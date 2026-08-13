@@ -1,0 +1,1534 @@
+// Second Brain — Prisma schema.
+// Phase 1 (foundation) ships the auth-critical core only: User, Profile, Session.
+// The remaining domain models (Document, ConceptMastery, KnowledgeGraph, Flashcard,
+// Quiz, PlannerEvent, MemoryEntry, ...) are added in the phase that owns them.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  emailVerified Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // TOTP two-factor auth. The secret is stored encrypted at rest (AES-256-GCM);
+  // it is set on setup and only trusted once `twoFactorEnabled` flips to true.
+  twoFactorSecret  String?
+  twoFactorEnabled Boolean @default(false)
+
+  // Platform back office (Sprint 8.5). `isAdmin` grants the superadmin dashboard
+  // (also bootstrappable via ADMIN_EMAILS env). `suspendedAt` soft-disables an
+  // account without deleting anything.
+  isAdmin     Boolean   @default(false)
+  suspendedAt DateTime?
+
+  // Analytics (Sprint 8.6): last time the user made an authenticated request,
+  // updated (throttled) by ActivityInterceptor. Drives DAU/WAU/MAU.
+  lastActiveAt DateTime?
+
+  profile                 Profile?
+  sessions                Session[]
+  emailVerificationTokens EmailVerificationToken[]
+  recoveryCodes           RecoveryCode[]
+  documents               Document[]
+  decks                   Deck[]
+  cards                   Card[]
+  concepts                Concept[]
+  conceptEdges            ConceptEdge[]
+  tutorSessions           TutorSession[]
+  lessons                 Lesson[]
+  languageProfiles        LanguageProfile[]
+  dailyPlans              DailyPlan[]
+  notifications           Notification[]
+  exerciseAttempts        ExerciseAttempt[]
+  achievements            Achievement[]
+  homework                Homework[]
+  studySessions           StudySession[]
+  reviewables             Reviewable[]
+  calendarEvents          CalendarEvent[]
+  goals                   Goal[]
+  exams                   Exam[]
+  collections             Collection[]
+  studyResources          StudyResource[]
+  assessments             Assessment[]
+  assessmentSubmissions   AssessmentSubmission[]
+  writingSubmissions      WritingSubmission[]
+  readingExercises        ReadingExercise[]
+  subscription            Subscription?
+  payments                Payment[]
+  invoices                Invoice[]
+  usageCounters           UsageCounter[]
+  memberships             Membership[]
+  groupMemberships        GroupMember[]
+  consents                Consent[]
+  aiInitiatives           AiInitiative[]
+  coachProfile            CoachProfile?
+  learningPredictions     LearningPrediction[]
+  recommendations         Recommendation[]
+  mentorGuidance          MentorGuidance?
+  successPredictions      SuccessPrediction[]
+  learningDna             LearningDna?
+
+  @@map("users")
+}
+
+/// How a document entered the system.
+enum DocumentSource {
+  text
+  file
+  url
+}
+
+/// Ingestion / embedding lifecycle. Increment 1 leaves documents at `pending`;
+/// the embedding pipeline (increment 2) moves them to `ready` or `failed`.
+enum DocumentStatus {
+  pending
+  processing
+  ready
+  failed
+}
+
+model Document {
+  id        String         @id @default(cuid())
+  userId    String
+  title     String
+  source    DocumentSource
+  /// Original filename or URL, when applicable.
+  sourceRef String?
+  /// Extracted plain-text content.
+  content   String
+  charCount Int
+  status    DocumentStatus @default(pending)
+  /// Current automatic-pipeline stage while status is `processing` (Sprint 6.2):
+  /// cleaning | segmenting | embedding | indexing | graphing. Null when settled.
+  stage     String?
+  /// Failure reason when status is `failed`.
+  error     String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  // ── Smart Library (Sprint 6.1) ──
+  /// Pinned by the learner → the Favorites shelf.
+  isFavorite   Boolean   @default(false)
+  /// Soft-delete: set → the document lives in the Trash, excluded everywhere else.
+  deletedAt    DateTime?
+  /// Optional user-defined collection this document belongs to.
+  collectionId String?
+  /// One-paragraph AI summary of the document (LLM-enriched, best-effort).
+  summary      String?
+  /// AI-detected subject / matière (e.g. "Biology"), for the Subjects shelf.
+  subject      String?
+  /// AI-detected language of the content (English name, e.g. "French").
+  language     String?
+  /// AI-identified author, when the text names one; null otherwise.
+  author       String?
+  /// AI-estimated difficulty: beginner | intermediate | advanced.
+  difficulty   String?
+  /// When the AI enrichment last ran (null = not yet enriched).
+  enrichedAt   DateTime?
+
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  collection Collection?       @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+  chunks     DocumentChunk[]
+  cards      Card[]
+  concepts   ConceptDocument[]
+  lessons    Lesson[]
+  resources  StudyResource[]
+
+  @@index([userId])
+  @@index([userId, deletedAt])
+  @@index([collectionId])
+  @@map("documents")
+}
+
+/// An AI-generated, PERSISTED study resource derived from a document (Sprint 6.6):
+/// summary, revision sheet, quiz, exercises, open questions, course plan — or a
+/// flashcards pointer (the cards themselves are real FSRS Cards in `deckId`).
+model StudyResource {
+  id         String   @id @default(cuid())
+  userId     String
+  documentId String
+  /// summary | revision_sheet | flashcards | quiz | exercises | open_questions | course_plan
+  type       String
+  title      String
+  /// Markdown body (for flashcards: a short note; the cards live in `deckId`).
+  content    String
+  /// For type=flashcards: the deck holding the generated cards.
+  deckId     String?
+  createdAt  DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([documentId])
+  @@map("study_resources")
+}
+
+/// A user-defined shelf grouping documents in the Smart Library (Sprint 6.1).
+model Collection {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  createdAt DateTime @default(now())
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents Document[]
+
+  @@index([userId])
+  @@map("collections")
+}
+
+model DocumentChunk {
+  id         String   @id @default(cuid())
+  documentId String
+  /// Denormalized owner id, so vector-search results can be filtered per user.
+  userId     String
+  chunkIndex Int
+  content    String
+  /// Qdrant point id (UUID) holding this chunk's embedding vector.
+  vectorId   String   @unique
+  createdAt  DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@map("document_chunks")
+}
+
+model RecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  /// Argon2 hash of a single-use 2FA recovery code.
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("recovery_codes")
+}
+
+model Profile {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  displayName       String?
+  preferredLanguage String   @default("en")
+  /// IANA timezone (e.g. "Europe/Paris"). The daily journey is anchored to the
+  /// learner's LOCAL day — "morning" is meaningless in server time.
+  timezone          String   @default("UTC")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  /// SHA-256 hex of the high-entropy token; the raw token is only ever emailed.
+  tokenHash String    @unique
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+model Session {
+  id               String    @id @default(cuid())
+  userId           String
+  refreshTokenHash String
+  userAgent        String?
+  ipAddress        String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+/// FSRS card lifecycle state (matches ts-fsrs' State: New/Learning/Review/Relearning).
+enum CardState {
+  new
+  learning
+  review
+  relearning
+}
+
+model Deck {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cards Card[]
+  /// Set when this deck is a language's vocabulary deck.
+  languageProfiles LanguageProfile[]
+  planItems        DailyPlanItem[]
+
+  @@index([userId])
+  @@map("decks")
+}
+
+model Card {
+  id     String @id @default(cuid())
+  deckId String
+  /// Denormalized owner id for per-user review queues.
+  userId String
+  front  String
+  back   String
+  /// Optional source document this card was generated from (increment 4).
+  sourceDocumentId String?
+
+  // ── FSRS memory state (see ts-fsrs). Defaults describe a brand-new card. ──
+  state         CardState @default(new)
+  /// Memory stability in days; 0 until the first review.
+  stability     Float     @default(0)
+  /// Estimated difficulty (1..10); 0 until the first review.
+  difficulty    Float     @default(0)
+  due           DateTime  @default(now())
+  /// Days since the previous review at the time of the last review.
+  elapsedDays   Int       @default(0)
+  /// Interval (days) chosen at the last review.
+  scheduledDays Int       @default(0)
+  reps          Int       @default(0)
+  lapses        Int       @default(0)
+  lastReview    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deck           Deck          @relation(fields: [deckId], references: [id], onDelete: Cascade)
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceDocument Document?     @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+  reviewLogs     ReviewLog[]
+  concepts       ConceptCard[]
+
+  @@index([deckId])
+  @@index([userId, due])
+  @@map("cards")
+}
+
+/// One review event, kept for history and for FSRS optimisation later (increment 2 writes these).
+model ReviewLog {
+  id     String @id @default(cuid())
+  cardId String
+  userId String
+  /// Grade given: 1=Again, 2=Hard, 3=Good, 4=Easy.
+  rating Int
+  /// Card state before this review.
+  state  CardState
+  /// Days scheduled by this review.
+  scheduledDays Int
+  /// Card's due timestamp before this review.
+  reviewedAt DateTime @default(now())
+
+  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([cardId])
+  /// Sprint 10.1: retention/streak reads filter by userId.
+  @@index([userId])
+  @@map("review_logs")
+}
+
+/// Author of a tutoring message.
+enum TutorRole {
+  user
+  assistant
+}
+
+/// How the language engine teaches (Educational Engine spec: Beginner →
+/// Intermediate → Advanced → Academic → Professional → Exam Prep → Immersion).
+enum LanguageMode {
+  beginner
+  intermediate
+  advanced
+  academic
+  professional
+  exam_prep
+  immersion
+}
+
+/// A language the learner is studying, and how it should be taught (Phase 5).
+/// Vocabulary is NOT a new SRS: `vocabDeck` holds ordinary FSRS cards.
+model LanguageProfile {
+  id     String @id @default(cuid())
+  userId String
+  /// Target language as the learner typed it, e.g. "Spanish".
+  language String
+  /// Lowercased/trimmed language used to enforce per-user uniqueness (dedup).
+  normalizedLanguage String
+  /// The learner's own language, used for translations and glosses.
+  nativeLanguage     String?
+  mode               LanguageMode @default(beginner)
+  /// CEFR / CECRL level (Sprint 7.3): A1 | A2 | B1 | B2 | C1 | C2.
+  cefrLevel          String       @default("A1")
+  /// Free-text goal, e.g. "order food on holiday" or "pass the DELE B2".
+  goal        String?
+  /// Deck holding this language's vocabulary cards (auto-created).
+  vocabDeckId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vocabDeck     Deck?          @relation(fields: [vocabDeckId], references: [id], onDelete: SetNull)
+  lessons       Lesson[]
+  tutorSessions TutorSession[]
+  planItems     DailyPlanItem[]
+
+  @@unique([userId, normalizedLanguage])
+  @@index([userId])
+  @@map("language_profiles")
+}
+
+/// A tutoring conversation (Phase 5). Grounded in the learner's documents.
+model TutorSession {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String?
+  /// Optional concept this session is steering the learner through (twin-focused).
+  focusConceptId String?
+  /// Set when this session is language practice; steers the tutor into its
+  /// Language Professor role. Null = an ordinary session, unchanged.
+  languageProfileId String?
+  /// The subject this session is about, detected automatically (task 3.6). The
+  /// role engine maps it to the specialist persona the teacher wears. Null until
+  /// detected (a general teacher until then).
+  subject   String?
+  /// Teaching Strategy Engine (Sprint 7.9, ITE): the pedagogical strategy the
+  /// engine selected for this session (socratic, problem_solving, case_study…),
+  /// cached for continuity. Null until the first turn selects one.
+  strategy       String?
+  /// Why that strategy was chosen (shown to the learner). Null until selected.
+  strategyReason String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  focusConcept    Concept?         @relation(fields: [focusConceptId], references: [id], onDelete: SetNull)
+  languageProfile LanguageProfile? @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
+  messages        TutorMessage[]
+  lessons         Lesson[]
+
+  @@index([userId])
+  @@map("tutor_sessions")
+}
+
+model TutorMessage {
+  id        String    @id @default(cuid())
+  sessionId String
+  role      TutorRole
+  content   String
+  /// Assistant-only: JSON array of citations ({documentId,documentTitle,chunkIndex,score}).
+  citations Json?
+  /// True when this turn originated from a spoken interaction (user turn = the
+  /// transcript, assistant turn = the reply that was voiced back).
+  viaVoice  Boolean   @default(false)
+  createdAt DateTime  @default(now())
+
+  session TutorSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("tutor_messages")
+}
+
+/// Kind of relationship between two concepts in the knowledge graph.
+enum ConceptRelation {
+  /// source must be understood before target.
+  prerequisite
+  /// source and target are related / associated.
+  related
+}
+
+/// What kind of milestone a learner reached (Educational Engine: the Mentor
+/// role — "celebrates wins").
+enum AchievementKind {
+  streak_days
+  cards_reviewed
+  concepts_mastered
+  lessons_completed
+  exercises_correct
+}
+
+/// A milestone the learner has passed. The unique key is the "celebrate once"
+/// guarantee: a win is awarded a single time, no matter how often it is checked.
+model Achievement {
+  id     String          @id @default(cuid())
+  userId String
+  kind   AchievementKind
+  /// The threshold crossed (e.g. kind=streak_days, threshold=7).
+  threshold  Int
+  achievedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind, threshold])
+  @@index([userId])
+  @@map("achievements")
+}
+
+/// One graded answer to a lesson exercise (Educational Engine: the Examiner
+/// role, pedagogical flow steps 9-11 — assessment, detailed correction,
+/// personalised feedback). Kept as history: "nothing is forgotten".
+model ExerciseAttempt {
+  id       String @id @default(cuid())
+  userId   String
+  lessonId String
+  /// Index into the lesson's `exercises` JSON array.
+  exerciseIndex Int
+  /// Snapshotted so the attempt stays readable even if the lesson is deleted.
+  question       String
+  expectedAnswer String
+  learnerAnswer  String
+
+  /// The Examiner's verdict.
+  correct Boolean
+  /// 0..1 — partial credit, since understanding is rarely binary.
+  score    Float
+  /// Detailed correction: what was right, what was wrong, why.
+  correction String
+  /// Personalised feedback aimed at this learner's next step.
+  feedback   String
+
+  /// Structured correction — a real teacher never just says "correct/incorrect".
+  /// why = Pourquoi ?, how = Comment ?, errorMade = Quelle erreur ? (null when
+  /// correct), howToAvoid = Comment éviter ? (null when correct).
+  why        String?
+  how        String?
+  errorMade  String?
+  howToAvoid String?
+
+  /// Concept the lesson taught, when it had one.
+  conceptId String?
+  /// Knowledge-gap detection: the weakest unmet PREREQUISITE blamed for this
+  /// mistake, found by walking the knowledge graph. Null when the answer was
+  /// right or no prerequisite was weak.
+  rootCauseConceptId String?
+
+  createdAt DateTime @default(now())
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson        Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  concept       Concept? @relation("AttemptConcept", fields: [conceptId], references: [id], onDelete: SetNull)
+  rootCause     Concept? @relation("AttemptRootCause", fields: [rootCauseConceptId], references: [id], onDelete: SetNull)
+
+  // No unique key: retrying an exercise is the point. Every attempt is history.
+  @@index([userId])
+  /// Sprint 10.1: "recent attempts" reads order by createdAt within a user.
+  @@index([userId, createdAt])
+  @@index([lessonId, exerciseIndex])
+  @@map("exercise_attempts")
+}
+
+/// The four moments of the daily learning journey (Educational Engine spec:
+/// morning = review yesterday, afternoon = new lesson, evening = exercises,
+/// night = quick revision before sleep).
+enum PlanSlot {
+  morning
+  afternoon
+  evening
+  night
+}
+
+/// What a plan item asks the learner to do.
+enum PlanItemKind {
+  review
+  lesson
+  exercises
+  quick_revision
+  vocabulary
+}
+
+enum PlanItemStatus {
+  pending
+  done
+  skipped
+}
+
+/// One learner's plan for one LOCAL day (Phase 5). Regenerated idempotently and
+/// adapted through the day as state changes.
+model DailyPlan {
+  id     String @id @default(cuid())
+  userId String
+  /// The learner's local calendar day this plan is for.
+  date   DateTime @db.Date
+  /// Timezone the local day was computed in, kept so a later timezone change
+  /// cannot silently reinterpret an existing plan.
+  timezone    String
+  generatedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items DailyPlanItem[]
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@map("daily_plans")
+}
+
+model DailyPlanItem {
+  id       String         @id @default(cuid())
+  planId   String
+  slot     PlanSlot
+  kind     PlanItemKind
+  title    String
+  detail   String?
+  status   PlanItemStatus @default(pending)
+  /// Ordering within the slot.
+  position Int            @default(0)
+  /// How many cards / exercises this item covers, when countable.
+  targetCount Int?
+
+  // What the item points at. All optional and SetNull: an item must survive the
+  // deletion of the thing it references.
+  conceptId         String?
+  deckId            String?
+  languageProfileId String?
+
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  plan            DailyPlan        @relation(fields: [planId], references: [id], onDelete: Cascade)
+  concept         Concept?         @relation(fields: [conceptId], references: [id], onDelete: SetNull)
+  deck            Deck?            @relation(fields: [deckId], references: [id], onDelete: SetNull)
+  languageProfile LanguageProfile? @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
+
+  @@index([planId])
+  @@map("daily_plan_items")
+}
+
+/// A nudge that was actually delivered. The unique key is the dedup guarantee:
+/// a given learner gets at most ONE notification per slot per local day, no
+/// matter how often the scheduler ticks.
+model Notification {
+  id     String   @id @default(cuid())
+  userId String
+  date   DateTime @db.Date
+  slot   PlanSlot
+  /// Transport that delivered it (log, mail, …).
+  channel String
+  title   String
+  body    String
+  sentAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date, slot])
+  @@index([userId])
+  @@map("notifications")
+}
+
+/// A unit of knowledge in the learner's Digital Twin (Phase 4).
+model Concept {
+  id     String @id @default(cuid())
+  userId String
+  name   String
+  /// Lowercased/trimmed name used to enforce per-user uniqueness (dedup).
+  normalizedName String
+  description    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  outgoingEdges ConceptEdge[]     @relation("EdgeSource")
+  incomingEdges ConceptEdge[]     @relation("EdgeTarget")
+  cards         ConceptCard[]
+  documents     ConceptDocument[]
+  tutorSessions TutorSession[]
+  lessons       Lesson[]
+  planItems     DailyPlanItem[]
+  attempts      ExerciseAttempt[] @relation("AttemptConcept")
+  blamedFor     ExerciseAttempt[] @relation("AttemptRootCause")
+
+  @@unique([userId, normalizedName])
+  @@index([userId])
+  @@map("concepts")
+}
+
+/// Link between a concept and a flashcard (many-to-many).
+model ConceptCard {
+  id        String   @id @default(cuid())
+  conceptId String
+  cardId    String
+  createdAt DateTime @default(now())
+
+  concept Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  card    Card    @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@unique([conceptId, cardId])
+  @@index([cardId])
+  @@map("concept_cards")
+}
+
+/// Link between a concept and a source document (many-to-many).
+model ConceptDocument {
+  id         String   @id @default(cuid())
+  conceptId  String
+  documentId String
+  createdAt  DateTime @default(now())
+
+  concept  Concept  @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([conceptId, documentId])
+  @@index([documentId])
+  @@map("concept_documents")
+}
+
+/// A complete written lesson package (Phase 5 — written-first learning). Generated
+/// from a topic / concept / tutoring interaction and indexed into long-term memory.
+model Lesson {
+  id             String  @id @default(cuid())
+  userId         String
+  tutorSessionId String?
+  conceptId      String?
+  /// Target language, when this is a language lesson.
+  language       String?
+  /// The language profile this lesson belongs to, when generated by the
+  /// language engine (carries the mode it was pitched at).
+  languageProfileId String?
+  /// Difficulty this lesson was actually pitched at ("beginner"|"intermediate"|
+  /// "advanced"). Either given explicitly or derived from the learner's mastery
+  /// of the concept — stored so the adaptation is auditable rather than a claim.
+  level          String?
+  topic          String
+  objective      String
+  intro          String
+  explanation    String
+  /// string[] of worked examples.
+  examples       Json
+  /// string[] of guided comprehension questions (standard flow step 5).
+  questions      Json?
+  /// string[] of concise key takeaways ("Points clés"). Null on lessons
+  /// generated before this section existed.
+  keyPoints      Json?
+  /// { question, answer }[] — exercises with model-answer corrections.
+  exercises      Json
+  homework       String
+  summary        String
+  revisionSheet  String
+  /// The Document this lesson was indexed as, for retrieval / long-term memory.
+  sourceDocumentId String?
+  createdAt      DateTime @default(now())
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tutorSession    TutorSession?    @relation(fields: [tutorSessionId], references: [id], onDelete: SetNull)
+  concept         Concept?         @relation(fields: [conceptId], references: [id], onDelete: SetNull)
+  sourceDocument  Document?        @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+  languageProfile LanguageProfile? @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
+  attempts        ExerciseAttempt[]
+  assignment      Homework?
+
+  @@index([userId])
+  @@map("lessons")
+}
+
+/// A learner goal (Sprint 5): daily / weekly / monthly objectives to persist.
+model Goal {
+  id     String @id @default(cuid())
+  userId String
+  /// daily | weekly | monthly
+  period String
+  title  String
+  /// pending | done
+  status String @default("pending")
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("goals")
+}
+
+/// An upcoming exam (Sprint 5): subject, date, priority. The "preparation level"
+/// is DERIVED from ConceptMastery at read time (engine communication), not stored.
+model Exam {
+  id      String  @id @default(cuid())
+  userId  String
+  subject String
+  date    DateTime
+  /// low | medium | high
+  priority String @default("medium")
+  /// Optional concept to gauge preparation from; else matched by subject name.
+  conceptId String?
+  createdAt DateTime @default(now())
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  successPrediction SuccessPrediction?
+
+  @@index([userId, date])
+  @@map("exams")
+}
+
+/// Academic Success Predictor (Sprint 9.6). One row per exam: the model's latest
+/// estimate of preparation, success probability and its OWN confidence (how much
+/// evidence backs the estimate), plus the `factors` behind it. Recorded for
+/// traceability; upserted on read. The point is not to foretell the result but
+/// to help the learner prepare — hence the confidence and factors travel with it.
+model SuccessPrediction {
+  id     String @id @default(cuid())
+  userId String
+  examId String @unique
+
+  preparation        Int?
+  successProbability Int?
+  /// Model confidence 0..100 — how much evidence backs the estimate.
+  confidence         Int
+  factors            Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  exam Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+
+  @@map("success_predictions")
+}
+
+/// A learner-created calendar event (Smart Calendar, task 5.4): exams,
+/// objectives, deadlines. AI-generated calendar entries are assembled live from
+/// the other engines and are NOT stored here — only the learner's own events
+/// are, because only those are editable (the AI keeps priority).
+model CalendarEvent {
+  id     String   @id @default(cuid())
+  userId String
+  /// exam | objective | deadline
+  kind   String
+  title  String
+  /// The event's calendar day (time part ignored).
+  date   DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+  @@map("calendar_events")
+}
+
+/// A schedulable pedagogical item for the independent FSRS Revision Engine
+/// (Sprint 5, task 5.1). NOT tied to flashcards: `kind`+`refId` point at any
+/// activity (lesson, exercise, quiz, homework, report…). Carries its own FSRS
+/// memory state so anything can be spaced-repetition scheduled.
+model Reviewable {
+  id     String @id @default(cuid())
+  userId String
+  /// Activity type: lesson | exercise | quiz | language | practical | homework
+  /// | report | flashcard | concept.
+  kind   String
+  /// The underlying entity id (lessonId, homeworkId, conceptId…).
+  refId  String
+  title  String
+
+  // ── FSRS memory state (independent of the Card model) ──
+  state         CardState @default(new)
+  stability     Float     @default(0)
+  difficulty    Float     @default(0)
+  due           DateTime  @default(now())
+  elapsedDays   Int       @default(0)
+  scheduledDays Int       @default(0)
+  reps          Int       @default(0)
+  lapses        Int       @default(0)
+  lastReview    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind, refId])
+  @@index([userId, due])
+  @@map("reviewables")
+}
+
+/// An orchestrated study session (Session Orchestrator, task 3.7): one guided
+/// loop the AI drives from Accueil to Fin. Snapshots the Digital Twin at start
+/// and end so "what moved" is a measured fact, not a claim.
+model StudySession {
+  id        String  @id @default(cuid())
+  userId    String
+  conceptId String?
+  lessonId  String?
+  /// Concept or topic name this session is about.
+  subject   String
+  /// "learning" while in progress, "done" once completed.
+  status    String  @default("learning")
+  /// Learning Score (0..1) and concept mastery (0..1) at start / end.
+  learningScoreBefore Float?
+  masteryBefore       Float?
+  learningScoreAfter  Float?
+  masteryAfter        Float?
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  /// Sprint 10.1: coach/mentor/insights filter done sessions by user + recency.
+  @@index([userId, status, completedAt])
+  @@map("study_sessions")
+}
+
+/// Personalised homework generated after a lesson (Homework Engine). One per
+/// lesson; regenerating replaces it. Exercises are corrected by the Examiner on
+/// submission (ephemeral — homework practice does not persist attempts).
+model Homework {
+  id         String  @id @default(cuid())
+  userId     String
+  lessonId   String  @unique
+  conceptId  String?
+  language   String?
+  /// Adaptive rationale: what this homework targets and why (learner's language).
+  focus      String
+  /// { type, question, answer, options? }[] — personalised exercises.
+  exercises  Json
+  /// string[] of reflective, open-ended questions.
+  questions  Json
+  /// Concept mastery (0..1) captured when generated, for auditability.
+  masteryAtGeneration Float?
+  createdAt  DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("homework")
+}
+
+/// AI Examiner (Sprint 7.6): an assessment the teacher-as-examiner created —
+/// a QCM, open questions, a dissertation prompt, an exercise, a case study, a
+/// mock exam, or an oral evaluation. Questions carry their answer key/rubric so
+/// grading is grounded; the key is stripped before the questions reach a client.
+model Assessment {
+  id        String   @id @default(cuid())
+  userId    String
+  /// mcq | open | dissertation | exercise | case_study | mock_exam | oral
+  type      String
+  topic     String
+  title     String
+  /// Difficulty it was pitched at (beginner|intermediate|advanced), for audit.
+  level     String?
+  /// Optional concept this assesses.
+  conceptId String?
+  /// AssessmentQuestion[] WITH answer keys/rubrics — never sent raw to clients.
+  questions Json
+  createdAt DateTime @default(now())
+
+  user        User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  submissions AssessmentSubmission[]
+
+  @@index([userId, createdAt])
+  @@map("assessments")
+}
+
+/// One graded attempt at an Assessment. The grade is never alone: `results`
+/// carries per-question explanation + how-to-improve, and `advice` turns the
+/// whole attempt into next steps.
+model AssessmentSubmission {
+  id           String @id @default(cuid())
+  assessmentId String
+  userId       String
+  /// string[] of the learner's answers, aligned to the questions.
+  answers      Json
+  /// 0..100 overall percentage.
+  score        Float
+  /// GradedAnswer[]: per-question { awarded, max, verdict, explanation, improvement }.
+  results      Json
+  /// Overall, encouraging read of the performance.
+  summary      String
+  /// Concrete advice / what to study next (learner's language).
+  advice       String
+  createdAt    DateTime @default(now())
+
+  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([assessmentId])
+  @@map("assessment_submissions")
+}
+
+/// Writing coach (Sprint 7.7): a piece of writing the learner submitted and the
+/// multi-dimensional review it received. General/academic writing in the
+/// learner's own language — distinct from the language-learning essay corrector.
+model WritingSubmission {
+  id        String   @id @default(cuid())
+  userId    String
+  /// redaction | dissertation | memoire | rapport | compte_rendu | devoir
+  type      String
+  title     String?
+  /// The learner's text.
+  text      String
+  /// 0..100 overall academic quality.
+  score     Float
+  /// WritingReview JSON: dimensions[], summary, strengths[], priorities[].
+  review    Json
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("writing_submissions")
+}
+
+/// Reading coach (Sprint 7.7): an AI-generated passage pitched at the learner's
+/// current reading level, its comprehension questions (with answer keys, stripped
+/// before reaching a client), and — once submitted — the score and the level the
+/// engine adapted to for next time.
+model ReadingExercise {
+  id           String   @id @default(cuid())
+  userId       String
+  /// beginner | intermediate | advanced | expert (level it was generated at).
+  level        String
+  topic        String?
+  title        String
+  text         String
+  /// ReadingQuestion[] WITH answer keys — never sent raw to a client.
+  questions    Json
+  /// 0..100, set after submission.
+  score        Float?
+  /// Level recommended for the next exercise, set after submission.
+  adaptedLevel String?
+  /// Full ReadingResultView JSON (per-question grading + summary), set after
+  /// submission so a reload can re-show the evaluation.
+  result       Json?
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("reading_exercises")
+}
+
+/// Subscription Engine (Sprint 8.1). A plan is DATA, not a hard-coded enum, so
+/// its name, quotas, features and price can change without a migration. This
+/// sprint builds only the ARCHITECTURE: the six plans are seeded but their
+/// quotas/features stay empty until limits & benefits are defined later.
+model Plan {
+  id   String @id @default(cuid())
+  /// Stable machine id (never shown): free | pro | pro_max | team | school | enterprise.
+  slug String @unique
+  /// Display name (provisional, editable later).
+  name String
+  /// Ordering / upgrade comparison — higher means "more".
+  tier Int @default(0)
+  /// Who the plan targets: "individual" or "organization".
+  audience String @default("individual")
+  /// Generic quota map { key: limit } (limit -1 or absent = unlimited). Empty
+  /// until per-plan limits are defined.
+  quotas Json @default("{}")
+  /// Generic feature flags { key: boolean }. Empty until benefits are defined.
+  features Json @default("{}")
+  /// Billing architecture only — amounts stay null until pricing is set. Minor
+  /// currency units (e.g. cents).
+  priceMonthly Int?
+  priceYearly  Int?
+  currency     String @default("usd")
+  isActive     Boolean @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+enum SubscriptionStatus {
+  active
+  trialing
+  past_due
+  canceled
+  incomplete
+}
+
+/// One subscriber's link to a plan. Individual (per-user) subscriptions for now;
+/// organization subscriptions arrive with the Organizations module (a nullable
+/// organizationId will be added then, with a one-owner constraint). Payment-
+/// provider fields are deliberately absent — they belong to the Payments task.
+model Subscription {
+  id                 String             @id @default(cuid())
+  userId             String             @unique
+  planId             String
+  status             SubscriptionStatus @default(active)
+  /// Billing interval when on a paid cycle: "month" | "year" | null.
+  interval           String?
+  /// Payment provider that owns the paid subscription (Sprint 8.2):
+  /// "stripe" | "apple" | "google" | "fake" | null (free / unbilled).
+  provider               String?
+  /// Provider-side identifiers — the link back to Stripe/Apple/Google. The
+  /// backend stays the source of truth; these only reconcile with the provider.
+  providerCustomerId     String?
+  providerSubscriptionId String?
+  /// Current billing window; null until a paid cycle is attached.
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  cancelAtPeriodEnd  Boolean            @default(false)
+  trialEndsAt        DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan Plan @relation(fields: [planId], references: [id])
+
+  @@index([planId])
+  @@map("subscriptions")
+}
+
+/// A single payment (Sprint 8.2). The backend records every charge as the source
+/// of truth; it is written only from a verified provider event, never from the
+/// client. No card data is ever stored — only the provider's opaque reference.
+model Payment {
+  id          String        @id @default(cuid())
+  userId      String
+  provider    String
+  /// Provider-side charge/transaction id (opaque).
+  providerRef String?
+  /// Minor currency units (e.g. cents).
+  amount      Int
+  currency    String        @default("usd")
+  status      PaymentStatus @default(succeeded)
+  /// Why: "subscription" | "renewal" | "refund" | …
+  purpose     String        @default("subscription")
+  createdAt   DateTime      @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  pending
+  succeeded
+  failed
+  refunded
+}
+
+/// A billing document (Sprint 8.2). Generated from verified provider events; the
+/// hosted provider (Stripe) may also expose a PDF, referenced by url.
+model Invoice {
+  id          String   @id @default(cuid())
+  userId      String
+  /// Human-facing sequential-ish number.
+  number      String   @unique
+  provider    String
+  amount      Int
+  currency    String   @default("usd")
+  /// "paid" | "open" | "void" | "uncollectible"
+  status      String   @default("paid")
+  periodStart DateTime?
+  periodEnd   DateTime?
+  /// Provider-hosted PDF/receipt, when available.
+  url         String?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("invoices")
+}
+
+/// Idempotency + audit log for provider webhooks / verified receipts (Sprint
+/// 8.2). Every inbound event is recorded by (provider, eventId) so re-delivery
+/// (which every provider does) is processed exactly once.
+model WebhookEvent {
+  id         String   @id @default(cuid())
+  provider   String
+  eventId    String
+  type       String
+  processedAt DateTime @default(now())
+
+  @@unique([provider, eventId])
+  @@map("webhook_events")
+}
+
+/// Usage & Quotas engine (Sprint 8.3). Tracks CONSUMPTION of periodic metrics
+/// (e.g. AI questions, voice minutes) per user per period. Gauge metrics
+/// (documents owned, storage used) are computed live from existing data and are
+/// NOT stored here. Adding a new limit = a catalog entry + a number in
+/// `Plan.quotas` — no schema change.
+model UsageCounter {
+  id      String @id @default(cuid())
+  userId  String
+  /// Metric key (matches the usage catalog + Plan.quotas key), e.g. "ai_questions".
+  metric  String
+  /// Reset bucket — a calendar month "YYYY-MM" for now (aligns to billing later).
+  period  String
+  used    Int    @default(0)
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, metric, period])
+  @@map("usage_counters")
+}
+
+// ── Advanced Intelligence (Sprint 9) ──
+
+enum InitiativeStatus {
+  active
+  acted
+  dismissed
+}
+
+/// A proactive decision the AI mentor took (Sprint 9.1). The AI observes the
+/// learner's state and RAISES an initiative rather than waiting to be asked.
+/// `payload` records the facts it acted on — traceability + explainability. The
+/// user's response (acted/dismissed) is kept so recommendations can learn.
+model AiInitiative {
+  id          String           @id @default(cuid())
+  userId      String
+  /// advance | slow_down | review_due | comeback | streak | …
+  kind        String
+  title       String
+  message     String
+  priority    Int              @default(0)
+  status      InitiativeStatus @default(active)
+  /// The signals this decision was based on (for "the AI always explains why").
+  payload     Json?
+  /// Prevents re-raising the same live initiative.
+  dedupeKey   String
+  createdAt   DateTime         @default(now())
+  respondedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@map("ai_initiatives")
+}
+
+/// Personalized Academic Coach (Sprint 9.2). One row per learner: the coach's
+/// current ADAPTED guidance (pace / difficulty / session length / method), the
+/// per-dimension `rationale` it recorded (traceability + explainability), and
+/// the learner's own overrides — a non-null override is a USER decision that
+/// takes precedence over the coach's automatic recommendation. Auto values are
+/// recomputed and re-stored on every read; overrides persist until changed.
+model CoachProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  pace           String // gentle | steady | intensive
+  difficulty     String // beginner | intermediate | advanced
+  sessionMinutes Int
+  method         String // practice | reading | socratic | mixed
+  rationale      Json?
+
+  paceOverride           String?
+  difficultyOverride     String?
+  sessionMinutesOverride Int?
+  methodOverride         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("coach_profiles")
+}
+
+/// Learning Prediction Engine (Sprint 9.3). One row per (learner, risk kind):
+/// the engine's latest forecast of a trajectory risk — dropout / future
+/// difficulty / overload / motivation loss / probable forgetting — with its
+/// probability, probable `cause`, recommended `action`, and the `signals` it
+/// was computed from (traceability + explainability). Upserted on every read;
+/// `updatedAt` is the auditable record of when the prediction was last made.
+model LearningPrediction {
+  id          String @id @default(cuid())
+  userId      String
+  kind        String // dropout | difficulty | overload | motivation | forgetting
+  probability Int // 0..100
+  level       String // low | moderate | high
+  cause       String
+  action      String
+  signals     Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind])
+  @@map("learning_predictions")
+}
+
+/// Whether a recommendation is still on offer, or the learner has acted on it.
+enum RecommendationStatus {
+  suggested
+  accepted
+  dismissed
+}
+
+/// Recommendation Engine (Sprint 9.4). A personalized, multi-type feed of
+/// resources the AI proposes: lessons / exercises / readings / reviews /
+/// practicals / documents. Each row is a persisted recommendation (traceability)
+/// whose `status` keeps the AI's automatic SUGGESTION distinct from the learner's
+/// DECISION (accepted / dismissed). `dedupeKey` makes generation idempotent.
+model Recommendation {
+  id         String @id @default(cuid())
+  userId     String
+  kind       String // lesson | exercise | reading | review | practical | document
+  title      String
+  reason     String
+  /// Where acting on it leads: concept | document | route (+ the id/path).
+  targetKind String?
+  targetId   String?
+  dedupeKey  String
+  priority   Int    @default(0)
+
+  status      RecommendationStatus @default(suggested)
+  createdAt   DateTime             @default(now())
+  respondedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@map("recommendations")
+}
+
+/// AI Mentor (Sprint 9.5). One row per learner: the mentor's latest strategic
+/// assessment across academic success, exam prep, organization, work method and
+/// confidence — the per-dimension ratings + insights it concluded (`dimensions`
+/// Json), the single `focus` to work on, and the opening `headline`. Recorded
+/// for traceability; upserted on every read, `updatedAt` = when last assessed.
+model MentorGuidance {
+  id         String  @id @default(cuid())
+  userId     String  @unique
+  headline   String
+  focus      String?
+  dimensions Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("mentor_guidance")
+}
+
+/// Learning DNA Engine (Sprint 9 ⭐, transversal). The learner's deep, STABLE
+/// learning profile — distinct from the Digital Twin's current-state mastery.
+/// It records, per user, the traits the system has learned about HOW they learn
+/// best (memorization, peak time, modality, explanation depth, best-retention
+/// format), each with a confidence that grows as evidence accumulates. Persisted
+/// so every other engine can read one shared profile; upserted on each read.
+model LearningDna {
+  id           String @id @default(cuid())
+  userId       String @unique
+  traits       Json
+  /// 0..100 — how completely the DNA is mapped so far (grows progressively).
+  maturity     Int
+  interactions Int    @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("learning_dna")
+}
+
+/// GDPR consent record (Sprint 8.7). One row per (user, consent key); the
+/// updatedAt is the auditable proof of when consent was granted or withdrawn.
+model Consent {
+  id        String   @id @default(cuid())
+  userId    String
+  /// e.g. "analytics" | "marketing" | "product_emails".
+  key       String
+  granted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@map("consents")
+}
+
+// ── Admin back office (Sprint 8.5) ──
+
+enum IncidentSeverity {
+  low
+  medium
+  high
+  critical
+}
+
+enum IncidentStatus {
+  open
+  investigating
+  resolved
+}
+
+/// An operational incident the platform admins track (status-page style).
+model Incident {
+  id          String           @id @default(cuid())
+  title       String
+  description String?
+  severity    IncidentSeverity @default(medium)
+  status      IncidentStatus   @default(open)
+  createdAt   DateTime         @default(now())
+  resolvedAt  DateTime?
+
+  @@index([status, createdAt])
+  @@map("incidents")
+}
+
+/// An audit-log entry: who did what admin-relevant action, when.
+model AuditLog {
+  id        String   @id @default(cuid())
+  /// Actor (admin) user id; null for system events.
+  actorId   String?
+  action    String
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+enum ReportStatus {
+  open
+  reviewed
+  dismissed
+}
+
+/// A user-submitted report / flag (abuse, bug, content). Admins triage these.
+model Report {
+  id         String       @id @default(cuid())
+  reporterId String?
+  /// Free category, e.g. "content" | "bug" | "abuse".
+  category   String       @default("other")
+  message    String
+  status     ReportStatus @default(open)
+  createdAt  DateTime     @default(now())
+  reviewedAt DateTime?
+
+  @@index([status, createdAt])
+  @@map("reports")
+}
+
+// ── Organizations & multi-tenancy (Sprint 8.4) ──
+
+enum OrganizationType {
+  school
+  university
+  training_center
+  enterprise
+}
+
+/// Role of a user WITHIN an organization. Coarse by design; finer per-group
+/// roles live on GroupMember.
+enum OrgRole {
+  admin
+  teacher
+  student
+}
+
+enum OrgGroupKind {
+  class
+  group
+}
+
+/// A tenant. All org-scoped data hangs off this and is isolated: a user can only
+/// reach an organization they are a member of (enforced in the service layer).
+model Organization {
+  id        String           @id @default(cuid())
+  name      String
+  type      OrganizationType
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  memberships Membership[]
+  groups      OrgGroup[]
+
+  @@map("organizations")
+}
+
+/// A user's membership of an organization, with an org-level role. The unique
+/// (org,user) pair is the isolation key every org query filters on.
+model Membership {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  role           OrgRole  @default(student)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@map("memberships")
+}
+
+/// A class or a generic group inside an organization.
+model OrgGroup {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  kind           OrgGroupKind @default(class)
+  createdAt      DateTime     @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members      GroupMember[]
+
+  @@index([organizationId])
+  @@map("org_groups")
+}
+
+/// Membership of a class/group (teacher or student of that group).
+model GroupMember {
+  id        String   @id @default(cuid())
+  groupId   String
+  userId    String
+  role      OrgRole  @default(student)
+  createdAt DateTime @default(now())
+
+  group OrgGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([userId])
+  @@map("group_members")
+}
+
+/// A directed edge between two concepts (prerequisite / related).
+model ConceptEdge {
+  id       String          @id @default(cuid())
+  userId   String
+  sourceId String
+  targetId String
+  relation ConceptRelation
+  createdAt DateTime       @default(now())
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  source Concept @relation("EdgeSource", fields: [sourceId], references: [id], onDelete: Cascade)
+  target Concept @relation("EdgeTarget", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, targetId, relation])
+  @@index([userId])
+  @@index([sourceId])
+  @@index([targetId])
+  @@map("concept_edges")
+}

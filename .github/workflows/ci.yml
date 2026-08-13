@@ -1,0 +1,51 @@
+# Second Brain — CI (Sprint 10.7).
+# Runs on every push/PR: install, build shared, typecheck the whole workspace.
+# The deploy job is gated on `main` and requires environment secrets, so it is a
+# no-op on forks/PRs — real deploy wiring (registry, host) is the owner's step.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared
+        run: pnpm --filter @second-brain/shared build
+
+      - name: Generate Prisma client
+        run: pnpm --filter @second-brain/api exec prisma generate
+
+      - name: Typecheck API
+        run: pnpm --filter @second-brain/api typecheck
+
+      - name: Typecheck mobile
+        run: pnpm --filter @second-brain/mobile exec tsc --noEmit
+
+  docker:
+    needs: build-and-check
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build -t second-brain-api:${{ github.sha }} .
+      # Push + deploy steps go here once a container registry + host are configured
+      # (owner's infrastructure): docker push, then trigger the rollout.

@@ -1,0 +1,21 @@
+{
+  "name": "second-brain",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Second Brain — an AI-driven Personal Learning Operating System.",
+  "packageManager": "pnpm@11.13.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "clean": "turbo run clean"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}

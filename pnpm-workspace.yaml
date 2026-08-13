@@ -1,0 +1,24 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# pnpm 10+ reads these from HERE, not from .npmrc. They were in .npmrc and were
+# being silently ignored, which cost the mobile app its ability to bundle at all
+# (Expo/Metro needs a flat node_modules; metro.config.js sets
+# disableHierarchicalLookup and only lists app+root node_modules).
+nodeLinker: hoisted
+# This environment's network is slow; give tarball fetches more headroom.
+fetchTimeout: 600000
+fetchRetries: 5
+networkConcurrency: 8
+
+# Dependencies allowed to run install/build scripts (pnpm blocks these by default).
+# All four are official, trusted packages; Prisma requires its postinstall to
+# fetch the query engine and generate the client.
+allowBuilds:
+  '@nestjs/core': true
+  '@prisma/client': true
+  '@prisma/engines': true
+  prisma: true
+  # argon2 ships a native addon; its postinstall fetches/builds the prebuilt binary.
+  argon2: true

@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+**/dist
+.git
+.github
+**/.expo
+**/.turbo
+*.log
+.env
+.env.*
+!.env.example
+apps/mobile
+scratchpad
