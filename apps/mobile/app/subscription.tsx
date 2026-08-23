@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useMemo } from 'react';
 import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import type {
@@ -8,7 +8,8 @@ import type {
   SubscriptionView,
 } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 
@@ -17,6 +18,8 @@ import { Button, Card, ErrorBanner, Loading } from '../components/ui';
  *  open a secure page). The backend is the source of truth — the screen just
  *  reflects it. */
 export default function SubscriptionScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [plans, setPlans] = useState<PlanView[] | null>(null);
   const [current, setCurrent] = useState<SubscriptionView | null>(null);
@@ -162,24 +165,24 @@ export default function SubscriptionScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
-  h1: { fontSize: 28, fontWeight: '700', color: theme.text },
-  intro: { fontSize: 14, color: theme.textMuted, lineHeight: 20, marginBottom: 4 },
-  currentCard: { borderColor: theme.accent, gap: 4 },
-  currentLabel: { fontSize: 11, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 1 },
-  currentPlan: { fontSize: 22, fontWeight: '800', color: theme.text },
-  currentStatus: { fontSize: 13, color: theme.textMuted, textTransform: 'capitalize', marginBottom: 4 },
-  activeCard: { borderColor: theme.accent },
+  h1: { fontSize: 28, fontWeight: '700', color: c.textPrimary },
+  intro: { fontSize: 14, color: c.textSecondary, lineHeight: 20, marginBottom: 4 },
+  currentCard: { borderColor: c.primary, gap: 4 },
+  currentLabel: { fontSize: 11, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
+  currentPlan: { fontSize: 22, fontWeight: '800', color: c.textPrimary },
+  currentStatus: { fontSize: 13, color: c.textSecondary, textTransform: 'capitalize', marginBottom: 4 },
+  activeCard: { borderColor: c.primary },
   planHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
-  planName: { fontSize: 17, fontWeight: '700', color: theme.text },
-  audience: { fontSize: 11, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 0.5 },
-  price: { fontSize: 13, color: theme.textMuted, marginBottom: 10 },
-  section: { fontSize: 12, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 1, marginTop: 10 },
+  planName: { fontSize: 17, fontWeight: '700', color: c.textPrimary },
+  audience: { fontSize: 11, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
+  price: { fontSize: 13, color: c.textSecondary, marginBottom: 10 },
+  section: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginTop: 10 },
   invoiceRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   flex: { flex: 1 },
-  invNumber: { fontSize: 14, fontWeight: '600', color: theme.text },
-  invMeta: { fontSize: 12, color: theme.textMuted, marginTop: 2 },
-  invAmount: { fontSize: 14, fontWeight: '700', color: theme.text, fontVariant: ['tabular-nums'] },
-  note: { fontSize: 12, color: theme.textFaint, fontStyle: 'italic', marginTop: 4 },
+  invNumber: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
+  invMeta: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
+  invAmount: { fontSize: 14, fontWeight: '700', color: c.textPrimary, fontVariant: ['tabular-nums'] },
+  note: { fontSize: 12, color: c.textMuted, fontStyle: 'italic', marginTop: 4 },
 });

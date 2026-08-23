@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n } from '../lib/i18n';
 import { useOnline } from '../lib/connectivity';
 import { flushOutbox, lastSyncAt, onOutboxChange, outboxCount } from '../lib/offline';
@@ -13,6 +14,8 @@ import { Button, Card } from '../components/ui';
  * automatically the moment the connection returns).
  */
 export default function SyncScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t, locale } = useI18n();
   const online = useOnline();
   const [pending, setPending] = useState(0);
@@ -48,7 +51,7 @@ export default function SyncScreen() {
 
       {/* Connection status. */}
       <Card style={styles.statusCard}>
-        <View style={[styles.dot, { backgroundColor: online ? theme.ok : theme.warn }]} />
+        <View style={[styles.dot, { backgroundColor: online ? c.success : c.warning }]} />
         <View style={styles.flex}>
           <Text style={styles.statusTitle}>
             {online ? t('sync.online') : t('sync.offline')}
@@ -62,7 +65,7 @@ export default function SyncScreen() {
       {/* Pending changes. */}
       <Card style={styles.rowCard}>
         <Text style={styles.rowLabel}>{t('sync.pending')}</Text>
-        <Text style={[styles.rowValue, pending > 0 && { color: theme.warn }]}>{pending}</Text>
+        <Text style={[styles.rowValue, pending > 0 && { color: c.warning }]}>{pending}</Text>
       </Card>
 
       {/* Last sync. */}
@@ -85,24 +88,24 @@ export default function SyncScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 560, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4, marginBottom: 2 },
   kicker: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
   },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
   flex: { flex: 1 },
   statusCard: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   dot: { width: 14, height: 14, borderRadius: 7 },
-  statusTitle: { fontSize: 16, fontWeight: '700', color: theme.text },
-  statusSub: { fontSize: 13, color: theme.textMuted, marginTop: 2 },
+  statusTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
+  statusSub: { fontSize: 13, color: c.textSecondary, marginTop: 2 },
   rowCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  rowLabel: { fontSize: 14, color: theme.textMuted },
-  rowValue: { fontSize: 16, fontWeight: '700', color: theme.text },
-  note: { fontSize: 12, color: theme.textFaint, lineHeight: 17, marginTop: 4 },
+  rowLabel: { fontSize: 14, color: c.textSecondary },
+  rowValue: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
+  note: { fontSize: 12, color: c.textMuted, lineHeight: 17, marginTop: 4 },
 });

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import type { DayPlan, PlanBlock, PlanBlockKind, PlanSource } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, ErrorBanner, Loading } from '../components/ui';
 
@@ -44,6 +45,8 @@ const SOURCE_LABEL: Record<PlanSource, string> = {
  * rest of the day from the current moment.
  */
 export default function PlannerScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
   const [plan, setPlan] = useState<DayPlan | null>(null);
@@ -123,6 +126,8 @@ function Row({
   t: (k: TranslationKey) => string;
   router: ReturnType<typeof useRouter>;
 }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const isEnd = block.kind === 'end';
   const tappable = !!block.route && !isEnd;
   const subject =
@@ -154,56 +159,56 @@ function Row({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 14, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
   kicker: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
   },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
   sources: { gap: 6 },
   sourcesLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderRadius: 20,
     paddingHorizontal: 10,
     paddingVertical: 4,
   },
-  chipText: { fontSize: 11, color: theme.textMuted, fontWeight: '600' },
-  liveTag: { fontSize: 13, color: theme.ok, fontWeight: '600' },
+  chipText: { fontSize: 11, color: c.textSecondary, fontWeight: '600' },
+  liveTag: { fontSize: 13, color: c.success, fontWeight: '600' },
   timeline: { gap: 0 },
   row: { flexDirection: 'row', gap: 12 },
   timeCol: { alignItems: 'center', width: 48 },
-  time: { fontSize: 14, fontWeight: '800', color: theme.text, paddingTop: 14 },
-  connector: { flex: 1, width: 2, backgroundColor: theme.border, marginTop: 4 },
+  time: { fontSize: 14, fontWeight: '800', color: c.textPrimary, paddingTop: 14 },
+  connector: { flex: 1, width: 2, backgroundColor: c.border, marginTop: 4 },
   card: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 12,
     padding: 14,
     marginBottom: 10,
   },
-  cardTap: { borderLeftWidth: 3, borderLeftColor: theme.accent },
-  cardEnd: { backgroundColor: theme.surfaceAlt, borderStyle: 'dashed' },
+  cardTap: { borderLeftWidth: 3, borderLeftColor: c.primary },
+  cardEnd: { backgroundColor: c.surfaceElevated, borderStyle: 'dashed' },
   cardIcon: { fontSize: 22 },
   cardBody: { flex: 1, gap: 1 },
-  cardTitle: { fontSize: 15, fontWeight: '700', color: theme.text },
-  cardMeta: { fontSize: 12, color: theme.textMuted },
-  chevron: { fontSize: 22, color: theme.textFaint },
+  cardTitle: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
+  cardMeta: { fontSize: 12, color: c.textSecondary },
+  chevron: { fontSize: 22, color: c.textMuted },
 });

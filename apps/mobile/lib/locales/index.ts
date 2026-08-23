@@ -31,3 +31,5 @@ import './hu'; // Hungarian
 import './da'; // Danish
 import './fi'; // Finnish
 import './id'; // Indonesian
+import './no'; // Norwegian
+import './uk'; // Ukrainian

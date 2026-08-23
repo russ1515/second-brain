@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SUPPORTED_LANGUAGES, type SupportedLanguageCode } from '@second-brain/shared';
 import { localeName, supportedLocaleCodes, useI18n } from '../lib/i18n';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 
 /** Flag for a locale code, from the shared registry (blank for unknown codes). */
 function flagOf(code: string): string {
@@ -19,6 +20,8 @@ function englishNameOf(code: string): string {
  * Content stays in whatever the teacher is teaching.
  */
 export function LocalePicker({ label }: { label?: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { locale, setLocale, t } = useI18n();
   const [open, setOpen] = useState(false);
   const codes = supportedLocaleCodes();
@@ -76,12 +79,12 @@ export function LocalePicker({ label }: { label?: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   wrap: { marginBottom: 8 },
   label: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: 6,
@@ -91,27 +94,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     paddingVertical: 10,
     paddingHorizontal: 14,
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
   },
-  currentText: { fontSize: 15, color: theme.text, fontWeight: '600' },
-  chevron: { fontSize: 14, color: theme.textMuted },
+  currentText: { fontSize: 15, color: c.textPrimary, fontWeight: '600' },
+  chevron: { fontSize: 14, color: c.textSecondary },
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
   sheet: {
-    backgroundColor: theme.bg,
+    backgroundColor: c.background,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     maxHeight: '80%',
     overflow: 'hidden',
   },
   sheetTitle: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
     padding: 16,
@@ -124,12 +127,12 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderTopWidth: 1,
-    borderTopColor: theme.border,
+    borderTopColor: c.border,
   },
-  rowActive: { backgroundColor: theme.surfaceAlt },
+  rowActive: { backgroundColor: c.surfaceElevated },
   flag: { fontSize: 22 },
   names: { flex: 1 },
-  native: { fontSize: 15, color: theme.text, fontWeight: '600' },
-  english: { fontSize: 12, color: theme.textMuted },
-  check: { fontSize: 16, color: theme.accent, fontWeight: '800' },
+  native: { fontSize: 15, color: c.textPrimary, fontWeight: '600' },
+  english: { fontSize: 12, color: c.textSecondary },
+  check: { fontSize: 16, color: c.primary, fontWeight: '800' },
 });

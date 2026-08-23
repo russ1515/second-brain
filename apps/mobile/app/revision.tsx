@@ -1,22 +1,25 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import type { CardView, ReviewQueue, ReviewRating } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, Card, Empty, ErrorBanner, Loading } from '../components/ui';
 
 /** Anki-style grades. The labels are the learner's honest self-report; FSRS
  *  turns them into the next due date. */
-const GRADES: { rating: ReviewRating; key: TranslationKey; color: string }[] = [
-  { rating: 1, key: 'revision.again', color: theme.danger },
-  { rating: 2, key: 'revision.hard', color: theme.warn },
-  { rating: 3, key: 'revision.good', color: theme.ok },
+const grades = (c: ColorScale): { rating: ReviewRating; key: TranslationKey; color: string }[] => [
+  { rating: 1, key: 'revision.again', color: c.error },
+  { rating: 2, key: 'revision.hard', color: c.warning },
+  { rating: 3, key: 'revision.good', color: c.success },
   { rating: 4, key: 'revision.easy', color: '#38BDF8' },
 ];
 
 export default function RevisionScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
   const [queue, setQueue] = useState<CardView[]>([]);
@@ -120,7 +123,7 @@ export default function RevisionScreen() {
 
       {revealed ? (
         <View style={styles.grades} testID="grades">
-          {GRADES.map((g) => (
+          {grades(c).map((g) => (
             <Pressable
               key={g.rating}
               onPress={() => grade(g.rating)}
@@ -140,14 +143,14 @@ export default function RevisionScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 14, maxWidth: 720, width: '100%', alignSelf: 'center' },
-  counter: { fontSize: 13, color: theme.textFaint, textAlign: 'center' },
+  counter: { fontSize: 13, color: c.textMuted, textAlign: 'center' },
   card: { minHeight: 200, justifyContent: 'center' },
-  front: { fontSize: 20, fontWeight: '600', color: theme.text, lineHeight: 28 },
-  divider: { height: 1, backgroundColor: theme.border, marginVertical: 16 },
+  front: { fontSize: 20, fontWeight: '600', color: c.textPrimary, lineHeight: 28 },
+  divider: { height: 1, backgroundColor: c.border, marginVertical: 16 },
   back: { fontSize: 17, color: '#CBD5E1', lineHeight: 25 },
-  tapHint: { marginTop: 20, fontSize: 13, color: theme.textFaint, textAlign: 'center' },
+  tapHint: { marginTop: 20, fontSize: 13, color: c.textMuted, textAlign: 'center' },
   grades: { flexDirection: 'row', gap: 8 },
   grade: {
     flex: 1,

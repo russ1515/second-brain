@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { HomeworkView, LessonExercise } from '@second-brain/shared';
 import { api } from '../../lib/client';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n } from '../../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
 import { ExerciseCard } from '../../components/exercise-card';
@@ -16,6 +17,8 @@ import { ExerciseCard } from '../../components/exercise-card';
  * the spec: Devoirs (why) → Exercices → Questions → Correction.
  */
 export default function HomeworkScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { lessonId } = useLocalSearchParams<{ lessonId: string }>();
   const router = useRouter();
   const { t } = useI18n();
@@ -128,6 +131,8 @@ export default function HomeworkScreen() {
 
 /** A textbook-style section divider — mirrors the lesson's look. */
 function Section({ icon, title }: { icon: string; title: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={styles.section}>
       <View style={styles.iconChip}>
@@ -140,6 +145,8 @@ function Section({ icon, title }: { icon: string; title: string }) {
 
 /** The model answers, revealed on demand. */
 function Corrections({ exercises }: { exercises: LessonExercise[] }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [shown, setShown] = useState(false);
   if (!shown) {
@@ -170,21 +177,21 @@ function Corrections({ exercises }: { exercises: LessonExercise[] }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
   kicker: {
     fontSize: 12,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.5,
   },
-  topic: { fontSize: 26, fontWeight: '800', color: theme.text, lineHeight: 32 },
+  topic: { fontSize: 26, fontWeight: '800', color: c.textPrimary, lineHeight: 32 },
   focusBanner: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderLeftWidth: 3,
-    borderLeftColor: theme.accent,
+    borderLeftColor: c.primary,
     borderRadius: 10,
     padding: 14,
     gap: 8,
@@ -192,34 +199,34 @@ const styles = StyleSheet.create({
   focusLabel: {
     fontSize: 12,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
-  focusText: { fontSize: 16, color: theme.text, lineHeight: 24 },
+  focusText: { fontSize: 16, color: c.textPrimary, lineHeight: 24 },
   masteryChip: {
     alignSelf: 'flex-start',
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderRadius: 20,
     paddingHorizontal: 12,
     paddingVertical: 5,
   },
-  masteryChipText: { fontSize: 12, color: theme.textMuted, fontWeight: '600' },
+  masteryChipText: { fontSize: 12, color: c.textSecondary, fontWeight: '600' },
   section: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 6 },
   iconChip: {
     width: 40,
     height: 40,
     borderRadius: 12,
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     alignItems: 'center',
     justifyContent: 'center',
   },
   iconChipText: { fontSize: 20 },
-  sectionTitle: { fontSize: 19, fontWeight: '700', color: theme.text },
-  reflect: { fontSize: 13, color: theme.textFaint, fontStyle: 'italic', marginBottom: 4 },
-  question: { fontSize: 15, fontWeight: '600', color: theme.text, lineHeight: 22, marginTop: 6 },
-  answerModel: { fontSize: 14, color: theme.ok, lineHeight: 21, marginTop: 4 },
+  sectionTitle: { fontSize: 19, fontWeight: '700', color: c.textPrimary },
+  reflect: { fontSize: 13, color: c.textMuted, fontStyle: 'italic', marginBottom: 4 },
+  question: { fontSize: 15, fontWeight: '600', color: c.textPrimary, lineHeight: 22, marginTop: 6 },
+  answerModel: { fontSize: 14, color: c.success, lineHeight: 21, marginTop: 4 },
   spaced: { marginTop: 12 },
   actions: { gap: 8, marginTop: 8 },
-  hint: { fontSize: 12, color: theme.textFaint, textAlign: 'center' },
+  hint: { fontSize: 12, color: c.textMuted, textAlign: 'center' },
 });

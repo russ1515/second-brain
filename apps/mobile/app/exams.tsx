@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { CreateExamRequest, ExamPriority, ExamView } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 
@@ -11,11 +12,11 @@ const PRIORITIES: { p: ExamPriority; key: TranslationKey }[] = [
   { p: 'medium', key: 'exams.p.medium' },
   { p: 'low', key: 'exams.p.low' },
 ];
-const PRIORITY_COLOR: Record<ExamPriority, string> = {
-  high: theme.danger,
-  medium: theme.warn,
-  low: theme.ok,
-};
+const priorityColor = (c: ColorScale): Record<ExamPriority, string> => ({
+  high: c.error,
+  medium: c.warning,
+  low: c.success,
+});
 const DAY_OFFSETS: { key: TranslationKey; days: number }[] = [
   { key: 'exams.in3', days: 3 },
   { key: 'exams.in7', days: 7 },
@@ -26,6 +27,8 @@ const DAY_OFFSETS: { key: TranslationKey; days: number }[] = [
 /** Upcoming Exams (Sprint 5): subject, date, priority + a preparation level
  *  derived from ConceptMastery. */
 export default function ExamsScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t, locale } = useI18n();
   const [exams, setExams] = useState<ExamView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +99,7 @@ export default function ExamsScreen() {
         <TextInput
           style={styles.input}
           placeholder={t('exams.placeholder')}
-          placeholderTextColor={theme.textFaint}
+          placeholderTextColor={c.textMuted}
           value={subject}
           onChangeText={setSubject}
         />
@@ -117,11 +120,11 @@ export default function ExamsScreen() {
         <Text style={styles.empty}>{t('exams.none')}</Text>
       ) : (
         exams.map((e) => (
-          <View key={e.id} style={[styles.exam, { borderLeftColor: PRIORITY_COLOR[e.priority] }]}>
+          <View key={e.id} style={[styles.exam, { borderLeftColor: priorityColor(c)[e.priority] }]}>
             <View style={styles.examHead}>
               <Text style={styles.examSubject} numberOfLines={1}>{e.subject}</Text>
-              <View style={[styles.prio, { borderColor: PRIORITY_COLOR[e.priority] }]}>
-                <Text style={[styles.prioText, { color: PRIORITY_COLOR[e.priority] }]}>
+              <View style={[styles.prio, { borderColor: priorityColor(c)[e.priority] }]}>
+                <Text style={[styles.prioText, { color: priorityColor(c)[e.priority] }]}>
                   {t(PRIORITIES.find((x) => x.p === e.priority)!.key)}
                 </Text>
               </View>
@@ -135,7 +138,7 @@ export default function ExamsScreen() {
                 <Text style={styles.prepUnknown}>{t('exams.prepUnknown')}</Text>
               ) : (
                 <View style={styles.prepBarBg}>
-                  <View style={[styles.prepBar, { width: `${e.preparation}%`, backgroundColor: prepColor(e.preparation) }]} />
+                  <View style={[styles.prepBar, { width: `${e.preparation}%`, backgroundColor: prepColor(e.preparation, c) }]} />
                   <Text style={styles.prepPct}>{e.preparation}%</Text>
                 </View>
               )}
@@ -151,6 +154,8 @@ export default function ExamsScreen() {
 }
 
 function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <Pressable style={[styles.chip, on && styles.chipOn]} onPress={onPress} accessibilityRole="button">
       <Text style={[styles.chipText, on && styles.chipTextOn]}>{label}</Text>
@@ -158,8 +163,8 @@ function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () 
   );
 }
 
-function prepColor(p: number): string {
-  return p >= 70 ? theme.ok : p >= 40 ? theme.warn : theme.danger;
+function prepColor(p: number, c: ColorScale): string {
+  return p >= 70 ? c.success : p >= 40 ? c.warning : c.error;
 }
 function daysLabel(days: number, t: (k: TranslationKey) => string): string {
   if (days < 0) return t('exams.past');
@@ -173,34 +178,34 @@ function formatDate(date: string, locale: string): string {
   });
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
-  kicker: { fontSize: 13, fontWeight: '700', color: theme.accent, textTransform: 'uppercase', letterSpacing: 1.2 },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
+  kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
   addCard: { gap: 10 },
-  input: { backgroundColor: theme.surfaceAlt, borderWidth: 1, borderColor: theme.border, borderRadius: 10, padding: 12, fontSize: 15, color: theme.text },
+  input: { backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12, fontSize: 15, color: c.textPrimary },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { borderWidth: 1, borderColor: theme.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: theme.surfaceAlt },
-  chipOn: { borderColor: theme.accent, backgroundColor: theme.accent },
-  chipText: { fontSize: 13, color: theme.textMuted, fontWeight: '600' },
-  chipTextOn: { color: theme.accentText },
-  empty: { fontSize: 14, color: theme.textMuted },
+  chip: { borderWidth: 1, borderColor: c.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: c.surfaceElevated },
+  chipOn: { borderColor: c.primary, backgroundColor: c.primary },
+  chipText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
+  chipTextOn: { color: c.onPrimary },
+  empty: { fontSize: 14, color: c.textSecondary },
   exam: {
-    backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderLeftWidth: 3,
+    backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, borderLeftWidth: 3,
     borderRadius: 12, padding: 14, gap: 8,
   },
   examHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  examSubject: { flex: 1, fontSize: 16, fontWeight: '700', color: theme.text },
+  examSubject: { flex: 1, fontSize: 16, fontWeight: '700', color: c.textPrimary },
   prio: { borderWidth: 1, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
   prioText: { fontSize: 11, fontWeight: '700' },
-  examMeta: { fontSize: 13, color: theme.textMuted },
+  examMeta: { fontSize: 13, color: c.textSecondary },
   prepRow: { gap: 4 },
-  prepLabel: { fontSize: 11, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 0.6 },
-  prepUnknown: { fontSize: 13, color: theme.textFaint },
-  prepBarBg: { height: 20, backgroundColor: theme.surfaceAlt, borderRadius: 10, justifyContent: 'center', overflow: 'hidden' },
+  prepLabel: { fontSize: 11, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.6 },
+  prepUnknown: { fontSize: 13, color: c.textMuted },
+  prepBarBg: { height: 20, backgroundColor: c.surfaceElevated, borderRadius: 10, justifyContent: 'center', overflow: 'hidden' },
   prepBar: { position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 10 },
-  prepPct: { fontSize: 12, fontWeight: '700', color: theme.text, paddingLeft: 8 },
+  prepPct: { fontSize: 12, fontWeight: '700', color: c.textPrimary, paddingLeft: 8 },
   removeWrap: { position: 'absolute', top: 10, right: 12 },
-  remove: { fontSize: 16, color: theme.danger, fontWeight: '700' },
+  remove: { fontSize: 16, color: c.error, fontWeight: '700' },
 });

@@ -25,111 +25,111 @@ export interface Choice<T extends string = string> {
 
 // 2.3 — Universal learning category
 export const CATEGORY_CHOICES: Choice<LearningCategory>[] = [
-  { value: 'kindergarten', label: 'Maternelle', icon: '🧒' },
-  { value: 'primary', label: 'Primaire', icon: '📚' },
-  { value: 'secondary', label: 'Secondaire', icon: '🎒' },
-  { value: 'highschool', label: 'Lycée', icon: '🎓' },
-  { value: 'university', label: 'Université / Faculté', icon: '🏛️' },
-  { value: 'research', label: 'Recherche / Doctorat', icon: '🔬' },
-  { value: 'professional', label: 'Formation professionnelle', icon: '💼' },
-  { value: 'language', label: 'Apprentissage d’une langue', icon: '🌍' },
-  { value: 'personal', label: 'Apprentissage personnel', icon: '🧠' },
+  { value: 'kindergarten', label: 'onb.cat.kindergarten', icon: '🧒' },
+  { value: 'primary', label: 'onb.cat.primary', icon: '📚' },
+  { value: 'secondary', label: 'onb.cat.secondary', icon: '🎒' },
+  { value: 'highschool', label: 'onb.cat.highschool', icon: '🎓' },
+  { value: 'university', label: 'onb.cat.university', icon: '🏛️' },
+  { value: 'research', label: 'onb.cat.research', icon: '🔬' },
+  { value: 'professional', label: 'onb.cat.professional', icon: '💼' },
+  { value: 'language', label: 'onb.cat.language', icon: '🌍' },
+  { value: 'personal', label: 'onb.cat.personal', icon: '🧠' },
 ];
 
 // 2.2 — Age bands (minor-friendly: a band, never a birth date)
 export const AGE_BANDS: Choice[] = [
-  { value: 'under12', label: 'Moins de 12 ans', icon: '🧒' },
-  { value: '12to15', label: '12–15 ans', icon: '🎒' },
-  { value: '16to18', label: '16–18 ans', icon: '🎓' },
-  { value: '18to25', label: '18–25 ans', icon: '🎓' },
-  { value: '25to40', label: '25–40 ans', icon: '💼' },
-  { value: 'over40', label: '40 ans et plus', icon: '🧭' },
+  { value: 'under12', label: 'onb.age.under12', icon: '🧒' },
+  { value: '12to15', label: 'onb.age.12to15', icon: '🎒' },
+  { value: '16to18', label: 'onb.age.16to18', icon: '🎓' },
+  { value: '18to25', label: 'onb.age.18to25', icon: '🎓' },
+  { value: '25to40', label: 'onb.age.25to40', icon: '💼' },
+  { value: 'over40', label: 'onb.age.over40', icon: '🧭' },
 ];
 
 // 2.5 — Learning goals (multi-select)
 export const GOAL_CHOICES: Choice[] = [
-  { value: 'understand', label: 'Comprendre mes cours', icon: '💡' },
-  { value: 'exams', label: 'Réussir mes examens', icon: '🎯' },
-  { value: 'grades', label: 'Améliorer mes notes', icon: '📈' },
-  { value: 'language', label: 'Apprendre une langue', icon: '🌍' },
-  { value: 'contest', label: 'Préparer un concours', icon: '🏆' },
-  { value: 'homework', label: 'Faire mes devoirs', icon: '📝' },
-  { value: 'labs', label: 'Réaliser mes TP', icon: '🔬' },
-  { value: 'reports', label: 'Rédiger mes rapports', icon: '📄' },
-  { value: 'projects', label: 'Travailler sur mes projets', icon: '🛠️' },
-  { value: 'research', label: 'Faire de la recherche', icon: '🔎' },
-  { value: 'skills', label: 'Développer mes compétences', icon: '🚀' },
-  { value: 'curiosity', label: 'Apprendre par curiosité', icon: '✨' },
+  { value: 'understand', label: 'onb.goal.understand', icon: '💡' },
+  { value: 'exams', label: 'onb.goal.exams', icon: '🎯' },
+  { value: 'grades', label: 'onb.goal.grades', icon: '📈' },
+  { value: 'language', label: 'onb.goal.language', icon: '🌍' },
+  { value: 'contest', label: 'onb.goal.contest', icon: '🏆' },
+  { value: 'homework', label: 'onb.goal.homework', icon: '📝' },
+  { value: 'labs', label: 'onb.goal.labs', icon: '🔬' },
+  { value: 'reports', label: 'onb.goal.reports', icon: '📄' },
+  { value: 'projects', label: 'onb.goal.projects', icon: '🛠️' },
+  { value: 'research', label: 'onb.goal.research', icon: '🔎' },
+  { value: 'skills', label: 'onb.goal.skills', icon: '🚀' },
+  { value: 'curiosity', label: 'onb.goal.curiosity', icon: '✨' },
 ];
 
 // 2.6 — Common subjects (learner can also add their own)
 export const SUBJECT_CHOICES: Choice[] = [
-  { value: 'Mathématiques', label: 'Mathématiques', icon: '➗' },
-  { value: 'Physique', label: 'Physique', icon: '🧲' },
-  { value: 'Chimie', label: 'Chimie', icon: '⚗️' },
-  { value: 'Biologie', label: 'Biologie', icon: '🧬' },
-  { value: 'Informatique', label: 'Informatique', icon: '💻' },
-  { value: 'Droit', label: 'Droit', icon: '⚖️' },
-  { value: 'Économie', label: 'Économie', icon: '📊' },
-  { value: 'Histoire', label: 'Histoire', icon: '🏛️' },
-  { value: 'Géographie', label: 'Géographie', icon: '🗺️' },
-  { value: 'Langues', label: 'Langues', icon: '🗣️' },
-  { value: 'Médecine', label: 'Médecine', icon: '🩺' },
-  { value: 'Philosophie', label: 'Philosophie', icon: '📖' },
+  { value: 'Mathématiques', label: 'onb.subj.math', icon: '➗' },
+  { value: 'Physique', label: 'onb.subj.physics', icon: '🧲' },
+  { value: 'Chimie', label: 'onb.subj.chemistry', icon: '⚗️' },
+  { value: 'Biologie', label: 'onb.subj.biology', icon: '🧬' },
+  { value: 'Informatique', label: 'onb.subj.cs', icon: '💻' },
+  { value: 'Droit', label: 'onb.subj.law', icon: '⚖️' },
+  { value: 'Économie', label: 'onb.subj.economics', icon: '📊' },
+  { value: 'Histoire', label: 'onb.subj.history', icon: '🏛️' },
+  { value: 'Géographie', label: 'onb.subj.geography', icon: '🗺️' },
+  { value: 'Langues', label: 'onb.subj.languages', icon: '🗣️' },
+  { value: 'Médecine', label: 'onb.subj.medicine', icon: '🩺' },
+  { value: 'Philosophie', label: 'onb.subj.philosophy', icon: '📖' },
 ];
 
 // 2.9 — Learning preferences (multi-select, NOT a diagnosis)
 export const PREFERENCE_CHOICES: Choice[] = [
-  { value: 'visual', label: 'Explications visuelles', icon: '🖼️' },
-  { value: 'examples', label: 'Exemples', icon: '📎' },
-  { value: 'practice', label: 'Pratique', icon: '🏋️' },
-  { value: 'exercises', label: 'Exercices', icon: '✍️' },
-  { value: 'conversation', label: 'Conversation', icon: '💬' },
-  { value: 'reading', label: 'Lecture', icon: '📕' },
-  { value: 'listening', label: 'Écoute', icon: '🎧' },
-  { value: 'repetition', label: 'Répétition', icon: '🔁' },
-  { value: 'problems', label: 'Résolution de problèmes', icon: '🧩' },
+  { value: 'visual', label: 'onb.pref.visual', icon: '🖼️' },
+  { value: 'examples', label: 'onb.pref.examples', icon: '📎' },
+  { value: 'practice', label: 'onb.pref.practice', icon: '🏋️' },
+  { value: 'exercises', label: 'onb.pref.exercises', icon: '✍️' },
+  { value: 'conversation', label: 'onb.pref.conversation', icon: '💬' },
+  { value: 'reading', label: 'onb.pref.reading', icon: '📕' },
+  { value: 'listening', label: 'onb.pref.listening', icon: '🎧' },
+  { value: 'repetition', label: 'onb.pref.repetition', icon: '🔁' },
+  { value: 'problems', label: 'onb.pref.problems', icon: '🧩' },
 ];
 
 // 2.10 — AI teacher configuration
 export const TONE_CHOICES: Choice[] = [
-  { value: 'supportive', label: 'Bienveillant', icon: '😊' },
-  { value: 'balanced', label: 'Équilibré', icon: '🎯' },
-  { value: 'demanding', label: 'Exigeant', icon: '🔥' },
+  { value: 'supportive', label: 'onb.tone.supportive', icon: '😊' },
+  { value: 'balanced', label: 'onb.tone.balanced', icon: '🎯' },
+  { value: 'demanding', label: 'onb.tone.demanding', icon: '🔥' },
 ];
 export const EXPLANATION_CHOICES: Choice[] = [
-  { value: 'short', label: 'Courtes', icon: '⚡' },
-  { value: 'balanced', label: 'Équilibrées', icon: '⚖️' },
-  { value: 'detailed', label: 'Détaillées', icon: '📚' },
+  { value: 'short', label: 'onb.expl.short', icon: '⚡' },
+  { value: 'balanced', label: 'onb.expl.balanced', icon: '⚖️' },
+  { value: 'detailed', label: 'onb.expl.detailed', icon: '📚' },
 ];
 export const INTERVENTION_CHOICES: Choice[] = [
-  { value: 'let_me_think', label: 'Me laisser réfléchir', icon: '🤔' },
-  { value: 'guide_me', label: 'Me guider progressivement', icon: '🧭' },
-  { value: 'interactive', label: 'Être très interactif', icon: '💬' },
+  { value: 'let_me_think', label: 'onb.interv.let_me_think', icon: '🤔' },
+  { value: 'guide_me', label: 'onb.interv.guide_me', icon: '🧭' },
+  { value: 'interactive', label: 'onb.interv.interactive', icon: '💬' },
 ];
 export const CORRECTION_CHOICES: Choice[] = [
-  { value: 'immediate', label: 'Corriger immédiatement', icon: '✅' },
-  { value: 'let_me_finish', label: 'Me laisser terminer', icon: '⏳' },
-  { value: 'adaptive', label: 'Adapter selon la situation', icon: '🎚️' },
+  { value: 'immediate', label: 'onb.corr.immediate', icon: '✅' },
+  { value: 'let_me_finish', label: 'onb.corr.let_me_finish', icon: '⏳' },
+  { value: 'adaptive', label: 'onb.corr.adaptive', icon: '🎚️' },
 ];
 
 // 2.11 — Academic assistance preferences (multi-select)
 export const ACADEMIC_SUPPORT_CHOICES: Choice[] = [
-  { value: 'guide', label: 'Me guider', icon: '👨‍🏫' },
-  { value: 'understand', label: 'M’aider à comprendre', icon: '🧠' },
-  { value: 'step_by_step', label: 'M’accompagner étape par étape', icon: '📝' },
-  { value: 'verify', label: 'Vérifier mon raisonnement', icon: '🔎' },
-  { value: 'solution', label: 'Me montrer une solution expliquée', icon: '✅' },
+  { value: 'guide', label: 'onb.sup.guide', icon: '👨‍🏫' },
+  { value: 'understand', label: 'onb.sup.understand', icon: '🧠' },
+  { value: 'step_by_step', label: 'onb.sup.step_by_step', icon: '📝' },
+  { value: 'verify', label: 'onb.sup.verify', icon: '🔎' },
+  { value: 'solution', label: 'onb.sup.solution', icon: '✅' },
 ];
 
 // 2.8 — Language-learner sub-skills
 export const LANGUAGE_SKILL_CHOICES: Choice[] = [
-  { value: 'comprehension', label: 'Compréhension', icon: '👂' },
-  { value: 'speaking', label: 'Expression orale', icon: '🗣️' },
-  { value: 'pronunciation', label: 'Prononciation', icon: '🔊' },
-  { value: 'writing', label: 'Écriture', icon: '✍️' },
-  { value: 'grammar', label: 'Grammaire', icon: '📐' },
-  { value: 'vocabulary', label: 'Vocabulaire', icon: '📖' },
+  { value: 'comprehension', label: 'onb.skill.comprehension', icon: '👂' },
+  { value: 'speaking', label: 'onb.skill.speaking', icon: '🗣️' },
+  { value: 'pronunciation', label: 'onb.skill.pronunciation', icon: '🔊' },
+  { value: 'writing', label: 'onb.skill.writing', icon: '✍️' },
+  { value: 'grammar', label: 'onb.skill.grammar', icon: '📐' },
+  { value: 'vocabulary', label: 'onb.skill.vocabulary', icon: '📖' },
 ];
 
 export const CEFR_LEVELS: Choice[] = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'].map(
@@ -138,9 +138,9 @@ export const CEFR_LEVELS: Choice[] = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'].map(
 
 /** Self-rating used when the AI diagnostic is unavailable (2.12). */
 export const SELF_RATING: Choice<KycMasteryLevel>[] = [
-  { value: 'high', label: 'Je maîtrise', icon: '🟢' },
-  { value: 'medium', label: 'Moyen', icon: '🟡' },
-  { value: 'low', label: 'À renforcer', icon: '🔴' },
+  { value: 'high', label: 'onb.rate.high', icon: '🟢' },
+  { value: 'medium', label: 'onb.rate.medium', icon: '🟡' },
+  { value: 'low', label: 'onb.rate.low', icon: '🔴' },
 ];
 
 // A handful of common interface/native languages surfaced first (the full

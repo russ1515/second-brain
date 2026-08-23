@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import {
@@ -7,11 +7,14 @@ import {
   type LanguageProfileSummary,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { Button, Card, Empty, ErrorBanner, Loading } from '../../components/ui';
 
 export default function LanguagesScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
   const [profiles, setProfiles] = useState<LanguageProfileSummary[] | null>(null);
@@ -65,7 +68,7 @@ export default function LanguagesScreen() {
         <TextInput
           style={styles.input}
           placeholder={t('lang.langPlaceholder')}
-          placeholderTextColor={theme.textFaint}
+          placeholderTextColor={c.textMuted}
           value={language}
           onChangeText={setLanguage}
           testID="language"
@@ -73,7 +76,7 @@ export default function LanguagesScreen() {
         <TextInput
           style={styles.input}
           placeholder={t('lang.nativePlaceholder')}
-          placeholderTextColor={theme.textFaint}
+          placeholderTextColor={c.textMuted}
           value={nativeLanguage}
           onChangeText={setNativeLanguage}
           testID="native-language"
@@ -119,39 +122,39 @@ export default function LanguagesScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   label: {
     fontSize: 12,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: 10,
   },
-  hint: { fontSize: 12, color: theme.textFaint, marginBottom: 6 },
+  hint: { fontSize: 12, color: c.textMuted, marginBottom: 6 },
   input: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     padding: 12,
     fontSize: 15,
-    color: theme.text,
+    color: c.textPrimary,
     marginBottom: 10,
   },
   modes: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 },
   mode: {
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 999,
     paddingVertical: 6,
     paddingHorizontal: 12,
-    color: theme.textMuted,
+    color: c.textSecondary,
     fontSize: 13,
     textTransform: 'capitalize',
   },
-  modeOn: { borderColor: theme.accent, color: theme.text, backgroundColor: theme.accent },
-  name: { fontSize: 18, fontWeight: '700', color: theme.text },
-  meta: { fontSize: 13, color: theme.textMuted, marginTop: 4, marginBottom: 8, textTransform: 'capitalize' },
+  modeOn: { borderColor: c.primary, color: c.textPrimary, backgroundColor: c.primary },
+  name: { fontSize: 18, fontWeight: '700', color: c.textPrimary },
+  meta: { fontSize: 13, color: c.textSecondary, marginTop: 4, marginBottom: 8, textTransform: 'capitalize' },
 });

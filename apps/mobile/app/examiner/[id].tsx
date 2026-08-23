@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type {
@@ -7,11 +7,14 @@ import type {
   GradedAnswer,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
 
 export default function AssessmentScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -84,7 +87,7 @@ export default function AssessmentScreen() {
       {assessment?.questions.map((q, i) => {
         const r = resultById.get(q.id);
         return (
-          <Card key={q.id} style={r ? verdictStyle(r.verdict) : undefined}>
+          <Card key={q.id} style={r ? verdictStyle(r.verdict, c) : undefined}>
             <Text style={styles.qHead}>
               {t('examiner.question')} {i + 1} ·{' '}
               {t('examiner.points').replace('{n}', String(q.points))}
@@ -108,7 +111,7 @@ export default function AssessmentScreen() {
               <TextInput
                 style={[styles.input, styles.tall]}
                 placeholder={t('examiner.yourAnswer')}
-                placeholderTextColor={theme.textFaint}
+                placeholderTextColor={c.textMuted}
                 value={answers[i]}
                 onChangeText={(v) => setAnswer(i, v)}
                 editable={!result}
@@ -118,7 +121,7 @@ export default function AssessmentScreen() {
 
             {r ? (
               <View style={styles.feedback}>
-                <Text style={[styles.verdict, verdictText(r.verdict)]}>
+                <Text style={[styles.verdict, verdictText(r.verdict, c)]}>
                   {t(`verdict.${r.verdict}` as TranslationKey)}
                 </Text>
                 {r.why ? <Text style={styles.fbLine}><Text style={styles.fbLabel}>{t('examiner.why')}</Text>{r.why}</Text> : null}
@@ -150,56 +153,56 @@ export default function AssessmentScreen() {
   );
 }
 
-function verdictStyle(v: GradedAnswer['verdict']) {
+function verdictStyle(v: GradedAnswer['verdict'], c: ColorScale) {
   return v === 'correct'
-    ? { borderColor: theme.ok }
+    ? { borderColor: c.success }
     : v === 'partial'
-      ? { borderColor: theme.warn }
-      : { borderColor: '#EF4444' };
+      ? { borderColor: c.warning }
+      : { borderColor: c.error };
 }
-function verdictText(v: GradedAnswer['verdict']) {
+function verdictText(v: GradedAnswer['verdict'], c: ColorScale) {
   return v === 'correct'
-    ? { color: theme.ok }
+    ? { color: c.success }
     : v === 'partial'
-      ? { color: theme.warn }
-      : { color: '#FECACA' };
+      ? { color: c.warning }
+      : { color: c.error };
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
-  title: { fontSize: 22, fontWeight: '700', color: theme.text },
-  meta: { fontSize: 13, color: theme.textMuted, textTransform: 'capitalize' },
-  scoreCard: { alignItems: 'center', gap: 6, borderColor: theme.accent },
-  scoreBig: { fontSize: 34, fontWeight: '800', color: theme.text },
-  summary: { fontSize: 14, color: theme.text, lineHeight: 20, textAlign: 'center' },
-  qHead: { fontSize: 12, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 },
-  prompt: { fontSize: 15, color: theme.text, lineHeight: 21, marginBottom: 10 },
+  title: { fontSize: 22, fontWeight: '700', color: c.textPrimary },
+  meta: { fontSize: 13, color: c.textSecondary, textTransform: 'capitalize' },
+  scoreCard: { alignItems: 'center', gap: 6, borderColor: c.primary },
+  scoreBig: { fontSize: 34, fontWeight: '800', color: c.textPrimary },
+  summary: { fontSize: 14, color: c.textPrimary, lineHeight: 20, textAlign: 'center' },
+  qHead: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 },
+  prompt: { fontSize: 15, color: c.textPrimary, lineHeight: 21, marginBottom: 10 },
   options: { gap: 8 },
   option: {
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     paddingVertical: 10,
     paddingHorizontal: 12,
-    color: theme.textMuted,
+    color: c.textSecondary,
     fontSize: 14,
   },
-  optionOn: { borderColor: theme.accent, color: theme.text, backgroundColor: theme.surfaceAlt },
+  optionOn: { borderColor: c.primary, color: c.textPrimary, backgroundColor: c.surfaceElevated },
   input: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     padding: 12,
     fontSize: 15,
-    color: theme.text,
+    color: c.textPrimary,
   },
   tall: { minHeight: 90, textAlignVertical: 'top' },
-  feedback: { marginTop: 10, gap: 4, borderTopWidth: 1, borderTopColor: theme.border, paddingTop: 8 },
+  feedback: { marginTop: 10, gap: 4, borderTopWidth: 1, borderTopColor: c.border, paddingTop: 8 },
   verdict: { fontSize: 12, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
-  fbLine: { fontSize: 13, color: theme.textMuted, lineHeight: 19 },
-  fbLabel: { color: theme.text, fontWeight: '700' },
-  adviceCard: { borderColor: theme.accent, gap: 6 },
-  adviceLabel: { fontSize: 12, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 1 },
-  advice: { fontSize: 14, color: theme.text, lineHeight: 20 },
+  fbLine: { fontSize: 13, color: c.textSecondary, lineHeight: 19 },
+  fbLabel: { color: c.textPrimary, fontWeight: '700' },
+  adviceCard: { borderColor: c.primary, gap: 6 },
+  adviceLabel: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
+  advice: { fontSize: 14, color: c.textPrimary, lineHeight: 20 },
 });

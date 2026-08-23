@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { SessionReport } from '@second-brain/shared';
 import { api } from '../../lib/client';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n } from '../../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
 
@@ -27,6 +28,8 @@ const STAGE_KEYS = [
  *    reports what moved: FSRS queue + Digital Twin / Learning Score delta.
  */
 export default function SessionScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const params = useLocalSearchParams<{
     id: string;
     lessonId?: string;
@@ -186,6 +189,8 @@ function ScoreBlock({
   value: number | null;
   highlight?: boolean;
 }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={styles.scoreBlock}>
       <Text style={styles.scoreLabel}>{label}</Text>
@@ -202,35 +207,35 @@ function formatDue(days: number, t: (k: 'session.today' | 'session.inDays' | 'se
   return `${days} ${t('session.inDays')}`;
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 14, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
   kicker: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
   },
-  topic: { fontSize: 26, fontWeight: '800', color: theme.text, lineHeight: 32 },
+  topic: { fontSize: 26, fontWeight: '800', color: c.textPrimary, lineHeight: 32 },
   planCard: { gap: 10, alignItems: 'flex-start' },
   avatar: { fontSize: 34 },
   planText: { fontSize: 16, color: '#D3DCE8', lineHeight: 24 },
   metaChip: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderRadius: 20,
     paddingHorizontal: 12,
     paddingVertical: 5,
   },
-  metaChipText: { fontSize: 13, color: theme.textMuted, fontWeight: '600' },
-  cardTitle: { fontSize: 16, fontWeight: '700', color: theme.text, marginBottom: 10 },
+  metaChipText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
+  cardTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginBottom: 10 },
   stageRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 5 },
   stageNum: {
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: theme.surfaceAlt,
-    color: theme.accent,
+    backgroundColor: c.surfaceElevated,
+    color: c.primary,
     fontSize: 12,
     fontWeight: '700',
     textAlign: 'center',
@@ -240,27 +245,27 @@ const styles = StyleSheet.create({
     width: 24,
     fontSize: 15,
     fontWeight: '800',
-    color: theme.ok,
+    color: c.success,
     textAlign: 'center',
   },
   stageText: { flex: 1, fontSize: 15, color: '#D3DCE8' },
-  twinCard: { borderColor: theme.accent },
+  twinCard: { borderColor: c.primary },
   scoreRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16 },
   scoreBlock: { alignItems: 'center', gap: 2 },
   scoreLabel: {
     fontSize: 11,
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
     fontWeight: '700',
   },
-  scoreValue: { fontSize: 34, fontWeight: '800', color: theme.textMuted },
-  scoreValueHi: { color: theme.text },
-  arrow: { fontSize: 24, color: theme.textFaint },
+  scoreValue: { fontSize: 34, fontWeight: '800', color: c.textSecondary },
+  scoreValueHi: { color: c.textPrimary },
+  arrow: { fontSize: 24, color: c.textMuted },
   delta: { textAlign: 'center', fontSize: 15, fontWeight: '700', marginTop: 8 },
-  deltaUp: { color: theme.ok },
-  deltaDown: { color: theme.warn },
-  masteryLine: { textAlign: 'center', color: theme.textMuted, fontSize: 14, marginTop: 8 },
-  hint: { textAlign: 'center', color: theme.textFaint, fontSize: 13, marginTop: 8 },
+  deltaUp: { color: c.success },
+  deltaDown: { color: c.warning },
+  masteryLine: { textAlign: 'center', color: c.textSecondary, fontSize: 14, marginTop: 8 },
+  hint: { textAlign: 'center', color: c.textMuted, fontSize: 13, marginTop: 8 },
   resultLine: { fontSize: 15, color: '#D3DCE8', lineHeight: 26 },
 });

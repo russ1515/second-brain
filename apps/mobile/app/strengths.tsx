@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ConceptScore, StrengthsWeaknesses } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, ErrorBanner, Loading } from '../components/ui';
 
@@ -13,6 +14,8 @@ import { Button, ErrorBanner, Loading } from '../components/ui';
  * next sessions (the Session Orchestrator already targets the weakest first).
  */
 export default function StrengthsScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
   // Both the 💪 and ⚠️ tiles land here; `focus` just scrolls attention.
@@ -56,7 +59,7 @@ export default function StrengthsScreen() {
         empty={t('sw.noStrengths')}
         emphasis={focus !== 'weaknesses'}
         items={data.strengths}
-        color={theme.ok}
+        color={c.success}
         t={t}
       />
       <Section
@@ -65,7 +68,7 @@ export default function StrengthsScreen() {
         empty={t('sw.noWeaknesses')}
         emphasis={focus === 'weaknesses'}
         items={data.weaknesses}
-        color={theme.warn}
+        color={c.warning}
         t={t}
       />
 
@@ -98,6 +101,8 @@ function Section({
   color: string;
   t: (k: TranslationKey) => string;
 }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={[styles.section, emphasis && { borderColor: color }]}>
       <Text style={[styles.sectionTitle, { color }]}>
@@ -123,45 +128,45 @@ function Section({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 14, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
   kicker: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
   },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
   section: {
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 12,
     padding: 14,
     gap: 8,
   },
   sectionTitle: { fontSize: 17, fontWeight: '700' },
-  empty: { fontSize: 14, color: theme.textMuted },
+  empty: { fontSize: 14, color: c.textSecondary },
   row: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 10,
     borderTopWidth: 1,
-    borderTopColor: theme.border,
+    borderTopColor: c.border,
     paddingTop: 8,
   },
-  name: { flex: 1, fontSize: 15, fontWeight: '600', color: theme.text },
-  stars: { fontSize: 14, color: theme.warn, letterSpacing: 1 },
-  starsOff: { color: theme.border },
-  pct: { fontSize: 12, color: theme.textMuted, letterSpacing: 0 },
+  name: { flex: 1, fontSize: 15, fontWeight: '600', color: c.textPrimary },
+  stars: { fontSize: 14, color: c.warning, letterSpacing: 1 },
+  starsOff: { color: c.border },
+  pct: { fontSize: 12, color: c.textSecondary, letterSpacing: 0 },
   aiNote: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderRadius: 12,
     borderLeftWidth: 3,
-    borderLeftColor: theme.accent,
+    borderLeftColor: c.primary,
     padding: 14,
     gap: 10,
   },

@@ -1,9 +1,10 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import type { StudyResource, StudyResourceType } from '@second-brain/shared';
 import { api } from '../../../lib/client';
-import { theme } from '../../../lib/theme';
+import { useTokens } from '../../../lib/design/theme';
+import type { ColorScale } from '../../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../../../components/ui';
 import { Markdown } from '../../../components/markdown';
@@ -21,6 +22,8 @@ const RESOURCE_KEY: Record<StudyResourceType, TranslationKey> = {
 /** Reader for a saved study resource (Sprint 6.6). Flashcards link into the
  *  FSRS review queue; everything else renders its markdown. */
 export default function ResourceScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { id } = useLocalSearchParams<{ id: string }>();
   const { t } = useI18n();
   const router = useRouter();
@@ -87,10 +90,10 @@ export default function ResourceScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
-  kind: { fontSize: 12, fontWeight: '700', color: theme.accent, textTransform: 'uppercase', letterSpacing: 1 },
-  title: { fontSize: 20, fontWeight: '700', color: theme.text },
+  kind: { fontSize: 12, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1 },
+  title: { fontSize: 20, fontWeight: '700', color: c.textPrimary },
   card: { gap: 10 },
-  body: { fontSize: 15, color: theme.text, lineHeight: 22 },
+  body: { fontSize: 15, color: c.textPrimary, lineHeight: 22 },
 });

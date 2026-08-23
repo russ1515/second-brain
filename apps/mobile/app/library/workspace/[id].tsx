@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -15,7 +15,8 @@ import type {
   WorkspaceMode,
 } from '@second-brain/shared';
 import { api } from '../../../lib/client';
-import { theme } from '../../../lib/theme';
+import { useTokens } from '../../../lib/design/theme';
+import type { ColorScale } from '../../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../../lib/i18n';
 import { Button, Card, ErrorBanner } from '../../../components/ui';
 import { Markdown } from '../../../components/markdown';
@@ -39,6 +40,8 @@ const OPENER: Record<WorkspaceMode, string> = {
  * one-tap turn of the finished work into saved study resources.
  */
 export default function WorkspaceScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { id, title } = useLocalSearchParams<{ id: string; title?: string }>();
   const { t } = useI18n();
   const [analysis, setAnalysis] = useState<WorkAnalysis | null>(null);
@@ -174,7 +177,7 @@ export default function WorkspaceScreen() {
         <TextInput
           style={styles.input}
           placeholder={t('ws.placeholder')}
-          placeholderTextColor={theme.textFaint}
+          placeholderTextColor={c.textMuted}
           value={input}
           onChangeText={setInput}
           multiline
@@ -197,6 +200,8 @@ export default function WorkspaceScreen() {
 }
 
 function AnalysisCard({ analysis }: { analysis: WorkAnalysis }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   return (
     <Card style={styles.analysisCard}>
@@ -224,6 +229,8 @@ function AnalysisCard({ analysis }: { analysis: WorkAnalysis }) {
 }
 
 function AnalysisBlock({ label, items }: { label: string; items: string[] }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   if (items.length === 0) return null;
   return (
     <View style={styles.block}>
@@ -235,33 +242,33 @@ function AnalysisBlock({ label, items }: { label: string; items: string[] }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
-  kicker: { fontSize: 13, fontWeight: '700', color: theme.accent, textTransform: 'uppercase', letterSpacing: 1.2 },
-  docTitle: { fontSize: 20, fontWeight: '700', color: theme.text },
-  analysing: { fontSize: 14, color: theme.textFaint, fontStyle: 'italic' },
-  thinking: { fontSize: 14, color: theme.textFaint },
-  analysisCard: { gap: 10, borderColor: theme.accent },
-  analysisTitle: { fontSize: 13, fontWeight: '700', color: theme.accent },
+  kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
+  docTitle: { fontSize: 20, fontWeight: '700', color: c.textPrimary },
+  analysing: { fontSize: 14, color: c.textMuted, fontStyle: 'italic' },
+  thinking: { fontSize: 14, color: c.textMuted },
+  analysisCard: { gap: 10, borderColor: c.primary },
+  analysisTitle: { fontSize: 13, fontWeight: '700', color: c.primary },
   block: { gap: 3 },
-  blockLabel: { fontSize: 12, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 0.5 },
-  blockItem: { fontSize: 14, color: theme.text, lineHeight: 20 },
-  hardItem: { fontSize: 14, color: theme.text, lineHeight: 20 },
-  hardConcept: { fontWeight: '700', color: theme.warn },
-  sectionLabel: { fontSize: 11, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 0.8 },
+  blockLabel: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
+  blockItem: { fontSize: 14, color: c.textPrimary, lineHeight: 20 },
+  hardItem: { fontSize: 14, color: c.textPrimary, lineHeight: 20 },
+  hardConcept: { fontWeight: '700', color: c.warning },
+  sectionLabel: { fontSize: 11, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.8 },
   modeRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  modeChip: { borderWidth: 1, borderColor: theme.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: theme.surfaceAlt },
-  modeChipOn: { borderColor: theme.accent, backgroundColor: theme.accent },
-  modeText: { fontSize: 13, color: theme.textMuted, fontWeight: '600' },
-  modeTextOn: { color: theme.accentText },
-  aiBubble: { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 12, padding: 12 },
-  userBubble: { backgroundColor: theme.surfaceAlt, borderWidth: 1, borderColor: theme.accent, borderRadius: 12, padding: 12, alignSelf: 'flex-end', maxWidth: '90%' },
-  userText: { fontSize: 15, color: theme.text, lineHeight: 21 },
+  modeChip: { borderWidth: 1, borderColor: c.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: c.surfaceElevated },
+  modeChipOn: { borderColor: c.primary, backgroundColor: c.primary },
+  modeText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
+  modeTextOn: { color: c.onPrimary },
+  aiBubble: { backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, borderRadius: 12, padding: 12 },
+  userBubble: { backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.primary, borderRadius: 12, padding: 12, alignSelf: 'flex-end', maxWidth: '90%' },
+  userText: { fontSize: 15, color: c.textPrimary, lineHeight: 21 },
   inputRow: { gap: 8 },
-  input: { backgroundColor: theme.surfaceAlt, borderWidth: 1, borderColor: theme.border, borderRadius: 10, padding: 12, fontSize: 15, color: theme.text, minHeight: 70, textAlignVertical: 'top' },
-  finishCard: { gap: 8, borderColor: theme.ok },
-  finishTitle: { fontSize: 15, fontWeight: '700', color: theme.text },
-  muted: { fontSize: 13, color: theme.textMuted, lineHeight: 19 },
-  done: { fontSize: 14, color: theme.ok, fontWeight: '700' },
+  input: { backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12, fontSize: 15, color: c.textPrimary, minHeight: 70, textAlignVertical: 'top' },
+  finishCard: { gap: 8, borderColor: c.success },
+  finishTitle: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
+  muted: { fontSize: 13, color: c.textSecondary, lineHeight: 19 },
+  done: { fontSize: 14, color: c.success, fontWeight: '700' },
 });

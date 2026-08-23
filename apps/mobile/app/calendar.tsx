@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type {
   CalendarEntry,
@@ -7,7 +7,8 @@ import type {
   UserEventKind,
 } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 
@@ -53,6 +54,8 @@ const DAY_OFFSETS: { key: TranslationKey; days: number }[] = [
  * removed.
  */
 export default function CalendarScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t, locale } = useI18n();
   const [view, setView] = useState<CalendarView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -126,7 +129,7 @@ export default function CalendarScreen() {
         <TextInput
           style={styles.input}
           placeholder={t('cal.titlePlaceholder')}
-          placeholderTextColor={theme.textFaint}
+          placeholderTextColor={c.textMuted}
           value={title}
           onChangeText={setTitle}
         />
@@ -175,6 +178,8 @@ export default function CalendarScreen() {
 }
 
 function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <Pressable style={[styles.chip, on && styles.chipOn]} onPress={onPress} accessibilityRole="button">
       <Text style={[styles.chipText, on && styles.chipTextOn]}>{label}</Text>
@@ -190,35 +195,35 @@ function formatDay(date: string, locale: string): string {
   });
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
-  kicker: { fontSize: 13, fontWeight: '700', color: theme.accent, textTransform: 'uppercase', letterSpacing: 1.2 },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
+  kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
   addCard: { gap: 10 },
-  addLabel: { fontSize: 12, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 0.8 },
+  addLabel: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.8 },
   input: {
-    backgroundColor: theme.surfaceAlt, borderWidth: 1, borderColor: theme.border, borderRadius: 10,
-    padding: 12, fontSize: 15, color: theme.text,
+    backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border, borderRadius: 10,
+    padding: 12, fontSize: 15, color: c.textPrimary,
   },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { borderWidth: 1, borderColor: theme.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: theme.surfaceAlt },
-  chipOn: { borderColor: theme.accent, backgroundColor: theme.accent },
-  chipText: { fontSize: 13, color: theme.textMuted, fontWeight: '600' },
-  chipTextOn: { color: theme.accentText },
+  chip: { borderWidth: 1, borderColor: c.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: c.surfaceElevated },
+  chipOn: { borderColor: c.primary, backgroundColor: c.primary },
+  chipText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
+  chipTextOn: { color: c.onPrimary },
   day: { gap: 6, marginTop: 6 },
-  dayLabel: { fontSize: 13, fontWeight: '700', color: theme.textMuted, textTransform: 'capitalize' },
-  dayToday: { color: theme.accent },
-  empty: { fontSize: 13, color: theme.textFaint },
+  dayLabel: { fontSize: 13, fontWeight: '700', color: c.textSecondary, textTransform: 'capitalize' },
+  dayToday: { color: c.primary },
+  empty: { fontSize: 13, color: c.textMuted },
   entry: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 12, padding: 12,
+    backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, borderRadius: 12, padding: 12,
   },
-  entryAi: { borderLeftWidth: 3, borderLeftColor: theme.accent },
+  entryAi: { borderLeftWidth: 3, borderLeftColor: c.primary },
   entryIcon: { fontSize: 20 },
   entryBody: { flex: 1, gap: 1 },
-  entryKind: { fontSize: 10, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 0.6 },
-  entryTitle: { fontSize: 15, fontWeight: '600', color: theme.text },
+  entryKind: { fontSize: 10, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.6 },
+  entryTitle: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
   aiBadge: { fontSize: 14 },
-  remove: { fontSize: 18, color: theme.danger, fontWeight: '700', paddingHorizontal: 4 },
+  remove: { fontSize: 18, color: c.error, fontWeight: '700', paddingHorizontal: 4 },
 });

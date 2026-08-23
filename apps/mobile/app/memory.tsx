@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { LearningMemory, MemoryEntry, MemoryKind } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 
@@ -36,6 +37,8 @@ const KIND_LABEL: Record<MemoryKind, TranslationKey> = {
  * reports and studied documents. The point: the AI never starts from zero.
  */
 export default function MemoryScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t, locale } = useI18n();
   const [memory, setMemory] = useState<LearningMemory | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -119,6 +122,8 @@ function Row({
   t: (k: TranslationKey) => string;
   locale: string;
 }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const when = new Date(entry.at).toLocaleDateString(locale === 'fr' ? 'fr-FR' : 'en-US', {
     day: 'numeric',
     month: 'short',
@@ -141,23 +146,23 @@ function Row({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
   kicker: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
   },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
-  totalCard: { alignItems: 'center', gap: 2, borderColor: theme.accent },
-  totalValue: { fontSize: 44, fontWeight: '800', color: theme.text },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
+  totalCard: { alignItems: 'center', gap: 2, borderColor: c.primary },
+  totalValue: { fontSize: 44, fontWeight: '800', color: c.textPrimary },
   totalLabel: {
     fontSize: 12,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
@@ -165,9 +170,9 @@ const styles = StyleSheet.create({
   stat: {
     flexGrow: 1,
     flexBasis: '29%',
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 12,
     paddingVertical: 12,
     paddingHorizontal: 10,
@@ -175,16 +180,16 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   statIcon: { fontSize: 20 },
-  statValue: { fontSize: 22, fontWeight: '800', color: theme.text },
-  statLabel: { fontSize: 11, color: theme.textMuted, textAlign: 'center' },
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: theme.text, marginTop: 8 },
-  empty: { fontSize: 14, color: theme.textMuted },
+  statValue: { fontSize: 22, fontWeight: '800', color: c.textPrimary },
+  statLabel: { fontSize: 11, color: c.textSecondary, textAlign: 'center' },
+  sectionTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginTop: 8 },
+  empty: { fontSize: 14, color: c.textSecondary },
   row: {
     flexDirection: 'row',
     gap: 12,
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 12,
     padding: 12,
   },
@@ -193,10 +198,10 @@ const styles = StyleSheet.create({
   rowKind: {
     fontSize: 10,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
-  rowTitle: { fontSize: 15, fontWeight: '600', color: theme.text, lineHeight: 20 },
-  rowDetail: { fontSize: 12, color: theme.textMuted },
+  rowTitle: { fontSize: 15, fontWeight: '600', color: c.textPrimary, lineHeight: 20 },
+  rowDetail: { fontSize: 12, color: c.textSecondary },
 });

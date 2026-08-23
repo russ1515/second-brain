@@ -1,8 +1,9 @@
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { MonitoringSnapshot } from '@second-brain/shared';
 import { useApiQuery } from '../lib/query';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n } from '../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 
@@ -12,6 +13,8 @@ import { Button, Card, ErrorBanner, Loading } from '../components/ui';
  * the in-process metrics registry (also exported to Prometheus at /metrics).
  */
 export default function MonitoringScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const { data, error, refetch } = useApiQuery<MonitoringSnapshot>(['monitoring'], '/monitoring');
 
@@ -37,14 +40,14 @@ export default function MonitoringScreen() {
 
       <Section label={t('mon.http')}>
         <Stat value={String(data.http.total)} label={t('mon.requests')} />
-        <Stat value={`${errPct}%`} label={t('mon.errorRate')} color={errPct > 0 ? theme.danger : theme.ok} />
+        <Stat value={`${errPct}%`} label={t('mon.errorRate')} color={errPct > 0 ? c.error : c.success} />
         <Stat value={`${data.http.p50Ms}ms`} label="p50" />
         <Stat value={`${data.http.p95Ms}ms`} label="p95" />
       </Section>
 
       <Section label={t('mon.ai')}>
         <Stat value={String(data.ai.calls)} label={t('mon.aiCalls')} />
-        <Stat value={String(data.ai.errors)} label={t('mon.errors')} color={data.ai.errors > 0 ? theme.warn : theme.ok} />
+        <Stat value={String(data.ai.errors)} label={t('mon.errors')} color={data.ai.errors > 0 ? c.warning : c.success} />
         <Stat value={`${data.ai.avgMs}ms`} label={t('mon.avgLatency')} />
       </Section>
 
@@ -63,7 +66,7 @@ export default function MonitoringScreen() {
       ) : null}
 
       <Section label={t('mon.cache')}>
-        <Stat value={`${hitPct}%`} label={t('mon.hitRate')} color={hitPct >= 50 ? theme.ok : theme.warn} />
+        <Stat value={`${hitPct}%`} label={t('mon.hitRate')} color={hitPct >= 50 ? c.success : c.warning} />
         <Stat value={String(data.cache.hits)} label={t('mon.hits')} />
         <Stat value={String(data.cache.misses)} label={t('mon.misses')} />
       </Section>
@@ -81,6 +84,8 @@ export default function MonitoringScreen() {
 }
 
 function Section({ label, children }: { label: string; children: ReactNode }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <Card style={styles.section}>
       <Text style={styles.sectionLabel}>{label}</Text>
@@ -90,6 +95,8 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function Stat({ value, label, color }: { value: string; label: string; color?: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={styles.stat}>
       <Text style={[styles.statValue, color ? { color } : null]}>{value}</Text>
@@ -98,32 +105,32 @@ function Stat({ value, label, color }: { value: string; label: string; color?: s
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4, marginBottom: 2 },
   kicker: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
   },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
   section: { gap: 10 },
   sectionLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
   stats: { flexDirection: 'row', flexWrap: 'wrap', gap: 20 },
   stat: { minWidth: 70 },
-  statValue: { fontSize: 22, fontWeight: '800', color: theme.text },
-  statLabel: { fontSize: 12, color: theme.textMuted, marginTop: 2 },
+  statValue: { fontSize: 22, fontWeight: '800', color: c.textPrimary },
+  statLabel: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
   modelsCard: { gap: 8 },
   modelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  modelName: { fontSize: 14, color: theme.text, fontWeight: '600' },
-  modelMeta: { fontSize: 13, color: theme.textMuted },
-  note: { fontSize: 12, color: theme.textFaint, lineHeight: 17, marginTop: 4 },
+  modelName: { fontSize: 14, color: c.textPrimary, fontWeight: '600' },
+  modelMeta: { fontSize: 13, color: c.textSecondary },
+  note: { fontSize: 12, color: c.textMuted, lineHeight: 17, marginTop: 4 },
 });

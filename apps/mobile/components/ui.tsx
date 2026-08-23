@@ -1,13 +1,22 @@
 import {
   ActivityIndicator,
   Pressable,
-  StyleSheet,
   Text,
   View,
   type ViewStyle,
 } from 'react-native';
 import type { ReactNode } from 'react';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+
+/**
+ * Legacy shared primitives used by screens migrating to the design system.
+ *
+ * They keep their exact original APIs (so every consuming screen works
+ * unchanged) but read design-system tokens via `useTokens()` — so they are
+ * theme-aware (correct in BOTH light and dark) and match the new visual
+ * language. As screens move off the static `lib/theme` palette to `useTokens`,
+ * these primitives follow the active scheme with them.
+ */
 
 export function Card({
   children,
@@ -18,8 +27,21 @@ export function Card({
   style?: ViewStyle;
   testID?: string;
 }) {
+  const { colors: c, radius, spacing } = useTokens();
   return (
-    <View style={[styles.card, style]} testID={testID}>
+    <View
+      testID={testID}
+      style={[
+        {
+          backgroundColor: c.surface,
+          borderRadius: radius.lg,
+          padding: spacing.md,
+          borderWidth: 1,
+          borderColor: c.borderSubtle,
+        },
+        style,
+      ]}
+    >
       {children}
     </View>
   );
@@ -38,101 +60,67 @@ export function Button({
   busy?: boolean;
   variant?: 'primary' | 'ghost' | 'danger';
 }) {
+  const { colors: c, radius, spacing } = useTokens();
   const off = disabled || busy;
+  const bg = variant === 'primary' ? c.primary : 'transparent';
+  const borderCol = variant === 'ghost' ? c.border : variant === 'danger' ? c.error : 'transparent';
+  const fg = variant === 'primary' ? c.onPrimary : variant === 'danger' ? c.error : c.textSecondary;
   return (
     <Pressable
       accessibilityRole="button"
       onPress={onPress}
       disabled={off}
-      style={[
-        styles.button,
-        variant === 'ghost' && styles.buttonGhost,
-        variant === 'danger' && styles.buttonDanger,
-        off && styles.buttonOff,
-      ]}
+      style={{
+        backgroundColor: bg,
+        borderRadius: radius.md,
+        borderWidth: variant === 'primary' ? 0 : 1,
+        borderColor: borderCol,
+        paddingVertical: 14,
+        paddingHorizontal: spacing.md,
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: 48,
+        opacity: off ? 0.5 : 1,
+      }}
     >
       {busy ? (
-        <ActivityIndicator color={theme.accentText} />
+        <ActivityIndicator color={fg} />
       ) : (
-        <Text
-          style={[
-            styles.buttonText,
-            variant === 'ghost' && styles.buttonGhostText,
-            variant === 'danger' && styles.buttonDangerText,
-          ]}
-        >
-          {label}
-        </Text>
+        <Text style={{ color: fg, fontSize: 16, fontWeight: '600' }}>{label}</Text>
       )}
     </Pressable>
   );
 }
 
 export function ErrorBanner({ message }: { message: string }) {
+  const { colors: c, radius, spacing } = useTokens();
   return (
-    <View style={styles.error}>
-      <Text style={styles.errorText}>{message}</Text>
+    <View style={{ backgroundColor: c.errorSoft, borderRadius: radius.md, padding: spacing.sm }}>
+      <Text style={{ color: c.error, fontSize: 14 }}>{message}</Text>
     </View>
   );
 }
 
 export function Loading({ label }: { label?: string }) {
+  const { colors: c, spacing } = useTokens();
   return (
-    <View style={styles.loading}>
-      <ActivityIndicator size="large" color="#38BDF8" />
-      {label ? <Text style={styles.loadingLabel}>{label}</Text> : null}
+    <View style={{ paddingVertical: spacing.xl, alignItems: 'center', gap: spacing.sm }}>
+      <ActivityIndicator size="large" color={c.primary} />
+      {label ? <Text style={{ color: c.textSecondary, fontSize: 14 }}>{label}</Text> : null}
     </View>
   );
 }
 
 export function Empty({ title, detail }: { title: string; detail?: string }) {
+  const { colors: c } = useTokens();
   return (
     <Card>
-      <Text style={styles.emptyTitle}>{title}</Text>
-      {detail ? <Text style={styles.emptyDetail}>{detail}</Text> : null}
+      <Text style={{ color: c.textPrimary, fontSize: 16, fontWeight: '600' }}>{title}</Text>
+      {detail ? (
+        <Text style={{ color: c.textSecondary, fontSize: 14, marginTop: 6, lineHeight: 20 }}>
+          {detail}
+        </Text>
+      ) : null}
     </Card>
   );
 }
-
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: theme.surface,
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  button: {
-    backgroundColor: theme.accent,
-    borderRadius: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 48,
-  },
-  buttonGhost: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  buttonDanger: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: theme.danger,
-  },
-  buttonOff: { opacity: 0.5 },
-  buttonText: { color: theme.accentText, fontSize: 16, fontWeight: '600' },
-  buttonGhostText: { color: theme.textMuted },
-  buttonDangerText: { color: theme.danger },
-  error: {
-    backgroundColor: theme.dangerBg,
-    borderRadius: 10,
-    padding: 12,
-  },
-  errorText: { color: '#FECACA', fontSize: 14 },
-  loading: { paddingVertical: 48, alignItems: 'center', gap: 12 },
-  loadingLabel: { color: theme.textMuted, fontSize: 14 },
-  emptyTitle: { color: theme.text, fontSize: 16, fontWeight: '600' },
-  emptyDetail: { color: theme.textMuted, fontSize: 14, marginTop: 6, lineHeight: 20 },
-});

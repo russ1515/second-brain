@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import type {
@@ -16,7 +16,8 @@ import type {
   UnderstandResponse,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
 
@@ -40,9 +41,9 @@ const LEVEL_KEY: Record<LearnerLevel, TranslationKey> = {
   advanced: 'lib.level.advanced',
 };
 
-function masteryColor(m: number | null): string {
-  if (m === null) return theme.textFaint;
-  return m >= 0.7 ? theme.ok : m >= 0.4 ? theme.warn : theme.danger;
+function masteryColor(m: number | null, c: ColorScale): string {
+  if (m === null) return c.textMuted;
+  return m >= 0.7 ? c.success : m >= 0.4 ? c.warning : c.error;
 }
 
 const RESOURCES: { type: StudyResourceType; key: TranslationKey; icon: string }[] = [
@@ -68,6 +69,8 @@ const RESOURCE_KEY: Record<StudyResourceType, TranslationKey> = {
 /** One document in the Smart Library: full derived metadata + text + actions
  *  (favorite, re-analyse, detect concepts, trash/restore, delete). */
 export default function LibraryDocumentScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { id } = useLocalSearchParams<{ id: string }>();
   const { t, locale } = useI18n();
   const router = useRouter();
@@ -367,7 +370,7 @@ export default function LibraryDocumentScreen() {
               <Text style={styles.prereqName} numberOfLines={1}>
                 {p.name} <Text style={styles.prereqFor}>→ {p.forConcept}</Text>
               </Text>
-              <Text style={[styles.prereqMastery, { color: masteryColor(p.mastery) }]}>
+              <Text style={[styles.prereqMastery, { color: masteryColor(p.mastery, c) }]}>
                 {p.mastery === null ? t('lib.u.untracked') : `${Math.round(p.mastery * 100)}%`}
               </Text>
             </View>
@@ -475,6 +478,8 @@ export default function LibraryDocumentScreen() {
 }
 
 function MetaRow({ label, value }: { label: string; value: string | null }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   return (
     <View style={styles.metaRow}>
@@ -487,6 +492,8 @@ function MetaRow({ label, value }: { label: string; value: string | null }) {
 }
 
 function IntegBlock({ label, items }: { label: string; items: IntegrationConcept[] }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   if (items.length === 0) return null;
   return (
     <View style={styles.block}>
@@ -506,6 +513,8 @@ function IntegBlock({ label, items }: { label: string; items: IntegrationConcept
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{title}</Text>
@@ -514,35 +523,35 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 14, maxWidth: 720, width: '100%', alignSelf: 'center' },
   head: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  title: { flex: 1, fontSize: 22, fontWeight: '700', color: theme.text },
+  title: { flex: 1, fontSize: 22, fontWeight: '700', color: c.textPrimary },
   star: { fontSize: 24 },
   metaCard: { gap: 8 },
   metaRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
-  metaLabel: { fontSize: 13, color: theme.textFaint, fontWeight: '600' },
-  metaValue: { fontSize: 13, color: theme.text, flexShrink: 1, textAlign: 'right' },
-  metaEmpty: { color: theme.textFaint, fontStyle: 'italic' },
+  metaLabel: { fontSize: 13, color: c.textMuted, fontWeight: '600' },
+  metaValue: { fontSize: 13, color: c.textPrimary, flexShrink: 1, textAlign: 'right' },
+  metaEmpty: { color: c.textMuted, fontStyle: 'italic' },
   section: { gap: 8 },
-  sectionTitle: { fontSize: 13, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 1 },
-  body: { fontSize: 15, color: theme.text, lineHeight: 22 },
-  analysing: { fontSize: 14, color: theme.textFaint, fontStyle: 'italic' },
-  muted: { fontSize: 14, color: theme.textMuted },
+  sectionTitle: { fontSize: 13, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
+  body: { fontSize: 15, color: c.textPrimary, lineHeight: 22 },
+  analysing: { fontSize: 14, color: c.textMuted, fontStyle: 'italic' },
+  muted: { fontSize: 14, color: c.textSecondary },
   concepts: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  conceptChip: { borderWidth: 1, borderColor: theme.accent, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 4 },
-  conceptText: { fontSize: 13, color: theme.accent, fontWeight: '600' },
+  conceptChip: { borderWidth: 1, borderColor: c.primary, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 4 },
+  conceptText: { fontSize: 13, color: c.primary, fontWeight: '600' },
   actions: { gap: 8 },
-  content: { fontSize: 13, color: theme.textMuted, lineHeight: 20 },
+  content: { fontSize: 13, color: c.textSecondary, lineHeight: 20 },
   modeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  uCard: { gap: 8, borderColor: theme.accent, marginTop: 4 },
-  uLevel: { fontSize: 12, fontWeight: '700', color: theme.accent },
-  otherRow: { backgroundColor: theme.surfaceAlt, borderWidth: 1, borderColor: theme.border, borderRadius: 10, padding: 12 },
-  otherText: { fontSize: 14, color: theme.text },
-  prereqRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 10, padding: 10 },
-  prereqName: { flex: 1, fontSize: 14, color: theme.text },
-  prereqFor: { fontSize: 12, color: theme.textFaint },
+  uCard: { gap: 8, borderColor: c.primary, marginTop: 4 },
+  uLevel: { fontSize: 12, fontWeight: '700', color: c.primary },
+  otherRow: { backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12 },
+  otherText: { fontSize: 14, color: c.textPrimary },
+  prereqRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 10 },
+  prereqName: { flex: 1, fontSize: 14, color: c.textPrimary },
+  prereqFor: { fontSize: 12, color: c.textMuted },
   prereqMastery: { fontSize: 13, fontWeight: '700' },
   block: { gap: 4 },
-  blockLabel: { fontSize: 12, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 0.5 },
+  blockLabel: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
 });

@@ -1,7 +1,9 @@
+import { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SUPPORTED_LANGUAGES, type SupportedLanguageCode } from '@second-brain/shared';
 import { localeCoverage, localeName, supportedLocaleCodes, useI18n } from '../lib/i18n';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 
 const flagOf = (code: string): string =>
   SUPPORTED_LANGUAGES[code as SupportedLanguageCode]?.flag ?? '🏳️';
@@ -14,6 +16,8 @@ const flagOf = (code: string): string =>
  * automatically once their resource is registered; the engine never changes.
  */
 export default function LanguageManagerScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t, locale, setLocale } = useI18n();
   const codes = supportedLocaleCodes();
 
@@ -44,7 +48,7 @@ export default function LanguageManagerScreen() {
               <View
                 style={[
                   styles.barFill,
-                  { width: `${pct}%`, backgroundColor: pct >= 90 ? theme.ok : theme.accent },
+                  { width: `${pct}%`, backgroundColor: pct >= 90 ? c.success : c.primary },
                 ]}
               />
             </View>
@@ -61,38 +65,38 @@ export default function LanguageManagerScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 560, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4, marginBottom: 2 },
   kicker: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
   },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
   card: {
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 12,
     padding: 14,
     gap: 8,
   },
-  cardActive: { borderColor: theme.accent },
+  cardActive: { borderColor: c.primary },
   head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   flag: { fontSize: 20 },
-  name: { flex: 1, fontSize: 16, fontWeight: '700', color: theme.text },
+  name: { flex: 1, fontSize: 16, fontWeight: '700', color: c.textPrimary },
   code: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     letterSpacing: 1,
   },
-  active: { fontSize: 12, fontWeight: '700', color: theme.accent },
-  barTrack: { height: 6, borderRadius: 999, backgroundColor: theme.border, overflow: 'hidden' },
+  active: { fontSize: 12, fontWeight: '700', color: c.primary },
+  barTrack: { height: 6, borderRadius: 999, backgroundColor: c.border, overflow: 'hidden' },
   barFill: { height: 6, borderRadius: 999 },
-  coverage: { fontSize: 12, color: theme.textMuted },
-  note: { fontSize: 12, color: theme.textFaint, lineHeight: 17, marginTop: 4 },
+  coverage: { fontSize: 12, color: c.textSecondary },
+  note: { fontSize: 12, color: c.textMuted, lineHeight: 17, marginTop: 4 },
 });

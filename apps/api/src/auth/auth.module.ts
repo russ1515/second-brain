@@ -4,6 +4,7 @@ import { PassportModule } from '@nestjs/passport';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { EmailVerificationService } from './email-verification.service';
+import { EmailOtpService } from './email-otp.service';
 import { TwoFactorService } from './two-factor.service';
 import { SecretCipher } from './secret-cipher';
 import { JwtAccessStrategy } from './strategies/jwt-access.strategy';
@@ -19,6 +20,7 @@ import { JwtAccessStrategy } from './strategies/jwt-access.strategy';
   providers: [
     AuthService,
     EmailVerificationService,
+    EmailOtpService,
     TwoFactorService,
     SecretCipher,
     JwtAccessStrategy,

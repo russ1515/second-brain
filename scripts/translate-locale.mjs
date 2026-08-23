@@ -44,6 +44,8 @@ const LANGS = {
   da: { name: 'Dansk', language: 'Danish' },
   fi: { name: 'Suomi', language: 'Finnish' },
   id: { name: 'Bahasa Indonesia', language: 'Indonesian' },
+  no: { name: 'Norsk', language: 'Norwegian' },
+  uk: { name: 'Українська', language: 'Ukrainian' },
 };
 
 function readEnv(name) {

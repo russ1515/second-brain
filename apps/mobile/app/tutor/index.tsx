@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import type {
@@ -13,7 +13,8 @@ import type {
 } from '@second-brain/shared';
 import { useAuth } from '../../lib/auth-context';
 import { api } from '../../lib/client';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { teacherRoleLabel } from '../../lib/teacher-role';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
@@ -36,6 +37,8 @@ const LEVEL_KEY: Record<MasteryLevel, TranslationKey> = {
  * nothing is lost — the feel changes, the capability does not.
  */
 export default function AiTeacherScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { user } = useAuth();
   const { t, locale } = useI18n();
   const router = useRouter();
@@ -195,7 +198,7 @@ export default function AiTeacherScreen() {
             <Text style={styles.teacherAvatar}>👨‍🏫</Text>
           </View>
           <View style={styles.flex}>
-            <Text style={styles.avatarKicker}>AI Teacher</Text>
+            <Text style={styles.avatarKicker}>{t('header.aiTeacher')}</Text>
             <Text style={styles.greeting}>
               {t('home.greeting')} {name}.
             </Text>
@@ -255,7 +258,7 @@ export default function AiTeacherScreen() {
         <TextInput
           style={styles.input}
           placeholder={t('aiteacher.topicPlaceholder')}
-          placeholderTextColor={theme.textFaint}
+          placeholderTextColor={c.textMuted}
           value={title}
           onChangeText={setTitle}
           testID="session-title"
@@ -299,6 +302,8 @@ export default function AiTeacherScreen() {
 
 /** One labelled fact in the "Today's session" card. */
 function SessionRow({ label, value }: { label: string; value: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={styles.sessionRow}>
       <Text style={styles.sessionRowLabel}>{label}</Text>
@@ -307,13 +312,13 @@ function SessionRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 14, maxWidth: 720, width: '100%', alignSelf: 'center' },
   flex: { flex: 1 },
   stage: {
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 16,
     padding: 22,
     gap: 12,
@@ -323,9 +328,9 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderWidth: 1,
-    borderColor: theme.accent,
+    borderColor: c.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -333,17 +338,17 @@ const styles = StyleSheet.create({
   avatarKicker: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.5,
   },
-  greeting: { fontSize: 24, fontWeight: '700', color: theme.text },
+  greeting: { fontSize: 24, fontWeight: '700', color: c.textPrimary },
   line: { fontSize: 17, color: '#CBD5E1', lineHeight: 26 },
-  subject: { color: theme.text, fontWeight: '700' },
+  subject: { color: c.textPrimary, fontWeight: '700' },
   sessionCard: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 12,
     padding: 16,
     marginTop: 4,
@@ -352,44 +357,44 @@ const styles = StyleSheet.create({
   sessionHeader: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
-  sessionCourse: { fontSize: 20, fontWeight: '700', color: theme.text },
+  sessionCourse: { fontSize: 20, fontWeight: '700', color: c.textPrimary },
   sessionRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: 12,
     borderTopWidth: 1,
-    borderTopColor: theme.border,
+    borderTopColor: c.border,
     paddingTop: 8,
   },
-  sessionRowLabel: { fontSize: 13, color: theme.textMuted },
-  sessionRowValue: { fontSize: 14, color: theme.text, fontWeight: '600', flexShrink: 1, textAlign: 'right' },
+  sessionRowLabel: { fontSize: 13, color: c.textSecondary },
+  sessionRowValue: { fontSize: 14, color: c.textPrimary, fontWeight: '600', flexShrink: 1, textAlign: 'right' },
   cta: { marginTop: 8, gap: 8 },
-  readyQ: { fontSize: 16, fontWeight: '700', color: theme.text, textAlign: 'center' },
+  readyQ: { fontSize: 16, fontWeight: '700', color: c.textPrimary, textAlign: 'center' },
   label: {
     fontSize: 12,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: 10,
   },
   input: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     padding: 12,
     fontSize: 15,
-    color: theme.text,
+    color: c.textPrimary,
     marginBottom: 10,
   },
   spacer: { height: 8 },
   history: { gap: 10 },
-  sessionTitle: { fontSize: 16, fontWeight: '600', color: theme.text },
-  sessionMeta: { fontSize: 13, color: theme.textMuted, marginTop: 4, marginBottom: 8 },
+  sessionTitle: { fontSize: 16, fontWeight: '600', color: c.textPrimary },
+  sessionMeta: { fontSize: 13, color: c.textSecondary, marginTop: 4, marginBottom: 8 },
 });

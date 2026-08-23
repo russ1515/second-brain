@@ -54,6 +54,10 @@ export default () => ({
       process.env.TWO_FACTOR_CHALLENGE_TTL ?? '300',
       10,
     ),
+    // Email OTP (6-digit code) lifetime (seconds); default 10min.
+    otpTtl: parseInt(process.env.OTP_TTL ?? '600', 10),
+    // Max wrong OTP guesses before the code is locked out.
+    otpMaxAttempts: parseInt(process.env.OTP_MAX_ATTEMPTS ?? '5', 10),
     // Key material for encrypting TOTP secrets at rest. Falls back to the access
     // secret (still 32-byte-derived) when unset; set explicitly in production.
     twoFactorEncKey: process.env.TWO_FACTOR_ENC_KEY,

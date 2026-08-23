@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type {
   LearningPredictionView,
@@ -7,7 +7,8 @@ import type {
   RiskPrediction,
 } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, ErrorBanner, Loading } from '../components/ui';
 
@@ -33,11 +34,11 @@ const LEVEL_KEY: Record<RiskLevel, TranslationKey> = {
   high: 'risk.level.high',
 };
 
-const LEVEL_COLOR: Record<RiskLevel, string> = {
-  low: theme.ok,
-  moderate: theme.warn,
-  high: theme.danger,
-};
+const levelColor = (c: ColorScale): Record<RiskLevel, string> => ({
+  low: c.success,
+  moderate: c.warning,
+  high: c.error,
+});
 
 /**
  * 🔭 Learning Prediction Engine (Sprint 9.3). Anticipates the risks on the
@@ -46,6 +47,8 @@ const LEVEL_COLOR: Record<RiskLevel, string> = {
  * recommended action, and the signals behind it (so the AI always explains why).
  */
 export default function ForesightScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [data, setData] = useState<LearningPredictionView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +99,9 @@ export default function ForesightScreen() {
 }
 
 function RiskCard({ p, t }: { p: RiskPrediction; t: (k: TranslationKey) => string }) {
-  const color = LEVEL_COLOR[p.level];
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const color = levelColor(c)[p.level];
   return (
     <View style={[styles.card, { borderLeftColor: color }]} testID={`risk-${p.kind}`}>
       <View style={styles.head}>
@@ -133,27 +138,27 @@ function RiskCard({ p, t }: { p: RiskPrediction; t: (k: TranslationKey) => strin
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4, marginBottom: 2 },
   kicker: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
   },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
   calm: {
-    backgroundColor: theme.okBg,
+    backgroundColor: c.successSoft,
     borderRadius: 12,
     padding: 14,
   },
   calmText: { fontSize: 15, color: '#DCFCE7', fontWeight: '600' },
   card: {
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderLeftWidth: 4,
     borderRadius: 12,
     padding: 14,
@@ -161,13 +166,13 @@ const styles = StyleSheet.create({
   },
   head: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   icon: { fontSize: 22 },
-  title: { flex: 1, fontSize: 16, fontWeight: '700', color: theme.text },
+  title: { flex: 1, fontSize: 16, fontWeight: '700', color: c.textPrimary },
   badge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
   badgeText: { fontSize: 13, fontWeight: '800', color: '#FFFFFF' },
   gaugeTrack: {
     height: 8,
     borderRadius: 999,
-    backgroundColor: theme.border,
+    backgroundColor: c.border,
     overflow: 'hidden',
     marginTop: 2,
   },
@@ -176,11 +181,11 @@ const styles = StyleSheet.create({
   rowLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
     marginTop: 4,
   },
-  rowText: { fontSize: 15, color: theme.text, lineHeight: 21 },
-  reason: { fontSize: 13, color: theme.textMuted, lineHeight: 19 },
+  rowText: { fontSize: 15, color: c.textPrimary, lineHeight: 21 },
+  reason: { fontSize: 13, color: c.textSecondary, lineHeight: 19 },
 });

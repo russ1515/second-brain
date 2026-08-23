@@ -13,6 +13,7 @@ import type {
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
 import { useAuth } from '../../lib/auth-context';
+import { useI18n } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
 import { Skeleton } from '../../components/ds/core';
@@ -42,6 +43,7 @@ import {
  */
 export default function BrainScreen() {
   const { user } = useAuth();
+  const { t } = useI18n();
   const router = useRouter();
   const { colors: c } = useTokens();
   const { width, maxContentWidth } = useResponsive();
@@ -134,7 +136,7 @@ export default function BrainScreen() {
 
       {/* Centrepiece: the graph + the selected concept's detail */}
       <View style={{ gap: 10 }}>
-        <SectionLabel>Graphe de connaissances</SectionLabel>
+        <SectionLabel>{t('brain.graph')}</SectionLabel>
         {wide ? (
           <View style={{ flexDirection: 'row', gap: 14 }}>
             <View style={{ flex: 1.4 }}>

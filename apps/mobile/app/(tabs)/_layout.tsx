@@ -3,7 +3,6 @@ import { ScrollView, StyleSheet, Text } from 'react-native';
 import { useAuth } from '../../lib/auth-context';
 import { useI18n } from '../../lib/i18n';
 import { useResponsive } from '../../lib/responsive';
-import { theme } from '../../lib/theme';
 import { Button, Empty, Loading } from '../../components/ui';
 import { ResponsiveTabBar } from '../../components/nav/responsive-tab-bar';
 import { LandingPage } from '../../components/landing/landing-page';

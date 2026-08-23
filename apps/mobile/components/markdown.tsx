@@ -1,6 +1,7 @@
-import { Fragment } from 'react';
+import { Fragment, useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 
 /**
  * A deliberately small Markdown renderer for lesson prose.
@@ -68,7 +69,7 @@ function toBlocks(md: string): Block[] {
 const INLINE = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*]+\*|_[^_]+_)/g;
 
 /** Render **bold**, *italic*, `code` inside a line as nested <Text> spans. */
-function renderInline(text: string, keyBase: string) {
+function renderInline(text: string, keyBase: string, styles: ReturnType<typeof makeStyles>) {
   const parts = text.split(INLINE).filter((p) => p !== '');
   return parts.map((part, i) => {
     const key = `${keyBase}-${i}`;
@@ -98,6 +99,8 @@ function renderInline(text: string, keyBase: string) {
 }
 
 export function Markdown({ text }: { text: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const blocks = toBlocks(text);
   return (
     <View style={styles.root}>
@@ -115,27 +118,27 @@ export function Markdown({ text }: { text: string }) {
                   block.level >= 3 && styles.h3,
                 ]}
               >
-                {renderInline(block.text, key)}
+                {renderInline(block.text, key, styles)}
               </Text>
             );
           case 'bullet':
             return (
               <View key={key} style={styles.listRow}>
                 <Text style={styles.bulletDot}>•</Text>
-                <Text style={styles.listText}>{renderInline(block.text, key)}</Text>
+                <Text style={styles.listText}>{renderInline(block.text, key, styles)}</Text>
               </View>
             );
           case 'ordered':
             return (
               <View key={key} style={styles.listRow}>
                 <Text style={styles.orderedMarker}>{block.marker}</Text>
-                <Text style={styles.listText}>{renderInline(block.text, key)}</Text>
+                <Text style={styles.listText}>{renderInline(block.text, key, styles)}</Text>
               </View>
             );
           default:
             return (
               <Text key={key} style={styles.paragraph}>
-                {renderInline(block.text, key)}
+                {renderInline(block.text, key, styles)}
               </Text>
             );
         }
@@ -144,23 +147,23 @@ export function Markdown({ text }: { text: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   root: { gap: 12 },
-  paragraph: { fontSize: 16, lineHeight: 26, color: '#D3DCE8' },
-  heading: { color: theme.text, fontWeight: '700' },
+  paragraph: { fontSize: 16, lineHeight: 26, color: c.textPrimary },
+  heading: { color: c.textPrimary, fontWeight: '700' },
   h1: { fontSize: 21, lineHeight: 28, marginTop: 2 },
   h2: { fontSize: 18, lineHeight: 25, marginTop: 2 },
-  h3: { fontSize: 16, lineHeight: 23, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
+  h3: { fontSize: 16, lineHeight: 23, color: c.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
   listRow: { flexDirection: 'row', gap: 10, paddingRight: 4 },
-  bulletDot: { fontSize: 16, lineHeight: 26, color: theme.accent, width: 14, textAlign: 'center' },
-  orderedMarker: { fontSize: 16, lineHeight: 26, color: theme.accent, fontWeight: '700', minWidth: 20 },
-  listText: { flex: 1, fontSize: 16, lineHeight: 26, color: '#D3DCE8' },
-  bold: { fontWeight: '700', color: theme.text },
+  bulletDot: { fontSize: 16, lineHeight: 26, color: c.primary, width: 14, textAlign: 'center' },
+  orderedMarker: { fontSize: 16, lineHeight: 26, color: c.primary, fontWeight: '700', minWidth: 20 },
+  listText: { flex: 1, fontSize: 16, lineHeight: 26, color: c.textPrimary },
+  bold: { fontWeight: '700', color: c.textPrimary },
   italic: { fontStyle: 'italic' },
   code: {
     fontFamily: 'monospace',
     fontSize: 14,
     color: '#93C5FD',
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
   },
 });

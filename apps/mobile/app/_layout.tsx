@@ -4,8 +4,11 @@ import { AuthProvider } from '../lib/auth-context';
 import { I18nProvider, useI18n } from '../lib/i18n';
 import '../lib/locales'; // registers every generated UI dictionary (es/de/it/pt/hi/…)
 import { QueryProvider } from '../lib/query';
-import { ThemeProvider } from '../lib/design/theme';
-import { theme } from '../lib/theme';
+import { ThemeProvider, useTokens } from '../lib/design/theme';
+
+// Zero-blank-page (§35): any render error in any screen falls back to a
+// localized, on-brand recovery UI with a working retry — never a white screen.
+export { AppErrorBoundary as ErrorBoundary } from '../components/error-boundary';
 
 export default function RootLayout() {
   return (
@@ -26,12 +29,13 @@ export default function RootLayout() {
  *  the hook must run under I18nProvider, which RootLayout itself renders. */
 function Navigator() {
   const { t } = useI18n();
+  const { colors: c } = useTokens();
   return (
     <Stack
       screenOptions={{
-        headerStyle: { backgroundColor: theme.bg },
-        headerTintColor: theme.text,
-        contentStyle: { backgroundColor: theme.bg },
+        headerStyle: { backgroundColor: c.background },
+        headerTintColor: c.textPrimary,
+        contentStyle: { backgroundColor: c.background },
       }}
     >
       {/* The five spaces. They own their own headers, so no outer one. */}

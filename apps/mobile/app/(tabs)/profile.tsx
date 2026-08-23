@@ -12,6 +12,7 @@ import type {
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
 import { useAuth } from '../../lib/auth-context';
+import { useI18n } from '../../lib/i18n';
 import { useTheme, useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
 import { Button, Card } from '../../components/ds/core';
@@ -31,6 +32,7 @@ import { AcademicPathCard, GoalsCard, IdentityFull, LearnedLanguages } from '../
  */
 export default function ProfileScreen() {
   const router = useRouter();
+  const { t } = useI18n();
   const { user, logout, refreshOnboarding } = useAuth();
   const { colors: c } = useTokens();
   const { scheme, setScheme } = useTheme();
@@ -156,9 +158,9 @@ export default function ProfileScreen() {
         onPrivacy={() => router.push('/privacy')} onMemory={() => router.push('/memory')} />
 
       <Card>
-        <Button label="Gérer mon abonnement" variant="secondary" onPress={() => router.push('/subscription')} />
+        <Button label={t('profile.manageSubscription')} variant="secondary" onPress={() => router.push('/subscription')} />
         <View style={{ height: 8 }} />
-        <Button label="Se déconnecter" variant="ghost" onPress={logout} />
+        <Button label={t('app.signOut')} variant="ghost" onPress={logout} />
       </Card>
 
       <Text style={{ color: c.textMuted, fontSize: 12, textAlign: 'center', marginTop: 4 }}>

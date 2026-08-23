@@ -13,7 +13,8 @@ import type {
   SessionReport,
 } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 import { Markdown } from '../components/markdown';
@@ -36,6 +37,8 @@ interface Phase {
  * The learner never leaves the session; it composes the other engines.
  */
 export default function DailySessionScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
   const [plan, setPlan] = useState<SessionPlan | null>(null);
@@ -293,6 +296,8 @@ export default function DailySessionScreen() {
 }
 
 function Revision({ items, t }: { items: ReviewableView[]; t: (k: TranslationKey) => string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   if (items.length === 0) return <Text style={styles.muted}>{t('daily.noRevision')}</Text>;
   return (
     <>
@@ -321,6 +326,8 @@ function ComprehensionCheck({
   question: string;
   t: (k: TranslationKey) => string;
 }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const [answer, setAnswer] = useState('');
   const [result, setResult] = useState<ComprehensionResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -345,10 +352,10 @@ function ComprehensionCheck({
   const verdict = result?.verdict;
   const badge =
     verdict === 'understood'
-      ? { icon: '✅', label: t('daily.check.understood'), color: theme.ok }
+      ? { icon: '✅', label: t('daily.check.understood'), color: c.success }
       : verdict === 'partial'
-        ? { icon: '🟡', label: t('daily.check.partial'), color: theme.warn }
-        : { icon: '🔁', label: t('daily.check.confused'), color: theme.danger };
+        ? { icon: '🟡', label: t('daily.check.partial'), color: c.warning }
+        : { icon: '🔁', label: t('daily.check.confused'), color: c.error };
 
   return (
     <View style={styles.checkCard}>
@@ -356,7 +363,7 @@ function ComprehensionCheck({
       <TextInput
         style={styles.checkInput}
         placeholder={t('daily.check.placeholder')}
-        placeholderTextColor={theme.textFaint}
+        placeholderTextColor={c.textMuted}
         value={answer}
         onChangeText={setAnswer}
         multiline
@@ -386,6 +393,8 @@ function ComprehensionCheck({
 }
 
 function Discussion({ conceptId, title, t }: { conceptId: string | null; title: string; t: (k: TranslationKey) => string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [reply, setReply] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -422,6 +431,8 @@ function Discussion({ conceptId, title, t }: { conceptId: string | null; title: 
 }
 
 function Corrections({ exercises, t }: { exercises: LessonExercise[]; t: (k: TranslationKey) => string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const [shown, setShown] = useState(false);
   if (!shown) return <Button variant="ghost" label={t('lesson.showCorrections')} onPress={() => setShown(true)} />;
   return (
@@ -437,6 +448,8 @@ function Corrections({ exercises, t }: { exercises: LessonExercise[]; t: (k: Tra
 }
 
 function Flashcard({ card, t }: { card: CardView; t: (k: TranslationKey) => string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const [open, setOpen] = useState(false);
   return (
     <Pressable onPress={() => setOpen((o) => !o)} accessibilityRole="button">
@@ -449,6 +462,8 @@ function Flashcard({ card, t }: { card: CardView; t: (k: TranslationKey) => stri
 }
 
 function BrainUpdate({ report, t }: { report: SessionReport | null; t: (k: TranslationKey) => string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   if (!report) return <Loading label={t('session.closing')} />;
   const d = report.scoreDelta;
   return (
@@ -468,6 +483,8 @@ function BrainUpdate({ report, t }: { report: SessionReport | null; t: (k: Trans
 }
 
 function ScoreBlock({ label, value, hi }: { label: string; value: number | null; hi?: boolean }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={styles.scoreBlock}>
       <Text style={styles.scoreLabel}>{label}</Text>
@@ -477,6 +494,8 @@ function ScoreBlock({ label, value, hi }: { label: string; value: number | null;
 }
 
 function NextPlan({ plan, t }: { plan: DayPlan | null; t: (k: TranslationKey) => string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   if (!plan) return <Loading label={t('plan.loading')} />;
   return (
     <>
@@ -491,62 +510,62 @@ function NextPlan({ plan, t }: { plan: DayPlan | null; t: (k: TranslationKey) =>
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   flex: { flex: 1 },
   hidden: { display: 'none' },
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
-  kicker: { fontSize: 13, fontWeight: '700', color: theme.accent, textTransform: 'uppercase', letterSpacing: 1.2 },
-  topic: { fontSize: 26, fontWeight: '800', color: theme.text },
+  kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
+  topic: { fontSize: 26, fontWeight: '800', color: c.textPrimary },
   dots: { flexDirection: 'row', gap: 4, flexWrap: 'wrap' },
-  dot: { flex: 1, minWidth: 8, height: 5, borderRadius: 3, backgroundColor: theme.border },
-  dotDone: { backgroundColor: theme.ok },
-  dotCur: { backgroundColor: theme.accent },
-  progressLabel: { fontSize: 13, fontWeight: '700', color: theme.textMuted },
-  phaseHead: { flexDirection: 'row', alignItems: 'center', gap: 12, borderBottomWidth: 1, borderBottomColor: theme.border, paddingBottom: 12 },
-  iconChip: { width: 44, height: 44, borderRadius: 12, backgroundColor: theme.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
+  dot: { flex: 1, minWidth: 8, height: 5, borderRadius: 3, backgroundColor: c.border },
+  dotDone: { backgroundColor: c.success },
+  dotCur: { backgroundColor: c.primary },
+  progressLabel: { fontSize: 13, fontWeight: '700', color: c.textSecondary },
+  phaseHead: { flexDirection: 'row', alignItems: 'center', gap: 12, borderBottomWidth: 1, borderBottomColor: c.border, paddingBottom: 12 },
+  iconChip: { width: 44, height: 44, borderRadius: 12, backgroundColor: c.surfaceElevated, alignItems: 'center', justifyContent: 'center' },
   iconChipText: { fontSize: 22 },
-  phaseTitle: { fontSize: 20, fontWeight: '700', color: theme.text },
+  phaseTitle: { fontSize: 20, fontWeight: '700', color: c.textPrimary },
   phaseBody: { marginTop: 14, gap: 12 },
   body: { fontSize: 16, color: '#D3DCE8', lineHeight: 24 },
-  objective: { fontSize: 17, fontWeight: '600', color: theme.text, lineHeight: 25 },
-  muted: { fontSize: 14, color: theme.textMuted },
+  objective: { fontSize: 17, fontWeight: '600', color: c.textPrimary, lineHeight: 25 },
+  muted: { fontSize: 14, color: c.textSecondary },
   focus: { fontSize: 15, color: '#D3DCE8', lineHeight: 22, fontStyle: 'italic' },
-  question: { fontSize: 15, fontWeight: '600', color: theme.text, lineHeight: 22, marginTop: 6 },
-  checkCard: { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 12, padding: 12, gap: 10, marginTop: 8 },
-  checkInput: { backgroundColor: theme.surfaceAlt, borderWidth: 1, borderColor: theme.border, borderRadius: 10, padding: 10, fontSize: 15, color: theme.text, minHeight: 56, textAlignVertical: 'top' },
+  question: { fontSize: 15, fontWeight: '600', color: c.textPrimary, lineHeight: 22, marginTop: 6 },
+  checkCard: { backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, borderRadius: 12, padding: 12, gap: 10, marginTop: 8 },
+  checkInput: { backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 10, fontSize: 15, color: c.textPrimary, minHeight: 56, textAlignVertical: 'top' },
   checkResult: { gap: 8 },
   checkVerdict: { fontSize: 14, fontWeight: '700' },
-  reexplain: { backgroundColor: theme.surfaceAlt, borderRadius: 10, padding: 10, gap: 4 },
-  reexplainLabel: { fontSize: 12, fontWeight: '700', color: theme.accent },
-  answerModel: { fontSize: 14, color: theme.ok, lineHeight: 21, marginTop: 4 },
+  reexplain: { backgroundColor: c.surfaceElevated, borderRadius: 10, padding: 10, gap: 4 },
+  reexplainLabel: { fontSize: 12, fontWeight: '700', color: c.primary },
+  answerModel: { fontSize: 14, color: c.success, lineHeight: 21, marginTop: 4 },
   spaced: { marginTop: 12 },
   kp: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
-  kpCheck: { fontSize: 15, fontWeight: '800', color: theme.ok, width: 18, textAlign: 'center' },
+  kpCheck: { fontSize: 15, fontWeight: '800', color: c.success, width: 18, textAlign: 'center' },
   kpText: { flex: 1, fontSize: 16, lineHeight: 24, color: '#D3DCE8' },
-  revRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, backgroundColor: theme.surfaceAlt, borderRadius: 8, padding: 10 },
-  revTitle: { flex: 1, fontSize: 14, color: theme.text, fontWeight: '600' },
-  revMeta: { fontSize: 13, color: theme.textMuted },
-  teacherReply: { fontSize: 15, color: '#E2E8F0', lineHeight: 23, backgroundColor: theme.surfaceAlt, borderRadius: 10, padding: 12 },
-  flashcard: { backgroundColor: theme.surfaceAlt, borderWidth: 1, borderColor: theme.border, borderRadius: 10, padding: 14 },
-  flashFront: { fontSize: 15, fontWeight: '600', color: theme.text },
+  revRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, backgroundColor: c.surfaceElevated, borderRadius: 8, padding: 10 },
+  revTitle: { flex: 1, fontSize: 14, color: c.textPrimary, fontWeight: '600' },
+  revMeta: { fontSize: 13, color: c.textSecondary },
+  teacherReply: { fontSize: 15, color: '#E2E8F0', lineHeight: 23, backgroundColor: c.surfaceElevated, borderRadius: 10, padding: 12 },
+  flashcard: { backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 14 },
+  flashFront: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
   flashBack: { fontSize: 14, color: '#CBD5E1', marginTop: 8, lineHeight: 20 },
-  flashHint: { fontSize: 12, color: theme.textFaint, marginTop: 8 },
+  flashHint: { fontSize: 12, color: c.textMuted, marginTop: 8 },
   scoreRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16 },
   scoreBlock: { alignItems: 'center', gap: 2 },
-  scoreLabel: { fontSize: 11, color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontWeight: '700' },
-  scoreValue: { fontSize: 34, fontWeight: '800', color: theme.textMuted },
-  scoreHi: { color: theme.text },
-  arrow: { fontSize: 24, color: theme.textFaint },
+  scoreLabel: { fontSize: 11, color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1, fontWeight: '700' },
+  scoreValue: { fontSize: 34, fontWeight: '800', color: c.textSecondary },
+  scoreHi: { color: c.textPrimary },
+  arrow: { fontSize: 24, color: c.textMuted },
   delta: { textAlign: 'center', fontSize: 15, fontWeight: '700' },
-  up: { color: theme.ok },
-  down: { color: theme.warn },
+  up: { color: c.success },
+  down: { color: c.warning },
   planRow: { flexDirection: 'row', gap: 12, alignItems: 'center' },
-  planTime: { fontSize: 14, fontWeight: '800', color: theme.text, width: 48 },
+  planTime: { fontSize: 14, fontWeight: '800', color: c.textPrimary, width: 48 },
   planKind: { fontSize: 15, color: '#D3DCE8' },
   nav: {
     flexDirection: 'row', gap: 10, padding: 16, paddingBottom: 20,
-    borderTopWidth: 1, borderTopColor: theme.border, backgroundColor: theme.bg,
+    borderTopWidth: 1, borderTopColor: c.border, backgroundColor: c.background,
     maxWidth: 720, width: '100%', alignSelf: 'center',
   },
 });

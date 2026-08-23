@@ -1,9 +1,10 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import type { UsageItem, UsageView } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Card, ErrorBanner, Loading } from '../components/ui';
 
@@ -11,6 +12,8 @@ const GB = 1024 * 1024 * 1024;
 
 /** Usage & Quotas (Sprint 8.3) — how much of each plan limit has been used. */
 export default function UsageScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [usage, setUsage] = useState<UsageView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -78,16 +81,16 @@ export default function UsageScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
-  h1: { fontSize: 28, fontWeight: '700', color: theme.text },
-  intro: { fontSize: 14, color: theme.textMuted, lineHeight: 20, marginBottom: 4 },
+  h1: { fontSize: 28, fontWeight: '700', color: c.textPrimary },
+  intro: { fontSize: 14, color: c.textSecondary, lineHeight: 20, marginBottom: 4 },
   card: { gap: 10 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  label: { fontSize: 15, fontWeight: '600', color: theme.text },
-  value: { fontSize: 14, color: theme.textMuted, fontVariant: ['tabular-nums'] },
-  track: { height: 8, borderRadius: 999, backgroundColor: theme.surfaceAlt, overflow: 'hidden' },
-  fill: { height: 8, borderRadius: 999, backgroundColor: theme.accent },
-  fillNear: { backgroundColor: theme.warn },
-  note: { fontSize: 12, color: theme.textFaint, fontStyle: 'italic', marginTop: 4 },
+  label: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
+  value: { fontSize: 14, color: c.textSecondary, fontVariant: ['tabular-nums'] },
+  track: { height: 8, borderRadius: 999, backgroundColor: c.surfaceElevated, overflow: 'hidden' },
+  fill: { height: 8, borderRadius: 999, backgroundColor: c.primary },
+  fillNear: { backgroundColor: c.warning },
+  note: { fontSize: 12, color: c.textMuted, fontStyle: 'italic', marginTop: 4 },
 });

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   UnauthorizedException,
@@ -17,6 +18,7 @@ import type {
 import { PrismaService } from '../prisma/prisma.service';
 import { ARGON2_OPTIONS } from './argon2.options';
 import { EmailVerificationService } from './email-verification.service';
+import { EmailOtpService } from './email-otp.service';
 import type { LoginDto } from './dto/login.dto';
 import type { RegisterDto } from './dto/register.dto';
 import {
@@ -37,6 +39,7 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly emailVerification: EmailVerificationService,
+    private readonly emailOtp: EmailOtpService,
   ) {}
 
   /** Create a new user (+ profile) and issue an initial token pair. */
@@ -66,11 +69,55 @@ export class AuthService {
       throw error;
     }
 
-    // Kick off email verification (best-effort; never blocks registration).
-    await this.emailVerification.issueAndSend(user);
+    // Kick off email verification via a 6-digit OTP (best-effort; never blocks
+    // registration). The link-based flow (`/verify-email`) stays available.
+    await this.emailOtp.issue(user, 'email_verify');
 
     const tokens = await this.issueTokens(user, ctx);
     return { user: this.toAuthUser(user, dto.displayName ?? null), tokens };
+  }
+
+  /** Confirm a signed-in user's email with the 6-digit OTP that was mailed on
+   *  registration (or resend). Flips `emailVerified` and returns the fresh user. */
+  async verifyEmailOtp(userId: string, code: string): Promise<AuthUser> {
+    await this.emailOtp.verify(userId, code, 'email_verify');
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: { emailVerified: true },
+      include: { profile: true },
+    });
+    return this.toAuthUser(user, user.profile?.displayName ?? null);
+  }
+
+  /** Re-issue an email-verification OTP for a signed-in, still-unverified user. */
+  async resendEmailOtp(userId: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new BadRequestException('Account not found.');
+    if (user.emailVerified) throw new ConflictException('Email is already verified.');
+    await this.emailOtp.issue(user, 'email_verify');
+  }
+
+  /** Start a password reset: email a reset OTP to the address IF an account
+   *  exists. Always resolves without revealing whether the email is registered
+   *  (no account-enumeration oracle). */
+  async requestPasswordReset(rawEmail: string): Promise<void> {
+    const email = this.normalizeEmail(rawEmail);
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (user) await this.emailOtp.issue(user, 'password_reset');
+  }
+
+  /** Complete a password reset: verify the OTP, set the new password, and revoke
+   *  every existing session so a compromised session cannot survive the reset. */
+  async resetPassword(rawEmail: string, code: string, newPassword: string): Promise<void> {
+    const email = this.normalizeEmail(rawEmail);
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    // Verify against the user when present; otherwise still fail as a bad code
+    // so the caller cannot tell a missing account from a wrong code.
+    if (!user) throw new BadRequestException('Invalid or expired code.');
+    await this.emailOtp.verify(user.id, code, 'password_reset');
+    const passwordHash = await argon2.hash(newPassword, ARGON2_OPTIONS);
+    await this.prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+    await this.revokeAllSessions(user.id);
   }
 
   /** Verify credentials. Returns a full token pair, or — when the account has

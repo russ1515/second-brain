@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { LessonView } from '@second-brain/shared';
 import { api } from '../../lib/client';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n } from '../../lib/i18n';
 import { Button, ErrorBanner, Loading } from '../../components/ui';
 
@@ -13,6 +14,8 @@ import { Button, ErrorBanner, Loading } from '../../components/ui';
  * into memory and builds flashcards), so the wait is explained rather than hidden.
  */
 export default function NewLessonScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { conceptId, topic, title } = useLocalSearchParams<{
     conceptId?: string;
     topic?: string;
@@ -61,8 +64,8 @@ export default function NewLessonScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
-  title: { fontSize: 24, fontWeight: '700', color: theme.text },
-  detail: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
+  title: { fontSize: 24, fontWeight: '700', color: c.textPrimary },
+  detail: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
 });

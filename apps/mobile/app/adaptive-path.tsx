@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type {
   AdaptivePath,
@@ -6,7 +6,8 @@ import type {
   PathStepAction,
 } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Card, ErrorBanner, Loading } from '../components/ui';
 
@@ -20,11 +21,11 @@ const ACTION_KEY: Record<PathStepAction, TranslationKey> = {
   consolidate: 'apath.a.consolidate',
   target: 'apath.a.target',
 };
-const ACTION_COLOR: Record<PathStepAction, string> = {
-  ready: theme.ok,
-  consolidate: theme.warn,
-  target: theme.accent,
-};
+const actionColor = (c: ColorScale): Record<PathStepAction, string> => ({
+  ready: c.success,
+  consolidate: c.warning,
+  target: c.primary,
+});
 
 /**
  * Adaptive Learning Path Engine (task 5.7) ⭐. The learner names a goal; the
@@ -33,6 +34,8 @@ const ACTION_COLOR: Record<PathStepAction, string> = {
  * the goal. "Before Genetics, let's consolidate DNA and Mitosis."
  */
 export default function AdaptivePathScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [concepts, setConcepts] = useState<ConceptSummary[] | null>(null);
   const [goal, setGoal] = useState<ConceptSummary | null>(null);
@@ -118,9 +121,9 @@ export default function AdaptivePathScreen() {
                   <Text style={styles.stepIcon}>{ACTION_ICON[s.action]}</Text>
                   {i < path.steps.length - 1 ? <View style={styles.connector} /> : null}
                 </View>
-                <View style={[styles.stepCard, { borderLeftColor: ACTION_COLOR[s.action] }]}>
+                <View style={[styles.stepCard, { borderLeftColor: actionColor(c)[s.action] }]}>
                   <Text style={styles.stepName}>{s.name}</Text>
-                  <Text style={[styles.stepAction, { color: ACTION_COLOR[s.action] }]}>
+                  <Text style={[styles.stepAction, { color: actionColor(c)[s.action] }]}>
                     {t(ACTION_KEY[s.action])}
                     {s.mastery !== null ? ` · ${s.mastery}%` : ''}
                   </Text>
@@ -150,36 +153,36 @@ function joinAnd(names: string[], and: string): string {
   return `${names.slice(0, -1).join(', ')} ${and} ${names[names.length - 1]}`;
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 14, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
-  kicker: { fontSize: 13, fontWeight: '700', color: theme.accent, textTransform: 'uppercase', letterSpacing: 1.2 },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
-  pick: { fontSize: 12, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 0.8 },
-  empty: { fontSize: 14, color: theme.textMuted },
+  kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
+  pick: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.8 },
+  empty: { fontSize: 14, color: c.textSecondary },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { borderWidth: 1, borderColor: theme.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: theme.surfaceAlt },
-  chipOn: { borderColor: theme.accent, backgroundColor: theme.accent },
-  chipText: { fontSize: 14, color: theme.textMuted, fontWeight: '600' },
-  chipTextOn: { color: theme.accentText },
-  verdict: { borderColor: theme.accent, borderLeftWidth: 3 },
-  verdictText: { fontSize: 16, color: theme.text, lineHeight: 24, fontWeight: '600' },
+  chip: { borderWidth: 1, borderColor: c.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: c.surfaceElevated },
+  chipOn: { borderColor: c.primary, backgroundColor: c.primary },
+  chipText: { fontSize: 14, color: c.textSecondary, fontWeight: '600' },
+  chipTextOn: { color: c.onPrimary },
+  verdict: { borderColor: c.primary, borderLeftWidth: 3 },
+  verdictText: { fontSize: 16, color: c.textPrimary, lineHeight: 24, fontWeight: '600' },
   pathList: { gap: 0 },
   step: { flexDirection: 'row', gap: 12 },
   stepCol: { alignItems: 'center', width: 32 },
   stepIcon: { fontSize: 22, paddingTop: 12 },
-  connector: { flex: 1, width: 2, backgroundColor: theme.border, marginTop: 4 },
+  connector: { flex: 1, width: 2, backgroundColor: c.border, marginTop: 4 },
   stepCard: {
     flex: 1,
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderLeftWidth: 3,
     borderRadius: 12,
     padding: 14,
     marginBottom: 10,
     gap: 2,
   },
-  stepName: { fontSize: 16, fontWeight: '700', color: theme.text },
+  stepName: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
   stepAction: { fontSize: 12, fontWeight: '700' },
 });

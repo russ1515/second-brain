@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useI18n } from '../lib/i18n';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { columnBasis, useResponsive } from '../lib/responsive';
 
 /**
@@ -27,6 +28,8 @@ export function FeatureTile({
   comingSoon?: boolean;
   testID?: string;
 }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const { columns } = useResponsive();
   const disabled = comingSoon || !onPress;
@@ -75,12 +78,12 @@ export function FeatureTile({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   tile: {
     flex: 1,
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 14,
     padding: 16,
     minHeight: 112,
@@ -88,18 +91,18 @@ const styles = StyleSheet.create({
   },
   tileOff: { opacity: 0.55 },
   emoji: { fontSize: 26 },
-  title: { fontSize: 15, fontWeight: '600', color: theme.text },
-  subtitle: { fontSize: 12, color: theme.textMuted, lineHeight: 16 },
+  title: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
+  subtitle: { fontSize: 12, color: c.textSecondary, lineHeight: 16 },
   badge: {
     alignSelf: 'flex-start',
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
   badgeText: {
     fontSize: 10,
-    color: theme.textFaint,
+    color: c.textMuted,
     fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 0.5,

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../lib/auth-context';
+import { useI18n } from '../lib/i18n';
 import { useTokens } from '../lib/design/theme';
 import { Loading } from '../components/ui';
 import { BrainViz } from '../components/landing/landing-page';
@@ -33,12 +34,13 @@ import {
  */
 export default function OnboardingScreen() {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const router = useRouter();
   const { refreshOnboarding } = useAuth();
   const ctrl = useOnboarding();
   const [entering, setEntering] = useState(false);
 
-  if (ctrl.loading) return <Loading label="Je prépare ton espace…" />;
+  if (ctrl.loading) return <Loading label={t('onboarding.preparing')} />;
 
   const progress = (ctrl.stepIndex + 1) / ctrl.total;
   const base: StepProps = {
@@ -120,24 +122,25 @@ export default function OnboardingScreen() {
 
 /** Digital-twin generation animation shown while the KYC is finalised (Sprint 8
  *  — AI Welcome Engine: the twin is being built from the learner's profile). */
-const GEN_MESSAGES = [
-  'Analyse de ton profil…',
-  'Construction de ta carte de connaissances…',
-  'Personnalisation de ton Professeur IA…',
-  'Ton cerveau numérique prend forme…',
-];
 function GeneratingTwin() {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
+  const messages = [
+    t('onboarding.gen.analyzing'),
+    t('onboarding.gen.graph'),
+    t('onboarding.gen.teacher'),
+    t('onboarding.gen.forming'),
+  ];
   const [i, setI] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setI((n) => (n + 1) % GEN_MESSAGES.length), 1400);
+    const id = setInterval(() => setI((n) => (n + 1) % messages.length), 1400);
     return () => clearInterval(id);
-  }, []);
+  }, [messages.length]);
   return (
     <View style={{ flex: 1, backgroundColor: c.background, alignItems: 'center', justifyContent: 'center', gap: 20, padding: 24 }}>
       <BrainViz color={c.aiAccent} nodeColor={c.primary} />
-      <Text style={{ color: c.textPrimary, fontSize: 22, fontWeight: '800', textAlign: 'center' }}>Création de votre cerveau numérique…</Text>
-      <Text style={{ color: c.textSecondary, fontSize: 15, textAlign: 'center' }}>{GEN_MESSAGES[i]}</Text>
+      <Text style={{ color: c.textPrimary, fontSize: 22, fontWeight: '800', textAlign: 'center' }}>{t('onboarding.gen.title')}</Text>
+      <Text style={{ color: c.textSecondary, fontSize: 15, textAlign: 'center' }}>{messages[i]}</Text>
     </View>
   );
 }

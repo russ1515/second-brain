@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ReviewableKind, ReviewableView, ReviewPriority } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, ErrorBanner, Loading } from '../components/ui';
 
@@ -18,12 +19,12 @@ const KIND_ICON: Record<ReviewableKind, string> = {
   concept: '🎯',
 };
 
-const PRIORITY_COLOR: Record<ReviewPriority, string> = {
-  urgent: theme.danger,
-  high: theme.warn,
-  medium: theme.accent,
-  low: theme.ok,
-};
+const priorityColor = (c: ColorScale): Record<ReviewPriority, string> => ({
+  urgent: c.error,
+  high: c.warning,
+  medium: c.primary,
+  low: c.success,
+});
 
 const GRADES: { rating: 1 | 2 | 3 | 4; key: TranslationKey }[] = [
   { rating: 1, key: 'revEng.again' },
@@ -40,6 +41,8 @@ const GRADES: { rating: 1 | 2 | 3 | 4; key: TranslationKey }[] = [
  * shown with its memory score, priority, urgency and next date.
  */
 export default function RevisionEngineScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [items, setItems] = useState<ReviewableView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,8 +110,8 @@ export default function RevisionEngineScreen() {
                   <Text style={styles.meta}>
                     🧠 {it.memoryScore}% · {t('revEng.next')} {formatDue(it, t)}
                   </Text>
-                  <View style={[styles.prio, { borderColor: PRIORITY_COLOR[it.priority] }]}>
-                    <Text style={[styles.prioText, { color: PRIORITY_COLOR[it.priority] }]}>
+                  <View style={[styles.prio, { borderColor: priorityColor(c)[it.priority] }]}>
+                    <Text style={[styles.prioText, { color: priorityColor(c)[it.priority] }]}>
                       {t(PRIO_KEY[it.priority])}
                     </Text>
                   </View>
@@ -152,22 +155,22 @@ function formatDue(it: ReviewableView, t: (k: TranslationKey) => string): string
   return `${days} ${t('revEng.days')}`;
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4, marginBottom: 2 },
   kicker: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
   },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
-  empty: { fontSize: 14, color: theme.textMuted },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
+  empty: { fontSize: 14, color: c.textSecondary },
   card: {
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 12,
     padding: 14,
     gap: 12,
@@ -175,21 +178,21 @@ const styles = StyleSheet.create({
   head: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
   icon: { fontSize: 24 },
   headBody: { flex: 1, gap: 6 },
-  title: { fontSize: 15, fontWeight: '700', color: theme.text, lineHeight: 20 },
+  title: { fontSize: 15, fontWeight: '700', color: c.textPrimary, lineHeight: 20 },
   metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  meta: { flex: 1, fontSize: 12, color: theme.textMuted },
+  meta: { flex: 1, fontSize: 12, color: c.textSecondary },
   prio: { borderWidth: 1, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
   prioText: { fontSize: 11, fontWeight: '700' },
   grades: { flexDirection: 'row', gap: 8 },
   grade: {
     flex: 1,
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     paddingVertical: 10,
     alignItems: 'center',
   },
   gradeOff: { opacity: 0.5 },
-  gradeText: { fontSize: 13, fontWeight: '600', color: theme.text },
+  gradeText: { fontSize: 13, fontWeight: '600', color: c.textPrimary },
 });

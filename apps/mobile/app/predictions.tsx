@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import type { ReviewableKind, RevisionForecastView } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 
@@ -25,6 +26,8 @@ const KIND_ICON: Record<ReviewableKind, string> = {
  * forgetting will pass the threshold" — so the AI acts BEFORE it's forgotten.
  */
 export default function PredictionsScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t, locale } = useI18n();
   const router = useRouter();
   const [data, setData] = useState<RevisionForecastView | null>(null);
@@ -109,30 +112,30 @@ function formatDate(date: string, locale: string): string {
   });
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
-  kicker: { fontSize: 13, fontWeight: '700', color: theme.accent, textTransform: 'uppercase', letterSpacing: 1.2 },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
+  kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
   contrast: { gap: 6 },
-  contrastLine: { fontSize: 14, color: theme.textMuted, lineHeight: 20 },
-  contrastLineHi: { fontSize: 14, color: theme.text, fontWeight: '600', lineHeight: 20 },
-  empty: { fontSize: 14, color: theme.textMuted },
+  contrastLine: { fontSize: 14, color: c.textSecondary, lineHeight: 20 },
+  contrastLineHi: { fontSize: 14, color: c.textPrimary, fontWeight: '600', lineHeight: 20 },
+  empty: { fontSize: 14, color: c.textSecondary },
   card: {
     flexDirection: 'row',
     gap: 12,
     alignItems: 'flex-start',
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderLeftWidth: 3,
-    borderLeftColor: theme.warn,
+    borderLeftColor: c.warning,
     borderRadius: 12,
     padding: 14,
   },
   icon: { fontSize: 22 },
   body: { flex: 1, gap: 3 },
-  title: { fontSize: 15, fontWeight: '700', color: theme.text },
-  forecast: { fontSize: 15, color: theme.text, lineHeight: 22, fontWeight: '500' },
-  meta: { fontSize: 12, color: theme.textMuted },
+  title: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
+  forecast: { fontSize: 15, color: c.textPrimary, lineHeight: 22, fontWeight: '500' },
+  meta: { fontSize: 12, color: c.textSecondary },
 });

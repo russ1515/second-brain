@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { AskRequest, AskResponse, LibraryFacets } from '@second-brain/shared';
 import { api } from '../../lib/client';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n } from '../../lib/i18n';
 import { Button, Card, ErrorBanner } from '../../components/ui';
 
@@ -20,6 +21,8 @@ type Scope =
  * Grounded — when nothing relevant is found it says so instead of inventing.
  */
 export default function AskScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const params = useLocalSearchParams<{ documentId?: string; title?: string }>();
   const { t } = useI18n();
   const router = useRouter();
@@ -110,7 +113,7 @@ export default function AskScreen() {
       <TextInput
         style={styles.input}
         placeholder={t('lib.ask.placeholder')}
-        placeholderTextColor={theme.textFaint}
+        placeholderTextColor={c.textMuted}
         value={question}
         onChangeText={setQuestion}
         multiline
@@ -156,6 +159,8 @@ export default function AskScreen() {
 }
 
 function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <Pressable style={[styles.chip, on && styles.chipOn]} onPress={onPress} accessibilityRole="button">
       <Text style={[styles.chipText, on && styles.chipTextOn]}>{label}</Text>
@@ -163,24 +168,24 @@ function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () 
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
-  kicker: { fontSize: 13, fontWeight: '700', color: theme.accent, textTransform: 'uppercase', letterSpacing: 1.2 },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
-  scopeLabel: { fontSize: 11, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 0.8 },
+  kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
+  scopeLabel: { fontSize: 11, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.8 },
   chips: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  chip: { borderWidth: 1, borderColor: theme.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: theme.surfaceAlt },
-  chipOn: { borderColor: theme.accent, backgroundColor: theme.accent },
-  chipText: { fontSize: 13, color: theme.textMuted, fontWeight: '600' },
-  chipTextOn: { color: theme.accentText },
-  input: { backgroundColor: theme.surfaceAlt, borderWidth: 1, borderColor: theme.border, borderRadius: 10, padding: 12, fontSize: 15, color: theme.text, minHeight: 80, textAlignVertical: 'top' },
-  answerCard: { gap: 8, borderColor: theme.accent },
-  answerLabel: { fontSize: 12, fontWeight: '700', color: theme.accent },
-  answer: { fontSize: 15, color: theme.text, lineHeight: 22 },
-  grounded: { fontSize: 13, color: theme.textFaint, fontStyle: 'italic' },
+  chip: { borderWidth: 1, borderColor: c.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: c.surfaceElevated },
+  chipOn: { borderColor: c.primary, backgroundColor: c.primary },
+  chipText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
+  chipTextOn: { color: c.onPrimary },
+  input: { backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12, fontSize: 15, color: c.textPrimary, minHeight: 80, textAlignVertical: 'top' },
+  answerCard: { gap: 8, borderColor: c.primary },
+  answerLabel: { fontSize: 12, fontWeight: '700', color: c.primary },
+  answer: { fontSize: 15, color: c.textPrimary, lineHeight: 22 },
+  grounded: { fontSize: 13, color: c.textMuted, fontStyle: 'italic' },
   sources: { gap: 8 },
-  citation: { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 10, padding: 12, gap: 4 },
-  citHead: { fontSize: 13, fontWeight: '700', color: theme.accent },
-  citSnippet: { fontSize: 13, color: theme.textMuted, lineHeight: 19 },
+  citation: { backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12, gap: 4 },
+  citHead: { fontSize: 13, fontWeight: '700', color: c.primary },
+  citSnippet: { fontSize: 13, color: c.textSecondary, lineHeight: 19 },
 });

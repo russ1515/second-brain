@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
 import { PLAYBACK_SUPPORTED, speak, stopSpeaking } from '../lib/speak';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 
 /**
  * "Read this aloud."
@@ -19,6 +20,8 @@ export function SpeakButton({
   language?: string;
   label?: string;
 }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle');
   const [error, setError] = useState<string | null>(null);
 
@@ -49,7 +52,7 @@ export function SpeakButton({
     <>
       <Pressable onPress={toggle} accessibilityRole="button" style={styles.button}>
         {state === 'loading' ? (
-          <ActivityIndicator size="small" color={theme.warn} />
+          <ActivityIndicator size="small" color={c.warning} />
         ) : (
           <Text style={styles.label}>
             {state === 'playing' ? '⏹ Stop' : `🔊 ${label}`}
@@ -61,11 +64,11 @@ export function SpeakButton({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   button: {
     alignSelf: 'flex-start',
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 999,
     paddingVertical: 6,
     paddingHorizontal: 12,
@@ -73,6 +76,6 @@ const styles = StyleSheet.create({
     minHeight: 32,
     justifyContent: 'center',
   },
-  label: { color: theme.warn, fontSize: 13, fontWeight: '600' },
+  label: { color: c.warning, fontSize: 13, fontWeight: '600' },
   error: { color: '#FECACA', fontSize: 12, marginTop: 6 },
 });

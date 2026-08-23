@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Card } from './ui';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 
 /** A tappable row that routes into an existing screen. The building block of the
  *  Learn / My Brain / Study / Profile spaces — navigation only, no logic. */
@@ -17,6 +19,8 @@ export function NavCard({
   onPress: () => void;
   testID?: string;
 }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <Pressable onPress={onPress} accessibilityRole="button" testID={testID}>
       <Card style={styles.card}>
@@ -31,11 +35,11 @@ export function NavCard({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   card: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   emoji: { fontSize: 26 },
   body: { flex: 1 },
-  title: { fontSize: 16, fontWeight: '600', color: theme.text },
-  detail: { fontSize: 13, color: theme.textMuted, marginTop: 4, lineHeight: 18 },
-  chevron: { fontSize: 24, color: theme.textFaint },
+  title: { fontSize: 16, fontWeight: '600', color: c.textPrimary },
+  detail: { fontSize: 13, color: c.textSecondary, marginTop: 4, lineHeight: 18 },
+  chevron: { fontSize: 24, color: c.textMuted },
 });

@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Image, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import type { DocumentDetail } from '@second-brain/shared';
 import { apiUpload } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n } from '../lib/i18n';
 import { Button, Card, ErrorBanner } from '../components/ui';
 
@@ -24,6 +25,8 @@ interface Page {
  * typed — so a photographed page is searchable and can ground a lesson.
  */
 export default function ScanScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
   const [pages, setPages] = useState<Page[]>([]);
@@ -144,7 +147,7 @@ export default function ScanScreen() {
           <TextInput
             style={styles.input}
             placeholder={t('scan.titlePlaceholder')}
-            placeholderTextColor={theme.textFaint}
+            placeholderTextColor={c.textMuted}
             value={title}
             onChangeText={setTitle}
             testID="scan-title"
@@ -161,13 +164,13 @@ export default function ScanScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   flex: { flex: 1 },
   row: { flexDirection: 'row', gap: 8 },
-  title: { fontSize: 26, fontWeight: '700', color: theme.text },
-  help: { fontSize: 14, color: theme.textMuted, lineHeight: 20 },
-  count: { fontSize: 13, color: theme.textFaint, marginTop: 6 },
+  title: { fontSize: 26, fontWeight: '700', color: c.textPrimary },
+  help: { fontSize: 14, color: c.textSecondary, lineHeight: 20 },
+  count: { fontSize: 13, color: c.textMuted, marginTop: 6 },
   thumbs: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   thumbWrap: { alignItems: 'center', gap: 4 },
   thumb: {
@@ -175,27 +178,27 @@ const styles = StyleSheet.create({
     height: 120,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
   },
-  remove: { color: theme.textFaint, fontSize: 12 },
+  remove: { color: c.textMuted, fontSize: 12 },
   input: {
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     padding: 12,
     fontSize: 15,
-    color: theme.text,
+    color: c.textPrimary,
   },
-  ok: { backgroundColor: theme.okBg, borderColor: theme.ok },
+  ok: { backgroundColor: c.successSoft, borderColor: c.success },
   okTitle: { color: '#D1FAE5', fontSize: 12, fontWeight: '700', letterSpacing: 1 },
-  okBody: { color: theme.text, fontSize: 18, fontWeight: '600', marginTop: 4 },
+  okBody: { color: c.textPrimary, fontSize: 18, fontWeight: '600', marginTop: 4 },
   okDetail: { color: '#CBD5E1', fontSize: 13, marginTop: 8, lineHeight: 19 },
   preview: {
-    color: theme.textMuted,
+    color: c.textSecondary,
     fontSize: 13,
     lineHeight: 19,
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderRadius: 10,
     padding: 12,
   },

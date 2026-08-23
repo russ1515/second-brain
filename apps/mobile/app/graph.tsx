@@ -2,17 +2,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { LearningStatus, TwinGraph, TwinGraphNode } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, ErrorBanner, Loading } from '../components/ui';
 
-const STATUS_COLOR: Record<LearningStatus, string> = {
-  mastered: theme.ok,
-  in_progress: theme.accent,
-  ready: theme.textMuted,
-  at_risk: theme.warn,
-  blocked: theme.danger,
-};
+const statusColor = (c: ColorScale): Record<LearningStatus, string> => ({
+  mastered: c.success,
+  in_progress: c.primary,
+  ready: c.textSecondary,
+  at_risk: c.warning,
+  blocked: c.error,
+});
 const STATUS_KEY: Record<LearningStatus, TranslationKey> = {
   mastered: 'graph.s.mastered',
   in_progress: 'graph.s.in_progress',
@@ -33,6 +34,8 @@ interface FlatNode {
  * The same graph the AI teacher already reads to sequence what to study.
  */
 export default function GraphScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [graph, setGraph] = useState<TwinGraph | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +79,7 @@ export default function GraphScreen() {
           {flat.map(({ node, depth, related }) => (
             <View key={node.id} style={[styles.row, { paddingLeft: depth * 20 }]}>
               {depth > 0 ? <Text style={styles.branch}>└─</Text> : null}
-              <View style={[styles.dot, { backgroundColor: STATUS_COLOR[node.status] }]} />
+              <View style={[styles.dot, { backgroundColor: statusColor(c)[node.status] }]} />
               <View style={styles.rowBody}>
                 <Text style={styles.name}>{node.name}</Text>
                 <Text style={styles.meta}>
@@ -92,9 +95,9 @@ export default function GraphScreen() {
 
       {/* Legend. */}
       <View style={styles.legend}>
-        {(Object.keys(STATUS_COLOR) as LearningStatus[]).map((s) => (
+        {(Object.keys(statusColor(c)) as LearningStatus[]).map((s) => (
           <View key={s} style={styles.legendItem}>
-            <View style={[styles.dot, { backgroundColor: STATUS_COLOR[s] }]} />
+            <View style={[styles.dot, { backgroundColor: statusColor(c)[s] }]} />
             <Text style={styles.legendText}>{t(STATUS_KEY[s])}</Text>
           </View>
         ))}
@@ -160,37 +163,37 @@ function flatten(graph: TwinGraph): FlatNode[] {
   return out;
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 14, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
   kicker: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
   },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
-  empty: { fontSize: 14, color: theme.textMuted },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
+  empty: { fontSize: 14, color: c.textSecondary },
   tree: { gap: 2 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     paddingVertical: 10,
     paddingRight: 12,
     marginBottom: 6,
   },
-  branch: { color: theme.textFaint, fontSize: 14, marginLeft: 4 },
+  branch: { color: c.textMuted, fontSize: 14, marginLeft: 4 },
   dot: { width: 12, height: 12, borderRadius: 6 },
   rowBody: { flex: 1, gap: 1 },
-  name: { fontSize: 15, fontWeight: '700', color: theme.text },
-  meta: { fontSize: 12, color: theme.textMuted },
+  name: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
+  meta: { fontSize: 12, color: c.textSecondary },
   legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 4 },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  legendText: { fontSize: 12, color: theme.textMuted },
+  legendText: { fontSize: 12, color: c.textSecondary },
 });

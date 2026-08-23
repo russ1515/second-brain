@@ -1,7 +1,9 @@
+import { useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { DnaConfidenceBand, DnaTrait, DnaTraitKey, LearningDna } from '@second-brain/shared';
 import { useApiQuery } from '../lib/query';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 
@@ -27,11 +29,11 @@ const BAND_KEY: Record<DnaConfidenceBand, TranslationKey> = {
   established: 'dna.band.established',
 };
 
-const BAND_COLOR: Record<DnaConfidenceBand, string> = {
-  emerging: theme.textFaint,
-  forming: theme.warn,
-  established: theme.ok,
-};
+const bandColor = (c: ColorScale): Record<DnaConfidenceBand, string> => ({
+  emerging: c.textMuted,
+  forming: c.warning,
+  established: c.success,
+});
 
 /**
  * 🧬 Learning DNA (Sprint 9 ⭐). The learner's deep, stable profile of HOW they
@@ -39,6 +41,8 @@ const BAND_COLOR: Record<DnaConfidenceBand, string> = {
  * format — built progressively, each trait firming up as evidence grows.
  */
 export default function LearningDnaScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   // TanStack Query (Sprint 10.1): dedup + 30s staleTime — revisiting the screen
   // within the window is instant, no refetch, no boilerplate.
@@ -83,7 +87,9 @@ export default function LearningDnaScreen() {
 }
 
 function TraitCard({ tr, t }: { tr: DnaTrait; t: (k: TranslationKey) => string }) {
-  const color = BAND_COLOR[tr.band];
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const color = bandColor(c)[tr.band];
   return (
     <Card style={styles.card} testID={`dna-${tr.key}`}>
       <View style={styles.head}>
@@ -104,35 +110,35 @@ function TraitCard({ tr, t }: { tr: DnaTrait; t: (k: TranslationKey) => string }
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4, marginBottom: 2 },
   kicker: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
   },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
   maturityCard: { alignItems: 'center', gap: 6 },
   maturityLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
-  maturityValue: { fontSize: 40, fontWeight: '800', color: theme.accent },
+  maturityValue: { fontSize: 40, fontWeight: '800', color: c.primary },
   maturityTrack: {
     height: 8,
     width: '100%',
     borderRadius: 999,
-    backgroundColor: theme.border,
+    backgroundColor: c.border,
     overflow: 'hidden',
   },
-  maturityFill: { height: 8, borderRadius: 999, backgroundColor: theme.accent },
-  maturityMeta: { fontSize: 12, color: theme.textMuted },
+  maturityFill: { height: 8, borderRadius: 999, backgroundColor: c.primary },
+  maturityMeta: { fontSize: 12, color: c.textSecondary },
   card: { gap: 8 },
   head: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   icon: { fontSize: 22 },
@@ -140,14 +146,14 @@ const styles = StyleSheet.create({
   traitName: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  label: { fontSize: 16, fontWeight: '700', color: theme.text },
+  label: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
   badge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
   badgeText: { fontSize: 10, fontWeight: '800', color: '#FFFFFF', textTransform: 'uppercase' },
-  summary: { fontSize: 14, color: theme.textMuted, lineHeight: 20 },
-  confTrack: { height: 6, borderRadius: 999, backgroundColor: theme.border, overflow: 'hidden' },
+  summary: { fontSize: 14, color: c.textSecondary, lineHeight: 20 },
+  confTrack: { height: 6, borderRadius: 999, backgroundColor: c.border, overflow: 'hidden' },
   confFill: { height: 6, borderRadius: 999 },
 });

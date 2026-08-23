@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import type {
@@ -7,7 +7,8 @@ import type {
   SmartNotificationsView,
 } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, ErrorBanner, Loading } from '../components/ui';
 
@@ -31,6 +32,8 @@ const CTA_KEY: Record<SmartNotificationKind, TranslationKey> = {
  * topic. The teacher speaks, with a reason.
  */
 export default function NotificationsScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
   const [data, setData] = useState<SmartNotificationsView | null>(null);
@@ -110,18 +113,18 @@ function message(n: SmartNotification, t: (k: TranslationKey) => string): string
   }
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 6 },
-  kicker: { fontSize: 13, fontWeight: '700', color: theme.accent, textTransform: 'uppercase', letterSpacing: 1.2 },
-  greeting: { fontSize: 18, fontWeight: '700', color: theme.text, lineHeight: 25 },
-  empty: { fontSize: 14, color: theme.textMuted },
+  kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
+  greeting: { fontSize: 18, fontWeight: '700', color: c.textPrimary, lineHeight: 25 },
+  empty: { fontSize: 14, color: c.textSecondary },
   card: {
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderLeftWidth: 3,
-    borderLeftColor: theme.accent,
+    borderLeftColor: c.primary,
     borderRadius: 12,
     padding: 16,
     gap: 10,
@@ -130,7 +133,7 @@ const styles = StyleSheet.create({
   source: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
@@ -8,11 +8,14 @@ import {
   type OrganizationDetail,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
 
 export default function OrganizationDetailScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -125,7 +128,7 @@ export default function OrganizationDetailScreen() {
             <Text style={styles.memberName}>{m.displayName || m.email}</Text>
             <Text style={styles.memberEmail}>{m.email}</Text>
           </View>
-          <Text style={[styles.roleBadge, roleStyle(m.role)]}>
+          <Text style={[styles.roleBadge, roleStyle(m.role, c)]}>
             {t(`org.role.${m.role}` as TranslationKey)}
           </Text>
         </Card>
@@ -137,7 +140,7 @@ export default function OrganizationDetailScreen() {
           <TextInput
             style={styles.input}
             placeholder={t('org.emailPlaceholder')}
-            placeholderTextColor={theme.textFaint}
+            placeholderTextColor={c.textMuted}
             value={memberEmail}
             onChangeText={setMemberEmail}
             autoCapitalize="none"
@@ -182,7 +185,7 @@ export default function OrganizationDetailScreen() {
           <TextInput
             style={styles.input}
             placeholder={t('org.groupNamePlaceholder')}
-            placeholderTextColor={theme.textFaint}
+            placeholderTextColor={c.textMuted}
             value={groupName}
             onChangeText={setGroupName}
             testID="group-name"
@@ -196,50 +199,50 @@ export default function OrganizationDetailScreen() {
   );
 }
 
-function roleStyle(role: OrgRole) {
+function roleStyle(role: OrgRole, c: ColorScale) {
   return role === 'admin'
-    ? { backgroundColor: theme.accent, color: theme.text }
+    ? { backgroundColor: c.primary, color: c.textPrimary }
     : role === 'teacher'
-      ? { backgroundColor: '#78350F', color: theme.warn }
-      : { backgroundColor: theme.surfaceAlt, color: theme.textMuted };
+      ? { backgroundColor: c.warningSoft, color: c.warning }
+      : { backgroundColor: c.surfaceElevated, color: c.textSecondary };
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
-  title: { fontSize: 24, fontWeight: '700', color: theme.text },
-  meta: { fontSize: 13, color: theme.textMuted, textTransform: 'capitalize' },
-  section: { fontSize: 12, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 1, marginTop: 10 },
-  label: { fontSize: 12, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 },
+  title: { fontSize: 24, fontWeight: '700', color: c.textPrimary },
+  meta: { fontSize: 13, color: c.textSecondary, textTransform: 'capitalize' },
+  section: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginTop: 10 },
+  label: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 },
   rowCard: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   flex: { flex: 1 },
-  memberName: { fontSize: 15, fontWeight: '600', color: theme.text },
-  memberEmail: { fontSize: 12, color: theme.textMuted, marginTop: 2, textTransform: 'capitalize' },
+  memberName: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
+  memberEmail: { fontSize: 12, color: c.textSecondary, marginTop: 2, textTransform: 'capitalize' },
   roleBadge: { fontSize: 11, fontWeight: '700', paddingVertical: 3, paddingHorizontal: 9, borderRadius: 999, overflow: 'hidden', textTransform: 'capitalize' },
   input: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     padding: 12,
     fontSize: 15,
-    color: theme.text,
+    color: c.textPrimary,
     marginBottom: 10,
   },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 },
   chip: {
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 999,
     paddingVertical: 6,
     paddingHorizontal: 12,
-    color: theme.textMuted,
+    color: c.textSecondary,
     fontSize: 13,
   },
-  chipOn: { borderColor: theme.accent, color: theme.text, backgroundColor: theme.accent },
-  note: { fontSize: 13, color: theme.textFaint, fontStyle: 'italic' },
-  sub: { fontSize: 12, color: theme.textMuted, marginTop: 2 },
-  insightsCard: { borderColor: theme.accent, gap: 4 },
-  insightsTitle: { fontSize: 15, fontWeight: '700', color: theme.text },
-  insightsLabel: { fontSize: 11, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 8 },
-  insightLine: { fontSize: 13, color: theme.textMuted, lineHeight: 19 },
+  chipOn: { borderColor: c.primary, color: c.textPrimary, backgroundColor: c.primary },
+  note: { fontSize: 13, color: c.textMuted, fontStyle: 'italic' },
+  sub: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
+  insightsCard: { borderColor: c.primary, gap: 4 },
+  insightsTitle: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
+  insightsLabel: { fontSize: 11, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 8 },
+  insightLine: { fontSize: 13, color: c.textSecondary, lineHeight: 19 },
 });

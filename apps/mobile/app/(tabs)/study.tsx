@@ -11,6 +11,7 @@ import type {
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
 import { useAuth } from '../../lib/auth-context';
+import { useI18n } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
 import { Skeleton } from '../../components/ds/core';
@@ -55,6 +56,7 @@ import {
  */
 export default function StudyScreen() {
   const { user } = useAuth();
+  const { t } = useI18n();
   const router = useRouter();
   const { colors: c } = useTokens();
   const { maxContentWidth } = useResponsive();
@@ -145,7 +147,7 @@ export default function StudyScreen() {
 
       {/* ZONE 3 — Smart Cards (launch + breakdown) */}
       <View style={{ gap: 10 }}>
-        <SectionLabel>Smart Cards</SectionLabel>
+        <SectionLabel>{t('study.section.cards')}</SectionLabel>
         <QuickLaunch due={stats?.due ?? 0} onLaunch={(o) => launch(o.key)} />
         <DueCounter counts={counts} onPick={() => router.push('/revision')} />
         <ReviewStatsStrip reviewsToday={stats?.reviewsToday ?? 0} retention={stats?.retention ?? null} />

@@ -4,6 +4,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import type { LearningCategory, OnboardingState } from '@second-brain/shared';
 import { api } from '../../lib/client';
 import { useAuth } from '../../lib/auth-context';
+import { useI18n } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
 import {
@@ -32,6 +33,7 @@ import {
  */
 export default function LearnScreen() {
   const { user } = useAuth();
+  const { t } = useI18n();
   const router = useRouter();
   const { colors: c } = useTokens();
   const { width, maxContentWidth } = useResponsive();
@@ -78,7 +80,7 @@ export default function LearnScreen() {
 
       {/* Pedagogical modes (4.1) */}
       <View style={{ gap: 10 }}>
-        <SectionLabel>Comment veux-tu travailler ?</SectionLabel>
+        <SectionLabel>{t('learn.section.modes')}</SectionLabel>
         <LearningModeSelector modes={modes} value={mode} onSelect={selectMode} />
       </View>
 

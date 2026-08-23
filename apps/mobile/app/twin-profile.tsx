@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { LearnerProfile } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 
@@ -14,6 +15,8 @@ import { Button, Card, ErrorBanner, Loading } from '../components/ui';
  * whole profile refreshes on every open — it evolves after each interaction.
  */
 export default function TwinProfileScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [profile, setProfile] = useState<LearnerProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -124,35 +127,35 @@ const FOCUS_KEY = {
   night: 'twin.focus.night',
 } as const satisfies Record<NonNullable<LearnerProfile['focusWindow']>, TranslationKey>;
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 14, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
   kicker: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
   },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
-  progressCard: { alignItems: 'center', gap: 2, borderColor: theme.accent },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
+  progressCard: { alignItems: 'center', gap: 2, borderColor: c.primary },
   progressLabel: {
     fontSize: 12,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
-  progressScore: { fontSize: 44, fontWeight: '800', color: theme.text },
-  progressUnit: { fontSize: 18, fontWeight: '600', color: theme.textFaint },
-  progressMeta: { fontSize: 13, color: theme.textMuted },
+  progressScore: { fontSize: 44, fontWeight: '800', color: c.textPrimary },
+  progressUnit: { fontSize: 18, fontWeight: '600', color: c.textMuted },
+  progressMeta: { fontSize: 13, color: c.textSecondary },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   dim: {
     flexGrow: 1,
     flexBasis: '46%',
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 12,
     padding: 14,
     gap: 4,
@@ -161,10 +164,10 @@ const styles = StyleSheet.create({
   dimLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
-  dimValue: { fontSize: 16, fontWeight: '600', color: theme.text },
-  foot: { fontSize: 12, color: theme.textFaint, textAlign: 'center', marginTop: 4 },
+  dimValue: { fontSize: 16, fontWeight: '600', color: c.textPrimary },
+  foot: { fontSize: 12, color: c.textMuted, textAlign: 'center', marginTop: 4 },
 });

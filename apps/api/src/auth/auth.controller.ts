@@ -27,6 +27,9 @@ import { LogoutDto } from './dto/logout.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SetLocaleDto } from './dto/set-locale.dto';
 import { TwoFactorCodeDto } from './dto/two-factor-code.dto';
 import { TwoFactorVerifyDto } from './dto/two-factor-verify.dto';
@@ -103,7 +106,8 @@ export class AuthController {
     return this.emailVerification.verify(dto.token);
   }
 
-  // Re-sends the verification email for the authenticated (still-unverified) user.
+  // Re-sends the verification email (as a fresh 6-digit OTP) for the
+  // authenticated, still-unverified user.
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @UseGuards(JwtAccessGuard)
   @Post('resend-verification')
@@ -111,7 +115,39 @@ export class AuthController {
   async resendVerification(
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<void> {
-    await this.emailVerification.resend(user.userId);
+    await this.auth.resendEmailOtp(user.userId);
+  }
+
+  // ── Email OTP + password reset (§27/§28) ──
+
+  // Confirms the authenticated user's email with the 6-digit OTP mailed at
+  // registration/resend. Rate-limited against guessing.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseGuards(JwtAccessGuard)
+  @Post('verify-otp')
+  @HttpCode(HttpStatus.OK)
+  verifyOtp(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: VerifyOtpDto,
+  ): Promise<AuthUser> {
+    return this.auth.verifyEmailOtp(user.userId, dto.code);
+  }
+
+  // Starts a password reset by emailing a reset OTP. Public + throttled; always
+  // returns 204 without revealing whether the email is registered.
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async forgotPassword(@Body() dto: ForgotPasswordDto): Promise<void> {
+    await this.auth.requestPasswordReset(dto.email);
+  }
+
+  // Completes a password reset with the emailed OTP → 204. Public + throttled.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('reset-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async resetPassword(@Body() dto: ResetPasswordDto): Promise<void> {
+    await this.auth.resetPassword(dto.email, dto.code, dto.password);
   }
 
   // ── Two-factor auth ──

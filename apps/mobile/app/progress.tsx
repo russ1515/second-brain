@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { MentorBriefing, MentorOverview } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n } from '../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 
 /** Progress: the Mentor's view. Every number here is measured, never flattered. */
 export default function ProgressScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [overview, setOverview] = useState<MentorOverview | null>(null);
   const [briefing, setBriefing] = useState<MentorBriefing | null>(null);
@@ -107,6 +110,8 @@ function Stat({
   unit?: string;
   testID?: string;
 }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <Card style={styles.stat}>
       <Text style={styles.statValue} testID={testID}>
@@ -119,6 +124,8 @@ function Stat({
 }
 
 function Row({ label, value }: { label: string; value: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={styles.row}>
       <Text style={styles.rowLabel}>{label}</Text>
@@ -127,17 +134,17 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   streakRow: { flexDirection: 'row', gap: 10 },
   stat: { flex: 1, alignItems: 'center', paddingVertical: 18 },
-  statValue: { fontSize: 30, fontWeight: '700', color: theme.warn },
-  statUnit: { fontSize: 11, color: theme.textFaint },
-  statLabel: { fontSize: 12, color: theme.textMuted, marginTop: 6, textAlign: 'center' },
+  statValue: { fontSize: 30, fontWeight: '700', color: c.warning },
+  statUnit: { fontSize: 11, color: c.textMuted },
+  statLabel: { fontSize: 12, color: c.textSecondary, marginTop: 6, textAlign: 'center' },
   sectionTitle: {
     fontSize: 12,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: 10,
@@ -147,19 +154,19 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 8,
     borderTopWidth: 1,
-    borderTopColor: theme.border,
+    borderTopColor: c.border,
   },
-  rowLabel: { color: theme.textMuted, fontSize: 15 },
-  rowValue: { color: theme.text, fontSize: 15, fontWeight: '600' },
+  rowLabel: { color: c.textSecondary, fontSize: 15 },
+  rowValue: { color: c.textPrimary, fontSize: 15, fontWeight: '600' },
   win: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingVertical: 8,
     borderTopWidth: 1,
-    borderTopColor: theme.border,
+    borderTopColor: c.border,
   },
-  winLabel: { color: theme.text, fontSize: 15, fontWeight: '600' },
-  winDate: { color: theme.textFaint, fontSize: 13 },
-  encouragement: { color: theme.text, fontSize: 16, lineHeight: 24, marginBottom: 10 },
-  strategy: { color: theme.textMuted, fontSize: 15, lineHeight: 22, marginTop: 6 },
+  winLabel: { color: c.textPrimary, fontSize: 15, fontWeight: '600' },
+  winDate: { color: c.textMuted, fontSize: 13 },
+  encouragement: { color: c.textPrimary, fontSize: 16, lineHeight: 24, marginBottom: 10 },
+  strategy: { color: c.textSecondary, fontSize: 15, lineHeight: 22, marginTop: 6 },
 });

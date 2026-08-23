@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type {
   CoachDifficulty,
@@ -9,7 +9,8 @@ import type {
   UpdateCoachRequest,
 } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 
@@ -26,6 +27,8 @@ const MINUTES = [10, 15, 20, 25, 30, 45];
  * streak, discipline, goals, progression.
  */
 export default function CoachScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [plan, setPlan] = useState<CoachPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -164,6 +167,8 @@ function Dimension<T extends string | number>({
   disabled: boolean;
   t: (k: TranslationKey) => string;
 }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <Card style={styles.dimCard}>
       <View style={styles.dimHead}>
@@ -195,6 +200,8 @@ function Dimension<T extends string | number>({
 }
 
 function Stat({ value, label }: { value: string; label: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={styles.stat}>
       <Text style={styles.statValue}>{value}</Text>
@@ -225,21 +232,21 @@ const DISCIPLINE_KEY: Record<'strong' | 'building' | 'irregular', TranslationKey
   irregular: 'coachp.disc.irregular',
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 6, marginBottom: 2 },
   kicker: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
   },
-  headline: { fontSize: 17, color: theme.text, lineHeight: 24, fontWeight: '600' },
+  headline: { fontSize: 17, color: c.textPrimary, lineHeight: 24, fontWeight: '600' },
   sectionLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: 10,
@@ -247,27 +254,27 @@ const styles = StyleSheet.create({
   stateCard: { gap: 4 },
   stateRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
   stat: { minWidth: 64 },
-  statValue: { fontSize: 20, fontWeight: '700', color: theme.text },
-  statLabel: { fontSize: 12, color: theme.textMuted, marginTop: 2 },
+  statValue: { fontSize: 20, fontWeight: '700', color: c.textPrimary },
+  statLabel: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
   dimCard: { gap: 10 },
   dimHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  dimTitle: { fontSize: 16, fontWeight: '700', color: theme.text },
+  dimTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
   badge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
-  badgeCoach: { backgroundColor: theme.accent },
-  badgeYou: { backgroundColor: theme.warn },
-  badgeText: { fontSize: 11, fontWeight: '700', color: theme.accentText },
-  dimReason: { fontSize: 14, color: theme.textMuted, lineHeight: 20 },
+  badgeCoach: { backgroundColor: c.primary },
+  badgeYou: { backgroundColor: c.warning },
+  badgeText: { fontSize: 11, fontWeight: '700', color: c.onPrimary },
+  dimReason: { fontSize: 14, color: c.textSecondary, lineHeight: 20 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 999,
     paddingHorizontal: 14,
     paddingVertical: 7,
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
   },
-  chipActive: { backgroundColor: theme.accent, borderColor: theme.accent },
+  chipActive: { backgroundColor: c.primary, borderColor: c.primary },
   chipOff: { opacity: 0.5 },
-  chipText: { fontSize: 14, color: theme.text, fontWeight: '500' },
-  chipTextActive: { color: theme.accentText, fontWeight: '700' },
+  chipText: { fontSize: 14, color: c.textPrimary, fontWeight: '500' },
+  chipTextActive: { color: c.onPrimary, fontWeight: '700' },
 });

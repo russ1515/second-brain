@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type {
@@ -6,7 +6,8 @@ import type {
   WritingSubmissionView,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
 
@@ -21,6 +22,8 @@ const DIM_LABEL: Record<WritingDimension['kind'], TranslationKey> = {
 };
 
 export default function WritingReviewScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -100,22 +103,22 @@ export default function WritingReviewScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
-  title: { fontSize: 22, fontWeight: '700', color: theme.text },
-  scoreCard: { alignItems: 'center', gap: 6, borderColor: theme.accent },
-  scoreBig: { fontSize: 34, fontWeight: '800', color: theme.text },
-  summary: { fontSize: 14, color: theme.text, lineHeight: 20, textAlign: 'center' },
-  blockLabel: { fontSize: 12, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 },
-  bullet: { fontSize: 14, color: theme.textMuted, lineHeight: 20, marginBottom: 4 },
+  title: { fontSize: 22, fontWeight: '700', color: c.textPrimary },
+  scoreCard: { alignItems: 'center', gap: 6, borderColor: c.primary },
+  scoreBig: { fontSize: 34, fontWeight: '800', color: c.textPrimary },
+  summary: { fontSize: 14, color: c.textPrimary, lineHeight: 20, textAlign: 'center' },
+  blockLabel: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 },
+  bullet: { fontSize: 14, color: c.textSecondary, lineHeight: 20, marginBottom: 4 },
   dimHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
-  dimName: { fontSize: 15, fontWeight: '700', color: theme.text },
+  dimName: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
   dimBadge: { fontSize: 11, fontWeight: '700', paddingVertical: 2, paddingHorizontal: 8, borderRadius: 999, overflow: 'hidden', textTransform: 'capitalize' },
-  rateGood: { backgroundColor: theme.okBg, color: theme.ok },
-  rateFair: { backgroundColor: '#78350F', color: theme.warn },
+  rateGood: { backgroundColor: c.successSoft, color: c.success },
+  rateFair: { backgroundColor: '#78350F', color: c.warning },
   rateBad: { backgroundColor: '#7F1D1D', color: '#FECACA' },
-  obs: { fontSize: 14, color: theme.textMuted, lineHeight: 20, marginBottom: 6 },
-  improve: { fontSize: 14, color: theme.text, lineHeight: 20 },
-  improveLabel: { fontWeight: '700', color: theme.accent },
-  prioCard: { borderColor: theme.accent },
+  obs: { fontSize: 14, color: c.textSecondary, lineHeight: 20, marginBottom: 6 },
+  improve: { fontSize: 14, color: c.textPrimary, lineHeight: 20 },
+  improveLabel: { fontWeight: '700', color: c.primary },
+  prioCard: { borderColor: c.primary },
 });

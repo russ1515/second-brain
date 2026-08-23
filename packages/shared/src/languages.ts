@@ -12,7 +12,7 @@
 export type SupportedLanguageCode =
   | 'fr' | 'en' | 'es' | 'de' | 'it' | 'pt' | 'nl' | 'pl' | 'ru' | 'zh'
   | 'ja' | 'ko' | 'ar' | 'hi' | 'tr' | 'sv' | 'vi' | 'th' | 'el' | 'cs'
-  | 'ro' | 'hu' | 'da' | 'fi' | 'id';
+  | 'ro' | 'hu' | 'da' | 'fi' | 'id' | 'no' | 'uk';
 
 export interface LanguageMeta {
   code: SupportedLanguageCode;
@@ -50,6 +50,8 @@ export const SUPPORTED_LANGUAGES: Record<SupportedLanguageCode, LanguageMeta> = 
   da: { code: 'da', name: 'Dansk', englishName: 'Danish', flag: '🇩🇰' },
   fi: { code: 'fi', name: 'Suomi', englishName: 'Finnish', flag: '🇫🇮' },
   id: { code: 'id', name: 'Bahasa Indonesia', englishName: 'Indonesian', flag: '🇮🇩' },
+  no: { code: 'no', name: 'Norsk', englishName: 'Norwegian', flag: '🇳🇴' },
+  uk: { code: 'uk', name: 'Українська', englishName: 'Ukrainian', flag: '🇺🇦' },
 };
 
 /** All supported codes, in registry order (French first). */

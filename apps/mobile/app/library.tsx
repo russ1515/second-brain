@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import {
   Platform,
   Pressable,
@@ -17,7 +17,8 @@ import type {
   PipelineStage,
 } from '@second-brain/shared';
 import { api, apiUpload } from '../lib/client';
-import { theme } from '../lib/theme';
+import { useTokens } from '../lib/design/theme';
+import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 
@@ -34,11 +35,11 @@ const DIFFICULTY_KEY: Record<DocumentDifficulty, TranslationKey> = {
   intermediate: 'lib.diff.intermediate',
   advanced: 'lib.diff.advanced',
 };
-const DIFFICULTY_COLOR: Record<DocumentDifficulty, string> = {
-  beginner: theme.ok,
-  intermediate: theme.warn,
-  advanced: theme.danger,
-};
+const difficultyColor = (c: ColorScale): Record<DocumentDifficulty, string> => ({
+  beginner: c.success,
+  intermediate: c.warning,
+  advanced: c.error,
+});
 const SOURCE_ICON: Record<string, string> = {
   text: '📝',
   file: '📄',
@@ -69,6 +70,8 @@ type Facet =
  * author and date. Nothing is faked — a document still being analysed says so.
  */
 export default function LibraryScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
   const [facets, setFacets] = useState<LibraryFacets | null>(null);
@@ -276,6 +279,8 @@ export default function LibraryScreen() {
 
 /** Inline quick-add: paste text, or ingest a URL. */
 function AddPanel({ onDone }: { onDone: () => void }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [mode, setMode] = useState<'text' | 'url'>('text');
   const [title, setTitle] = useState('');
@@ -350,14 +355,14 @@ function AddPanel({ onDone }: { onDone: () => void }) {
           <TextInput
             style={styles.input}
             placeholder={t('lib.addTitle')}
-            placeholderTextColor={theme.textFaint}
+            placeholderTextColor={c.textMuted}
             value={title}
             onChangeText={setTitle}
           />
           <TextInput
             style={[styles.input, styles.inputMultiline]}
             placeholder={t('lib.addBody')}
-            placeholderTextColor={theme.textFaint}
+            placeholderTextColor={c.textMuted}
             value={body}
             onChangeText={setBody}
             multiline
@@ -367,7 +372,7 @@ function AddPanel({ onDone }: { onDone: () => void }) {
         <TextInput
           style={styles.input}
           placeholder="https://…"
-          placeholderTextColor={theme.textFaint}
+          placeholderTextColor={c.textMuted}
           value={body}
           onChangeText={setBody}
           autoCapitalize="none"
@@ -389,6 +394,8 @@ function DocCard({
   onFavorite: () => void;
   onTrash: () => void;
 }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t, locale } = useI18n();
   return (
     <Card style={styles.doc}>
@@ -408,13 +415,13 @@ function DocCard({
 
       {/* Metadata badges */}
       <View style={styles.badges}>
-        {doc.subject ? <Badge label={doc.subject} tone={theme.accent} /> : null}
-        {doc.language ? <Badge label={doc.language} tone={theme.textMuted} /> : null}
+        {doc.subject ? <Badge label={doc.subject} tone={c.primary} /> : null}
+        {doc.language ? <Badge label={doc.language} tone={c.textSecondary} /> : null}
         {doc.difficulty ? (
-          <Badge label={t(DIFFICULTY_KEY[doc.difficulty])} tone={DIFFICULTY_COLOR[doc.difficulty]} />
+          <Badge label={t(DIFFICULTY_KEY[doc.difficulty])} tone={difficultyColor(c)[doc.difficulty]} />
         ) : null}
         {doc.status === 'failed' ? (
-          <Badge label={t('lib.status.failed')} tone={theme.danger} />
+          <Badge label={t('lib.status.failed')} tone={c.error} />
         ) : null}
       </View>
 
@@ -453,6 +460,8 @@ function DocCard({
  *  Completed stages are green, the running one is highlighted, the rest faint —
  *  the learner watches it advance without doing anything. */
 function PipelineProgress({ stage }: { stage: PipelineStage | null }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const currentIndex = stage ? PIPELINE.findIndex((s) => s.stage === stage) : -1;
   return (
@@ -499,6 +508,8 @@ function Chip({
   on: boolean;
   onPress: () => void;
 }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <Pressable style={[styles.chip, on && styles.chipOn]} onPress={onPress} accessibilityRole="button">
       <Text style={[styles.chipText, on && styles.chipTextOn]}>
@@ -510,6 +521,8 @@ function Chip({
 }
 
 function FacetGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={styles.facetGroup}>
       <Text style={styles.facetTitle}>{title}</Text>
@@ -519,6 +532,8 @@ function FacetGroup({ title, children }: { title: string; children: React.ReactN
 }
 
 function Badge({ label, tone }: { label: string; tone: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={[styles.badge, { borderColor: tone }]}>
       <Text style={[styles.badgeText, { color: tone }]}>{label}</Text>
@@ -526,46 +541,46 @@ function Badge({ label, tone }: { label: string; tone: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
-  kicker: { fontSize: 13, fontWeight: '700', color: theme.accent, textTransform: 'uppercase', letterSpacing: 1.2 },
-  intro: { fontSize: 15, color: theme.textMuted, lineHeight: 21 },
+  kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
+  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
   addRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   addCard: { gap: 10 },
-  input: { backgroundColor: theme.surfaceAlt, borderWidth: 1, borderColor: theme.border, borderRadius: 10, padding: 12, fontSize: 15, color: theme.text },
+  input: { backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12, fontSize: 15, color: c.textPrimary },
   inputMultiline: { minHeight: 90, textAlignVertical: 'top' },
   chips: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', paddingVertical: 2 },
-  chip: { borderWidth: 1, borderColor: theme.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: theme.surfaceAlt },
-  chipOn: { borderColor: theme.accent, backgroundColor: theme.accent },
-  chipText: { fontSize: 13, color: theme.textMuted, fontWeight: '600' },
-  chipTextOn: { color: theme.accentText },
+  chip: { borderWidth: 1, borderColor: c.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: c.surfaceElevated },
+  chipOn: { borderColor: c.primary, backgroundColor: c.primary },
+  chipText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
+  chipTextOn: { color: c.onPrimary },
   facetGroup: { gap: 6 },
-  facetTitle: { fontSize: 11, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 0.8 },
+  facetTitle: { fontSize: 11, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.8 },
   facetChips: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  empty: { fontSize: 14, color: theme.textMuted, paddingVertical: 12 },
+  empty: { fontSize: 14, color: c.textSecondary, paddingVertical: 12 },
   doc: { gap: 8 },
   docHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   flex: { flex: 1 },
-  docTitle: { fontSize: 16, fontWeight: '700', color: theme.text },
+  docTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
   star: { fontSize: 20 },
   trash: { fontSize: 18 },
   badges: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
   badge: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2 },
   badgeText: { fontSize: 11, fontWeight: '700' },
-  summary: { fontSize: 14, color: theme.text, lineHeight: 20 },
-  preview: { fontSize: 13, color: theme.textMuted, lineHeight: 19 },
-  analysing: { fontSize: 13, color: theme.textFaint, fontStyle: 'italic' },
+  summary: { fontSize: 14, color: c.textPrimary, lineHeight: 20 },
+  preview: { fontSize: 13, color: c.textSecondary, lineHeight: 19 },
+  analysing: { fontSize: 13, color: c.textMuted, fontStyle: 'italic' },
   pipeline: { gap: 6 },
-  pipelineLabel: { fontSize: 12, color: theme.accent, fontWeight: '700' },
+  pipelineLabel: { fontSize: 12, color: c.primary, fontWeight: '700' },
   pipelineSteps: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
-  stagePill: { borderWidth: 1, borderColor: theme.border, borderRadius: 14, paddingHorizontal: 8, paddingVertical: 3, backgroundColor: theme.surfaceAlt },
-  stageDone: { borderColor: theme.ok },
-  stageActive: { borderColor: theme.accent, backgroundColor: theme.accent },
-  stageText: { fontSize: 11, color: theme.textFaint, fontWeight: '600' },
-  stageDoneText: { color: theme.ok },
-  stageActiveText: { color: theme.accentText },
+  stagePill: { borderWidth: 1, borderColor: c.border, borderRadius: 14, paddingHorizontal: 8, paddingVertical: 3, backgroundColor: c.surfaceElevated },
+  stageDone: { borderColor: c.success },
+  stageActive: { borderColor: c.primary, backgroundColor: c.primary },
+  stageText: { fontSize: 11, color: c.textMuted, fontWeight: '600' },
+  stageDoneText: { color: c.success },
+  stageActiveText: { color: c.onPrimary },
   concepts: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  concept: { fontSize: 12, color: theme.accent, fontWeight: '600' },
-  meta: { fontSize: 12, color: theme.textFaint },
+  concept: { fontSize: 12, color: c.primary, fontWeight: '600' },
+  meta: { fontSize: 12, color: c.textMuted },
 });

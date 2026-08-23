@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useTokens } from '../../lib/design/theme';
+import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { useResponsive } from '../../lib/responsive';
 import { Button } from '../ds/core';
 import { AITeacherMessage } from '../ds/ai';
@@ -17,6 +18,7 @@ import type { Choice } from '../../lib/onboarding/catalog';
 // ── Progress ribbon (2.17) ───────────────────────────────────────────────────
 export function ProgressRibbon({ value }: { value: number }) {
   const { colors: c, radius } = useTokens();
+  const { t } = useI18n();
   return (
     <View style={{ gap: 6 }}>
       <View
@@ -33,7 +35,7 @@ export function ProgressRibbon({ value }: { value: number }) {
         />
       </View>
       <Text style={{ color: c.textMuted, fontSize: 12 }}>
-        Ton espace prend forme…
+        {t('onb.progress')}
       </Text>
     </View>
   );
@@ -42,12 +44,13 @@ export function ProgressRibbon({ value }: { value: number }) {
 // ── Privacy "why" note (2.19) ────────────────────────────────────────────────
 export function PrivacyNote({ why }: { why: string }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   return (
     <View style={{ marginTop: 4 }}>
       <Pressable onPress={() => setOpen((o) => !o)} accessibilityRole="button">
         <Text style={{ color: c.textMuted, fontSize: 12 }}>
-          {open ? '▾ ' : '▸ '}Pourquoi je te demande ça ?
+          {open ? '▾ ' : '▸ '}{t('onb.why')}
         </Text>
       </Pressable>
       {open ? (
@@ -70,12 +73,16 @@ function Chip({
   onPress: () => void;
 }) {
   const { colors: c, radius } = useTokens();
+  const { t } = useI18n();
+  // Labels in the catalog are i18n keys; t() passes through any literal (e.g.
+  // CEFR levels, flag+language names) unchanged, so both cases resolve here.
+  const label = t(choice.label as TranslationKey);
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
       accessibilityState={{ selected }}
-      accessibilityLabel={choice.label}
+      accessibilityLabel={label}
       style={{
         flexDirection: 'row',
         alignItems: 'center',
@@ -91,7 +98,7 @@ function Chip({
     >
       {choice.icon ? <Text style={{ fontSize: 18 }}>{choice.icon}</Text> : null}
       <Text style={{ color: selected ? c.aiAccent : c.textPrimary, fontSize: 15, fontWeight: selected ? '700' : '500' }}>
-        {choice.label}
+        {label}
       </Text>
     </Pressable>
   );
@@ -147,7 +154,7 @@ export function StepScaffold({
   onBack,
   onSkip,
   onNext,
-  nextLabel = 'Continuer',
+  nextLabel,
   nextDisabled,
   saving,
   showBack = true,
@@ -166,6 +173,7 @@ export function StepScaffold({
   showBack?: boolean;
 }) {
   const { colors: c, spacing } = useTokens();
+  const { t } = useI18n();
   const { maxContentWidth } = useResponsive();
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
@@ -202,11 +210,11 @@ export function StepScaffold({
           alignSelf: 'center',
         }}
       >
-        {showBack && onBack ? <Button label="Retour" variant="ghost" onPress={onBack} /> : null}
+        {showBack && onBack ? <Button label={t('onb.back')} variant="ghost" onPress={onBack} /> : null}
         <View style={{ flex: 1 }} />
-        {onSkip ? <Button label="Passer" variant="ghost" onPress={onSkip} /> : null}
+        {onSkip ? <Button label={t('onb.skip')} variant="ghost" onPress={onSkip} /> : null}
         {onNext ? (
-          <Button label={saving ? '…' : nextLabel} onPress={onNext} disabled={nextDisabled || saving} />
+          <Button label={saving ? '…' : (nextLabel ?? t('onb.continue'))} onPress={onNext} disabled={nextDisabled || saving} />
         ) : null}
       </View>
     </View>

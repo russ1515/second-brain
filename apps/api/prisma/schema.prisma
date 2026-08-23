@@ -39,6 +39,7 @@ model User {
   onboardingProfile       OnboardingProfile?
   sessions                Session[]
   emailVerificationTokens EmailVerificationToken[]
+  emailOtps               EmailOtp[]
   recoveryCodes           RecoveryCode[]
   documents               Document[]
   decks                   Deck[]
@@ -312,6 +313,28 @@ model EmailVerificationToken {
 
   @@index([userId])
   @@map("email_verification_tokens")
+}
+
+/// Short-lived 6-digit email OTP codes for email verification and password
+/// reset. Only the SHA-256 hash of the code is stored; the raw code is only ever
+/// emailed. `attempts` caps brute-force guessing; `consumedAt` makes each code
+/// single-use. Delivered through the shared Mail seam (log/SMTP).
+model EmailOtp {
+  id         String    @id @default(cuid())
+  userId     String
+  /// 'email_verify' | 'password_reset'
+  purpose    String
+  /// SHA-256 hex of the 6-digit code.
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@map("email_otps")
 }
 
 model Session {

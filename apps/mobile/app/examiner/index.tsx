@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import {
@@ -8,7 +8,8 @@ import {
   type AssessmentView,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { Button, Card, Empty, ErrorBanner, Loading } from '../../components/ui';
 
@@ -25,6 +26,8 @@ const TYPE_LABEL: Record<AssessmentType, TranslationKey> = {
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced'] as const;
 
 export default function ExaminerScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
   const [items, setItems] = useState<AssessmentSummary[] | null>(null);
@@ -90,7 +93,7 @@ export default function ExaminerScreen() {
         <TextInput
           style={styles.input}
           placeholder={t('examiner.topicPlaceholder')}
-          placeholderTextColor={theme.textFaint}
+          placeholderTextColor={c.textMuted}
           value={topic}
           onChangeText={setTopic}
           testID="topic"
@@ -147,41 +150,41 @@ export default function ExaminerScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
-  h1: { fontSize: 28, fontWeight: '700', color: theme.text },
-  intro: { fontSize: 14, color: theme.textMuted, lineHeight: 20, marginBottom: 4 },
+  h1: { fontSize: 28, fontWeight: '700', color: c.textPrimary },
+  intro: { fontSize: 14, color: c.textSecondary, lineHeight: 20, marginBottom: 4 },
   label: {
     fontSize: 12,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: 10,
   },
-  hint: { fontSize: 12, color: theme.textFaint, marginBottom: 6 },
+  hint: { fontSize: 12, color: c.textMuted, marginBottom: 6 },
   input: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     padding: 12,
     fontSize: 15,
-    color: theme.text,
+    color: c.textPrimary,
     marginBottom: 10,
   },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 },
   chip: {
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 999,
     paddingVertical: 6,
     paddingHorizontal: 12,
-    color: theme.textMuted,
+    color: c.textSecondary,
     fontSize: 13,
     textTransform: 'capitalize',
   },
-  chipOn: { borderColor: theme.accent, color: theme.text, backgroundColor: theme.accent },
-  name: { fontSize: 17, fontWeight: '700', color: theme.text },
-  meta: { fontSize: 13, color: theme.textMuted, marginTop: 4, marginBottom: 8 },
+  chipOn: { borderColor: c.primary, color: c.textPrimary, backgroundColor: c.primary },
+  name: { fontSize: 17, fontWeight: '700', color: c.textPrimary },
+  meta: { fontSize: 13, color: c.textSecondary, marginTop: 4, marginBottom: 8 },
 });

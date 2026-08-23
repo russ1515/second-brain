@@ -4,7 +4,8 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { CardView, LessonExercise, LessonView } from '@second-brain/shared';
 import { api } from '../../lib/client';
 import { saveLessonAsPdf } from '../../lib/lesson-pdf';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
 import { Markdown } from '../../components/markdown';
@@ -31,6 +32,8 @@ interface FlowStep {
  * with "Continue"; there is no way to jump to the end.
  */
 export default function LessonScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { id, session } = useLocalSearchParams<{ id: string; session?: string }>();
   const router = useRouter();
   const { t } = useI18n();
@@ -345,6 +348,8 @@ function scheduleMessage(cards: CardView[], t: (k: TranslationKey) => string): s
 
 /** The model answers, revealed on demand — the answer key for the exercises. */
 function Corrections({ exercises }: { exercises: LessonExercise[] }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [shown, setShown] = useState(false);
   if (!shown) {
@@ -367,6 +372,8 @@ function Corrections({ exercises }: { exercises: LessonExercise[] }) {
 
 /** One generated flashcard: front, tap to reveal the back. */
 function Flashcard({ card }: { card: CardView }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   return (
@@ -386,6 +393,8 @@ function Flashcard({ card }: { card: CardView }) {
 /** Textbook-style section header: an icon chip + kicker + title, with a rule.
  *  This is what gives each step the look of a chapter section. */
 function SectionHeader({ icon, kicker, title }: { icon: string; kicker: string; title: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={styles.sectionHeader}>
       <View style={styles.iconChip}>
@@ -401,6 +410,8 @@ function SectionHeader({ icon, kicker, title }: { icon: string; kicker: string; 
 
 /** The learning objective, as a highlighted "by the end you'll be able to" box. */
 function ObjectiveBanner({ objective }: { objective: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   return (
     <View style={styles.objectiveBanner}>
@@ -412,6 +423,8 @@ function ObjectiveBanner({ objective }: { objective: string }) {
 
 /** One worked example, in a numbered callout — the textbook "Example N" box. */
 function ExampleCard({ index, text }: { index: number; text: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   return (
     <View style={styles.exampleCard}>
@@ -425,6 +438,8 @@ function ExampleCard({ index, text }: { index: number; text: string }) {
 
 /** Key takeaways ("Points clés") — the essentials as a checked list. */
 function KeyTakeaways({ points }: { points: string[] }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={styles.takeaways}>
       {points.map((p, i) => (
@@ -438,11 +453,13 @@ function KeyTakeaways({ points }: { points: string[] }) {
 }
 
 function Label({ t: key }: { t: TranslationKey }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   return <Text style={styles.label}>{t(key)}</Text>;
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   flex: { flex: 1 },
   hidden: { display: 'none' },
   container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
@@ -450,14 +467,14 @@ const styles = StyleSheet.create({
   kicker: {
     fontSize: 12,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1.5,
   },
-  topic: { fontSize: 28, fontWeight: '800', color: theme.text, lineHeight: 34 },
+  topic: { fontSize: 28, fontWeight: '800', color: c.textPrimary, lineHeight: 34 },
   levelChip: {
     alignSelf: 'flex-start',
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderRadius: 20,
     paddingHorizontal: 12,
     paddingVertical: 5,
@@ -465,7 +482,7 @@ const styles = StyleSheet.create({
   },
   levelChipText: {
     fontSize: 12,
-    color: theme.textMuted,
+    color: c.textSecondary,
     fontWeight: '600',
     textTransform: 'capitalize',
   },
@@ -475,7 +492,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     borderBottomWidth: 1,
-    borderBottomColor: theme.border,
+    borderBottomColor: c.border,
     paddingBottom: 12,
     marginBottom: 4,
   },
@@ -483,7 +500,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 12,
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -491,41 +508,41 @@ const styles = StyleSheet.create({
   sectionKicker: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
-  sectionTitleBig: { fontSize: 20, fontWeight: '700', color: theme.text, marginTop: 1 },
+  sectionTitleBig: { fontSize: 20, fontWeight: '700', color: c.textPrimary, marginTop: 1 },
   stepBody: { marginTop: 14, gap: 12 },
   // Objective banner
   objectiveBanner: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderLeftWidth: 3,
-    borderLeftColor: theme.accent,
+    borderLeftColor: c.primary,
     borderRadius: 10,
     padding: 14,
   },
   objectiveLabel: {
     fontSize: 12,
     fontWeight: '700',
-    color: theme.accent,
+    color: c.primary,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: 6,
   },
-  objectiveText: { fontSize: 17, fontWeight: '600', color: theme.text, lineHeight: 25 },
+  objectiveText: { fontSize: 17, fontWeight: '600', color: c.textPrimary, lineHeight: 25 },
   // Worked-example callout
   exampleCard: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     padding: 14,
   },
   exampleTag: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.warn,
+    color: c.warning,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: 8,
@@ -536,7 +553,7 @@ const styles = StyleSheet.create({
   takeawayCheck: {
     fontSize: 15,
     fontWeight: '800',
-    color: theme.ok,
+    color: c.success,
     lineHeight: 24,
     width: 18,
     textAlign: 'center',
@@ -549,14 +566,14 @@ const styles = StyleSheet.create({
     minWidth: 14,
     height: 5,
     borderRadius: 3,
-    backgroundColor: theme.border,
+    backgroundColor: c.border,
   },
-  dotDone: { backgroundColor: theme.ok },
-  dotCurrent: { backgroundColor: theme.accent },
+  dotDone: { backgroundColor: c.success },
+  dotCurrent: { backgroundColor: c.primary },
   progressLabel: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.textMuted,
+    color: c.textSecondary,
   },
   stepCard: { marginTop: 2 },
   nav: {
@@ -565,8 +582,8 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 20,
     borderTopWidth: 1,
-    borderTopColor: theme.border,
-    backgroundColor: theme.bg,
+    borderTopColor: c.border,
+    backgroundColor: c.background,
     maxWidth: 720,
     width: '100%',
     alignSelf: 'center',
@@ -574,35 +591,35 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginTop: 10,
     marginBottom: 4,
   },
-  muted: { fontSize: 14, color: theme.textMuted },
-  reflect: { fontSize: 13, color: theme.textFaint, fontStyle: 'italic', marginBottom: 4 },
+  muted: { fontSize: 14, color: c.textSecondary },
+  reflect: { fontSize: 13, color: c.textMuted, fontStyle: 'italic', marginBottom: 4 },
   spaced: { marginTop: 12 },
-  question: { fontSize: 15, fontWeight: '600', color: theme.text, lineHeight: 22, marginTop: 6 },
-  answerModel: { fontSize: 14, color: theme.ok, lineHeight: 21, marginTop: 4 },
+  question: { fontSize: 15, fontWeight: '600', color: c.textPrimary, lineHeight: 22, marginTop: 6 },
+  answerModel: { fontSize: 14, color: c.success, lineHeight: 21, marginTop: 4 },
   schedule: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderRadius: 10,
     padding: 12,
     borderLeftWidth: 3,
-    borderLeftColor: theme.accent,
+    borderLeftColor: c.primary,
   },
   scheduleText: { fontSize: 14, color: '#CBD5E1', lineHeight: 21 },
   flashcard: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     padding: 14,
     marginTop: 8,
   },
-  flashFront: { fontSize: 15, fontWeight: '600', color: theme.text },
+  flashFront: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
   flashBack: { fontSize: 14, color: '#CBD5E1', marginTop: 8, lineHeight: 20 },
-  flashHint: { fontSize: 12, color: theme.textFaint, marginTop: 8 },
-  foot: { fontSize: 12, color: theme.textFaint, marginTop: 8 },
+  flashHint: { fontSize: 12, color: c.textMuted, marginTop: 8 },
+  foot: { fontSize: 12, color: c.textMuted, marginTop: 8 },
 });

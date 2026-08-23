@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type {
@@ -18,13 +18,16 @@ import type {
 } from '@second-brain/shared';
 import { api, apiUpload } from '../../lib/client';
 import { createRecorder, RECORDING_SUPPORTED, type Recorder } from '../../lib/recorder';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
 import { Markdown } from '../../components/markdown';
 import { SpeakButton } from '../../components/speak-button';
 
 export default function LanguageScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -180,7 +183,7 @@ export default function LanguageScreen() {
         <TextInput
           style={styles.input}
           placeholder={t('lang.skillPlaceholder')}
-          placeholderTextColor={theme.textFaint}
+          placeholderTextColor={c.textMuted}
           value={skillTopic}
           onChangeText={setSkillTopic}
           testID="skill-topic"
@@ -204,7 +207,7 @@ export default function LanguageScreen() {
         <TextInput
           style={styles.input}
           placeholder={t('lang.scenarioConvo')}
-          placeholderTextColor={theme.textFaint}
+          placeholderTextColor={c.textMuted}
           value={scenario}
           onChangeText={setScenario}
           testID="scenario"
@@ -217,7 +220,7 @@ export default function LanguageScreen() {
         <TextInput
           style={[styles.input, styles.tall]}
           placeholder={t('lang.vocabPlaceholder')}
-          placeholderTextColor={theme.textFaint}
+          placeholderTextColor={c.textMuted}
           value={source}
           onChangeText={setSource}
           multiline
@@ -235,7 +238,7 @@ export default function LanguageScreen() {
         <TextInput
           style={styles.input}
           placeholder={t('lang.lessonPlaceholder')}
-          placeholderTextColor={theme.textFaint}
+          placeholderTextColor={c.textMuted}
           value={topic}
           onChangeText={setTopic}
           testID="lesson-topic"
@@ -263,6 +266,8 @@ export default function LanguageScreen() {
 
 /** Generate a written dialogue to study in the target language. */
 function Dialogue({ profileId }: { profileId: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [scenario, setScenario] = useState('');
   const [dialogue, setDialogue] = useState<LanguageDialogue | null>(null);
@@ -292,7 +297,7 @@ function Dialogue({ profileId }: { profileId: string }) {
       <TextInput
         style={styles.input}
         placeholder={t('lang.scenarioPlaceholder')}
-        placeholderTextColor={theme.textFaint}
+        placeholderTextColor={c.textMuted}
         value={scenario}
         onChangeText={setScenario}
         testID="dialogue-scenario"
@@ -320,6 +325,8 @@ function Dialogue({ profileId }: { profileId: string }) {
 
 /** Correct the learner's written text like a teacher marking a rédaction. */
 function EssayCorrection({ profileId }: { profileId: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [text, setText] = useState('');
   const [result, setResult] = useState<EssayCorrectionResult | null>(null);
@@ -349,7 +356,7 @@ function EssayCorrection({ profileId }: { profileId: string }) {
       <TextInput
         style={[styles.input, styles.tall]}
         placeholder={t('lang.essayPlaceholder')}
-        placeholderTextColor={theme.textFaint}
+        placeholderTextColor={c.textMuted}
         value={text}
         onChangeText={setText}
         multiline
@@ -391,6 +398,8 @@ function EssayCorrection({ profileId }: { profileId: string }) {
 
 /** Read a phrase aloud and see how much of it was actually understood. */
 function Pronunciation({ profileId }: { profileId: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [phrase, setPhrase] = useState('');
   const [recording, setRecording] = useState(false);
@@ -438,7 +447,7 @@ function Pronunciation({ profileId }: { profileId: string }) {
       <TextInput
         style={styles.input}
         placeholder={t('lang.phrasePlaceholder')}
-        placeholderTextColor={theme.textFaint}
+        placeholderTextColor={c.textMuted}
         value={phrase}
         onChangeText={setPhrase}
         testID="target-phrase"
@@ -484,6 +493,8 @@ function Pronunciation({ profileId }: { profileId: string }) {
 /** Pronunciation coach (7.5): speak freely, the teacher listens and coaches
  *  across pronunciation, accent, rhythm, fluency and intonation. */
 function PronunciationCoach({ profileId }: { profileId: string }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [context, setContext] = useState('');
   const [recording, setRecording] = useState(false);
@@ -537,7 +548,7 @@ function PronunciationCoach({ profileId }: { profileId: string }) {
       <TextInput
         style={styles.input}
         placeholder={t('lang.coachContextPlaceholder')}
-        placeholderTextColor={theme.textFaint}
+        placeholderTextColor={c.textMuted}
         value={context}
         onChangeText={setContext}
         testID="coach-context"
@@ -599,6 +610,8 @@ function PronunciationCoach({ profileId }: { profileId: string }) {
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{title}</Text>
@@ -607,83 +620,83 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 10, maxWidth: 720, width: '100%', alignSelf: 'center' },
-  title: { fontSize: 26, fontWeight: '700', color: theme.text },
-  meta: { fontSize: 13, color: theme.textMuted, textTransform: 'capitalize', marginBottom: 6 },
-  notice: { backgroundColor: theme.okBg, borderColor: theme.ok },
+  title: { fontSize: 26, fontWeight: '700', color: c.textPrimary },
+  meta: { fontSize: 13, color: c.textSecondary, textTransform: 'capitalize', marginBottom: 6 },
+  notice: { backgroundColor: c.successSoft, borderColor: c.success },
   noticeText: { color: '#D1FAE5', fontSize: 14, lineHeight: 20 },
   section: { gap: 8, marginTop: 8 },
   sectionTitle: {
     fontSize: 12,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
-  help: { fontSize: 13, color: theme.textMuted, lineHeight: 19, marginBottom: 10 },
+  help: { fontSize: 13, color: c.textSecondary, lineHeight: 19, marginBottom: 10 },
   cefrRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 12 },
-  cefrLabel: { fontSize: 12, fontWeight: '700', color: theme.textFaint, marginRight: 4 },
-  immersionCard: { borderColor: theme.accent, gap: 6, marginBottom: 8 },
-  immersionText: { fontSize: 15, fontWeight: '700', color: theme.text },
+  cefrLabel: { fontSize: 12, fontWeight: '700', color: c.textMuted, marginRight: 4 },
+  immersionCard: { borderColor: c.primary, gap: 6, marginBottom: 8 },
+  immersionText: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
   skillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
-  skillCard: { marginTop: 12, gap: 8, borderColor: theme.accent },
-  skillTitle: { fontSize: 15, fontWeight: '700', color: theme.text },
+  skillCard: { marginTop: 12, gap: 8, borderColor: c.primary },
+  skillTitle: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
   coach: { marginTop: 12, gap: 8 },
-  coachSummary: { fontSize: 14, color: theme.text, lineHeight: 20, marginBottom: 4 },
-  coachLabel: { fontSize: 12, fontWeight: '700', color: theme.textFaint, textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 6 },
-  dim: { borderTopWidth: 1, borderTopColor: theme.border, paddingTop: 8, gap: 2 },
+  coachSummary: { fontSize: 14, color: c.textPrimary, lineHeight: 20, marginBottom: 4 },
+  coachLabel: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 6 },
+  dim: { borderTopWidth: 1, borderTopColor: c.border, paddingTop: 8, gap: 2 },
   dimHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  dimName: { fontSize: 14, fontWeight: '700', color: theme.text, textTransform: 'capitalize' },
+  dimName: { fontSize: 14, fontWeight: '700', color: c.textPrimary, textTransform: 'capitalize' },
   dimBadge: { fontSize: 11, fontWeight: '700', paddingVertical: 2, paddingHorizontal: 8, borderRadius: 999, overflow: 'hidden', textTransform: 'capitalize' },
-  rateGood: { backgroundColor: theme.okBg, color: theme.ok },
-  rateFair: { backgroundColor: '#78350F', color: theme.warn },
+  rateGood: { backgroundColor: c.successSoft, color: c.success },
+  rateFair: { backgroundColor: '#78350F', color: c.warning },
   rateBad: { backgroundColor: '#7F1D1D', color: '#FECACA' },
   exercise: { marginTop: 4, gap: 2 },
-  exerciseTitle: { fontSize: 14, fontWeight: '600', color: theme.text },
-  dialogue: { marginTop: 12, borderTopWidth: 1, borderTopColor: theme.border, paddingTop: 10, gap: 10 },
-  dialogueTitle: { fontSize: 15, fontWeight: '700', color: theme.text },
+  exerciseTitle: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
+  dialogue: { marginTop: 12, borderTopWidth: 1, borderTopColor: c.border, paddingTop: 10, gap: 10 },
+  dialogueTitle: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
   turn: { gap: 2 },
-  speaker: { fontSize: 12, fontWeight: '700', color: theme.accent },
-  dialogueText: { fontSize: 15, color: theme.text, lineHeight: 22 },
-  dialogueGloss: { fontSize: 13, color: theme.textMuted, fontStyle: 'italic' },
-  essay: { marginTop: 12, borderTopWidth: 1, borderTopColor: theme.border, paddingTop: 10, gap: 8 },
+  speaker: { fontSize: 12, fontWeight: '700', color: c.primary },
+  dialogueText: { fontSize: 15, color: c.textPrimary, lineHeight: 22 },
+  dialogueGloss: { fontSize: 13, color: c.textSecondary, fontStyle: 'italic' },
+  essay: { marginTop: 12, borderTopWidth: 1, borderTopColor: c.border, paddingTop: 10, gap: 8 },
   essayLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginTop: 6,
   },
   correctionItem: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderRadius: 8,
     padding: 10,
     gap: 3,
   },
-  wrong: { fontSize: 14, color: theme.danger, textDecorationLine: 'line-through' },
-  right: { fontSize: 14, color: theme.ok, fontWeight: '600' },
-  explain: { fontSize: 13, color: theme.textMuted, marginTop: 2 },
-  noMistakes: { fontSize: 14, color: theme.ok, fontWeight: '600' },
+  wrong: { fontSize: 14, color: c.error, textDecorationLine: 'line-through' },
+  right: { fontSize: 14, color: c.success, fontWeight: '600' },
+  explain: { fontSize: 13, color: c.textSecondary, marginTop: 2 },
+  noMistakes: { fontSize: 14, color: c.success, fontWeight: '600' },
   corrected: { fontSize: 15, color: '#CBD5E1', lineHeight: 22 },
   input: {
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     padding: 12,
     fontSize: 15,
-    color: theme.text,
+    color: c.textPrimary,
     marginBottom: 10,
   },
   tall: { minHeight: 90, textAlignVertical: 'top' },
-  score: { marginTop: 12, borderTopWidth: 1, borderTopColor: theme.border, paddingTop: 10 },
-  scoreHead: { fontSize: 16, fontWeight: '700', color: theme.text },
-  heard: { fontSize: 14, color: theme.textMuted, marginTop: 4 },
+  score: { marginTop: 12, borderTopWidth: 1, borderTopColor: c.border, paddingTop: 10 },
+  scoreHead: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
+  heard: { fontSize: 14, color: c.textSecondary, marginTop: 4 },
   words: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
   word: { fontSize: 14, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6 },
-  wordOk: { backgroundColor: theme.okBg, color: '#D1FAE5' },
-  wordBad: { backgroundColor: theme.dangerBg, color: '#FECACA' },
+  wordOk: { backgroundColor: c.successSoft, color: '#D1FAE5' },
+  wordBad: { backgroundColor: c.errorSoft, color: '#FECACA' },
   feedback: { fontSize: 14, color: '#CBD5E1', marginTop: 12, lineHeight: 21 },
 });

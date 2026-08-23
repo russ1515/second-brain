@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type {
@@ -12,7 +12,8 @@ import type {
 import { api, apiUpload } from '../../lib/client';
 import { createRecorder, RECORDING_SUPPORTED, type Recorder } from '../../lib/recorder';
 import { PLAYBACK_SUPPORTED, speak } from '../../lib/speak';
-import { theme } from '../../lib/theme';
+import { useTokens } from '../../lib/design/theme';
+import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { teacherRoleLabel } from '../../lib/teacher-role';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
@@ -33,6 +34,8 @@ const STRATEGY_LABEL: Record<TeachingStrategy, TranslationKey> = {
 /** Discussion with the teacher — typed or spoken. A spoken turn also leaves a
  *  written lesson behind (written-first), which is surfaced here. */
 export default function TutorSessionScreen() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { t, locale } = useI18n();
@@ -189,7 +192,7 @@ export default function TutorSessionScreen() {
       <TextInput
         style={styles.input}
         placeholder={t('tutor.placeholder')}
-        placeholderTextColor={theme.textFaint}
+        placeholderTextColor={c.textMuted}
         value={draft}
         onChangeText={setDraft}
         multiline
@@ -259,6 +262,8 @@ function Message({
   message: TutorMessageView;
   t: (key: TranslationKey) => string;
 }) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
   const mine = message.role === 'user';
   return (
     <Card style={mine ? styles.mine : styles.theirs}>
@@ -286,67 +291,67 @@ function Message({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 10, maxWidth: 720, width: '100%', alignSelf: 'center' },
   flex: { flex: 1 },
-  title: { fontSize: 24, fontWeight: '700', color: theme.text },
+  title: { fontSize: 24, fontWeight: '700', color: c.textPrimary },
   roleChip: {
     alignSelf: 'flex-start',
-    backgroundColor: theme.surfaceAlt,
+    backgroundColor: c.surfaceElevated,
     borderRadius: 20,
     paddingHorizontal: 12,
     paddingVertical: 5,
     marginTop: 2,
   },
-  roleChipText: { fontSize: 13, color: theme.accent, fontWeight: '700' },
-  focus: { fontSize: 13, color: theme.warn, marginBottom: 6 },
+  roleChipText: { fontSize: 13, color: c.primary, fontWeight: '700' },
+  focus: { fontSize: 13, color: c.warning, marginBottom: 6 },
   strategyChip: {
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     paddingVertical: 6,
     paddingHorizontal: 10,
     marginBottom: 8,
     gap: 2,
   },
-  strategyChipText: { fontSize: 13, color: theme.text, fontWeight: '700' },
-  strategyReason: { fontSize: 12, color: theme.textMuted, lineHeight: 17 },
-  notice: { backgroundColor: theme.surfaceAlt, borderColor: theme.accent },
+  strategyChipText: { fontSize: 13, color: c.textPrimary, fontWeight: '700' },
+  strategyReason: { fontSize: 12, color: c.textSecondary, lineHeight: 17 },
+  notice: { backgroundColor: c.surfaceElevated, borderColor: c.primary },
   noticeText: { color: '#CBD5E1', fontSize: 14, lineHeight: 20 },
-  mine: { backgroundColor: theme.surfaceAlt },
+  mine: { backgroundColor: c.surfaceElevated },
   theirs: {},
   metaRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   who: {
     fontSize: 11,
     fontWeight: '700',
-    color: theme.textFaint,
+    color: c.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
-  voiceTag: { fontSize: 11, color: theme.warn },
+  voiceTag: { fontSize: 11, color: c.warning },
   body: { fontSize: 15, color: '#E2E8F0', lineHeight: 23 },
   citations: {
     marginTop: 10,
     fontSize: 12,
-    color: theme.textFaint,
+    color: c.textMuted,
     borderTopWidth: 1,
-    borderTopColor: theme.border,
+    borderTopColor: c.border,
     paddingTop: 8,
   },
   input: {
-    backgroundColor: theme.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: c.border,
     borderRadius: 10,
     padding: 12,
     minHeight: 72,
     fontSize: 15,
-    color: theme.text,
+    color: c.textPrimary,
     textAlignVertical: 'top',
     marginTop: 8,
   },
   paceRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   recordRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  recordingHint: { color: theme.warn, fontSize: 13, textAlign: 'center' },
-  unsupported: { color: theme.textFaint, fontSize: 13, textAlign: 'center' },
+  recordingHint: { color: c.warning, fontSize: 13, textAlign: 'center' },
+  unsupported: { color: c.textMuted, fontSize: 13, textAlign: 'center' },
 });
