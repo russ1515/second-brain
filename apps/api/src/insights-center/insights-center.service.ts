@@ -12,6 +12,7 @@ import { LearningPathService } from '../concepts/learning-path.service';
 import { InsightsService } from '../concepts/insights.service';
 import { MentorService } from '../mentor/mentor.service';
 import { CacheService } from '../redis/cache.service';
+import { LocalizationService } from '../localization/localization.service';
 
 /**
  * AI Insights Center (Sprint 9.7).
@@ -33,11 +34,28 @@ export class InsightsCenterService {
     private readonly insights: InsightsService,
     private readonly mentor: MentorService,
     private readonly cache: CacheService,
+    private readonly localization: LocalizationService,
   ) {}
 
-  /** Cached 20s (Sprint 10.1) — a heavy multi-engine aggregation, staleness-tolerant. */
-  center(userId: string, now = new Date()): Promise<InsightsCenter> {
-    return this.cache.wrap(`insights-center:${userId}`, 20, () => this.computeCenter(userId, now));
+  /** Cached 20s (Sprint 10.1); the English aggregation is then localized into the
+   *  learner's Learning Locale (Redis-cached per string). */
+  async center(userId: string, now = new Date()): Promise<InsightsCenter> {
+    const view = await this.cache.wrap(`insights-center:${userId}`, 20, () =>
+      this.computeCenter(userId, now),
+    );
+    const texts: string[] = [];
+    for (const c of view.categories) {
+      texts.push(c.headline);
+      for (const it of c.items) texts.push(it.title, it.detail);
+    }
+    const tr = await this.localization.localizeForUser(userId, texts);
+    let i = 0;
+    const categories = view.categories.map((c) => ({
+      ...c,
+      headline: tr[i++],
+      items: c.items.map((it) => ({ title: tr[i++], detail: tr[i++] })),
+    }));
+    return { ...view, categories };
   }
 
   private async computeCenter(userId: string, now: Date): Promise<InsightsCenter> {

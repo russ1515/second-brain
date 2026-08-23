@@ -1,6 +1,10 @@
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SUPPORTED_LANGUAGES, type SupportedLanguageCode } from '@second-brain/shared';
 import { localeCoverage, localeName, supportedLocaleCodes, useI18n } from '../lib/i18n';
 import { theme } from '../lib/theme';
+
+const flagOf = (code: string): string =>
+  SUPPORTED_LANGUAGES[code as SupportedLanguageCode]?.flag ?? '🏳️';
 
 /**
  * 🌍 Language Manager (Sprint 10.5). Every registered UI language, with how
@@ -31,6 +35,7 @@ export default function LanguageManagerScreen() {
             testID={`lang-${code}`}
           >
             <View style={styles.head}>
+              <Text style={styles.flag}>{flagOf(code)}</Text>
               <Text style={styles.name}>{localeName(code)}</Text>
               <Text style={styles.code}>{code.toUpperCase()}</Text>
               {active ? <Text style={styles.active}>✓ {t('lm.active')}</Text> : null}
@@ -77,6 +82,7 @@ const styles = StyleSheet.create({
   },
   cardActive: { borderColor: theme.accent },
   head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  flag: { fontSize: 20 },
   name: { flex: 1, fontSize: 16, fontWeight: '700', color: theme.text },
   code: {
     fontSize: 11,

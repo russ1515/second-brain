@@ -198,7 +198,12 @@
       "Bash(grep -rn \"learningLocale\\\\|localeDirective\\\\|in \\\\${\" lessons/lesson.service.ts tutor/tutor.service.ts)",
       "Bash(chmod +x scripts/*.sh)",
       "Bash(POSTGRES_USER=secondbrain POSTGRES_DB=secondbrain bash scripts/backup.sh)",
-      "Bash(zcat backups/secondbrain-*.sql.gz)"
+      "Bash(zcat backups/secondbrain-*.sql.gz)",
+      "Bash(grep -nA12 \"setLocale\" auth/auth.service.ts)",
+      "Bash(seq 1 25)",
+      "Bash(npx prisma *)",
+      "Bash(echo \"ATC_DONE=$?\")",
+      "Bash(grep -vE \"^MTC=0$\" \"/c/Users/user/AppData/Local/Temp/claude/C--Users-user-Second-Brain/3ef6ae93-bdfb-4e93-95a4-36ba34267c68/tasks/bbyf0oz04.output\")"
     ]
   }
 }

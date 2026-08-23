@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { MAILER } from './mail.constants';
 import type { Mailer } from './mailer.interface';
 import { LogMailer } from './providers/log.mailer';
+import { SmtpMailer } from './providers/smtp.mailer';
 import { MailService } from './mail.service';
 
 /**
@@ -18,6 +19,15 @@ const mailerFactory: Provider = {
     switch (transport) {
       case 'log':
         return new LogMailer();
+      case 'smtp':
+        return new SmtpMailer({
+          host: config.getOrThrow<string>('mail.smtp.host'),
+          port: config.getOrThrow<number>('mail.smtp.port'),
+          secure: config.getOrThrow<boolean>('mail.smtp.secure'),
+          user: config.getOrThrow<string>('mail.smtp.user'),
+          pass: config.getOrThrow<string>('mail.smtp.pass'),
+          from: config.getOrThrow<string>('mail.from'),
+        });
       default:
         throw new Error(
           `Mail transport "${transport}" is not wired yet. ` +

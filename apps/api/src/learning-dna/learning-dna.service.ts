@@ -12,6 +12,7 @@ import type {
 import { PrismaService } from '../prisma/prisma.service';
 import { LearnerProfileService } from '../concepts/learner-profile.service';
 import { CacheService } from '../redis/cache.service';
+import { LocalizationService } from '../localization/localization.service';
 
 /**
  * Learning DNA Engine (Sprint 9 ⭐, transversal).
@@ -30,11 +31,20 @@ export class LearningDnaService {
     private readonly prisma: PrismaService,
     private readonly learnerProfile: LearnerProfileService,
     private readonly cache: CacheService,
+    private readonly localization: LocalizationService,
   ) {}
 
-  /** Cached 30s (Sprint 10.1) — the DNA is stable and slow-moving by nature. */
-  dna(userId: string, now = new Date()): Promise<LearningDna> {
-    return this.cache.wrap(`learning-dna:${userId}`, 30, () => this.computeDna(userId, now));
+  /** Cached 30s (Sprint 10.1); English DNA then localized per the learner's locale. */
+  async dna(userId: string, now = new Date()): Promise<LearningDna> {
+    const view = await this.cache.wrap(`learning-dna:${userId}`, 30, () =>
+      this.computeDna(userId, now),
+    );
+    const texts: string[] = [];
+    for (const t of view.traits) texts.push(t.label, t.summary);
+    const tr = await this.localization.localizeForUser(userId, texts);
+    let i = 0;
+    const traits = view.traits.map((t) => ({ ...t, label: tr[i++], summary: tr[i++] }));
+    return { ...view, traits };
   }
 
   /** Build (or refresh), persist and return the learner's Learning DNA. */

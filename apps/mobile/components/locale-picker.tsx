@@ -1,28 +1,77 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { SUPPORTED_LANGUAGES, type SupportedLanguageCode } from '@second-brain/shared';
 import { localeName, supportedLocaleCodes, useI18n } from '../lib/i18n';
 import { theme } from '../lib/theme';
 
-/** Switch the app's own language. Content stays in whatever the teacher teaches.
- *  Reads the live locale registry, so any registered language shows up here. */
+/** Flag for a locale code, from the shared registry (blank for unknown codes). */
+function flagOf(code: string): string {
+  return SUPPORTED_LANGUAGES[code as SupportedLanguageCode]?.flag ?? '🏳️';
+}
+function englishNameOf(code: string): string {
+  return SUPPORTED_LANGUAGES[code as SupportedLanguageCode]?.englishName ?? code.toUpperCase();
+}
+
+/**
+ * Switch the app's own language (Scalable i18n). A clean current-language row
+ * opens a modal listing every supported language (25+) with its flag and native
+ * name. The choice drives BOTH the UI and the AI Professor's teaching language.
+ * Content stays in whatever the teacher is teaching.
+ */
 export function LocalePicker({ label }: { label?: string }) {
   const { locale, setLocale, t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const codes = supportedLocaleCodes();
+
+  const choose = (code: string) => {
+    setLocale(code);
+    setOpen(false);
+  };
 
   return (
     <View style={styles.wrap}>
       <Text style={styles.label}>{label ?? t('app.language')}</Text>
-      <View style={styles.row}>
-        {supportedLocaleCodes().map((l) => (
-          <Text
-            key={l}
-            onPress={() => setLocale(l)}
-            accessibilityRole="button"
-            style={[styles.chip, l === locale && styles.chipOn]}
-            testID={`locale-${l}`}
-          >
-            {localeName(l)}
-          </Text>
-        ))}
-      </View>
+      <Pressable
+        onPress={() => setOpen(true)}
+        accessibilityRole="button"
+        style={styles.current}
+        testID="locale-current"
+      >
+        <Text style={styles.currentText}>
+          {flagOf(locale)}  {localeName(locale)}
+        </Text>
+        <Text style={styles.chevron}>▾</Text>
+      </Pressable>
+
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
+          <Pressable style={styles.sheet} onPress={() => {}}>
+            <Text style={styles.sheetTitle}>{t('app.language')}</Text>
+            <FlatList
+              data={codes}
+              keyExtractor={(c) => c}
+              style={styles.list}
+              renderItem={({ item: code }) => {
+                const active = code === locale;
+                return (
+                  <Pressable
+                    onPress={() => choose(code)}
+                    style={[styles.row, active && styles.rowActive]}
+                    testID={`locale-${code}`}
+                  >
+                    <Text style={styles.flag}>{flagOf(code)}</Text>
+                    <View style={styles.names}>
+                      <Text style={styles.native}>{localeName(code)}</Text>
+                      <Text style={styles.english}>{englishNameOf(code)}</Text>
+                    </View>
+                    {active ? <Text style={styles.check}>✓</Text> : null}
+                  </Pressable>
+                );
+              }}
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -37,15 +86,50 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginBottom: 6,
   },
-  row: { flexDirection: 'row', gap: 6 },
-  chip: {
+  current: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     borderWidth: 1,
     borderColor: theme.border,
-    borderRadius: 999,
-    paddingVertical: 6,
+    borderRadius: 10,
+    paddingVertical: 10,
     paddingHorizontal: 14,
-    color: theme.textMuted,
-    fontSize: 13,
+    backgroundColor: theme.surface,
   },
-  chipOn: { borderColor: theme.accent, backgroundColor: theme.accent, color: theme.text },
+  currentText: { fontSize: 15, color: theme.text, fontWeight: '600' },
+  chevron: { fontSize: 14, color: theme.textMuted },
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
+  sheet: {
+    backgroundColor: theme.bg,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.border,
+    maxHeight: '80%',
+    overflow: 'hidden',
+  },
+  sheetTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: theme.textFaint,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    padding: 16,
+  },
+  list: { flexGrow: 0 },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderTopWidth: 1,
+    borderTopColor: theme.border,
+  },
+  rowActive: { backgroundColor: theme.surfaceAlt },
+  flag: { fontSize: 22 },
+  names: { flex: 1 },
+  native: { fontSize: 15, color: theme.text, fontWeight: '600' },
+  english: { fontSize: 12, color: theme.textMuted },
+  check: { fontSize: 16, color: theme.accent, fontWeight: '800' },
 });

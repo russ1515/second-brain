@@ -12,6 +12,7 @@ import { LearningPathService } from '../concepts/learning-path.service';
 import { MentorService } from '../mentor/mentor.service';
 import { RevisionEngineService } from '../revision/revision-engine.service';
 import { CacheService } from '../redis/cache.service';
+import { LocalizationService } from '../localization/localization.service';
 
 /** Forecasts crossing their forgetting threshold within this many days count. */
 const FORGETTING_HORIZON_DAYS = 7;
@@ -53,11 +54,26 @@ export class PredictionService {
     private readonly mentor: MentorService,
     private readonly revision: RevisionEngineService,
     private readonly cache: CacheService,
+    private readonly localization: LocalizationService,
   ) {}
 
-  /** Cached 20s (Sprint 10.1) — advisory risk forecast, staleness-tolerant. */
-  forecast(userId: string, now = new Date()): Promise<LearningPredictionView> {
-    return this.cache.wrap(`foresight:${userId}`, 20, () => this.computeForecast(userId, now));
+  /** Cached 20s (Sprint 10.1); English forecast then localized per the learner's locale. */
+  async forecast(userId: string, now = new Date()): Promise<LearningPredictionView> {
+    const view = await this.cache.wrap(`foresight:${userId}`, 20, () =>
+      this.computeForecast(userId, now),
+    );
+    const texts: string[] = [];
+    for (const p of view.predictions) texts.push(p.cause, p.action, ...p.reasons);
+    const tr = await this.localization.localizeForUser(userId, texts);
+    let i = 0;
+    const predictions = view.predictions.map((p) => ({
+      ...p,
+      cause: tr[i++],
+      action: tr[i++],
+      reasons: p.reasons.map(() => tr[i++]),
+    }));
+    const topRisk = predictions.find((p) => p.level !== 'low') ?? null;
+    return { ...view, predictions, topRisk };
   }
 
   private async computeForecast(userId: string, now: Date): Promise<LearningPredictionView> {

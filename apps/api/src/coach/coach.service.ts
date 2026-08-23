@@ -9,6 +9,7 @@ import type {
 import { PrismaService } from '../prisma/prisma.service';
 import { MasteryService } from '../concepts/mastery.service';
 import { LearningPathService } from '../concepts/learning-path.service';
+import { LocalizationService } from '../localization/localization.service';
 
 /** A concept counts toward the score once it is mastered enough to be "solid". */
 const STRONG = 0.8;
@@ -32,6 +33,7 @@ export class CoachService {
     private readonly prisma: PrismaService,
     private readonly mastery: MasteryService,
     private readonly learningPath: LearningPathService,
+    private readonly localization: LocalizationService,
   ) {}
 
   async today(userId: string): Promise<ProactiveBriefing> {
@@ -75,7 +77,7 @@ export class CoachService {
         ? Math.max(0, Math.round(projectedScore - score.score))
         : null;
 
-    return {
+    const briefing: ProactiveBriefing = {
       score,
       projectedScore,
       projectedGain,
@@ -83,6 +85,19 @@ export class CoachService {
       headline: this.headline(recommendations),
       why: this.why(atRisk, recommendations),
     };
+    return this.localize(userId, briefing);
+  }
+
+  /** Translate the briefing's prose (headline, why, each recommendation reason)
+   *  into the learner's Learning Locale. Concept/activity names are left as-is. */
+  private async localize(userId: string, b: ProactiveBriefing): Promise<ProactiveBriefing> {
+    const texts = [b.headline, b.why, ...b.recommendations.map((r) => r.reason)];
+    const tr = await this.localization.localizeForUser(userId, texts);
+    let i = 0;
+    const headline = tr[i++];
+    const why = tr[i++];
+    const recommendations = b.recommendations.map((r) => ({ ...r, reason: tr[i++] }));
+    return { ...b, headline, why, recommendations };
   }
 
   // ── internals ────────────────────────────────────────────────────────────

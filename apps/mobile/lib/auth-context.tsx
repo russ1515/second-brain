@@ -12,6 +12,7 @@ import {
   type AuthResponse,
   type AuthUser,
   type LoginResponse,
+  type OnboardingState,
 } from '@second-brain/shared';
 import { ApiError, api } from './client';
 import { clearSession, loadSession, saveSession } from './storage';
@@ -24,11 +25,23 @@ interface AuthState {
   /** We hold a session but could not reach the API to confirm it. The learner
    *  is NOT signed out; the classroom is simply unreachable right now. */
   offline: boolean;
+  /** Whether the Universal KYC is done (UI/UX Sprint 2). `null` = unknown yet
+   *  (still checking, or the check failed — the gate fails OPEN on null so an
+   *  onboarding-status hiccup never traps the learner). */
+  onboarded: boolean | null;
+  /** Re-check onboarding status — called after the flow completes. */
+  refreshOnboarding: () => Promise<void>;
   retry: () => void;
   register: (email: string, password: string, displayName?: string) => Promise<void>;
-  login: (email: string, password: string) => Promise<void>;
+  /** Sign in. Returns a 2FA challenge instead of throwing when the account has
+   *  two-step verification enabled, so the UI can collect the TOTP/recovery code. */
+  login: (email: string, password: string) => Promise<LoginOutcome>;
+  /** Complete a 2FA challenge with a TOTP or recovery code. */
+  verifyTwoFactor: (challengeToken: string, code: string) => Promise<void>;
   logout: () => Promise<void>;
 }
+
+export type LoginOutcome = { status: 'ok' } | { status: '2fa'; challengeToken: string };
 
 const AuthContext = createContext<AuthState | null>(null);
 
@@ -36,9 +49,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [offline, setOffline] = useState(false);
+  const [onboarded, setOnboarded] = useState<boolean | null>(null);
   const [attempt, setAttempt] = useState(0);
 
   const retry = useCallback(() => setAttempt((a) => a + 1), []);
+
+  /** Read onboarding status AND refresh the in-memory user. Completing the KYC
+   *  updates the Profile server-side (display name, preferred language); without
+   *  re-reading `/auth/me` the dashboard would greet the learner with their
+   *  register-time name until a reload. Both run in parallel; the user refetch
+   *  is best-effort so a hiccup there never affects the onboarding gate. On any
+   *  onboarding-status failure we leave it `null` — the gate treats null as
+   *  "let them through" so a status hiccup never blocks the app. */
+  const refreshOnboarding = useCallback(async () => {
+    const [stateRes, meRes] = await Promise.allSettled([
+      api<OnboardingState>('/onboarding'),
+      api<AuthUser>('/auth/me'),
+    ]);
+    if (meRes.status === 'fulfilled') setUser(meRes.value);
+    try {
+      if (stateRes.status === 'rejected') throw stateRes.reason;
+      setOnboarded(stateRes.value.status === 'completed');
+    } catch {
+      setOnboarded(null);
+    }
+  }, []);
 
   // Restore an existing session on boot. `/auth/me` is the honest check: it
   // proves the stored token still works rather than trusting its presence.
@@ -59,6 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!cancelled) {
           setUser(me);
           setOffline(false);
+          void refreshOnboarding();
         }
       } catch (e) {
         // ONLY a rejected session logs the learner out. A network blip (API
@@ -98,27 +134,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: { email, password, ...(displayName ? { displayName } : {}) },
       });
       await accept(res);
+      // A brand-new account has not done the KYC yet.
+      setOnboarded(false);
     },
     [accept],
   );
 
   const login = useCallback(
-    async (email: string, password: string) => {
+    async (email: string, password: string): Promise<LoginOutcome> => {
       const res = await api<LoginResponse>('/auth/login', {
         method: 'POST',
         anonymous: true,
         body: { email, password },
       });
-      // 2FA is fully built in the API but has no screen yet; say so plainly
-      // rather than silently failing to sign the learner in.
+      // 2FA enabled: hand the challenge back so the UI can complete the second step.
       if (isTwoFactorChallenge(res)) {
-        throw new Error(
-          'This account has two-factor authentication enabled, which the classroom cannot complete yet.',
-        );
+        return { status: '2fa', challengeToken: res.challengeToken };
       }
       await accept(res);
+      await refreshOnboarding();
+      return { status: 'ok' };
     },
-    [accept],
+    [accept, refreshOnboarding],
+  );
+
+  const verifyTwoFactor = useCallback(
+    async (challengeToken: string, code: string) => {
+      const res = await api<AuthResponse>('/auth/2fa/verify', {
+        method: 'POST',
+        anonymous: true,
+        body: { challengeToken, code },
+      });
+      await accept(res);
+      await refreshOnboarding();
+    },
+    [accept, refreshOnboarding],
   );
 
   const logout = useCallback(async () => {
@@ -133,11 +183,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearSession();
     setUser(null);
     setOffline(false);
+    setOnboarded(null);
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, offline, retry, register, login, logout }),
-    [user, loading, offline, retry, register, login, logout],
+    () => ({
+      user,
+      loading,
+      offline,
+      onboarded,
+      refreshOnboarding,
+      retry,
+      register,
+      login,
+      verifyTwoFactor,
+      logout,
+    }),
+    [user, loading, offline, onboarded, refreshOnboarding, retry, register, login, verifyTwoFactor, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

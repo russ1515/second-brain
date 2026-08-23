@@ -10,6 +10,7 @@ import type {
 import { PrismaService } from '../prisma/prisma.service';
 import { LearningPathService } from '../concepts/learning-path.service';
 import { RevisionEngineService } from '../revision/revision-engine.service';
+import { LocalizationService } from '../localization/localization.service';
 
 /** A dismissed recommendation stays quiet this long before it can resurface. */
 const COOLDOWN_MS = 3 * 86_400_000;
@@ -40,16 +41,24 @@ export class RecommendationService {
     private readonly prisma: PrismaService,
     private readonly learningPath: LearningPathService,
     private readonly revision: RevisionEngineService,
+    private readonly localization: LocalizationService,
   ) {}
 
-  /** Refresh the feed from current state, then return what's still on offer. */
+  /** Refresh the feed from current state, then return what's still on offer,
+   *  localized into the learner's Learning Locale. */
   async feed(userId: string): Promise<RecommendationFeed> {
     await this.generate(userId);
     const rows = await this.prisma.recommendation.findMany({
       where: { userId, status: 'suggested' },
       orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
     });
-    return { recommendations: rows.map((r) => this.toView(r)) };
+    const recs = rows.map((r) => this.toView(r));
+    const texts: string[] = [];
+    for (const r of recs) texts.push(r.title, r.reason);
+    const tr = await this.localization.localizeForUser(userId, texts);
+    let i = 0;
+    const recommendations = recs.map((r) => ({ ...r, title: tr[i++], reason: tr[i++] }));
+    return { recommendations };
   }
 
   async respond(

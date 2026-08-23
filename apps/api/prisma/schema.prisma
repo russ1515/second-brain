@@ -36,6 +36,7 @@ model User {
   lastActiveAt DateTime?
 
   profile                 Profile?
+  onboardingProfile       OnboardingProfile?
   sessions                Session[]
   emailVerificationTokens EmailVerificationToken[]
   recoveryCodes           RecoveryCode[]
@@ -233,6 +234,69 @@ model Profile {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("profiles")
+}
+
+/// Who the learner is (UI/UX Sprint 2 KYC, task 2.3). Drives the whole
+/// onboarding branch and the initial system configuration.
+enum LearningCategory {
+  kindergarten
+  primary
+  secondary
+  highschool
+  university
+  research
+  professional
+  language
+  personal
+}
+
+enum OnboardingStatus {
+  not_started
+  in_progress
+  completed
+}
+
+/// The Universal KYC (UI/UX Sprint 2). This is the learner's SELF-DECLARED
+/// profile — distinct from the derived behavioural twin (LearnerProfile) and
+/// from Profile (display/locale/timezone). It seeds the interface, the AI
+/// Professor, language support, goals, subjects and the initial Digital Twin.
+///
+/// Answers are kept in independent JSON SECTIONS so new dimensions can be added
+/// later without a migration (evolution-safe, task 2.21). A few columns are
+/// promoted out of JSON because the backend queries/gates on them: `status`
+/// (the onboarding gate + resume), `category` (adaptive branching + adaptive
+/// UI), `currentStep` (resume point).
+model OnboardingProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  status      OnboardingStatus  @default(not_started)
+  category    LearningCategory?
+  /// The step the learner last reached, so an interrupted KYC resumes there.
+  currentStep String            @default("welcome")
+
+  /// KYC answer sections (task 2.21): identity, education, languages,
+  /// languageLearner, goals, subjects, preferences, teacher, academicSupport,
+  /// assessment, extra. Each is an OnboardingAnswers sub-object.
+  identity        Json?
+  education       Json?
+  languages       Json?
+  languageLearner Json?
+  goals           Json?
+  subjects        Json?
+  preferences     Json?
+  teacher         Json?
+  academicSupport Json?
+  assessment      Json?
+  extra           Json?
+
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("onboarding_profiles")
 }
 
 model EmailVerificationToken {

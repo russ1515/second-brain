@@ -59,9 +59,19 @@ export default () => ({
     twoFactorEncKey: process.env.TWO_FACTOR_ENC_KEY,
   },
   mail: {
-    // 'log' (dev, prints to console) is the only wired transport for now.
+    // 'log' (dev, prints to console) or 'smtp' (real delivery via nodemailer).
     transport: process.env.MAIL_TRANSPORT ?? 'log',
     from: process.env.MAIL_FROM ?? 'no-reply@secondbrain.local',
+    // SMTP settings, only read when MAIL_TRANSPORT=smtp. Gmail defaults:
+    // host smtp.gmail.com, port 465 (implicit TLS). Use an App Password as
+    // MAIL_PASS (regular Gmail passwords are rejected).
+    smtp: {
+      host: process.env.MAIL_HOST ?? 'smtp.gmail.com',
+      port: parseInt(process.env.MAIL_PORT ?? '465', 10),
+      secure: (process.env.MAIL_SECURE ?? 'true') === 'true',
+      user: process.env.MAIL_USER ?? '',
+      pass: process.env.MAIL_PASS ?? '',
+    },
   },
   notify: {
     // Daily-journey nudges. 'log' prints to console; 'mail' rides the mail seam.

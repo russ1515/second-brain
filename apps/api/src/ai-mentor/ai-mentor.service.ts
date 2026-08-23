@@ -10,6 +10,7 @@ import { MasteryService } from '../concepts/mastery.service';
 import { MentorService } from '../mentor/mentor.service';
 import { ExamsService } from '../goals/exams.service';
 import { CacheService } from '../redis/cache.service';
+import { LocalizationService } from '../localization/localization.service';
 
 /** Enough recent activity to judge method by (below this, it's too early). */
 const MEANINGFUL_EFFORT = 6;
@@ -53,11 +54,31 @@ export class AiMentorService {
     private readonly mentor: MentorService,
     private readonly exams: ExamsService,
     private readonly cache: CacheService,
+    private readonly localization: LocalizationService,
   ) {}
 
-  /** Cached 20s (Sprint 10.1) — advisory assessment, staleness-tolerant. */
-  guidance(userId: string, now = new Date()): Promise<MentorGuidance> {
-    return this.cache.wrap(`ai-mentor:${userId}`, 20, () => this.computeGuidance(userId, now));
+  /** Cached 20s (Sprint 10.1) — advisory assessment, staleness-tolerant. The
+   *  English analysis is cached; it's then localized into the learner's Learning
+   *  Locale (Redis-cached per string, so it's cheap after the first time). */
+  async guidance(userId: string, now = new Date()): Promise<MentorGuidance> {
+    const view = await this.cache.wrap(`ai-mentor:${userId}`, 20, () =>
+      this.computeGuidance(userId, now),
+    );
+    return this.localize(userId, view);
+  }
+
+  /** Translate every prose field of the guidance into the learner's language. */
+  private async localize(userId: string, view: MentorGuidance): Promise<MentorGuidance> {
+    const texts = [view.headline, ...view.dimensions.flatMap((d) => [d.insight, ...d.reasons])];
+    const tr = await this.localization.localizeForUser(userId, texts);
+    let i = 0;
+    const headline = tr[i++];
+    const dimensions = view.dimensions.map((d) => {
+      const insight = tr[i++];
+      const reasons = d.reasons.map(() => tr[i++]);
+      return { ...d, insight, reasons };
+    });
+    return { ...view, headline, dimensions };
   }
 
   /** Compute, record and return the mentor's strategic guidance. */

@@ -7,6 +7,7 @@ import type {
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { LearningPathService } from '../concepts/learning-path.service';
+import { LocalizationService } from '../localization/localization.service';
 
 /** How long a dismissed/acted initiative stays quiet before it can resurface. */
 const COOLDOWN_MS = 3 * 86_400_000;
@@ -33,16 +34,28 @@ export class ProactiveService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly learningPath: LearningPathService,
+    private readonly localization: LocalizationService,
   ) {}
 
-  /** Refresh initiatives from the current state, then return the active ones. */
+  /** Refresh initiatives from the current state, then return the active ones,
+   *  localized into the learner's Learning Locale. */
   async list(userId: string): Promise<InitiativeView[]> {
     await this.generate(userId);
     const rows = await this.prisma.aiInitiative.findMany({
       where: { userId, status: 'active' },
       orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
     });
-    return rows.map((r) => this.toView(r));
+    const views = rows.map((r) => this.toView(r));
+    const texts: string[] = [];
+    for (const v of views) texts.push(v.title, v.message, ...v.reasons);
+    const tr = await this.localization.localizeForUser(userId, texts);
+    let i = 0;
+    return views.map((v) => ({
+      ...v,
+      title: tr[i++],
+      message: tr[i++],
+      reasons: v.reasons.map(() => tr[i++]),
+    }));
   }
 
   async respond(

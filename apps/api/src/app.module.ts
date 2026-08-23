@@ -47,9 +47,11 @@ import { InsightsCenterModule } from './insights-center/insights-center.module';
 import { LearningDnaModule } from './learning-dna/learning-dna.module';
 import { MonitoringModule } from './monitoring/monitoring.module';
 import { PluginModule } from './plugins/plugin.module';
+import { LocalizationModule } from './localization/localization.module';
 import { ActivityInterceptor } from './common/activity.interceptor';
 import { MentorModule } from './mentor/mentor.module';
 import { CoachModule } from './coach/coach.module';
+import { OnboardingModule } from './onboarding/onboarding.module';
 
 @Module({
   imports: [
@@ -68,6 +70,8 @@ import { CoachModule } from './coach/coach.module';
     RedisModule,
     MonitoringModule,
     PluginModule,
+    LocalizationModule,
+    OnboardingModule,
     QdrantModule,
     LlmModule,
     EmbeddingsModule,

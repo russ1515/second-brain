@@ -5,19 +5,22 @@
       "name": "api",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@second-brain/api", "dev"],
-      "port": 3000
+      "port": 3000,
+      "autoPort": false
     },
     {
       "name": "mobile",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@second-brain/mobile", "start"],
-      "port": 8081
+      "port": 8081,
+      "autoPort": false
     },
     {
       "name": "mobile-web",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@second-brain/mobile", "web"],
-      "port": 8081
+      "port": 8081,
+      "autoPort": false
     }
   ]
 }

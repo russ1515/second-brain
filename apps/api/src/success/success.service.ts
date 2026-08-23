@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MasteryService } from '../concepts/mastery.service';
 import { ExamsService } from '../goals/exams.service';
 import { CacheService } from '../redis/cache.service';
+import { LocalizationService } from '../localization/localization.service';
 
 /** Exams don't reward preparation 1:1 — there's always some exam-day variance. */
 const VARIANCE_DISCOUNT = 0.95;
@@ -32,11 +33,24 @@ export class SuccessPredictorService {
     private readonly mastery: MasteryService,
     private readonly exams: ExamsService,
     private readonly cache: CacheService,
+    private readonly localization: LocalizationService,
   ) {}
 
-  /** Cached 20s (Sprint 10.1) — advisory forecast, staleness-tolerant. */
-  forecast(userId: string, now = new Date()): Promise<SuccessForecast> {
-    return this.cache.wrap(`success:${userId}`, 20, () => this.computeForecast(userId, now));
+  /** Cached 20s (Sprint 10.1); English forecast then localized per the learner's locale. */
+  async forecast(userId: string, now = new Date()): Promise<SuccessForecast> {
+    const view = await this.cache.wrap(`success:${userId}`, 20, () =>
+      this.computeForecast(userId, now),
+    );
+    const texts: string[] = [];
+    for (const e of view.exams) texts.push(e.advice, ...e.factors);
+    const tr = await this.localization.localizeForUser(userId, texts);
+    let i = 0;
+    const exams = view.exams.map((e) => ({
+      ...e,
+      advice: tr[i++],
+      factors: e.factors.map(() => tr[i++]),
+    }));
+    return { ...view, exams };
   }
 
   private async computeForecast(userId: string, now: Date): Promise<SuccessForecast> {

@@ -10,6 +10,7 @@ import type {
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionService } from '../flashcards/session.service';
 import { LearningPathService } from '../concepts/learning-path.service';
+import { LocalizationService } from '../localization/localization.service';
 import { localDate } from './local-time';
 
 /** A plan item before it is persisted. */
@@ -43,6 +44,7 @@ export class DailyPlanService {
     private readonly prisma: PrismaService,
     private readonly sessions: SessionService,
     private readonly learningPath: LearningPathService,
+    private readonly localization: LocalizationService,
   ) {}
 
   /** Today's plan, generated on first read. Idempotent: the unique key on
@@ -56,9 +58,21 @@ export class DailyPlanService {
       include: { items: { orderBy: [{ slot: 'asc' }, { position: 'asc' }] } },
     });
     if (existing) {
-      return this.toView(existing, existing.items, timezone);
+      return this.localize(userId, this.toView(existing, existing.items, timezone));
     }
-    return this.generate(userId, timezone, date);
+    return this.localize(userId, await this.generate(userId, timezone, date));
+  }
+
+  /** Translate each plan item's title + detail into the learner's Learning Locale
+   *  (concept/deck names inside them are handled by the translator). */
+  private async localize(userId: string, view: DailyPlanView): Promise<DailyPlanView> {
+    if (view.items.length === 0) return view;
+    const texts: string[] = [];
+    for (const it of view.items) texts.push(it.title, it.detail ?? '');
+    const tr = await this.localization.localizeForUser(userId, texts);
+    let i = 0;
+    const items = view.items.map((it) => ({ ...it, title: tr[i++], detail: tr[i++] || it.detail }));
+    return { ...view, items };
   }
 
   /**
@@ -70,7 +84,7 @@ export class DailyPlanService {
    */
   async refresh(userId: string, now = new Date()): Promise<DailyPlanView> {
     const timezone = await this.timezoneOf(userId);
-    return this.refreshForDay(userId, timezone, localDate(now, timezone));
+    return this.localize(userId, await this.refreshForDay(userId, timezone, localDate(now, timezone)));
   }
 
   /** Ensure-and-adapt for an explicit local day. This is what the scheduler

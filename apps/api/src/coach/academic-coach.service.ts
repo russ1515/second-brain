@@ -12,6 +12,7 @@ import type {
 import { PrismaService } from '../prisma/prisma.service';
 import { MasteryService } from '../concepts/mastery.service';
 import { MentorService } from '../mentor/mentor.service';
+import { LocalizationService } from '../localization/localization.service';
 
 const PACES: CoachPace[] = ['gentle', 'steady', 'intensive'];
 const DIFFICULTIES: CoachDifficulty[] = ['beginner', 'intermediate', 'advanced'];
@@ -54,13 +55,34 @@ export class AcademicCoachService {
     private readonly prisma: PrismaService,
     private readonly mastery: MasteryService,
     private readonly mentor: MentorService,
+    private readonly localization: LocalizationService,
   ) {}
 
   /** The learner's live, personalised plan (recomputed and re-recorded). */
   async plan(userId: string, now = new Date()): Promise<CoachPlan> {
     const [accompaniment, derived] = await this.observe(userId, now);
     const profile = await this.record(userId, derived);
-    return this.toPlan(profile, derived, accompaniment);
+    return this.localize(userId, this.toPlan(profile, derived, accompaniment));
+  }
+
+  /** Translate the plan's prose (headline + each dimension's reason) into the
+   *  learner's Learning Locale; enum values/labels are localized by the UI. */
+  private async localize(userId: string, plan: CoachPlan): Promise<CoachPlan> {
+    const tr = await this.localization.localizeForUser(userId, [
+      plan.headline,
+      plan.pace.reason,
+      plan.difficulty.reason,
+      plan.sessionMinutes.reason,
+      plan.method.reason,
+    ]);
+    return {
+      ...plan,
+      headline: tr[0],
+      pace: { ...plan.pace, reason: tr[1] },
+      difficulty: { ...plan.difficulty, reason: tr[2] },
+      sessionMinutes: { ...plan.sessionMinutes, reason: tr[3] },
+      method: { ...plan.method, reason: tr[4] },
+    };
   }
 
   /**
@@ -94,7 +116,7 @@ export class AcademicCoachService {
     }
 
     const profile = await this.prisma.coachProfile.update({ where: { userId }, data });
-    return this.toPlan(profile, derived, accompaniment);
+    return this.localize(userId, this.toPlan(profile, derived, accompaniment));
   }
 
   // ── observation (all reused engines) ──────────────────────────────────────

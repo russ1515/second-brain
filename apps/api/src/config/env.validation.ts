@@ -76,6 +76,26 @@ class EnvironmentVariables {
 
   @IsOptional()
   @IsString()
+  MAIL_HOST?: string;
+
+  @IsOptional()
+  @IsInt()
+  MAIL_PORT?: number;
+
+  @IsOptional()
+  @IsString()
+  MAIL_SECURE?: string;
+
+  @IsOptional()
+  @IsString()
+  MAIL_USER?: string;
+
+  @IsOptional()
+  @IsString()
+  MAIL_PASS?: string;
+
+  @IsOptional()
+  @IsString()
   APP_URL?: string;
 
   @IsOptional()

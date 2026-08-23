@@ -1,94 +1,119 @@
+import { useCallback, useState, type ReactNode } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
-import { useI18n } from '../../lib/i18n';
-import { theme } from '../../lib/theme';
+import { useFocusEffect, useRouter } from 'expo-router';
+import type { LearningCategory, OnboardingState } from '@second-brain/shared';
+import { api } from '../../lib/client';
+import { useAuth } from '../../lib/auth-context';
+import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
-import { FeatureTile } from '../../components/feature-tile';
+import {
+  CAPABILITIES,
+  MODES,
+  START_ENTRIES,
+  learnPersona,
+  type CapabilityKey,
+} from '../../lib/learn/catalog';
+import {
+  CapabilityCard,
+  LearningModeSelector,
+  UniversalStartBar,
+} from '../../components/learn/components';
 
-/** 📚 Learn — the acquisition space. Real tiles route into existing screens
- *  (teacher, scanner, languages); features without a screen yet show as
- *  Coming Soon so the structure is complete. Nothing new is coded here. */
+/**
+ * 📚 Apprendre — the intelligent pedagogical workspace (UI/UX Sprint 4).
+ *
+ * The visible heart of Second Brain: everything a learner wants to learn,
+ * understand or work on can begin here. It presents the SIX capabilities
+ * (Conversation, Langues, Cours, Bibliothèque, Travaux/Academic Workspace,
+ * Évaluations) — never a seventh main tab — the pedagogical MODES, and a
+ * universal entry that converges any input onto the AI teacher. Order and tone
+ * adapt to the KYC persona (Sprint 2). It routes into existing engines; no new
+ * business logic lives here.
+ */
 export default function LearnScreen() {
+  const { user } = useAuth();
   const router = useRouter();
-  const { t } = useI18n();
-  const { maxContentWidth } = useResponsive();
+  const { colors: c } = useTokens();
+  const { width, maxContentWidth } = useResponsive();
+  const [category, setCategory] = useState<LearningCategory | undefined>(undefined);
+  const [mode, setMode] = useState<(typeof MODES)[number]['key'] | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!user) return;
+      let cancelled = false;
+      api<OnboardingState>('/onboarding')
+        .then((s) => { if (!cancelled) setCategory(s.answers.education?.category ?? undefined); })
+        .catch(() => undefined);
+      return () => { cancelled = true; };
+    }, [user]),
+  );
+
+  const persona = learnPersona(category ?? null);
+  const wide = width >= 760;
+
+  // Capabilities in the persona's priority order.
+  const byKey = new Map<CapabilityKey, (typeof CAPABILITIES)[number]>(CAPABILITIES.map((cap) => [cap.key, cap]));
+  const ordered = persona.order.map((k) => byKey.get(k)!).filter(Boolean);
+  // Lead the mode selector with the persona's primary mode.
+  const modes = [...MODES].sort((a, b) => (a.key === persona.primaryMode ? -1 : b.key === persona.primaryMode ? 1 : 0));
+
+  const openCapability = (route: string) => router.push(route as never);
+  const selectMode = (m: (typeof MODES)[number]) => {
+    setMode(m.key);
+    router.push({ pathname: m.route as never, params: { mode: m.mode } as never });
+  };
+  const onText = (text: string) => router.push({ pathname: '/tutor' as never, params: { q: text } as never });
+  const onPick = (e: (typeof START_ENTRIES)[number]) => router.push(e.route as never);
+
   return (
     <ScrollView contentContainerStyle={[styles.container, { maxWidth: maxContentWidth }]}>
-      <Text style={styles.h1}>📚 {t('tab.learn')}</Text>
-      <Text style={styles.intro}>{t('learn.intro')}</Text>
-
-      <View style={styles.grid}>
-        <FeatureTile
-          emoji="✨"
-          title={t('reco.title')}
-          subtitle={t('reco.tileDetail')}
-          onPress={() => router.push('/for-you')}
-          testID="tile-for-you"
-        />
-        <FeatureTile
-          emoji="💬"
-          title={t('learn.teacher.title')}
-          subtitle={t('learn.teacher.detail')}
-          onPress={() => router.push('/tutor')}
-          testID="tile-teacher"
-        />
-        <FeatureTile
-          emoji="🧭"
-          title={t('apath.title')}
-          subtitle={t('apath.tileDetail')}
-          onPress={() => router.push('/adaptive-path')}
-          testID="tile-adaptive-path"
-        />
-        <FeatureTile
-          emoji="📷"
-          title={t('learn.ocr')}
-          subtitle={t('learn.scan.detail')}
-          onPress={() => router.push('/scan')}
-          testID="tile-ocr"
-        />
-        <FeatureTile
-          emoji="📚"
-          title={t('lib.title')}
-          subtitle={t('lib.tileDetail')}
-          onPress={() => router.push('/library')}
-          testID="tile-documents"
-        />
-        <FeatureTile
-          emoji="🗣️"
-          title={t('learn.languages.title')}
-          subtitle={t('learn.languages.detail')}
-          onPress={() => router.push('/languages')}
-          testID="tile-languages"
-        />
-        <FeatureTile
-          emoji="✍️"
-          title={t('learn.writing.title')}
-          subtitle={t('learn.writing.detail')}
-          onPress={() => router.push('/writing')}
-          testID="tile-writing"
-        />
-        <FeatureTile
-          emoji="📖"
-          title={t('learn.reading.title')}
-          subtitle={t('learn.reading.detail')}
-          onPress={() => router.push('/reading')}
-          testID="tile-reading"
-        />
-        <FeatureTile
-          emoji="📝"
-          title={t('learn.assessments')}
-          subtitle={t('learn.assessments.detail')}
-          onPress={() => router.push('/examiner')}
-          testID="tile-assessments"
-        />
+      <View style={{ gap: 4 }}>
+        <Text style={{ color: c.textPrimary, fontSize: 30, fontWeight: '800' }}>📚 Apprendre</Text>
+        <Text style={{ color: c.textSecondary, fontSize: 15, lineHeight: 22 }}>{persona.intro}</Text>
       </View>
+
+      {/* Convergence — everything can begin here */}
+      <UniversalStartBar entries={START_ENTRIES} onText={onText} onPick={onPick} />
+
+      {/* Pedagogical modes (4.1) */}
+      <View style={{ gap: 10 }}>
+        <SectionLabel>Comment veux-tu travailler ?</SectionLabel>
+        <LearningModeSelector modes={modes} value={mode} onSelect={selectMode} />
+      </View>
+
+      {/* The six capabilities — order adapts to the KYC persona */}
+      <View style={{ gap: 10 }}>
+        <SectionLabel>Tes capacités d’apprentissage</SectionLabel>
+        {wide ? (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+            {ordered.map((cap) => (
+              <View key={cap.key} style={{ width: '48%', flexGrow: 1 }}>
+                <CapabilityCard capability={cap} onOpen={() => openCapability(cap.route)} />
+              </View>
+            ))}
+          </View>
+        ) : (
+          ordered.map((cap) => <CapabilityCard key={cap.key} capability={cap} onOpen={() => openCapability(cap.route)} />)
+        )}
+      </View>
+
+      <Text style={{ color: c.textMuted, fontSize: 12, textAlign: 'center', marginTop: 4 }}>
+        Academic Workspace, langues, évaluations et bibliothèque vivent ici, dans Apprendre.
+      </Text>
     </ScrollView>
   );
 }
 
+function SectionLabel({ children }: { children: ReactNode }) {
+  const { colors: c } = useTokens();
+  return (
+    <Text style={{ color: c.textMuted, fontSize: 12, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase' }}>
+      {children}
+    </Text>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
-  h1: { fontSize: 30, fontWeight: '700', color: theme.text },
-  intro: { fontSize: 15, color: theme.textMuted, marginBottom: 4, lineHeight: 21 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  container: { padding: 20, gap: 16, width: '100%', alignSelf: 'center', paddingBottom: 48 },
 });

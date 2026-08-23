@@ -2,19 +2,22 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider } from '../lib/auth-context';
 import { I18nProvider, useI18n } from '../lib/i18n';
-import '../lib/locales/es'; // registers the Spanish UI locale (Sprint 10.5)
+import '../lib/locales'; // registers every generated UI dictionary (es/de/it/pt/hi/…)
 import { QueryProvider } from '../lib/query';
+import { ThemeProvider } from '../lib/design/theme';
 import { theme } from '../lib/theme';
 
 export default function RootLayout() {
   return (
     <QueryProvider>
-      <I18nProvider>
-        <AuthProvider>
-          <StatusBar style="light" />
-          <Navigator />
-        </AuthProvider>
-      </I18nProvider>
+      <ThemeProvider>
+        <I18nProvider>
+          <AuthProvider>
+            <StatusBar style="light" />
+            <Navigator />
+          </AuthProvider>
+        </I18nProvider>
+      </ThemeProvider>
     </QueryProvider>
   );
 }
@@ -35,6 +38,8 @@ function Navigator() {
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       {/* Full-screen, outside the tabs. Brand name — not translated. */}
       <Stack.Screen name="sign-in" options={{ title: 'Second Brain' }} />
+      {/* Universal KYC / onboarding (UI/UX Sprint 2). Owns its own chrome. */}
+      <Stack.Screen name="onboarding" options={{ headerShown: false }} />
       {/* Detail screens pushed on top of a space (tab bar hidden). */}
       <Stack.Screen name="lesson/[id]" options={{ title: t('header.lesson') }} />
       <Stack.Screen name="lesson/new" options={{ title: t('header.newLesson') }} />
