@@ -81,6 +81,8 @@ const en = {
   // Global error-boundary fallback (Zero-blank-page, §35).
   'error.title': 'Something went wrong',
   'error.detail': 'This screen ran into a problem. You can try again.',
+  'error.serverBusy': 'The service is busy right now. Please try again shortly.',
+  'error.network': 'Connection problem. Check your network and try again.',
 
   // Onboarding finalization screens (§31).
   'onboarding.preparing': 'Preparing your space…',
@@ -1903,6 +1905,8 @@ const fr: Record<TranslationKey, string> = {
   // Repli global de l’Error Boundary (Zéro page blanche, §35).
   'error.title': 'Une erreur est survenue',
   'error.detail': 'Cet écran a rencontré un problème. Tu peux réessayer.',
+  'error.serverBusy': 'Le service est momentanément indisponible. Réessaie dans un instant.',
+  'error.network': 'Problème de connexion. Vérifie ton réseau et réessaie.',
 
   // Écrans de finalisation de l’onboarding (§31).
   'onboarding.preparing': 'Je prépare ton espace…',
@@ -3734,8 +3738,18 @@ interface I18nState {
 
 const I18nContext = createContext<I18nState | null>(null);
 
+/** Module-level mirror of the active locale, kept in sync by the provider, so
+ *  non-hook code (e.g. the API client) can localize messages too. */
+let activeLocale: Locale = 'en';
+/** Non-hook translate for the active locale (English fallback, then the key). */
+export function tr(key: TranslationKey): string {
+  return registry.get(activeLocale)?.catalog[key] ?? en[key] ?? key;
+}
+
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>('en');
+
+  useEffect(() => { activeLocale = locale; }, [locale]);
 
   useEffect(() => {
     (async () => {

@@ -208,7 +208,7 @@ function roleStyle(role: OrgRole, c: ColorScale) {
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 12, maxWidth: 960, width: '100%', alignSelf: 'center' },
   title: { fontSize: 24, fontWeight: '700', color: c.textPrimary },
   meta: { fontSize: 13, color: c.textSecondary, textTransform: 'capitalize' },
   section: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginTop: 10 },

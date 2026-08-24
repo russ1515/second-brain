@@ -136,7 +136,7 @@ export default function SubscriptionScreen() {
           mid paid tier flagged Popular, real price when set, and a feature list
           for comparison. Prices/quotas come from the backend — nothing frozen. */}
       <View style={wide ? styles.planGrid : { gap: 12 }}>
-        {[...(plans ?? [])].sort((a, b) => a.tier - b.tier).map((p) => {
+        {[...(plans ?? [])].filter((p) => p.slug === 'free' || p.slug === 'pro').sort((a, b) => a.tier - b.tier).map((p) => {
           const active = current?.planSlug === p.slug;
           const popular = p.slug === 'pro';
           const feats = Object.entries(p.features).filter(([, on]) => on).map(([k]) => k).slice(0, 6);
@@ -200,7 +200,7 @@ export default function SubscriptionScreen() {
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 12, maxWidth: 960, width: '100%', alignSelf: 'center' },
   h1: { fontSize: 28, fontWeight: '700', color: c.textPrimary },
   intro: { fontSize: 14, color: c.textSecondary, lineHeight: 20, marginBottom: 4 },
   currentCard: { borderColor: c.primary, gap: 4 },

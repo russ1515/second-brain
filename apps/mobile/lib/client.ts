@@ -1,5 +1,6 @@
 import type { AuthTokens } from '@second-brain/shared';
 import { API_BASE_URL } from './api';
+import { tr } from './i18n';
 import { clearSession, loadSession, saveSession } from './storage';
 
 export class ApiError extends Error {
@@ -18,8 +19,12 @@ interface RequestOptions {
   anonymous?: boolean;
 }
 
-/** Read the API's error shape without pretending we know it exactly. */
-function messageFrom(payload: unknown, fallback: string): string {
+/** Read the API's error shape without pretending we know it exactly. Server-side
+ *  failures (5xx) — including the AI services' "temporarily unavailable" — carry
+ *  English backend text, so we replace them with a LOCALIZED generic message so
+ *  the UI never shows a raw, wrong-language error (§24 / one-language rule). */
+function messageFrom(payload: unknown, status: number, fallback: string): string {
+  if (status >= 500) return tr('error.serverBusy');
   if (payload && typeof payload === 'object' && 'message' in payload) {
     const message = (payload as { message: unknown }).message;
     if (typeof message === 'string') return message;
@@ -104,7 +109,7 @@ export async function apiUpload<T>(
 
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new ApiError(res.status, messageFrom(payload, `Upload failed (${res.status})`));
+    throw new ApiError(res.status, messageFrom(payload, res.status, `Upload failed (${res.status})`));
   }
   return payload as T;
 }
@@ -124,7 +129,7 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
 
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new ApiError(res.status, messageFrom(payload, `Request failed (${res.status})`));
+    throw new ApiError(res.status, messageFrom(payload, res.status, `Request failed (${res.status})`));
   }
   return payload as T;
 }

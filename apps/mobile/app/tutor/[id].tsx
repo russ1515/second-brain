@@ -292,7 +292,7 @@ function Message({
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 10, maxWidth: 720, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 10, maxWidth: 960, width: '100%', alignSelf: 'center' },
   flex: { flex: 1 },
   title: { fontSize: 24, fontWeight: '700', color: c.textPrimary },
   roleChip: {

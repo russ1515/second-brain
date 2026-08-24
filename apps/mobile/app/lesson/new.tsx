@@ -65,7 +65,7 @@ export default function NewLessonScreen() {
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 12, maxWidth: 960, width: '100%', alignSelf: 'center' },
   title: { fontSize: 24, fontWeight: '700', color: c.textPrimary },
   detail: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
 });

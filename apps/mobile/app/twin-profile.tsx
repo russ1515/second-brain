@@ -128,7 +128,7 @@ const FOCUS_KEY = {
 } as const satisfies Record<NonNullable<LearnerProfile['focusWindow']>, TranslationKey>;
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 14, maxWidth: 720, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 14, maxWidth: 960, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
   kicker: {
     fontSize: 13,

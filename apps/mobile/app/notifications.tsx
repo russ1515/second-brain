@@ -114,7 +114,7 @@ function message(n: SmartNotification, t: (k: TranslationKey) => string): string
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 12, maxWidth: 960, width: '100%', alignSelf: 'center' },
   masthead: { gap: 6 },
   kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
   greeting: { fontSize: 18, fontWeight: '700', color: c.textPrimary, lineHeight: 25 },
