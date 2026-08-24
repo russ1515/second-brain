@@ -607,14 +607,15 @@ function TwinRow({ icon, title, value, onEdit }: { icon: string; title: string; 
 // The completion side-effect summary, shown briefly on the way in (optional use).
 export function ConfigurationSummary({ config }: { config: SystemConfiguration }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const a = config.applied;
   return (
     <Card>
-      <Text style={{ color: c.textPrimary, fontWeight: '700', marginBottom: 6 }}>Configuration appliquée</Text>
+      <Text style={{ color: c.textPrimary, fontWeight: '700', marginBottom: 6 }}>{t('onb.cfg.title')}</Text>
       <Text style={{ color: c.textSecondary, fontSize: 13 }}>
-        {a.profileUpdated ? '✓ Profil mis à jour  ' : ''}
-        {a.languageProfileCreated ? '✓ Profil de langue créé  ' : ''}
-        {a.conceptsCreated > 0 ? `✓ ${a.conceptsCreated} concepts initiaux` : ''}
+        {a.profileUpdated ? `✓ ${t('onb.cfg.profileUpdated')}  ` : ''}
+        {a.languageProfileCreated ? `✓ ${t('onb.cfg.langCreated')}  ` : ''}
+        {a.conceptsCreated > 0 ? `✓ ${a.conceptsCreated} ${t('onb.cfg.concepts')}` : ''}
       </Text>
     </Card>
   );

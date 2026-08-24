@@ -157,7 +157,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   provHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   provName: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
   badge: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 2 },
-  badgeText: { fontSize: 10, fontWeight: '800', color: '#FFFFFF', textTransform: 'uppercase' },
+  badgeText: { fontSize: 10, fontWeight: '800', color: c.onColor, textTransform: 'uppercase' },
   provModel: { fontSize: 13, color: c.textSecondary, fontFamily: 'monospace' },
   tiers: { flexDirection: 'row', gap: 18, marginTop: 2 },
   tier: { alignItems: 'center' },

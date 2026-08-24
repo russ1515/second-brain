@@ -154,7 +154,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     borderRadius: 12,
     padding: 14,
   },
-  calmText: { fontSize: 15, color: '#DCFCE7', fontWeight: '600' },
+  calmText: { fontSize: 15, color: c.success, fontWeight: '600' },
   card: {
     backgroundColor: c.surface,
     borderWidth: 1,
@@ -168,7 +168,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   icon: { fontSize: 22 },
   title: { flex: 1, fontSize: 16, fontWeight: '700', color: c.textPrimary },
   badge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
-  badgeText: { fontSize: 13, fontWeight: '800', color: '#FFFFFF' },
+  badgeText: { fontSize: 13, fontWeight: '800', color: c.onColor },
   gaugeTrack: {
     height: 8,
     borderRadius: 999,

@@ -129,7 +129,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     padding: 16,
     gap: 10,
   },
-  message: { fontSize: 16, color: '#E2E8F0', lineHeight: 24, fontWeight: '500' },
+  message: { fontSize: 16, color: c.textSecondary, lineHeight: 24, fontWeight: '500' },
   source: {
     fontSize: 11,
     fontWeight: '700',

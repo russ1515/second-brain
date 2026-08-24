@@ -220,7 +220,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   topic: { fontSize: 26, fontWeight: '800', color: c.textPrimary, lineHeight: 32 },
   planCard: { gap: 10, alignItems: 'flex-start' },
   avatar: { fontSize: 34 },
-  planText: { fontSize: 16, color: '#D3DCE8', lineHeight: 24 },
+  planText: { fontSize: 16, color: c.textPrimary, lineHeight: 24 },
   metaChip: {
     backgroundColor: c.surfaceElevated,
     borderRadius: 20,
@@ -248,7 +248,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     color: c.success,
     textAlign: 'center',
   },
-  stageText: { flex: 1, fontSize: 15, color: '#D3DCE8' },
+  stageText: { flex: 1, fontSize: 15, color: c.textPrimary },
   twinCard: { borderColor: c.primary },
   scoreRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16 },
   scoreBlock: { alignItems: 'center', gap: 2 },
@@ -267,5 +267,5 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   deltaDown: { color: c.warning },
   masteryLine: { textAlign: 'center', color: c.textSecondary, fontSize: 14, marginTop: 8 },
   hint: { textAlign: 'center', color: c.textMuted, fontSize: 13, marginTop: 8 },
-  resultLine: { fontSize: 15, color: '#D3DCE8', lineHeight: 26 },
+  resultLine: { fontSize: 15, color: c.textPrimary, lineHeight: 26 },
 });

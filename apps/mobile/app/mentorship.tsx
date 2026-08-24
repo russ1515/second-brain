@@ -184,7 +184,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   },
   focusText: { fontSize: 10, fontWeight: '800', color: c.onPrimary, letterSpacing: 0.5 },
   badge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
-  badgeText: { fontSize: 11, fontWeight: '700', color: '#FFFFFF', textTransform: 'uppercase' },
+  badgeText: { fontSize: 11, fontWeight: '700', color: c.onColor, textTransform: 'uppercase' },
   insight: { fontSize: 15, color: c.textPrimary, lineHeight: 22 },
   whyLabel: {
     fontSize: 11,

@@ -343,7 +343,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     letterSpacing: 1.5,
   },
   greeting: { fontSize: 24, fontWeight: '700', color: c.textPrimary },
-  line: { fontSize: 17, color: '#CBD5E1', lineHeight: 26 },
+  line: { fontSize: 17, color: c.textSecondary, lineHeight: 26 },
   subject: { color: c.textPrimary, fontWeight: '700' },
   sessionCard: {
     backgroundColor: c.surfaceElevated,

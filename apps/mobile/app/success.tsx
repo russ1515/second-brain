@@ -189,7 +189,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     letterSpacing: 0.6,
   },
   confBadge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
-  confText: { fontSize: 12, fontWeight: '700', color: '#FFFFFF' },
+  confText: { fontSize: 12, fontWeight: '700', color: c.onColor },
   adviceLabel: {
     fontSize: 11,
     fontWeight: '700',

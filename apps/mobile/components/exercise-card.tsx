@@ -173,7 +173,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     marginTop: 10,
     marginBottom: 4,
   },
-  body: { fontSize: 15, color: '#CBD5E1', lineHeight: 23 },
+  body: { fontSize: 15, color: c.textSecondary, lineHeight: 23 },
   question: { fontSize: 15, fontWeight: '600', color: c.textPrimary, lineHeight: 22, marginTop: 6 },
   exercise: { gap: 10 },
   typeBadge: {

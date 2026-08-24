@@ -282,6 +282,10 @@ const en = {
   'onb.adapt.p5': 'use your documents',
   'onb.adapt.p6': 'help you with your assignments',
   'onb.edit': 'Edit',
+  'onb.cfg.title': 'Configuration applied',
+  'onb.cfg.profileUpdated': 'Profile updated',
+  'onb.cfg.langCreated': 'Language profile created',
+  'onb.cfg.concepts': 'initial concepts',
 
   'auth.title': 'Your classroom',
   'auth.subtitle': 'A private teacher that remembers every lesson, mistake and success.',
@@ -2077,6 +2081,10 @@ const fr: Record<TranslationKey, string> = {
   'onb.adapt.p5': 'utiliser tes documents',
   'onb.adapt.p6': 't’aider dans tes travaux',
   'onb.edit': 'Modifier',
+  'onb.cfg.title': 'Configuration appliquée',
+  'onb.cfg.profileUpdated': 'Profil mis à jour',
+  'onb.cfg.langCreated': 'Profil de langue créé',
+  'onb.cfg.concepts': 'concepts initiaux',
 
   'auth.title': 'Ta salle de classe',
   'auth.subtitle':

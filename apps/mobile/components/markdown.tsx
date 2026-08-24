@@ -163,7 +163,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   code: {
     fontFamily: 'monospace',
     fontSize: 14,
-    color: '#93C5FD',
+    color: c.info,
     backgroundColor: c.surfaceElevated,
   },
 });

@@ -68,9 +68,10 @@ export function Button({
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityState={{ disabled: !!off, busy: !!busy }}
       onPress={onPress}
       disabled={off}
-      style={{
+      style={({ pressed }) => ({
         backgroundColor: bg,
         borderRadius: radius.md,
         borderWidth: variant === 'primary' ? 0 : 1,
@@ -80,8 +81,10 @@ export function Button({
         alignItems: 'center',
         justifyContent: 'center',
         minHeight: 48,
-        opacity: off ? 0.5 : 1,
-      }}
+        // Micro-interaction (§42): subtle press feedback for tactile response.
+        opacity: off ? 0.5 : pressed ? 0.85 : 1,
+        transform: [{ scale: pressed && !off ? 0.985 : 1 }],
+      })}
     >
       {busy ? (
         <ActivityIndicator color={fg} />

@@ -558,7 +558,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     width: 18,
     textAlign: 'center',
   },
-  takeawayText: { flex: 1, fontSize: 16, lineHeight: 24, color: '#D3DCE8' },
+  takeawayText: { flex: 1, fontSize: 16, lineHeight: 24, color: c.textPrimary },
   progressBlock: { gap: 8, marginBottom: 4 },
   dots: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
   dot: {
@@ -609,7 +609,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     borderLeftWidth: 3,
     borderLeftColor: c.primary,
   },
-  scheduleText: { fontSize: 14, color: '#CBD5E1', lineHeight: 21 },
+  scheduleText: { fontSize: 14, color: c.textSecondary, lineHeight: 21 },
   flashcard: {
     backgroundColor: c.surfaceElevated,
     borderWidth: 1,
@@ -619,7 +619,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     marginTop: 8,
   },
   flashFront: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
-  flashBack: { fontSize: 14, color: '#CBD5E1', marginTop: 8, lineHeight: 20 },
+  flashBack: { fontSize: 14, color: c.textSecondary, marginTop: 8, lineHeight: 20 },
   flashHint: { fontSize: 12, color: c.textMuted, marginTop: 8 },
   foot: { fontSize: 12, color: c.textMuted, marginTop: 8 },
 });

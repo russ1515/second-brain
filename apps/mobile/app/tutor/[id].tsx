@@ -317,7 +317,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   strategyChipText: { fontSize: 13, color: c.textPrimary, fontWeight: '700' },
   strategyReason: { fontSize: 12, color: c.textSecondary, lineHeight: 17 },
   notice: { backgroundColor: c.surfaceElevated, borderColor: c.primary },
-  noticeText: { color: '#CBD5E1', fontSize: 14, lineHeight: 20 },
+  noticeText: { color: c.textSecondary, fontSize: 14, lineHeight: 20 },
   mine: { backgroundColor: c.surfaceElevated },
   theirs: {},
   metaRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
@@ -329,7 +329,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     letterSpacing: 1,
   },
   voiceTag: { fontSize: 11, color: c.warning },
-  body: { fontSize: 15, color: '#E2E8F0', lineHeight: 23 },
+  body: { fontSize: 15, color: c.textSecondary, lineHeight: 23 },
   citations: {
     marginTop: 10,
     fontSize: 12,

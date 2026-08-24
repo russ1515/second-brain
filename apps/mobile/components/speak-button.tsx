@@ -77,5 +77,5 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     justifyContent: 'center',
   },
   label: { color: c.warning, fontSize: 13, fontWeight: '600' },
-  error: { color: '#FECACA', fontSize: 12, marginTop: 6 },
+  error: { color: c.error, fontSize: 12, marginTop: 6 },
 });

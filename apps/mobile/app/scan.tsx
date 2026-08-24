@@ -191,9 +191,9 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     color: c.textPrimary,
   },
   ok: { backgroundColor: c.successSoft, borderColor: c.success },
-  okTitle: { color: '#D1FAE5', fontSize: 12, fontWeight: '700', letterSpacing: 1 },
+  okTitle: { color: c.success, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
   okBody: { color: c.textPrimary, fontSize: 18, fontWeight: '600', marginTop: 4 },
-  okDetail: { color: '#CBD5E1', fontSize: 13, marginTop: 8, lineHeight: 19 },
+  okDetail: { color: c.textSecondary, fontSize: 13, marginTop: 8, lineHeight: 19 },
   preview: {
     color: c.textSecondary,
     fontSize: 13,

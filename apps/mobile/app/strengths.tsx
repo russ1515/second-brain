@@ -170,5 +170,5 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     padding: 14,
     gap: 10,
   },
-  aiNoteText: { fontSize: 14, color: '#D3DCE8', lineHeight: 21 },
+  aiNoteText: { fontSize: 14, color: c.textPrimary, lineHeight: 21 },
 });

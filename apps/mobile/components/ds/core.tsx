@@ -78,6 +78,7 @@ export function Button({
           paddingHorizontal: pad.h,
           minHeight: 44,
           opacity: off ? 0.5 : pressed ? 0.85 : 1,
+          transform: [{ scale: pressed && !off ? 0.985 : 1 }],
           alignSelf: fullWidth ? 'stretch' : 'flex-start',
         },
       ]}

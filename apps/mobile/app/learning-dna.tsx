@@ -152,7 +152,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   },
   label: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
   badge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
-  badgeText: { fontSize: 10, fontWeight: '800', color: '#FFFFFF', textTransform: 'uppercase' },
+  badgeText: { fontSize: 10, fontWeight: '800', color: c.onColor, textTransform: 'uppercase' },
   summary: { fontSize: 14, color: c.textSecondary, lineHeight: 20 },
   confTrack: { height: 6, borderRadius: 999, backgroundColor: c.border, overflow: 'hidden' },
   confFill: { height: 6, borderRadius: 999 },

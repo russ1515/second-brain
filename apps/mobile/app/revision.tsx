@@ -14,7 +14,7 @@ const grades = (c: ColorScale): { rating: ReviewRating; key: TranslationKey; col
   { rating: 1, key: 'revision.again', color: c.error },
   { rating: 2, key: 'revision.hard', color: c.warning },
   { rating: 3, key: 'revision.good', color: c.success },
-  { rating: 4, key: 'revision.easy', color: '#38BDF8' },
+  { rating: 4, key: 'revision.easy', color: c.info },
 ];
 
 export default function RevisionScreen() {
@@ -149,7 +149,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   card: { minHeight: 200, justifyContent: 'center' },
   front: { fontSize: 20, fontWeight: '600', color: c.textPrimary, lineHeight: 28 },
   divider: { height: 1, backgroundColor: c.border, marginVertical: 16 },
-  back: { fontSize: 17, color: '#CBD5E1', lineHeight: 25 },
+  back: { fontSize: 17, color: c.textSecondary, lineHeight: 25 },
   tapHint: { marginTop: 20, fontSize: 13, color: c.textMuted, textAlign: 'center' },
   grades: { flexDirection: 'row', gap: 8 },
   grade: {
