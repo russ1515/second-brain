@@ -4,8 +4,19 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '../lib/auth-context';
 import { api } from '../lib/client';
 import { useI18n, type TranslationKey } from '../lib/i18n';
-import { darkColors as C, spacing } from '../lib/design/tokens';
-import { AuthButton, AuthField, GlassCard, GlowBackground, LangPill, OtpInput } from '../components/auth/kit';
+import { useTokens } from '../lib/design/theme';
+import { useResponsive } from '../lib/responsive';
+import {
+  AuthButton,
+  AuthField,
+  BrandBadge,
+  GlassCard,
+  GlowBackground,
+  LangPill,
+  OtpInput,
+  PasswordStrength,
+  ThemeToggle,
+} from '../components/auth/kit';
 
 type Mode = 'login' | 'register';
 type Step = 'credentials' | 'otp' | 'twofactor' | 'forgot' | 'forgotSent';
@@ -13,17 +24,20 @@ const RESEND_SECONDS = 30;
 const EXPIRY_SECONDS = 300;
 
 /**
- * Premium sign-in / sign-up (UI/UX Sprint 8 — SaaS-grade). Always-dark
- * glassmorphism over a soft glow, a language pill, autofill-safe inputs, and a
- * fully-localised secure flow: credentials → email OTP (paste, resend countdown,
- * expiration, error/success) ; two-step verification (TOTP / recovery code) ;
- * password reset via OTP. Register/login/2FA are wired to the real auth engine;
- * OTP + reset degrade gracefully where a backend endpoint is not built yet.
+ * Premium authentication (refactor v2) — the first product screen of Second
+ * Brain, as a theme-aware split-screen (brand story left, form right; form-only
+ * on mobile). Reuses the existing auth engine, Mailer/OTP seam and i18n: the
+ * secure flow is credentials → mandatory email OTP → two-step verification
+ * (TOTP / recovery) → protected app; plus OTP-based password reset. The OTP step
+ * offers NO skip — verification is enforced server-side.
  */
 export default function SignInScreen() {
   const { login, register, verifyTwoFactor } = useAuth();
   const { t } = useI18n();
+  const { colors: c, spacing } = useTokens();
+  const { width } = useResponsive();
   const router = useRouter();
+  const split = width >= 768; // desktop/tablet: brand + form side by side
   const fmt = (k: TranslationKey, vars: Record<string, string | number> = {}) =>
     Object.entries(vars).reduce((s, [key, v]) => s.replace(`{${key}}`, String(v)), t(k));
 
@@ -42,7 +56,7 @@ export default function SignInScreen() {
   const [cooldown, setCooldown] = useState(0);
   const [expired, setExpired] = useState(false);
 
-  // Animated fade/slide on mode/step change.
+  // Short fade/slide on mode/step change (respects reduced motion via short dur).
   const anim = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     anim.setValue(0);
@@ -50,7 +64,6 @@ export default function SignInScreen() {
   }, [mode, step, anim]);
   const animStyle = { opacity: anim, transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) }] };
 
-  // Resend countdown + code expiry, active on OTP-bearing steps.
   useEffect(() => {
     if (cooldown <= 0) return;
     const id = setTimeout(() => setCooldown((s) => s - 1), 1000);
@@ -84,9 +97,12 @@ export default function SignInScreen() {
   const verifyOtp = async () => {
     if (expired) { setError(t('auth.expired')); return; }
     setBusy(true); clear();
-    try { await api('/auth/verify-otp', { method: 'POST', body: { code: otp } }); } catch { /* endpoint optional */ }
-    setBusy(false);
-    router.replace('/');
+    try {
+      await api('/auth/verify-otp', { method: 'POST', body: { code: otp } });
+      router.replace('/');
+    } catch (e) {
+      setError((e as Error).message || t('auth.otpError'));
+    } finally { setBusy(false); }
   };
   const resend = async () => {
     clear();
@@ -118,112 +134,201 @@ export default function SignInScreen() {
   };
 
   const resendRow = (
-    <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6 }}>
-      <Text style={{ color: C.textMuted, fontSize: 13 }}>{t('auth.notReceived')}</Text>
+    <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
+      <Text style={{ color: c.textMuted, fontSize: 13 }}>{t('auth.notReceived')}</Text>
       {cooldown > 0 ? (
-        <Text style={{ color: C.textMuted, fontSize: 13 }}>{fmt('auth.resendIn', { n: cooldown })}</Text>
+        <Text style={{ color: c.textMuted, fontSize: 13 }}>{fmt('auth.resendIn', { n: cooldown })}</Text>
       ) : (
-        <Pressable onPress={resend}><Text style={{ color: C.aiAccent, fontSize: 13, fontWeight: '700' }}>{t('auth.resend')}</Text></Pressable>
+        <Pressable onPress={resend} accessibilityRole="button"><Text style={{ color: c.primary, fontSize: 13, fontWeight: '700' }}>{t('auth.resend')}</Text></Pressable>
       )}
     </View>
+  );
+
+  const form = (
+    <GlassCard>
+      <Animated.View style={animStyle}>
+        {step === 'credentials' ? (
+          <View style={{ gap: spacing.md }}>
+            <View style={{ gap: 2 }}>
+              <Text style={{ color: c.textPrimary, fontSize: 22, fontWeight: '800' }}>{mode === 'register' ? t('auth.createAccount') : t('auth.welcomeBack')}</Text>
+              <Text style={{ color: c.textMuted, fontSize: 13 }}>{mode === 'register' ? t('auth.signUpSubtitle') : t('auth.signInSubtitle')}</Text>
+            </View>
+            {mode === 'register' ? <AuthField label={t('auth.name')} placeholder={t('auth.namePh')} value={name} onChangeText={setName} autoCapitalize="words" /> : null}
+            <AuthField label={t('auth.email')} placeholder={t('auth.emailPh')} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" autoComplete="email" />
+            <AuthField label={t('auth.password')} placeholder="••••••••" value={password} onChangeText={setPassword} secureTextEntry autoComplete={mode === 'register' ? 'new-password' : 'password'} />
+            {mode === 'register' ? <PasswordStrength password={password} /> : null}
+            {mode === 'login' ? (
+              <Pressable onPress={() => { clear(); setStep('forgot'); }} style={{ alignSelf: 'flex-end' }} accessibilityRole="button">
+                <Text style={{ color: c.primary, fontSize: 13, fontWeight: '600' }}>{t('auth.forgot')}</Text>
+              </Pressable>
+            ) : null}
+            <AuthButton label={mode === 'register' ? t('auth.createBtn') : t('auth.signIn')} onPress={submitCredentials} busy={busy} disabled={!email.trim() || !password} />
+            <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <Text style={{ color: c.textMuted, fontSize: 14 }}>{mode === 'register' ? t('auth.haveAccount') : t('auth.noAccount')}</Text>
+              <Pressable onPress={toggleMode} accessibilityRole="button">
+                <Text style={{ color: c.primary, fontSize: 14, fontWeight: '800' }}>{mode === 'register' ? t('auth.signIn') : t('auth.createAccount')}</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
+        {step === 'otp' ? (
+          <View style={{ gap: spacing.md }}>
+            <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800' }}>{t('auth.otpTitle')}</Text>
+            <Text style={{ color: c.textSecondary, fontSize: 14 }}>{fmt('auth.otpSubtitle', { email: maskEmail(email.trim()) })}</Text>
+            <OtpInput value={otp} onChange={setOtp} />
+            <AuthButton label={t('auth.verify')} onPress={verifyOtp} busy={busy} disabled={otp.length < 6} />
+            {resendRow}
+            {/* No skip: OTP verification is mandatory and enforced server-side (§2). */}
+            <Pressable onPress={() => { clear(); setStep('credentials'); }} style={{ alignSelf: 'center' }} accessibilityRole="button">
+              <Text style={{ color: c.textMuted, fontSize: 13 }}>{t('auth.back')}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {step === 'twofactor' ? (
+          <View style={{ gap: spacing.md }}>
+            <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800' }}>{t('auth.2faTitle')}</Text>
+            <Text style={{ color: c.textSecondary, fontSize: 14 }}>{t('auth.2faSubtitle')}</Text>
+            {useRecovery ? (
+              <AuthField label={t('auth.recoveryPh')} placeholder="xxxx-xxxx" value={otp} onChangeText={setOtp} autoCapitalize="none" />
+            ) : (
+              <OtpInput value={otp} onChange={setOtp} />
+            )}
+            <AuthButton label={t('auth.verify')} onPress={verify2fa} busy={busy} disabled={useRecovery ? otp.trim().length < 4 : otp.length < 6} />
+            <Pressable onPress={() => { setUseRecovery((v) => !v); setOtp(''); }} style={{ alignSelf: 'center' }} accessibilityRole="button">
+              <Text style={{ color: c.primary, fontSize: 13, fontWeight: '700' }}>{useRecovery ? t('auth.2faTitle') : t('auth.useRecovery')}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {step === 'forgot' ? (
+          <View style={{ gap: spacing.md }}>
+            <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800' }}>{t('auth.forgotTitle')}</Text>
+            <Text style={{ color: c.textSecondary, fontSize: 14 }}>{t('auth.forgotSubtitle')}</Text>
+            <AuthField label={t('auth.email')} placeholder={t('auth.emailPh')} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
+            <AuthButton label={t('auth.sendCode')} onPress={sendReset} busy={busy} disabled={!email.trim()} />
+            <Pressable onPress={() => { clear(); setStep('credentials'); }} style={{ alignSelf: 'center' }} accessibilityRole="button"><Text style={{ color: c.textMuted, fontSize: 13 }}>{t('auth.back')}</Text></Pressable>
+          </View>
+        ) : null}
+
+        {step === 'forgotSent' ? (
+          <View style={{ gap: spacing.md }}>
+            <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800' }}>{t('auth.resetTitle')}</Text>
+            <Text style={{ color: c.textSecondary, fontSize: 14 }}>{t('auth.resetSubtitle')}</Text>
+            <OtpInput value={otp} onChange={setOtp} />
+            <AuthField label={t('auth.newPassword')} placeholder="••••••••" value={newPassword} onChangeText={setNewPassword} secureTextEntry autoComplete="new-password" />
+            <PasswordStrength password={newPassword} />
+            <AuthButton label={t('auth.reset')} onPress={doReset} busy={busy} disabled={otp.length < 6 || newPassword.length < 8} />
+            {resendRow}
+            <Pressable onPress={() => { clear(); setStep('credentials'); }} style={{ alignSelf: 'center' }} accessibilityRole="button"><Text style={{ color: c.textMuted, fontSize: 13 }}>{t('auth.back')}</Text></Pressable>
+          </View>
+        ) : null}
+
+        {expired && (step === 'otp' || step === 'forgotSent') ? <Text style={{ color: c.warning, fontSize: 13, marginTop: 6, textAlign: 'center' }}>{t('auth.expired')}</Text> : null}
+        {error ? (
+          <View style={{ marginTop: 8, gap: 6, alignItems: 'center' }}>
+            <Text style={{ color: c.error, fontSize: 13, textAlign: 'center' }}>{error}</Text>
+          </View>
+        ) : null}
+        {info ? <Text style={{ color: c.success, fontSize: 13, marginTop: 8, textAlign: 'center' }}>{info}</Text> : null}
+      </Animated.View>
+    </GlassCard>
   );
 
   return (
     <GlowBackground>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={{ flexGrow: 1, padding: spacing.lg, justifyContent: 'center' }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: spacing.lg }}>
-            <LangPill />
-          </View>
-
-          <View style={{ alignItems: 'center', gap: 8, marginBottom: spacing.lg }}>
-            <Text style={{ color: C.aiAccent, fontSize: 13, fontWeight: '800', letterSpacing: 2, textTransform: 'uppercase' }}>Second Brain</Text>
-            <Text style={{ color: C.textPrimary, fontSize: 30, fontWeight: '800', textAlign: 'center', lineHeight: 38 }}>{t('auth.headline')}</Text>
-            <Text style={{ color: C.textSecondary, fontSize: 15, textAlign: 'center', maxWidth: 360, lineHeight: 22 }}>{t('auth.subtitle')}</Text>
-          </View>
-
-          <GlassCard>
-            <Animated.View style={animStyle}>
-              {step === 'credentials' ? (
-                <View style={{ gap: spacing.md }}>
-                  <Text style={{ color: C.textPrimary, fontSize: 20, fontWeight: '800' }}>{mode === 'register' ? t('auth.createAccount') : t('auth.signIn')}</Text>
-                  {mode === 'register' ? <AuthField label={t('auth.name')} placeholder={t('auth.namePh')} value={name} onChangeText={setName} autoCapitalize="words" /> : null}
-                  <AuthField label={t('auth.email')} placeholder={t('auth.emailPh')} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" autoComplete="email" />
-                  <AuthField label={t('auth.password')} placeholder="••••••••" value={password} onChangeText={setPassword} secureTextEntry autoComplete={mode === 'register' ? 'new-password' : 'password'} />
-                  {mode === 'login' ? (
-                    <Pressable onPress={() => { clear(); setStep('forgot'); }} style={{ alignSelf: 'flex-end' }}>
-                      <Text style={{ color: C.aiAccent, fontSize: 13, fontWeight: '600' }}>{t('auth.forgot')}</Text>
-                    </Pressable>
-                  ) : null}
-                  <AuthButton label={mode === 'register' ? t('auth.createBtn') : t('auth.signIn')} onPress={submitCredentials} busy={busy} disabled={!email.trim() || !password} />
-                </View>
-              ) : null}
-
-              {step === 'otp' ? (
-                <View style={{ gap: spacing.md }}>
-                  <Text style={{ color: C.textPrimary, fontSize: 20, fontWeight: '800' }}>{t('auth.otpTitle')}</Text>
-                  <Text style={{ color: C.textSecondary, fontSize: 14 }}>{fmt('auth.otpSubtitle', { email: email.trim() })}</Text>
-                  <OtpInput value={otp} onChange={setOtp} />
-                  <AuthButton label={t('auth.verify')} onPress={verifyOtp} busy={busy} disabled={otp.length < 6} />
-                  {resendRow}
-                  <Pressable onPress={() => router.replace('/')} style={{ alignSelf: 'center' }}><Text style={{ color: C.textMuted, fontSize: 13 }}>{t('auth.skip')}</Text></Pressable>
-                </View>
-              ) : null}
-
-              {step === 'twofactor' ? (
-                <View style={{ gap: spacing.md }}>
-                  <Text style={{ color: C.textPrimary, fontSize: 20, fontWeight: '800' }}>{t('auth.2faTitle')}</Text>
-                  <Text style={{ color: C.textSecondary, fontSize: 14 }}>{t('auth.2faSubtitle')}</Text>
-                  {useRecovery ? (
-                    <AuthField label={t('auth.recoveryPh')} placeholder="xxxx-xxxx" value={otp} onChangeText={setOtp} autoCapitalize="none" />
-                  ) : (
-                    <OtpInput value={otp} onChange={setOtp} />
-                  )}
-                  <AuthButton label={t('auth.verify')} onPress={verify2fa} busy={busy} disabled={useRecovery ? otp.trim().length < 4 : otp.length < 6} />
-                  <Pressable onPress={() => { setUseRecovery((v) => !v); setOtp(''); }} style={{ alignSelf: 'center' }}>
-                    <Text style={{ color: C.aiAccent, fontSize: 13, fontWeight: '700' }}>{useRecovery ? t('auth.2faTitle') : t('auth.useRecovery')}</Text>
-                  </Pressable>
-                </View>
-              ) : null}
-
-              {step === 'forgot' ? (
-                <View style={{ gap: spacing.md }}>
-                  <Text style={{ color: C.textPrimary, fontSize: 20, fontWeight: '800' }}>{t('auth.forgotTitle')}</Text>
-                  <Text style={{ color: C.textSecondary, fontSize: 14 }}>{t('auth.forgotSubtitle')}</Text>
-                  <AuthField label={t('auth.email')} placeholder={t('auth.emailPh')} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
-                  <AuthButton label={t('auth.sendCode')} onPress={sendReset} busy={busy} disabled={!email.trim()} />
-                  <Pressable onPress={() => { clear(); setStep('credentials'); }} style={{ alignSelf: 'center' }}><Text style={{ color: C.textMuted, fontSize: 13 }}>{t('auth.back')}</Text></Pressable>
-                </View>
-              ) : null}
-
-              {step === 'forgotSent' ? (
-                <View style={{ gap: spacing.md }}>
-                  <Text style={{ color: C.textPrimary, fontSize: 20, fontWeight: '800' }}>{t('auth.resetTitle')}</Text>
-                  <Text style={{ color: C.textSecondary, fontSize: 14 }}>{t('auth.resetSubtitle')}</Text>
-                  <OtpInput value={otp} onChange={setOtp} />
-                  <AuthField label={t('auth.newPassword')} placeholder="••••••••" value={newPassword} onChangeText={setNewPassword} secureTextEntry autoComplete="new-password" />
-                  <AuthButton label={t('auth.reset')} onPress={doReset} busy={busy} disabled={otp.length < 6 || newPassword.length < 8} />
-                  {resendRow}
-                  <Pressable onPress={() => { clear(); setStep('credentials'); }} style={{ alignSelf: 'center' }}><Text style={{ color: C.textMuted, fontSize: 13 }}>{t('auth.back')}</Text></Pressable>
-                </View>
-              ) : null}
-
-              {expired && (step === 'otp' || step === 'forgotSent') ? <Text style={{ color: C.warning, fontSize: 13, marginTop: 6, textAlign: 'center' }}>{t('auth.expired')}</Text> : null}
-              {error ? <Text style={{ color: C.error, fontSize: 13, marginTop: 8, textAlign: 'center' }}>{error}</Text> : null}
-              {info ? <Text style={{ color: C.success, fontSize: 13, marginTop: 8, textAlign: 'center' }}>{info}</Text> : null}
-            </Animated.View>
-          </GlassCard>
-
-          {step === 'credentials' ? (
-            <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: spacing.lg }}>
-              <Text style={{ color: C.textMuted, fontSize: 14 }}>{mode === 'register' ? t('auth.haveAccount') : t('auth.noAccount')}</Text>
-              <Pressable onPress={toggleMode} accessibilityRole="button">
-                <Text style={{ color: C.aiAccent, fontSize: 14, fontWeight: '800' }}>{mode === 'register' ? t('auth.signIn') : t('auth.createAccount')}</Text>
-              </Pressable>
+        {split ? (
+          <View style={{ flex: 1, flexDirection: 'row' }}>
+            {/* Left — brand experience (§7-9) */}
+            <View style={{ width: '46%', padding: spacing.xl, justifyContent: 'space-between' }}>
+              <View style={{ flexDirection: 'row' }}><ThemeToggle /></View>
+              <View style={{ gap: spacing.lg, maxWidth: 460 }}>
+                <Text style={{ color: c.primary, fontSize: 13, fontWeight: '800', letterSpacing: 2, textTransform: 'uppercase' }}>Second Brain</Text>
+                <Text style={{ color: c.textPrimary, fontSize: 40, fontWeight: '800', lineHeight: 48 }}>{t('auth.brandTitle')}</Text>
+                <Text style={{ color: c.textSecondary, fontSize: 16, lineHeight: 24 }}>{t('auth.brandSubtitle')}</Text>
+                <AuthScene />
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                <BrandBadge icon="🌍" label={t('auth.badgeLangs')} />
+                <BrandBadge icon="🤖" label={t('auth.badgeModels')} />
+                <BrandBadge icon="🧠" label={t('auth.badgeGraph')} />
+              </View>
             </View>
-          ) : null}
-        </ScrollView>
+            {/* Right — form */}
+            <View style={{ flex: 1, borderLeftWidth: 1, borderLeftColor: c.borderSubtle }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.lg }}>
+                <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '800' }}>🧠 Second Brain</Text>
+                <LangPill />
+              </View>
+              <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: spacing.lg }}>
+                {form}
+              </ScrollView>
+            </View>
+          </View>
+        ) : (
+          <ScrollView contentContainerStyle={{ flexGrow: 1, padding: spacing.lg, justifyContent: 'center' }}>
+            {/* Mobile — compact header + form only (§18) */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.lg }}>
+              <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '800' }}>🧠 Second Brain</Text>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <LangPill />
+                <ThemeToggle />
+              </View>
+            </View>
+            <View style={{ alignItems: 'center', gap: 8, marginBottom: spacing.lg }}>
+              <Text style={{ color: c.textPrimary, fontSize: 26, fontWeight: '800', textAlign: 'center', lineHeight: 32 }}>{t('auth.brandTitle')}</Text>
+              <Text style={{ color: c.textSecondary, fontSize: 14, textAlign: 'center', maxWidth: 340, lineHeight: 20 }}>{t('auth.brandSubtitle')}</Text>
+            </View>
+            {form}
+            <View style={{ flexDirection: 'row', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: spacing.lg }}>
+              <BrandBadge icon="🌍" label={t('auth.badgeLangs')} />
+              <BrandBadge icon="🤖" label={t('auth.badgeModels')} />
+              <BrandBadge icon="🧠" label={t('auth.badgeGraph')} />
+            </View>
+          </ScrollView>
+        )}
       </KeyboardAvoidingView>
     </GlowBackground>
+  );
+}
+
+/** Partially mask an email (a***@domain) for the OTP subtitle. */
+function maskEmail(email: string): string {
+  const [user, domain] = email.split('@');
+  if (!domain) return email;
+  const shown = user.slice(0, 1);
+  return `${shown}${'*'.repeat(Math.max(1, user.length - 1))}@${domain}`;
+}
+
+/** Lightweight product illustration (§8): a question, the teacher's reply, and
+ *  a few concept nodes — suggesting the system learns with the user. Static,
+ *  no fake app, no business engine. */
+function AuthScene() {
+  const { colors: c, radius } = useTokens();
+  const { t } = useI18n();
+  const chip = (label: string) => (
+    <View key={label} style={{ borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.full, paddingVertical: 5, paddingHorizontal: 10 }}>
+      <Text style={{ color: c.textSecondary, fontSize: 12, fontWeight: '600' }}>{label}</Text>
+    </View>
+  );
+  return (
+    <View style={{ gap: 10, padding: 16, borderRadius: radius.lg, borderWidth: 1, borderColor: c.borderSubtle, backgroundColor: c.surface }}>
+      <View style={{ alignSelf: 'flex-end', maxWidth: '85%', backgroundColor: c.primary, borderRadius: radius.lg, paddingVertical: 8, paddingHorizontal: 12 }}>
+        <Text style={{ color: c.onPrimary, fontSize: 13 }}>{t('auth.sceneQuestion')}</Text>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, maxWidth: '90%' }}>
+        <Text style={{ fontSize: 18 }}>👨‍🏫</Text>
+        <View style={{ flex: 1, backgroundColor: c.surfaceElevated, borderRadius: radius.lg, paddingVertical: 8, paddingHorizontal: 12 }}>
+          <Text style={{ color: c.textPrimary, fontSize: 13, lineHeight: 19 }}>{t('auth.sceneAnswer')}</Text>
+        </View>
+      </View>
+      <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
+        {chip(`🧩 ${t('auth.sceneConcept')}`)}
+        {chip(`🔗 ${t('auth.sceneRelation')}`)}
+        {chip(`⭐ ${t('auth.sceneMastery')}`)}
+      </View>
+    </View>
   );
 }
