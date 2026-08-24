@@ -249,6 +249,12 @@ export default function LibraryDocumentScreen() {
         <MetaRow label={t('lib.m.size')} value={`${doc.charCount.toLocaleString()} ${t('lib.chars')}`} />
       </Card>
 
+      {/* One-click learning (§13): teach directly from this document. */}
+      <Button
+        label={`👨‍🏫 ${t('lib.learnWithTeacher')}`}
+        onPress={() => router.push({ pathname: '/tutor', params: { docId: doc.id, title: doc.title, mode: 'explain' } })}
+      />
+
       {/* AI summary */}
       <Section title={`🤖 ${t('lib.summary')}`}>
         {doc.summary ? (

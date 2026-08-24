@@ -12,13 +12,14 @@ import type {
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
 import { useAuth } from '../../lib/auth-context';
-import { useI18n } from '../../lib/i18n';
+import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { useTheme, useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
-import { Button, Card } from '../../components/ds/core';
+import { Badge, Button, Card } from '../../components/ds/core';
+import { categoryLabel } from '../../lib/onboarding/catalog';
+import { LocalePicker } from '../../components/locale-picker';
 import { clearAvatarPhoto, loadAvatarPhoto, pickPhoto, saveAvatarPhoto } from '../../lib/profile/photo';
-import { CognitiveSummary, LanguagesCard, ProfilePhoto, SystemConfig, TeacherConfig } from '../../components/profile/components';
-import { AcademicPathCard, GoalsCard, IdentityFull, LearnedLanguages } from '../../components/profile/kyc';
+import { CognitiveSummary, ProfilePhoto, SystemConfig, TeacherConfig } from '../../components/profile/components';
 
 /**
  * 👤 Profil & KYC universel (UI/UX Sprint 7 unified).
@@ -45,10 +46,6 @@ export default function ProfileScreen() {
   const [stats, setStats] = useState<ReviewStats | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [first, setFirst] = useState('');
-  const [last, setLast] = useState('');
-  const [birth, setBirth] = useState('');
-  const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
     let cancel = false;
@@ -60,13 +57,7 @@ export default function ProfileScreen() {
         api<ReviewStats>('/review/stats'),
       ]);
       if (cancel) return;
-      if (k.status === 'fulfilled') {
-        setKyc(k.value);
-        const id = k.value.answers.identity ?? {};
-        setFirst(id.firstName ?? (user?.displayName?.split(' ')[0] ?? ''));
-        setLast(id.lastName ?? (user?.displayName?.split(' ').slice(1).join(' ') ?? ''));
-        setBirth((id as { birthDate?: string }).birthDate ?? '');
-      }
+      if (k.status === 'fulfilled') setKyc(k.value);
       if (t.status === 'fulfilled') setTwin(t.value);
       if (s.status === 'fulfilled') setSw(s.value);
       if (r.status === 'fulfilled') setStats(r.value);
@@ -94,15 +85,6 @@ export default function ProfileScreen() {
     [refreshOnboarding],
   );
 
-  /** Debounced text-field patch. */
-  const debounced = (key: string, fn: () => void) => {
-    if (timers.current[key]) clearTimeout(timers.current[key]);
-    timers.current[key] = setTimeout(fn, 700);
-  };
-  const onFirst = (v: string) => { setFirst(v); debounced('first', () => patch('identity', { firstName: v })); };
-  const onLast = (v: string) => { setLast(v); debounced('last', () => patch('identity', { lastName: v })); };
-  const onBirth = (v: string) => { setBirth(v); debounced('birth', () => patch('identity', { birthDate: v } as OnboardingAnswers['identity'])); };
-
   const onPick = async (source: 'camera' | 'gallery') => {
     setBusy(true);
     const res = await pickPhoto(source);
@@ -112,8 +94,16 @@ export default function ProfileScreen() {
   const onChooseAvatar = (emoji: string) => { setPhoto(null); void clearAvatarPhoto(); void patch('identity', { avatarEmoji: emoji }); };
   const onRemove = () => { setPhoto(null); void clearAvatarPhoto(); void patch('identity', { avatarEmoji: '' }); };
 
-  const name = [first, last].filter(Boolean).join(' ');
+  const name = [identity.firstName, identity.lastName].filter(Boolean).join(' ');
   const strengths = (sw?.strengths ?? []).map((s) => s.name);
+  // KYC completeness (§20): the core answers that tailor the twin/teacher.
+  const kycComplete = Boolean(identity.firstName && education?.category && goals.length > 0);
+  const langLine = languages.native
+    ? `${languages.native}${languages.study ? ` → ${languages.study}` : ''}`
+    : '—';
+  const pathLine =
+    (education?.category ? t(categoryLabel(education.category) as TranslationKey) : '—') +
+    (education?.field ? ` — ${education.field}` : '');
 
   const grid: ViewStyle = wide ? { flexDirection: 'row', flexWrap: 'wrap', gap: 14 } : { gap: 16 };
   const cell: ViewStyle = wide ? { width: '48%', flexGrow: 1 } : {};
@@ -127,23 +117,31 @@ export default function ProfileScreen() {
         <Text style={{ color: c.textMuted, fontSize: 13 }}>{user?.email ?? ''}</Text>
       </View>
 
-      {/* 2×2 (desktop) / stacked (mobile) */}
+      {/* Compact KYC card (§20): a summary + a button into the KYC flow — never a
+          massive form in the profile page. Editing happens in the onboarding flow. */}
+      <Card>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+          <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: '800' }}>{t('profile.kyc.title')}</Text>
+          <Badge tone={kycComplete ? 'success' : 'warning'} label={kycComplete ? t('profile.kyc.complete') : t('profile.kyc.incomplete')} />
+        </View>
+        <Text style={{ color: c.textMuted, fontSize: 13, marginBottom: 12 }}>{t('profile.kyc.detail')}</Text>
+        <View style={{ gap: 8, marginBottom: 14 }}>
+          <SummaryRow c={c} label={t('profile.kyc.name')} value={name || (user?.email?.split('@')[0] ?? '—')} />
+          <SummaryRow c={c} label={t('profile.kyc.path')} value={pathLine} />
+          <SummaryRow c={c} label={t('profile.kyc.languagesRow')} value={langLine} />
+          <SummaryRow c={c} label={t('profile.kyc.goalsRow')} value={`${goals.length} ${t('profile.kyc.goalsN')}`} />
+        </View>
+        <Button label={t('profile.kyc.verify')} variant="secondary" icon="→" onPress={() => router.push('/onboarding')} />
+      </Card>
+
+      {/* Interface-language selector (§21): premium, accessible, drives the whole
+          UI language via i18n setLocale (persisted). */}
+      <Card>
+        <LocalePicker />
+      </Card>
+
+      {/* Kept in-profile: AI-teacher posture + the read-only cognitive summary. */}
       <View style={grid}>
-        <View style={cell}>
-          <IdentityFull firstName={first} lastName={last} birthDate={birth} category={education?.category as LearningCategory | undefined}
-            onFirst={onFirst} onLast={onLast} onBirth={onBirth} onCategory={(v) => patch('education', { category: v })} />
-        </View>
-        <View style={cell}>
-          <AcademicPathCard education={education ?? {}} onChange={(k, v) => patch('education', { [k]: v } as OnboardingAnswers['education'])} />
-        </View>
-        <View style={cell}>
-          <LanguagesCard native={languages.native} study={languages.study} mobility={languages.studyingInForeignLanguage ?? false} onToggleMobility={(v) => patch('languages', { studyingInForeignLanguage: v })} />
-          <View style={{ height: 14 }} />
-          <Card><LearnedLanguages languages={(languages.others ?? []) as string[]} onChange={(v) => patch('languages', { others: v })} /></Card>
-        </View>
-        <View style={cell}>
-          <GoalsCard goals={goals} onToggle={(v) => patch('goals', v)} />
-        </View>
         <View style={cell}>
           <TeacherConfig tone={teacher.tone} explanations={teacher.explanations}
             onTone={(v: NonNullable<KycTeacher['tone']>) => patch('teacher', { tone: v })}
@@ -164,9 +162,21 @@ export default function ProfileScreen() {
       </Card>
 
       <Text style={{ color: c.textMuted, fontSize: 12, textAlign: 'center', marginTop: 4 }}>
-        Tes modifications mettent aussitôt à jour ton Professeur IA et ton Digital Twin dans toute l’app.
+        {t('profile.footer')}
       </Text>
     </ScrollView>
+  );
+}
+
+/** One read-only "label — value" line inside the compact KYC card. */
+function SummaryRow({ c, label, value }: { c: { textMuted: string; textPrimary: string }; label: string; value: string }) {
+  return (
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
+      <Text style={{ color: c.textMuted, fontSize: 13 }}>{label}</Text>
+      <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: '600', flexShrink: 1, textAlign: 'right' }} numberOfLines={1}>
+        {value}
+      </Text>
+    </View>
   );
 }
 

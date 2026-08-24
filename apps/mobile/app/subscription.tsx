@@ -11,7 +11,16 @@ import { api } from '../lib/client';
 import { useTokens } from '../lib/design/theme';
 import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
+import { useResponsive } from '../lib/responsive';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
+import { Badge } from '../components/ds/core';
+
+/** Humanize a feature key (`voice_shadowing` → `Voice shadowing`) for the plan
+ *  comparison list. Feature keys are capability ids, not translated copy. */
+function humanize(key: string): string {
+  const s = key.replace(/[_-]+/g, ' ').trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
 /** Subscription & billing (Sprint 8.1 + 8.2). Choosing a paid plan starts a
  *  hosted checkout; the fake dev provider completes it inline (real providers
@@ -21,6 +30,8 @@ export default function SubscriptionScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
+  const { width } = useResponsive();
+  const wide = width >= 900;
   const [plans, setPlans] = useState<PlanView[] | null>(null);
   const [current, setCurrent] = useState<SubscriptionView | null>(null);
   const [invoices, setInvoices] = useState<InvoiceView[]>([]);
@@ -121,25 +132,48 @@ export default function SubscriptionScreen() {
         </Card>
       ) : null}
 
-      {plans?.map((p) => {
-        const active = current?.planSlug === p.slug;
-        return (
-          <Card key={p.id} style={active ? styles.activeCard : undefined}>
-            <View style={styles.planHead}>
-              <Text style={styles.planName}>{p.name}</Text>
-              <Text style={styles.audience}>{t(`sub.audience.${p.audience}` as TranslationKey)}</Text>
-            </View>
-            <Text style={styles.price}>{t('sub.pricingSoon')}</Text>
-            <Button
-              label={active ? t('sub.currentPlan') : t('sub.choose')}
-              variant={active ? 'ghost' : 'primary'}
-              disabled={active || busy !== null}
-              busy={busy === p.slug}
-              onPress={() => choose(p.slug)}
-            />
-          </Card>
-        );
-      })}
+      {/* Plan cards (§4): sorted by tier, side-by-side on wide screens, with the
+          mid paid tier flagged Popular, real price when set, and a feature list
+          for comparison. Prices/quotas come from the backend — nothing frozen. */}
+      <View style={wide ? styles.planGrid : { gap: 12 }}>
+        {[...(plans ?? [])].sort((a, b) => a.tier - b.tier).map((p) => {
+          const active = current?.planSlug === p.slug;
+          const popular = p.slug === 'pro';
+          const feats = Object.entries(p.features).filter(([, on]) => on).map(([k]) => k).slice(0, 6);
+          const priceLabel =
+            p.priceMonthly === null
+              ? p.tier === 0 ? t('sub.free') : t('sub.pricingSoon')
+              : `${(p.priceMonthly / 100).toFixed(0)} ${p.currency.toUpperCase()}${t('sub.perMonth')}`;
+          return (
+            <Card key={p.id} style={StyleSheet.flatten([wide ? styles.planCol : undefined, active ? styles.activeCard : popular ? styles.popularCard : undefined])}>
+              <View style={styles.planHead}>
+                <Text style={styles.planName}>{p.name}</Text>
+                {popular ? <Badge tone="ai" label={t('sub.popular')} /> : (
+                  <Text style={styles.audience}>{t(`sub.audience.${p.audience}` as TranslationKey)}</Text>
+                )}
+              </View>
+              <Text style={styles.price}>{priceLabel}</Text>
+              {feats.length ? (
+                <View style={styles.feats}>
+                  {feats.map((f) => (
+                    <View key={f} style={styles.featRow}>
+                      <Text style={styles.featTick}>✓</Text>
+                      <Text style={styles.featText} numberOfLines={1}>{humanize(f)}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+              <Button
+                label={active ? t('sub.currentPlan') : t('sub.choose')}
+                variant={active ? 'ghost' : 'primary'}
+                disabled={active || busy !== null}
+                busy={busy === p.slug}
+                onPress={() => choose(p.slug)}
+              />
+            </Card>
+          );
+        })}
+      </View>
 
       <Text style={styles.section}>{t('sub.invoices')}</Text>
       {invoices.length === 0 ? (
@@ -174,6 +208,13 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   currentPlan: { fontSize: 22, fontWeight: '800', color: c.textPrimary },
   currentStatus: { fontSize: 13, color: c.textSecondary, textTransform: 'capitalize', marginBottom: 4 },
   activeCard: { borderColor: c.primary },
+  popularCard: { borderColor: c.aiAccent },
+  planGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'stretch' },
+  planCol: { flexGrow: 1, flexBasis: '30%', minWidth: 200 },
+  feats: { gap: 6, marginBottom: 12 },
+  featRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  featTick: { color: c.success, fontSize: 13, fontWeight: '800' },
+  featText: { color: c.textSecondary, fontSize: 13, flexShrink: 1 },
   planHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
   planName: { fontSize: 17, fontWeight: '700', color: c.textPrimary },
   audience: { fontSize: 11, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
