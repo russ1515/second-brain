@@ -19,7 +19,7 @@
       "name": "mobile-web",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@second-brain/mobile", "web"],
-      "port": 8081,
+      "port": 8082,
       "autoPort": false
     }
   ]
