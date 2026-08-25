@@ -26,6 +26,15 @@ function useRTL(): boolean {
   return RTL_LOCALES.has(locale as string);
 }
 
+/** SaaS-desktop content width — wide enough to fill large screens without
+ *  over-stretching lines (≈ Tailwind max-w-7xl, room to breathe up to 1440). */
+const CONTENT_MAX = 1280;
+/** Responsive gutter, mirroring `px-4 sm:px-6 lg:px-8`. */
+function useGutter(): number {
+  const { width } = useResponsive();
+  return width >= 1024 ? 32 : width >= 640 ? 24 : 16;
+}
+
 /** Respect the OS "reduce motion" setting on web; assume motion allowed elsewhere. */
 function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
@@ -72,6 +81,7 @@ export function LandingPage() {
     >
       <Header onNav={scrollTo} />
       <Hero onStart={undefined} onDiscover={() => scrollTo('features')} />
+      <SignalsBand />
 
       <Anchored id="features" onAnchor={onAnchor}><Showcase /></Anchored>
       <Comparison />
@@ -105,10 +115,11 @@ function useGo() {
 
 function Shell({ children, tone }: { children: ReactNode; tone?: 'alt' }) {
   const { colors: c } = useTokens();
-  const { maxContentWidth } = useResponsive();
+  const { width } = useResponsive();
+  const gutter = useGutter();
   return (
     <View style={{ width: '100%', backgroundColor: tone === 'alt' ? c.surfaceSunken : 'transparent' }}>
-      <View style={{ maxWidth: maxContentWidth, width: '100%', alignSelf: 'center', paddingHorizontal: 20, paddingVertical: 56 }}>
+      <View style={{ maxWidth: CONTENT_MAX, width: '100%', alignSelf: 'center', paddingHorizontal: gutter, paddingVertical: width >= 900 ? 72 : 48 }}>
         {children}
       </View>
     </View>
@@ -136,15 +147,6 @@ function Chip({ label }: { label: string }) {
   return (
     <View style={{ borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.full, paddingVertical: 8, paddingHorizontal: 14 }}>
       <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: '600' }}>{label}</Text>
-    </View>
-  );
-}
-
-function Glass({ children, style }: { children: ReactNode; style?: ViewStyle }) {
-  const { colors: c, radius } = useTokens();
-  return (
-    <View style={[{ borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.lg, padding: 18, gap: 8 }, style]}>
-      {children}
     </View>
   );
 }
@@ -198,7 +200,8 @@ function GhostCta({ label, onPress }: { label: string; onPress?: () => void }) {
 
 function Header({ onNav }: { onNav: (id: string) => void }) {
   const { colors: c } = useTokens();
-  const { width, maxContentWidth } = useResponsive();
+  const { width } = useResponsive();
+  const gutter = useGutter();
   const { t } = useI18n();
   const go = useGo();
   const wide = width >= 900;
@@ -212,7 +215,7 @@ function Header({ onNav }: { onNav: (id: string) => void }) {
   ];
   return (
     <View style={[{ width: '100%', backgroundColor: c.background, borderBottomWidth: 1, borderBottomColor: c.borderSubtle, zIndex: 50 }, webOnly({ position: 'sticky', top: 0, backdropFilter: 'saturate(140%) blur(8px)' })]}>
-      <View style={{ maxWidth: maxContentWidth, width: '100%', alignSelf: 'center', paddingHorizontal: wide ? 20 : 12, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: wide ? 16 : 6 }}>
+      <View style={{ maxWidth: CONTENT_MAX, width: '100%', alignSelf: 'center', paddingHorizontal: wide ? gutter : 12, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: wide ? 16 : 6 }}>
         <View style={{ flexShrink: 1 }}>
           <Text numberOfLines={1} style={{ color: c.aiAccent, fontSize: wide ? 16 : 15, fontWeight: '900', letterSpacing: 0.3 }}>🧠 {t(k('landing.brand'))}</Text>
           {wide ? <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: '600' }}>{t(k('landing.signature'))}</Text> : null}
@@ -247,42 +250,45 @@ function Hero({ onDiscover }: { onStart?: () => void; onDiscover: () => void }) 
   const rtl = useRTL();
   const wide = width >= 900;
   const heroAlign = wide ? (rtl ? 'right' : 'left') : 'center';
-  const promises = ['landing.hero.promise1', 'landing.hero.promise2', 'landing.hero.promise3', 'landing.hero.promise4'];
+  const gutter = useGutter();
+  const reassure = [1, 2, 3, 4].map((n) => t(k(`landing.hero.reassure${n}`)));
   return (
     <View style={{ width: '100%', overflow: 'hidden' }}>
       {/* ambient glow */}
-      <View pointerEvents="none" style={[{ position: 'absolute', top: -160, alignSelf: 'center', width: 520, height: 520, borderRadius: 260, backgroundColor: c.aiAccent, opacity: 0.12 }, webOnly({ filter: 'blur(120px)' })]} />
-      <View style={{ maxWidth: 1080, width: '100%', alignSelf: 'center', paddingHorizontal: 20, paddingTop: 56, paddingBottom: 48, flexDirection: wide ? 'row' : 'column', alignItems: 'center', gap: 40 }}>
-        <View style={{ flex: wide ? 1 : undefined, gap: 20, alignItems: wide ? 'flex-start' : 'center' }}>
+      <View pointerEvents="none" style={[{ position: 'absolute', top: -180, alignSelf: 'center', width: 660, height: 660, borderRadius: 330, backgroundColor: c.aiAccent, opacity: 0.12 }, webOnly({ filter: 'blur(150px)' })]} />
+      <View style={{ maxWidth: CONTENT_MAX, width: '100%', alignSelf: 'center', paddingHorizontal: gutter, paddingTop: wide ? 84 : 44, paddingBottom: wide ? 72 : 40, flexDirection: wide ? 'row' : 'column', alignItems: 'center', gap: wide ? 56 : 36 }}>
+        <View style={{ flex: wide ? 1.05 : undefined, width: '100%', gap: 22, alignItems: wide ? 'flex-start' : 'center' }}>
           <View style={{ borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: 999, paddingVertical: 6, paddingHorizontal: 14 }}>
             <Text style={{ color: c.aiAccent, fontSize: 12, fontWeight: '800', letterSpacing: 1 }}>✦ {t(k('landing.signature'))}</Text>
           </View>
-          <Text style={{ color: c.textPrimary, fontSize: wide ? 52 : 36, fontWeight: '900', lineHeight: wide ? 58 : 42, textAlign: heroAlign }}>{t(k('landing.hero.title'))}</Text>
-          <Text style={{ color: c.textSecondary, fontSize: 18, lineHeight: 27, maxWidth: 520, textAlign: heroAlign }}>{t(k('landing.hero.subtitle'))}</Text>
+          <Text style={{ color: c.textPrimary, fontSize: wide ? 56 : 36, fontWeight: '900', lineHeight: wide ? 62 : 42, textAlign: heroAlign }}>{t(k('landing.hero.title'))}</Text>
+          <Text style={{ color: c.textSecondary, fontSize: wide ? 20 : 17, lineHeight: wide ? 30 : 25, maxWidth: 560, textAlign: heroAlign }}>{t(k('landing.hero.subtitle'))}</Text>
           <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap', justifyContent: wide ? 'flex-start' : 'center' }}>
             <PrimaryCta label={t(k('landing.cta.start'))} />
             <GhostCta label={t(k('landing.cta.discover'))} onPress={onDiscover} />
           </View>
-          {/* micro-promise */}
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: wide ? 'flex-start' : 'center' }}>
-            {promises.map((p, i) => (
-              <View key={p} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Text style={{ color: c.textMuted, fontSize: 13, fontWeight: '700' }}>{t(k(p))}</Text>
-                {i < promises.length - 1 ? <Text style={{ color: c.aiAccent, fontSize: 12 }}>•</Text> : null}
+          {/* reassurance signals */}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignItems: 'center', justifyContent: wide ? 'flex-start' : 'center' }}>
+            {reassure.map((r) => (
+              <View key={r} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={{ color: c.success, fontSize: 13, fontWeight: '800' }}>✓</Text>
+                <Text style={{ color: c.textSecondary, fontSize: 13, fontWeight: '600' }}>{r}</Text>
               </View>
             ))}
           </View>
         </View>
-        <View style={{ flex: wide ? 1 : undefined, width: '100%', maxWidth: 420 }}>
-          <ProductPipeline />
+        <View style={{ flex: wide ? 1 : undefined, width: '100%', maxWidth: wide ? undefined : 480, alignSelf: 'center' }}>
+          <OsMockup />
         </View>
       </View>
     </View>
   );
 }
 
-/** Animated product story: content flows down into the Digital Twin. */
-function ProductPipeline() {
+/** The large "Second Brain OS" product window — the hero's visual anchor.
+ *  Suggests the Digital Twin, Knowledge Graph, AI Professor and progression at
+ *  once, with restrained motion (node/typing pulse) that honours reduced-motion. */
+function OsMockup() {
   const { colors: c, radius } = useTokens();
   const { t } = useI18n();
   const reduced = useReducedMotion();
@@ -291,38 +297,145 @@ function ProductPipeline() {
     if (reduced) return;
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(anim, { toValue: 1, duration: 2200, useNativeDriver: Platform.OS !== 'web' }),
-        Animated.timing(anim, { toValue: 0, duration: 2200, useNativeDriver: Platform.OS !== 'web' }),
+        Animated.timing(anim, { toValue: 1, duration: 1400, useNativeDriver: Platform.OS !== 'web' }),
+        Animated.timing(anim, { toValue: 0, duration: 1400, useNativeDriver: Platform.OS !== 'web' }),
       ]),
     );
     loop.start();
     return () => loop.stop();
   }, [anim, reduced]);
 
-  const stages: { icon: string; key: string; accent?: boolean }[] = [
-    { icon: '📄', key: 'landing.flow.documents' },
-    { icon: '✨', key: 'landing.flow.intelligence' },
-    { icon: '🕸️', key: 'landing.flow.graph' },
-    { icon: '👨‍🏫', key: 'landing.flow.professor' },
-    { icon: '🧠', key: 'landing.flow.twin', accent: true },
-    { icon: '📅', key: 'landing.flow.revision' },
-  ];
   return (
-    <Glass style={{ padding: 16, gap: 0 }}>
-      {stages.map((s, i) => (
-        <View key={s.key}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: s.accent ? c.aiAccent : c.borderSubtle, backgroundColor: s.accent ? c.aiAccentSoft : c.surface, borderRadius: radius.md, paddingVertical: 12, paddingHorizontal: 14 }}>
-            <Text style={{ fontSize: 20 }}>{s.icon}</Text>
-            <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: s.accent ? '800' : '700', flex: 1 }}>{t(k(s.key))}</Text>
-          </View>
-          {i < stages.length - 1 ? (
-            <View style={{ alignItems: 'center', height: 18, justifyContent: 'center' }}>
-              <Animated.Text style={{ color: c.aiAccent, fontSize: 16, opacity: reduced ? 0.6 : anim.interpolate({ inputRange: [0, 1], outputRange: [0.25, 1] }) }}>↓</Animated.Text>
-            </View>
-          ) : null}
+    <View style={[{ borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.xl, overflow: 'hidden' }, webOnly({ boxShadow: '0 40px 90px -50px rgba(0,0,0,0.55)' })]}>
+      {/* window title bar */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: c.borderSubtle, backgroundColor: c.surfaceSunken }}>
+        <View style={{ flexDirection: 'row', gap: 6 }}>
+          {['#ff5f57', '#febc2e', '#28c840'].map((col) => (
+            <View key={col} style={{ width: 11, height: 11, borderRadius: 6, backgroundColor: col }} />
+          ))}
         </View>
+        <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: '800', letterSpacing: 1, marginStart: 12 }}>{t(k('landing.mock.os'))}</Text>
+      </View>
+      <View style={{ padding: 16, gap: 14 }}>
+        {/* My Brain — knowledge graph */}
+        <View style={{ borderWidth: 1, borderColor: c.borderSubtle, backgroundColor: c.surface, borderRadius: radius.lg, padding: 14, gap: 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={{ fontSize: 15 }}>🧠</Text>
+            <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: '800' }}>{t(k('landing.mock.brain'))}</Text>
+            <View style={{ flex: 1 }} />
+            <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: '700' }}>{t(k('landing.flow.graph'))}</Text>
+          </View>
+          <MiniGraph anim={anim} reduced={reduced} />
+        </View>
+        {/* AI Professor — chat */}
+        <View style={{ borderWidth: 1, borderColor: c.borderSubtle, backgroundColor: c.surface, borderRadius: radius.lg, padding: 14, gap: 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={{ fontSize: 15 }}>👨‍🏫</Text>
+            <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: '800' }}>{t(k('landing.mock.professor'))}</Text>
+          </View>
+          <View style={{ alignSelf: 'flex-start', maxWidth: '90%', backgroundColor: c.aiAccentSoft, borderColor: c.aiAccent, borderWidth: 1, borderRadius: radius.lg, paddingVertical: 9, paddingHorizontal: 12 }}>
+            <Text style={{ color: c.textPrimary, fontSize: 13, lineHeight: 19 }}>{t(k('landing.mock.msg'))}</Text>
+          </View>
+          <View style={{ flexDirection: 'row', gap: 5, alignItems: 'center', paddingStart: 2 }}>
+            {[0, 1, 2].map((i) => (
+              <Animated.View
+                key={i}
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: 4,
+                  backgroundColor: c.aiAccent,
+                  opacity: reduced
+                    ? 0.5
+                    : anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: i === 1 ? [0.3, 1, 0.3] : [1, 0.3, 1] }),
+                }}
+              />
+            ))}
+          </View>
+        </View>
+        {/* memory / progress / mastery */}
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <StatBar label={t(k('landing.mock.memory'))} value={0.82} color={c.aiAccent} />
+          <StatBar label={t(k('landing.mock.progress'))} value={0.64} color={c.primary} />
+          <StatBar label={t(k('landing.mock.mastery'))} value={0.73} color={c.success} />
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/** Small animated knowledge graph (nodes + edges) for the OS mockup. */
+function MiniGraph({ anim, reduced }: { anim: Animated.Value; reduced: boolean }) {
+  const { colors: c } = useTokens();
+  const H = 118;
+  const nodes = [
+    { x: 34, y: 60, r: 9, accent: true },
+    { x: 104, y: 26, r: 7 },
+    { x: 116, y: 96, r: 7 },
+    { x: 186, y: 52, r: 8 },
+    { x: 250, y: 88, r: 6 },
+    { x: 244, y: 22, r: 6 },
+  ];
+  const edges: [number, number][] = [[0, 1], [0, 2], [1, 3], [2, 3], [3, 4], [3, 5]];
+  return (
+    <View style={{ width: '100%', maxWidth: 280, height: H, alignSelf: 'center', position: 'relative', overflow: 'hidden' }}>
+      {edges.map(([a, b], i) => {
+        const n1 = nodes[a];
+        const n2 = nodes[b];
+        const dx = n2.x - n1.x;
+        const dy = n2.y - n1.y;
+        const len = Math.hypot(dx, dy);
+        const ang = Math.atan2(dy, dx);
+        return (
+          <View
+            key={i}
+            style={{ position: 'absolute', left: (n1.x + n2.x) / 2 - len / 2, top: (n1.y + n2.y) / 2 - 1, width: len, height: 2, backgroundColor: c.border, transform: [{ rotate: `${ang}rad` }] }}
+          />
+        );
+      })}
+      {nodes.map((n, i) => (
+        <Animated.View
+          key={i}
+          style={{ position: 'absolute', left: n.x - n.r, top: n.y - n.r, width: n.r * 2, height: n.r * 2, borderRadius: n.r, backgroundColor: n.accent ? c.aiAccent : c.primary, opacity: reduced ? 0.9 : anim.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }) }}
+        />
       ))}
-    </Glass>
+    </View>
+  );
+}
+
+function StatBar({ label, value, color }: { label: string; value: number; color: string }) {
+  const { colors: c } = useTokens();
+  const pct = `${Math.round(value * 100)}%` as `${number}%`;
+  return (
+    <View style={{ flex: 1, gap: 5 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+        <Text style={{ color: c.textSecondary, fontSize: 11, fontWeight: '700' }}>{label}</Text>
+        <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: '700' }}>{pct}</Text>
+      </View>
+      <View style={{ height: 6, borderRadius: 3, backgroundColor: c.surfaceSunken, overflow: 'hidden' }}>
+        <View style={{ width: pct, height: '100%', backgroundColor: color, borderRadius: 3 }} />
+      </View>
+    </View>
+  );
+}
+
+/** Thin product-signals band under the hero. */
+function SignalsBand() {
+  const { colors: c } = useTokens();
+  const gutter = useGutter();
+  const { t } = useI18n();
+  const items = ['landing.flow.professor', 'landing.flow.twin', 'landing.flow.graph', 'landing.hero.reassure3', 'landing.signals.multipdf', 'landing.signals.fsrs'];
+  return (
+    <View style={{ width: '100%', borderTopWidth: 1, borderBottomWidth: 1, borderColor: c.borderSubtle, backgroundColor: c.surfaceSunken }}>
+      <View style={{ maxWidth: CONTENT_MAX, width: '100%', alignSelf: 'center', paddingHorizontal: gutter, paddingVertical: 16, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 8 }}>
+        {items.map((key, i) => (
+          <View key={key} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={{ color: c.textSecondary, fontSize: 13, fontWeight: '700' }}>{t(k(key))}</Text>
+            {i < items.length - 1 ? <Text style={{ color: c.aiAccent, fontSize: 12 }}>•</Text> : null}
+          </View>
+        ))}
+      </View>
+    </View>
   );
 }
 
@@ -745,7 +858,8 @@ function FinalCta() {
 
 function Footer() {
   const { colors: c } = useTokens();
-  const { width, maxContentWidth } = useResponsive();
+  const { width } = useResponsive();
+  const gutter = useGutter();
   const { t } = useI18n();
   const cols: { title: string; items: string[] }[] = [
     { title: 'landing.footer.product', items: ['landing.footer.product1', 'landing.footer.product2', 'landing.footer.product3', 'landing.footer.product4', 'landing.footer.product5'] },
@@ -756,7 +870,7 @@ function Footer() {
   ];
   return (
     <View style={{ width: '100%', borderTopWidth: 1, borderTopColor: c.borderSubtle, backgroundColor: c.surfaceSunken }}>
-      <View style={{ maxWidth: maxContentWidth, width: '100%', alignSelf: 'center', paddingHorizontal: 20, paddingVertical: 40, gap: 24 }}>
+      <View style={{ maxWidth: CONTENT_MAX, width: '100%', alignSelf: 'center', paddingHorizontal: gutter, paddingVertical: 40, gap: 24 }}>
         <View style={{ gap: 6 }}>
           <Text style={{ color: c.aiAccent, fontSize: 16, fontWeight: '900' }}>🧠 {t(k('landing.brand'))}</Text>
           <Text style={{ color: c.textMuted, fontSize: 13, maxWidth: 320 }}>{t(k('landing.footer.tagline'))}</Text>
