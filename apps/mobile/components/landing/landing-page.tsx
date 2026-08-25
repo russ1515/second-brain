@@ -33,9 +33,9 @@ export function LandingPage() {
         {/* Hero */}
         <View style={{ alignItems: 'center', gap: 16, paddingTop: spacing.xl, paddingBottom: spacing.lg }}>
           <BrainViz color={c.aiAccent} nodeColor={c.primary} />
-          <Text style={{ color: c.aiAccent, fontSize: 12, fontWeight: '800', letterSpacing: 2 }}>YOUR PERSONAL AI LEARNING OS</Text>
+          <Text style={{ color: c.aiAccent, fontSize: 12, fontWeight: '800', letterSpacing: 2 }}>TON SYSTÈME D’APPRENTISSAGE PERSONNEL PROPULSÉ PAR L’IA</Text>
           <Text style={{ color: c.textPrimary, fontSize: wide ? 48 : 34, fontWeight: '900', textAlign: 'center', lineHeight: wide ? 54 : 40 }}>SECOND BRAIN</Text>
-          <Text style={{ color: c.textPrimary, fontSize: wide ? 22 : 18, fontWeight: '700', textAlign: 'center' }}>Learn Smarter. Remember Longer. Master Faster.</Text>
+          <Text style={{ color: c.textPrimary, fontSize: wide ? 22 : 18, fontWeight: '700', textAlign: 'center' }}>Apprends plus intelligemment. Retiens plus longtemps. Maîtrise plus vite.</Text>
           <Text style={{ color: c.textSecondary, fontSize: 15, textAlign: 'center', maxWidth: 560, lineHeight: 22 }}>
             Un professeur particulier propulsé par l’IA qui construit ton cerveau numérique, se souvient de tout, et t’enseigne exactement ce dont tu as besoin, au bon moment.
           </Text>
@@ -125,7 +125,7 @@ export function LandingPage() {
               <Text key={l} style={{ color: c.textMuted, fontSize: 13 }}>{l}</Text>
             ))}
           </View>
-          <Text style={{ color: c.textMuted, fontSize: 12 }}>© 2026 Second Brain — Your Personal AI Learning Operating System.</Text>
+          <Text style={{ color: c.textMuted, fontSize: 12 }}>© 2026 Second Brain — Ton système d’exploitation d’apprentissage personnel propulsé par l’IA.</Text>
         </View>
       </View>
     </ScrollView>

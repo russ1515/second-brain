@@ -2130,7 +2130,7 @@ const fr: Record<TranslationKey, string> = {
   'auth.brandSubtitle': 'Apprends. Comprends. Mémorise. Ton Professeur IA évolue avec toi.',
   'auth.badgeLangs': '25+ langues',
   'auth.badgeModels': 'IA multi-modèles',
-  'auth.badgeGraph': 'Knowledge Graph',
+  'auth.badgeGraph': 'Graphe de connaissances',
   'auth.sceneQuestion': 'Explique-moi ce concept simplement.',
   'auth.sceneAnswer': 'Bien sûr — voici, étape par étape, à ton niveau.',
   'auth.sceneConcept': 'Concept',
