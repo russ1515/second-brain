@@ -17,7 +17,7 @@ export default () => ({
   },
   llm: {
     provider: process.env.LLM_PROVIDER ?? 'gemini',
-    model: process.env.LLM_MODEL ?? 'gemini-2.5-pro',
+    model: process.env.LLM_MODEL ?? 'gemini-flash-latest',
     geminiApiKey: process.env.GEMINI_API_KEY,
   },
   embeddings: {
