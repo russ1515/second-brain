@@ -19,6 +19,13 @@ const k = (s: string) => s as TranslationKey;
 const webOnly = (style: Record<string, unknown>): ViewStyle =>
   (Platform.OS === 'web' ? style : {}) as unknown as ViewStyle;
 
+/** Locales that read right-to-left; the landing mirrors its layout for these. */
+const RTL_LOCALES = new Set(['ar', 'fa', 'he', 'ur']);
+function useRTL(): boolean {
+  const { locale } = useI18n();
+  return RTL_LOCALES.has(locale as string);
+}
+
 /** Respect the OS "reduce motion" setting on web; assume motion allowed elsewhere. */
 function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
@@ -45,6 +52,7 @@ function useReducedMotion(): boolean {
  */
 export function LandingPage() {
   const { colors: c } = useTokens();
+  const rtl = useRTL();
   const scrollRef = useRef<ScrollView>(null);
   const anchors = useRef<Record<string, number>>({});
 
@@ -58,7 +66,7 @@ export function LandingPage() {
   return (
     <ScrollView
       ref={scrollRef}
-      style={{ flex: 1, backgroundColor: c.background }}
+      style={[{ flex: 1, backgroundColor: c.background }, webOnly({ direction: rtl ? 'rtl' : 'ltr' })]}
       contentContainerStyle={{ paddingBottom: 0 }}
       showsVerticalScrollIndicator={false}
     >
@@ -144,6 +152,7 @@ function Glass({ children, style }: { children: ReactNode; style?: ViewStyle }) 
 /** A horizontal (or wrapping) rail of labelled steps joined by arrows. */
 function Rail({ steps, accent }: { steps: string[]; accent?: boolean }) {
   const { colors: c, radius } = useTokens();
+  const rtl = useRTL();
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
       {steps.map((s, i) => (
@@ -151,7 +160,7 @@ function Rail({ steps, accent }: { steps: string[]; accent?: boolean }) {
           <View style={{ borderWidth: 1, borderColor: accent ? c.aiAccent : c.border, backgroundColor: accent ? c.aiAccentSoft : c.surface, borderRadius: radius.md, paddingVertical: 8, paddingHorizontal: 12 }}>
             <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: '700' }}>{s}</Text>
           </View>
-          {i < steps.length - 1 ? <Text style={{ color: accent ? c.aiAccent : c.textMuted, fontSize: 15, fontWeight: '800' }}>→</Text> : null}
+          {i < steps.length - 1 ? <Text style={{ color: accent ? c.aiAccent : c.textMuted, fontSize: 15, fontWeight: '800' }}>{rtl ? '←' : '→'}</Text> : null}
         </View>
       ))}
     </View>
@@ -235,7 +244,9 @@ function Hero({ onDiscover }: { onStart?: () => void; onDiscover: () => void }) 
   const { colors: c } = useTokens();
   const { width } = useResponsive();
   const { t } = useI18n();
+  const rtl = useRTL();
   const wide = width >= 900;
+  const heroAlign = wide ? (rtl ? 'right' : 'left') : 'center';
   const promises = ['landing.hero.promise1', 'landing.hero.promise2', 'landing.hero.promise3', 'landing.hero.promise4'];
   return (
     <View style={{ width: '100%', overflow: 'hidden' }}>
@@ -246,8 +257,8 @@ function Hero({ onDiscover }: { onStart?: () => void; onDiscover: () => void }) 
           <View style={{ borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: 999, paddingVertical: 6, paddingHorizontal: 14 }}>
             <Text style={{ color: c.aiAccent, fontSize: 12, fontWeight: '800', letterSpacing: 1 }}>✦ {t(k('landing.signature'))}</Text>
           </View>
-          <Text style={{ color: c.textPrimary, fontSize: wide ? 52 : 36, fontWeight: '900', lineHeight: wide ? 58 : 42, textAlign: wide ? 'left' : 'center' }}>{t(k('landing.hero.title'))}</Text>
-          <Text style={{ color: c.textSecondary, fontSize: 18, lineHeight: 27, maxWidth: 520, textAlign: wide ? 'left' : 'center' }}>{t(k('landing.hero.subtitle'))}</Text>
+          <Text style={{ color: c.textPrimary, fontSize: wide ? 52 : 36, fontWeight: '900', lineHeight: wide ? 58 : 42, textAlign: heroAlign }}>{t(k('landing.hero.title'))}</Text>
+          <Text style={{ color: c.textSecondary, fontSize: 18, lineHeight: 27, maxWidth: 520, textAlign: heroAlign }}>{t(k('landing.hero.subtitle'))}</Text>
           <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap', justifyContent: wide ? 'flex-start' : 'center' }}>
             <PrimaryCta label={t(k('landing.cta.start'))} />
             <GhostCta label={t(k('landing.cta.discover'))} onPress={onDiscover} />
@@ -576,6 +587,7 @@ function DigitalTwin() {
   const { colors: c, radius } = useTokens();
   const { width } = useResponsive();
   const { t } = useI18n();
+  const rtl = useRTL();
   const wide = width >= 820;
   const inputs = [1, 2, 3, 4, 5].map((n) => t(k(`landing.twin.i${n}`)));
   return (
@@ -593,7 +605,7 @@ function DigitalTwin() {
             </View>
           ))}
         </View>
-        <Text style={{ color: c.aiAccent, fontSize: 24, fontWeight: '800' }}>{wide ? '→' : '↓'}</Text>
+        <Text style={{ color: c.aiAccent, fontSize: 24, fontWeight: '800' }}>{wide ? (rtl ? '←' : '→') : '↓'}</Text>
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: c.aiAccent, backgroundColor: c.aiAccentSoft, borderRadius: radius.xl, padding: 28, gap: 10, minHeight: 180 }}>
           <BrainViz color={c.aiAccent} nodeColor={c.primary} />
           <Text style={{ color: c.aiAccent, fontSize: 20, fontWeight: '900' }}>{t(k('landing.twin.result'))}</Text>
@@ -626,7 +638,7 @@ function KnowledgeGraph() {
       </View>
       <View style={{ borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.lg, padding: 18, gap: 8 }}>
         {tree.map((n) => (
-          <View key={n.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: n.depth * 22 }}>
+          <View key={n.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginStart: n.depth * 22 }}>
             <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: n.depth === 0 ? c.aiAccent : n.depth === 1 ? c.primary : c.textMuted }} />
             <Text style={{ color: n.depth === 0 ? c.textPrimary : c.textSecondary, fontSize: 14, fontWeight: n.depth === 0 ? '800' : '600' }}>{n.label}</Text>
           </View>
