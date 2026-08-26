@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Animated,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -200,17 +201,20 @@ function GhostCta({ label, onPress }: { label: string; onPress?: () => void }) {
 // ── Header (sticky on web) ───────────────────────────────────────────────────
 
 function Header({ onNav }: { onNav: (id: string) => void }) {
-  const { colors: c } = useTokens();
+  const { colors: c, radius } = useTokens();
   const { width } = useResponsive();
   const gutter = useGutter();
   const { t } = useI18n();
   const go = useGo();
+  const [menuOpen, setMenuOpen] = useState(false);
   const wide = width >= 900;
   // The centre nav + sign-in only appear once there is real room for all six
   // links beside the logo and the CTA; the signature needs even more. Below
-  // that they hide (rather than crushing the logo block) — the CTA stays.
+  // that they hide (rather than crushing the logo block) — the CTA stays. At
+  // tablet / small-desktop widths a ☰ menu keeps the nav reachable.
   const roomy = width >= 1080;
   const showSig = width >= 1240;
+  const showBurger = width >= 768 && !roomy;
   const nav: [string, string][] = [
     ['features', 'landing.nav.features'],
     ['how', 'landing.nav.how'],
@@ -238,11 +242,36 @@ function Header({ onNav }: { onNav: (id: string) => void }) {
         ) : null}
         <View style={{ width: roomy ? 18 : 0 }} />
         <LangPill />
+        {showBurger ? (
+          <Pressable onPress={() => setMenuOpen(true)} accessibilityRole="button" accessibilityLabel={t(k('landing.nav.menu'))} style={{ paddingHorizontal: 8, paddingVertical: 8, minHeight: 40, justifyContent: 'center' }}>
+            <Text style={{ color: c.textPrimary, fontSize: 20 }}>☰</Text>
+          </Pressable>
+        ) : null}
         {roomy ? (
           <Pressable onPress={go} accessibilityRole="button"><Text style={{ color: c.textSecondary, fontSize: 14, fontWeight: '700' }}>{t(k('landing.cta.signin'))}</Text></Pressable>
         ) : null}
         <PrimaryCta compact={!wide} label={t(k(wide ? 'landing.cta.start' : 'landing.cta.startShort'))} />
       </View>
+
+      {/* ☰ menu drawer — keeps the nav reachable at tablet / small-desktop widths */}
+      <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
+        <Pressable style={{ flex: 1, backgroundColor: c.overlay }} onPress={() => setMenuOpen(false)} accessibilityRole="button" accessibilityLabel={t(k('landing.nav.menu'))}>
+          <Pressable
+            onPress={() => {}}
+            style={[{ marginTop: 60, marginHorizontal: 16, alignSelf: 'flex-end', minWidth: 240, backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border, borderRadius: radius.lg, padding: 8 }, webOnly({ boxShadow: '0 24px 60px -30px rgba(0,0,0,0.5)' })]}
+          >
+            {nav.map(([id, key]) => (
+              <Pressable key={id} onPress={() => { setMenuOpen(false); onNav(id); }} accessibilityRole="link" style={{ paddingVertical: 12, paddingHorizontal: 14, borderRadius: radius.sm, minHeight: 44, justifyContent: 'center' }}>
+                <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '600' }}>{t(k(key))}</Text>
+              </Pressable>
+            ))}
+            <View style={{ height: 1, backgroundColor: c.borderSubtle, marginVertical: 4 }} />
+            <Pressable onPress={() => { setMenuOpen(false); go(); }} accessibilityRole="button" style={{ paddingVertical: 12, paddingHorizontal: 14, minHeight: 44, justifyContent: 'center' }}>
+              <Text style={{ color: c.aiAccent, fontSize: 15, fontWeight: '700' }}>{t(k('landing.cta.signin'))}</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
