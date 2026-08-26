@@ -552,7 +552,9 @@ function ContentToExperience() {
 
 function Showcase() {
   const { colors: c, radius } = useTokens();
+  const { width } = useResponsive();
   const { t } = useI18n();
+  const wide = width >= 900;
   const tabs = [
     { id: 'brain', tab: 'landing.showcase.brain.tab', title: 'landing.showcase.brain.title', desc: 'landing.showcase.brain.desc' },
     { id: 'professor', tab: 'landing.showcase.professor.tab', title: 'landing.showcase.professor.title', desc: 'landing.showcase.professor.desc' },
@@ -580,11 +582,134 @@ function Showcase() {
           );
         })}
       </ScrollView>
-      <View style={{ marginTop: 16, borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.lg, padding: 22, gap: 10, minHeight: 150 }}>
-        <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800' }}>{t(k(cur.title))}</Text>
-        <Text style={{ color: c.textSecondary, fontSize: 15, lineHeight: 23, maxWidth: 640 }}>{t(k(cur.desc))}</Text>
+      {/* Two columns on desktop: a per-tab illustration on the left, the copy on
+          the right; stacked (visual then text) on mobile. */}
+      <View style={{ marginTop: 16, flexDirection: wide ? 'row' : 'column', gap: wide ? 20 : 14, alignItems: 'stretch' }}>
+        <View style={{ flex: wide ? 1 : undefined, width: wide ? undefined : '100%' }}>
+          <ShowcaseVisual id={cur.id} />
+        </View>
+        <View style={{ flex: wide ? 1.1 : undefined, borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.lg, padding: 22, gap: 10, justifyContent: 'center', minHeight: 150 }}>
+          <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800' }}>{t(k(cur.title))}</Text>
+          <Text style={{ color: c.textSecondary, fontSize: 15, lineHeight: 23 }}>{t(k(cur.desc))}</Text>
+        </View>
       </View>
     </Shell>
+  );
+}
+
+/** A small thematic illustration for each showcase tab (static, token-styled). */
+function ShowcaseVisual({ id }: { id: string }) {
+  const { colors: c, radius } = useTokens();
+  const frame: ViewStyle = { width: '100%', minHeight: 200, borderWidth: 1, borderColor: c.borderSubtle, backgroundColor: c.surface, borderRadius: radius.lg, padding: 18, justifyContent: 'center', alignItems: 'center' };
+
+  if (id === 'brain') {
+    const nodes = [{ x: 28, y: 66, a: true }, { x: 96, y: 26 }, { x: 104, y: 106 }, { x: 172, y: 54 }, { x: 232, y: 92 }, { x: 226, y: 24 }];
+    const edges: [number, number][] = [[0, 1], [0, 2], [1, 3], [2, 3], [3, 4], [3, 5]];
+    return (
+      <View style={frame}>
+        <View style={{ width: '100%', maxWidth: 260, height: 132, position: 'relative' }}>
+          {edges.map(([a, b], i) => {
+            const n1 = nodes[a];
+            const n2 = nodes[b];
+            const dx = n2.x - n1.x;
+            const dy = n2.y - n1.y;
+            const len = Math.hypot(dx, dy);
+            const ang = Math.atan2(dy, dx);
+            return <View key={i} style={{ position: 'absolute', left: (n1.x + n2.x) / 2 - len / 2, top: (n1.y + n2.y) / 2 - 1, width: len, height: 2, backgroundColor: c.border, transform: [{ rotate: `${ang}rad` }] }} />;
+          })}
+          {nodes.map((n, i) => <View key={i} style={{ position: 'absolute', left: n.x - 6, top: n.y - 6, width: 12, height: 12, borderRadius: 6, backgroundColor: n.a ? c.aiAccent : c.primary }} />)}
+        </View>
+      </View>
+    );
+  }
+
+  if (id === 'professor') {
+    return (
+      <View style={frame}>
+        <View style={{ width: '100%', maxWidth: 280, gap: 10 }}>
+          <View style={{ alignSelf: 'flex-start', maxWidth: '85%', backgroundColor: c.aiAccentSoft, borderColor: c.aiAccent, borderWidth: 1, borderRadius: radius.lg, paddingVertical: 10, paddingHorizontal: 12, gap: 6 }}>
+            <View style={{ height: 7, width: 130, borderRadius: 4, backgroundColor: c.aiAccent, opacity: 0.55 }} />
+            <View style={{ height: 7, width: 90, borderRadius: 4, backgroundColor: c.aiAccent, opacity: 0.3 }} />
+          </View>
+          <View style={{ flexDirection: 'row', gap: 5, paddingStart: 4 }}>
+            {[0.9, 0.5, 0.9].map((o, i) => <View key={i} style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: c.aiAccent, opacity: o }} />)}
+          </View>
+          <Text style={{ fontSize: 22, alignSelf: 'flex-end' }}>👨‍🏫</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (id === 'search') {
+    return (
+      <View style={frame}>
+        <View style={{ width: '100%', maxWidth: 280, gap: 12 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.full, paddingVertical: 10, paddingHorizontal: 12 }}>
+            <Text style={{ fontSize: 14 }}>🔎</Text>
+            <View style={{ height: 8, flex: 1, borderRadius: 4, backgroundColor: c.textMuted, opacity: 0.35 }} />
+          </View>
+          {[210, 160, 120].map((w, i) => <View key={i} style={{ height: 8, width: w, borderRadius: 4, backgroundColor: c.border }} />)}
+        </View>
+      </View>
+    );
+  }
+
+  if (id === 'documents') {
+    return (
+      <View style={frame}>
+        <View style={{ width: 150, height: 148 }}>
+          {[0, 1, 2].map((i) => (
+            <View key={i} style={{ position: 'absolute', left: i * 16, top: i * 12, width: 104, height: 124, borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.md, padding: 10, gap: 6 }}>
+              <Text style={{ fontSize: 14 }}>📄</Text>
+              {[74, 56, 64].map((w, j) => <View key={j} style={{ height: 5, width: w, borderRadius: 3, backgroundColor: c.border }} />)}
+            </View>
+          ))}
+        </View>
+      </View>
+    );
+  }
+
+  if (id === 'voice') {
+    const bars = [12, 26, 18, 34, 22, 40, 16, 30, 20, 36, 14, 24];
+    return (
+      <View style={frame}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, height: 56 }}>
+          {bars.map((h, i) => <View key={i} style={{ width: 6, height: h, borderRadius: 3, backgroundColor: i % 2 ? c.aiAccent : c.primary, opacity: 0.85 }} />)}
+        </View>
+        <Text style={{ fontSize: 22, marginTop: 14 }}>🎙️</Text>
+      </View>
+    );
+  }
+
+  if (id === 'academic') {
+    return (
+      <View style={frame}>
+        <View style={{ width: '100%', maxWidth: 280, gap: 8 }}>
+          {['01', '02', '03'].map((n, i) => (
+            <View key={n} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: i === 0 ? c.aiAccent : c.border, backgroundColor: i === 0 ? c.aiAccentSoft : c.surfaceElevated, borderRadius: radius.md, paddingVertical: 9, paddingHorizontal: 12 }}>
+              <Text style={{ color: c.aiAccent, fontSize: 12, fontWeight: '900' }}>{n}</Text>
+              <View style={{ height: 7, flex: 1, borderRadius: 4, backgroundColor: c.border }} />
+            </View>
+          ))}
+        </View>
+      </View>
+    );
+  }
+
+  // revise — a flashcard + progress
+  return (
+    <View style={frame}>
+      <View style={{ width: 176, gap: 12 }}>
+        <View style={{ borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.lg, padding: 16, gap: 8, minHeight: 96, justifyContent: 'center', alignItems: 'center' }}>
+          <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: '900', letterSpacing: 1 }}>Q ↔ R</Text>
+          <View style={{ height: 8, width: 96, borderRadius: 4, backgroundColor: c.border }} />
+          <View style={{ height: 8, width: 64, borderRadius: 4, backgroundColor: c.border }} />
+        </View>
+        <View style={{ height: 6, borderRadius: 3, backgroundColor: c.surfaceSunken, overflow: 'hidden' }}>
+          <View style={{ width: 120, height: '100%', backgroundColor: c.success }} />
+        </View>
+      </View>
+    </View>
   );
 }
 
