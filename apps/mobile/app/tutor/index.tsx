@@ -51,6 +51,7 @@ export default function TutorEntry() {
   const params = useLocalSearchParams<{ mode?: string | string[] }>();
   const mode = Array.isArray(params.mode) ? params.mode[0] : params.mode;
   if (mode === 'free' || mode === 'free_search') return <FreeSearch />;
+  if (mode === 'deepsearch' || mode === 'deep_research') return <DeepResearch />;
   if (mode && !TUTOR_MODES.has(mode)) return <ModeError />;
   return <TeacherHome />;
 }
@@ -344,11 +345,23 @@ function BackToLearn() {
 }
 
 /**
- * 🔎 Free Search (mode=free) — a focused, spontaneous-question workspace, kept
- * distinct from the pedagogical teacher. Reuses the tutor session API: the first
- * question creates a general session and opens the existing conversation view.
+ * A focused question workspace — the shared shell behind Free Search and Deep
+ * Research. It reuses the tutor session API: the first question creates a
+ * general session (optionally framed by `framePrefixKey` so the professor gives
+ * a deeper, structured answer) and opens the existing conversation view. No new
+ * chat system, and no fabricated sources/plan — an honest `noteKey` states when
+ * a richer capability still depends on the backend.
  */
-function FreeSearch() {
+function QuestionWorkspace({ icon, kickerKey, titleKey, subtitleKey, placeholderKey, submitKey, framePrefixKey, noteKey }: {
+  icon: string;
+  kickerKey: TranslationKey;
+  titleKey: TranslationKey;
+  subtitleKey: TranslationKey;
+  placeholderKey: TranslationKey;
+  submitKey: TranslationKey;
+  framePrefixKey?: TranslationKey;
+  noteKey?: TranslationKey;
+}) {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
@@ -364,7 +377,8 @@ function FreeSearch() {
     setError(null);
     try {
       const session = await api<TutorSessionSummary>('/tutor/sessions', { method: 'POST', body: {} });
-      await api(`/tutor/sessions/${session.id}/messages`, { method: 'POST', body: { content: question } });
+      const content = framePrefixKey ? `${t(framePrefixKey)}\n\n${question}` : question;
+      await api(`/tutor/sessions/${session.id}/messages`, { method: 'POST', body: { content } });
       router.push(`/tutor/${session.id}`);
     } catch (e) {
       setError((e as Error).message);
@@ -376,24 +390,55 @@ function FreeSearch() {
     <ScrollView contentContainerStyle={styles.container}>
       <BackToLearn />
       <View style={styles.freeHead}>
-        <Text style={styles.freeKicker}>🔎 {t('learn.free.kicker')}</Text>
-        <Text style={styles.freeTitle}>{t('learn.free.title')}</Text>
-        <Text style={styles.freeSub}>{t('learn.free.subtitle')}</Text>
+        <Text style={styles.freeKicker}>{icon} {t(kickerKey)}</Text>
+        <Text style={styles.freeTitle}>{t(titleKey)}</Text>
+        <Text style={styles.freeSub}>{t(subtitleKey)}</Text>
       </View>
       {error ? <ErrorBanner message={error} /> : null}
       <Card>
         <TextInput
           style={[styles.input, styles.freeInput]}
-          placeholder={t('learn.free.placeholder')}
+          placeholder={t(placeholderKey)}
           placeholderTextColor={c.textMuted}
           value={q}
           onChangeText={setQ}
           multiline
           autoFocus
         />
-        <Button label={t('learn.free.submit')} onPress={ask} busy={busy} disabled={!q.trim()} />
+        <Button label={t(submitKey)} onPress={ask} busy={busy} disabled={!q.trim()} />
       </Card>
+      {noteKey ? <Text style={styles.freeNote}>{t(noteKey)}</Text> : null}
     </ScrollView>
+  );
+}
+
+/** 🔎 Free Search (mode=free) — spontaneous questions, distinct from the teacher. */
+function FreeSearch() {
+  return (
+    <QuestionWorkspace
+      icon="🔎"
+      kickerKey="learn.free.kicker"
+      titleKey="learn.free.title"
+      subtitleKey="learn.free.subtitle"
+      placeholderKey="learn.free.placeholder"
+      submitKey="learn.free.submit"
+    />
+  );
+}
+
+/** 🔬 Deep Research (mode=deepsearch) — a thorough, structured investigation. */
+function DeepResearch() {
+  return (
+    <QuestionWorkspace
+      icon="🔬"
+      kickerKey="learn.deep.kicker"
+      titleKey="learn.deep.title"
+      subtitleKey="learn.deep.subtitle"
+      placeholderKey="learn.deep.placeholder"
+      submitKey="learn.deep.submit"
+      framePrefixKey="learn.deep.frame"
+      noteKey="learn.deep.note"
+    />
   );
 }
 
@@ -420,6 +465,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   freeTitle: { fontSize: 26, fontWeight: '800', color: c.textPrimary },
   freeSub: { fontSize: 15, color: c.textSecondary, lineHeight: 22 },
   freeInput: { minHeight: 110, textAlignVertical: 'top', marginBottom: 12 },
+  freeNote: { fontSize: 13, color: c.textMuted, fontStyle: 'italic', lineHeight: 19 },
   flex: { flex: 1 },
   stage: {
     backgroundColor: c.surface,
