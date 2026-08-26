@@ -59,7 +59,8 @@ export default function StudyScreen() {
   const { t } = useI18n();
   const router = useRouter();
   const { colors: c } = useTokens();
-  const { maxContentWidth } = useResponsive();
+  const { width, maxContentWidth } = useResponsive();
+  const wide = width >= 1024;
 
   const [stats, setStats] = useState<ReviewStats | null>(null);
   const [foresight, setForesight] = useState<LearningPredictionView | null>(null);
@@ -125,10 +126,9 @@ export default function StudyScreen() {
   const keyDates = exams.filter((e) => e.daysUntil >= 0).sort((a, b) => a.daysUntil - b.daysUntil).slice(0, 4)
     .map((e) => ({ id: e.id, label: e.subject, when: e.daysUntil === 0 ? 'aujourd’hui' : `dans ${e.daysUntil} j` }));
 
-  return (
-    <ScrollView contentContainerStyle={[styles.container, { maxWidth: maxContentWidth }]}>
-      <Header intro={persona.intro} />
-
+  // LEFT — the "do it now" action zones; RIGHT — retention analytics + planning.
+  const actionZones = (
+    <>
       {/* ZONE 1 — Aujourd'hui, OR an un-guilty "all caught up" */}
       {allCaughtUp ? (
         <SessionComplete reviewed={stats!.reviewsToday} onDone={() => router.push('/learn')} />
@@ -152,7 +152,11 @@ export default function StudyScreen() {
         <DueCounter counts={counts} onPick={() => router.push('/revision')} />
         <ReviewStatsStrip reviewsToday={stats?.reviewsToday ?? 0} retention={stats?.retention ?? null} />
       </View>
+    </>
+  );
 
+  const analyticsZones = (
+    <>
       {/* ZONE 4 — Progression de rétention */}
       <View style={{ gap: 10 }}>
         <RetentionMap counts={retentionCounts} />
@@ -165,6 +169,24 @@ export default function StudyScreen() {
       <RevisionPlanner today={todayPlan} tomorrow={tomorrowPlan} keyDates={keyDates} />
 
       <AutoExtractCard onExtract={() => router.push('/library')} />
+    </>
+  );
+
+  return (
+    <ScrollView contentContainerStyle={[styles.container, { maxWidth: maxContentWidth }]}>
+      <Header intro={persona.intro} />
+
+      {wide ? (
+        <View style={{ flexDirection: 'row', gap: 20, alignItems: 'flex-start' }}>
+          <View style={{ flex: 1, gap: 16, minWidth: 0 }}>{actionZones}</View>
+          <View style={{ flex: 1, gap: 16, minWidth: 0 }}>{analyticsZones}</View>
+        </View>
+      ) : (
+        <View style={{ gap: 16 }}>
+          {actionZones}
+          {analyticsZones}
+        </View>
+      )}
 
       <Text style={{ color: c.textMuted, fontSize: 12, textAlign: 'center', marginTop: 4 }}>{persona.encourage}</Text>
     </ScrollView>
