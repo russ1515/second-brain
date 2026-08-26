@@ -91,7 +91,7 @@ export default function ResourceScreen() {
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   kind: { fontSize: 12, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1 },
   title: { fontSize: 20, fontWeight: '700', color: c.textPrimary },
   card: { gap: 10 },

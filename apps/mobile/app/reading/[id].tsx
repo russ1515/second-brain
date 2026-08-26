@@ -171,7 +171,7 @@ function verdictText(v: GradedAnswer['verdict'], c: ColorScale) {
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   title: { fontSize: 22, fontWeight: '700', color: c.textPrimary },
   meta: { fontSize: 13, color: c.textSecondary, textTransform: 'capitalize' },
   scoreCard: { alignItems: 'center', gap: 6, borderColor: c.primary },

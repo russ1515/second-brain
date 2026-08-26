@@ -513,7 +513,7 @@ function NextPlan({ plan, t }: { plan: DayPlan | null; t: (k: TranslationKey) =>
 const makeStyles = (c: ColorScale) => StyleSheet.create({
   flex: { flex: 1 },
   hidden: { display: 'none' },
-  container: { padding: 20, gap: 12, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
   kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
   topic: { fontSize: 26, fontWeight: '800', color: c.textPrimary },
@@ -566,6 +566,6 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   nav: {
     flexDirection: 'row', gap: 10, padding: 16, paddingBottom: 20,
     borderTopWidth: 1, borderTopColor: c.border, backgroundColor: c.background,
-    maxWidth: 960, width: '100%', alignSelf: 'center',
+    maxWidth: 1280, width: '100%', alignSelf: 'center',
   },
 });

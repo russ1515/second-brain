@@ -233,7 +233,7 @@ const DISCIPLINE_KEY: Record<'strong' | 'building' | 'irregular', TranslationKey
 };
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   masthead: { gap: 6, marginBottom: 2 },
   kicker: {
     fontSize: 13,

@@ -135,7 +135,7 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   streakRow: { flexDirection: 'row', gap: 10 },
   stat: { flex: 1, alignItems: 'center', paddingVertical: 18 },
   statValue: { fontSize: 30, fontWeight: '700', color: c.warning },

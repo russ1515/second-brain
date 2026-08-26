@@ -313,7 +313,7 @@ function SessionRow({ label, value }: { label: string; value: string }) {
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 14, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 14, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   flex: { flex: 1 },
   stage: {
     backgroundColor: c.surface,

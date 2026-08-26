@@ -200,7 +200,7 @@ export default function SubscriptionScreen() {
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   h1: { fontSize: 28, fontWeight: '700', color: c.textPrimary },
   intro: { fontSize: 14, color: c.textSecondary, lineHeight: 20, marginBottom: 4 },
   currentCard: { borderColor: c.primary, gap: 4 },

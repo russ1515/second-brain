@@ -144,7 +144,7 @@ export default function RevisionScreen() {
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 14, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 14, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   counter: { fontSize: 13, color: c.textMuted, textAlign: 'center' },
   card: { minHeight: 200, justifyContent: 'center' },
   front: { fontSize: 20, fontWeight: '600', color: c.textPrimary, lineHeight: 28 },

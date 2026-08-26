@@ -154,7 +154,7 @@ function joinAnd(names: string[], and: string): string {
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 14, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 14, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
   kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
   intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },

@@ -621,7 +621,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 10, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 10, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   title: { fontSize: 26, fontWeight: '700', color: c.textPrimary },
   meta: { fontSize: 13, color: c.textSecondary, textTransform: 'capitalize', marginBottom: 6 },
   notice: { backgroundColor: c.successSoft, borderColor: c.success },

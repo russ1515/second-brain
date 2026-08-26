@@ -165,7 +165,7 @@ export default function ScanScreen() {
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   flex: { flex: 1 },
   row: { flexDirection: 'row', gap: 8 },
   title: { fontSize: 26, fontWeight: '700', color: c.textPrimary },

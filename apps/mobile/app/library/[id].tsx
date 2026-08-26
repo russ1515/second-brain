@@ -530,7 +530,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 14, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 14, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   head: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   title: { flex: 1, fontSize: 22, fontWeight: '700', color: c.textPrimary },
   star: { fontSize: 24 },

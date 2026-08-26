@@ -462,7 +462,7 @@ function Label({ t: key }: { t: TranslationKey }) {
 const makeStyles = (c: ColorScale) => StyleSheet.create({
   flex: { flex: 1 },
   hidden: { display: 'none' },
-  container: { padding: 20, gap: 12, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   masthead: { gap: 4 },
   kicker: {
     fontSize: 12,
@@ -584,7 +584,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: c.border,
     backgroundColor: c.background,
-    maxWidth: 960,
+    maxWidth: 1280,
     width: '100%',
     alignSelf: 'center',
   },

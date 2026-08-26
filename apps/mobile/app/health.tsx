@@ -82,7 +82,7 @@ export default function HealthScreen() {
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 24, gap: 12, maxWidth: 960, width: '100%', alignSelf: 'center' },
+  container: { padding: 24, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   title: { fontSize: 28, fontWeight: '700', color: c.textPrimary },
   subtitle: { fontSize: 13, color: c.textMuted, marginBottom: 12 },
   banner: { borderRadius: 12, padding: 16, marginBottom: 8 },
