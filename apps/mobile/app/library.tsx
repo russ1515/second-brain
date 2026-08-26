@@ -20,6 +20,7 @@ import { api, apiUpload } from '../lib/client';
 import { useTokens } from '../lib/design/theme';
 import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
+import { useResponsive } from '../lib/responsive';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 
 const SHELVES: { filter: LibraryFilter; key: TranslationKey; icon: string }[] = [
@@ -74,6 +75,8 @@ export default function LibraryScreen() {
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
+  const { width } = useResponsive();
+  const wide = width >= 1024;
   const [facets, setFacets] = useState<LibraryFacets | null>(null);
   const [docs, setDocs] = useState<LibraryDocument[] | null>(null);
   const [shelf, setShelf] = useState<LibraryFilter>('all');
@@ -186,6 +189,70 @@ export default function LibraryScreen() {
 
   const count = (f: LibraryFilter): number => facets[f];
 
+  // Filters (shelves + subject/language/collection facets) — rendered vertically
+  // in the desktop LEFT rail, or as the current horizontal chips on mobile.
+  const shelfChips = SHELVES.map((s) => (
+    <Chip key={s.filter} label={`${s.icon} ${t(s.key)}`} badge={count(s.filter)} on={shelf === s.filter && !facet} onPress={() => pickShelf(s.filter)} />
+  ));
+  const facetGroups = (
+    <>
+      {facets.subjects.length > 0 ? (
+        <FacetGroup title={t('lib.subjects')}>
+          {facets.subjects.map((s) => (
+            <Chip key={s.value} label={s.value} badge={s.count} on={facet?.kind === 'subject' && facet.value === s.value} onPress={() => pickFacet({ kind: 'subject', value: s.value })} />
+          ))}
+        </FacetGroup>
+      ) : null}
+      {facets.languages.length > 0 ? (
+        <FacetGroup title={t('lib.languages')}>
+          {facets.languages.map((l) => (
+            <Chip key={l.value} label={l.value} badge={l.count} on={facet?.kind === 'language' && facet.value === l.value} onPress={() => pickFacet({ kind: 'language', value: l.value })} />
+          ))}
+        </FacetGroup>
+      ) : null}
+      {facets.collections.length > 0 ? (
+        <FacetGroup title={t('lib.collections')}>
+          {facets.collections.map((col) => (
+            <Chip key={col.id} label={`📁 ${col.name}`} badge={col.documentCount} on={facet?.kind === 'collection' && facet.id === col.id} onPress={() => pickFacet({ kind: 'collection', id: col.id, name: col.name })} />
+          ))}
+        </FacetGroup>
+      ) : null}
+    </>
+  );
+
+  const filtersRail = (
+    <>
+      <View style={styles.chips}>{shelfChips}</View>
+      {facetGroups}
+    </>
+  );
+  const filtersMobile = (
+    <>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+        {shelfChips}
+      </ScrollView>
+      {facetGroups}
+    </>
+  );
+
+  const docNodes =
+    shelf === 'shared' && !facet ? (
+      <Text style={styles.empty}>{t('lib.sharedSoon')}</Text>
+    ) : docs.length === 0 ? (
+      <Text style={styles.empty}>{t('lib.empty')}</Text>
+    ) : (
+      docs.map((doc) => (
+        <View key={doc.id} style={wide ? styles.docCell : undefined}>
+          <DocCard
+            doc={doc}
+            onOpen={() => router.push(`/library/${doc.id}`)}
+            onFavorite={() => toggleFavorite(doc)}
+            onTrash={() => trash(doc)}
+          />
+        </View>
+      ))
+    );
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.masthead}>
@@ -203,75 +270,20 @@ export default function LibraryScreen() {
       </View>
       {adding ? <AddPanel onDone={() => { setAdding(false); void load(); }} /> : null}
 
-      {/* Shelves */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-        {SHELVES.map((s) => (
-          <Chip
-            key={s.filter}
-            label={`${s.icon} ${t(s.key)}`}
-            badge={count(s.filter)}
-            on={shelf === s.filter && !facet}
-            onPress={() => pickShelf(s.filter)}
-          />
-        ))}
-      </ScrollView>
-
-      {/* Subjects / Languages / Collections facets */}
-      {facets.subjects.length > 0 ? (
-        <FacetGroup title={t('lib.subjects')}>
-          {facets.subjects.map((s) => (
-            <Chip
-              key={s.value}
-              label={s.value}
-              badge={s.count}
-              on={facet?.kind === 'subject' && facet.value === s.value}
-              onPress={() => pickFacet({ kind: 'subject', value: s.value })}
-            />
-          ))}
-        </FacetGroup>
-      ) : null}
-      {facets.languages.length > 0 ? (
-        <FacetGroup title={t('lib.languages')}>
-          {facets.languages.map((l) => (
-            <Chip
-              key={l.value}
-              label={l.value}
-              badge={l.count}
-              on={facet?.kind === 'language' && facet.value === l.value}
-              onPress={() => pickFacet({ kind: 'language', value: l.value })}
-            />
-          ))}
-        </FacetGroup>
-      ) : null}
-      {facets.collections.length > 0 ? (
-        <FacetGroup title={t('lib.collections')}>
-          {facets.collections.map((c) => (
-            <Chip
-              key={c.id}
-              label={`📁 ${c.name}`}
-              badge={c.documentCount}
-              on={facet?.kind === 'collection' && facet.id === c.id}
-              onPress={() => pickFacet({ kind: 'collection', id: c.id, name: c.name })}
-            />
-          ))}
-        </FacetGroup>
-      ) : null}
-
-      {/* Documents */}
-      {shelf === 'shared' && !facet ? (
-        <Text style={styles.empty}>{t('lib.sharedSoon')}</Text>
-      ) : docs.length === 0 ? (
-        <Text style={styles.empty}>{t('lib.empty')}</Text>
+      {wide ? (
+        // Desktop: LEFT filters rail + RIGHT documents grid filling the width.
+        <View style={{ flexDirection: 'row', gap: 20, alignItems: 'flex-start' }}>
+          <View style={{ width: 260, gap: 12 }}>{filtersRail}</View>
+          <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start', alignContent: 'flex-start' }}>
+            {docNodes}
+          </View>
+        </View>
       ) : (
-        docs.map((doc) => (
-          <DocCard
-            key={doc.id}
-            doc={doc}
-            onOpen={() => router.push(`/library/${doc.id}`)}
-            onFavorite={() => toggleFavorite(doc)}
-            onTrash={() => trash(doc)}
-          />
-        ))
+        // Mobile / tablet: unchanged single-column stack.
+        <>
+          {filtersMobile}
+          {docNodes}
+        </>
       )}
     </ScrollView>
   );
@@ -559,6 +571,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   facetTitle: { fontSize: 11, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.8 },
   facetChips: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   empty: { fontSize: 14, color: c.textSecondary, paddingVertical: 12 },
+  docCell: { width: '48%', flexGrow: 1, minWidth: 320 },
   doc: { gap: 8 },
   docHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   flex: { flex: 1 },
