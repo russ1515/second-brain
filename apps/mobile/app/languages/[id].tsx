@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, View, type ViewStyle } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type {
   CefrLevel,
@@ -20,6 +20,7 @@ import { api, apiUpload } from '../../lib/client';
 import { createRecorder, RECORDING_SUPPORTED, type Recorder } from '../../lib/recorder';
 import { useTokens } from '../../lib/design/theme';
 import type { ColorScale } from '../../lib/design/tokens';
+import { useResponsive } from '../../lib/responsive';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
 import { Markdown } from '../../components/markdown';
@@ -29,6 +30,8 @@ export default function LanguageScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
+  const { width } = useResponsive();
+  const wide = width >= 1024;
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [profile, setProfile] = useState<LanguageProfileDetail | null>(null);
@@ -176,7 +179,8 @@ export default function LanguageScreen() {
         </Card>
       ) : null}
 
-      <Section title={t('lang.skills')}>
+      <View style={wide ? styles.grid : undefined}>
+      <Section title={t('lang.skills')} cellStyle={wide ? styles.cell : undefined}>
         <Text style={styles.help}>
           {t('lang.skillsHelp').replace('{level}', profile?.cefrLevel ?? '')}
         </Text>
@@ -202,7 +206,7 @@ export default function LanguageScreen() {
         ) : null}
       </Section>
 
-      <Section title={t('lang.conversation')}>
+      <Section title={t('lang.conversation')} cellStyle={wide ? styles.cell : undefined}>
         <Text style={styles.help}>{t('lang.conversationHelp')}</Text>
         <TextInput
           style={styles.input}
@@ -215,7 +219,7 @@ export default function LanguageScreen() {
         <Button label={t('lang.startTalking')} onPress={converse} busy={busy === 'convo'} />
       </Section>
 
-      <Section title={t('lang.vocabulary')}>
+      <Section title={t('lang.vocabulary')} cellStyle={wide ? styles.cell : undefined}>
         <Text style={styles.help}>{t('lang.vocabularyHelp')}</Text>
         <TextInput
           style={[styles.input, styles.tall]}
@@ -234,7 +238,7 @@ export default function LanguageScreen() {
         />
       </Section>
 
-      <Section title={t('lang.lesson')}>
+      <Section title={t('lang.lesson')} cellStyle={wide ? styles.cell : undefined}>
         <TextInput
           style={styles.input}
           placeholder={t('lang.lessonPlaceholder')}
@@ -251,13 +255,11 @@ export default function LanguageScreen() {
         />
       </Section>
 
-      <Dialogue profileId={id} />
-
-      <EssayCorrection profileId={id} />
-
-      <Pronunciation profileId={id} />
-
-      <PronunciationCoach profileId={id} />
+        <View style={wide ? styles.cell : undefined}><Dialogue profileId={id} /></View>
+        <View style={wide ? styles.cell : undefined}><EssayCorrection profileId={id} /></View>
+        <View style={wide ? styles.cell : undefined}><Pronunciation profileId={id} /></View>
+        <View style={wide ? styles.cell : undefined}><PronunciationCoach profileId={id} /></View>
+      </View>
 
       <Button variant="ghost" label={t('app.back')} onPress={() => router.replace('/')} />
     </ScrollView>
@@ -609,11 +611,11 @@ function PronunciationCoach({ profileId }: { profileId: string }) {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children, cellStyle }: { title: string; children: React.ReactNode; cellStyle?: ViewStyle }) {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   return (
-    <View style={styles.section}>
+    <View style={[styles.section, cellStyle]}>
       <Text style={styles.sectionTitle}>{title}</Text>
       <Card>{children}</Card>
     </View>
@@ -622,6 +624,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 10, maxWidth: 1280, width: '100%', alignSelf: 'center' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, alignItems: 'flex-start' },
+  cell: { width: '48%', flexGrow: 1, minWidth: 320 },
   title: { fontSize: 26, fontWeight: '700', color: c.textPrimary },
   meta: { fontSize: 13, color: c.textSecondary, textTransform: 'capitalize', marginBottom: 6 },
   notice: { backgroundColor: c.successSoft, borderColor: c.success },
