@@ -52,7 +52,7 @@ export default function LearnScreen() {
   );
 
   const persona = learnPersona(category ?? null);
-  const wide = width >= 760;
+  const cols = width >= 1024 ? 3 : width >= 760 ? 2 : 1;
 
   // Capabilities in the persona's priority order.
   const byKey = new Map<CapabilityKey, (typeof CAPABILITIES)[number]>(CAPABILITIES.map((cap) => [cap.key, cap]));
@@ -84,13 +84,14 @@ export default function LearnScreen() {
         <LearningModeSelector modes={modes} value={mode} onSelect={selectMode} />
       </View>
 
-      {/* The six capabilities — order adapts to the KYC persona */}
+      {/* The six capabilities — order adapts to the KYC persona. The grid widens
+          with the viewport: 1 column on phones, 2 on tablets, 3 on desktop. */}
       <View style={{ gap: 10 }}>
         <SectionLabel>Tes capacités d’apprentissage</SectionLabel>
-        {wide ? (
+        {cols > 1 ? (
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
             {ordered.map((cap) => (
-              <View key={cap.key} style={{ width: '48%', flexGrow: 1 }}>
+              <View key={cap.key} style={{ width: cols === 3 ? '31.5%' : '48%', flexGrow: 1, minWidth: 240 }}>
                 <CapabilityCard capability={cap} onOpen={() => openCapability(cap.route)} />
               </View>
             ))}
