@@ -5,6 +5,7 @@ import { useI18n } from '../../lib/i18n';
 import { useResponsive } from '../../lib/responsive';
 import { Button, Empty, Loading } from '../../components/ui';
 import { ResponsiveTabBar } from '../../components/nav/responsive-tab-bar';
+import { SidebarProvider, useSidebar, useIsRTL } from '../../components/nav/app-shell';
 import { LandingPage } from '../../components/landing/landing-page';
 
 function TabIcon({ emoji, color }: { emoji: string; color: string }) {
@@ -21,7 +22,6 @@ function TabIcon({ emoji, color }: { emoji: string; color: string }) {
 export default function TabsLayout() {
   const { user, loading, offline, onboarded, retry, logout } = useAuth();
   const { t } = useI18n();
-  const { width } = useResponsive();
 
   if (loading) return <Loading label={t('classroom.opening')} />;
 
@@ -52,17 +52,30 @@ export default function TabsLayout() {
   // status hiccup never traps them out of the classroom.
   if (onboarded === false) return <Redirect href="/onboarding" />;
 
-  // Responsive nav (UI/UX Sprint 7): a permanent left sidebar on desktop
-  // (≥1024px), the bottom bar otherwise — same 5 spaces. On desktop the content
-  // is offset so it never sits under the floating sidebar.
+  // Responsive App Shell: a permanent, collapsible sidebar on desktop (≥1024px),
+  // the bottom bar otherwise — same 5 spaces. The workspace offset is lifted into
+  // the shell so it always tracks the sidebar width and mirrors under RTL.
+  return (
+    <SidebarProvider>
+      <Shell />
+    </SidebarProvider>
+  );
+}
+
+function Shell() {
+  const { t } = useI18n();
+  const { width } = useResponsive();
+  const rtl = useIsRTL();
+  const { width: sidebarW } = useSidebar();
   const desktop = width >= 1024;
+  const sceneStyle = desktop ? (rtl ? { paddingRight: sidebarW } : { paddingLeft: sidebarW }) : undefined;
 
   return (
     <Tabs
       tabBar={(props) => <ResponsiveTabBar {...props} />}
       screenOptions={{
         headerShown: false,
-        sceneStyle: desktop ? { paddingLeft: 232 } : undefined,
+        sceneStyle,
       }}
     >
       <Tabs.Screen

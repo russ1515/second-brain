@@ -380,6 +380,8 @@ const en = {
   'nav.languages': 'Languages',
   'nav.revision': 'Revision queue',
   'nav.progress': 'Progress',
+  'nav.expand': 'Expand menu',
+  'nav.collapse': 'Collapse menu',
 
   'tab.home': 'Home',
   'tab.learn': 'Learn',
@@ -2473,6 +2475,8 @@ const fr: Record<TranslationKey, string> = {
   'nav.languages': 'Langues',
   'nav.revision': 'File de révision',
   'nav.progress': 'Progression',
+  'nav.expand': 'Déplier le menu',
+  'nav.collapse': 'Replier le menu',
 
   'tab.home': 'Accueil',
   'tab.learn': 'Apprendre',
