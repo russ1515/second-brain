@@ -55,6 +55,8 @@ export default function TutorEntry() {
   if (mode === 'free' || mode === 'free_search') return <FreeSearch />;
   if (mode === 'deepsearch' || mode === 'deep_research') return <DeepResearch />;
   if (mode === 'oral_exercise') return <OralExercise />;
+  if (mode === 'explain') return <Explain />;
+  if (mode === 'discuss' || mode === 'chat_tutor') return <Discuss />;
   if (mode && !TUTOR_MODES.has(mode)) return <ModeError />;
   return <TeacherHome />;
 }
@@ -445,6 +447,90 @@ function DeepResearch() {
   );
 }
 
+/** 💬 Conversation (mode=discuss/chat_tutor) — a free pedagogical conversation
+ *  with the teacher (who keeps the learner's context), distinct from Free Search. */
+function Discuss() {
+  return (
+    <QuestionWorkspace
+      icon="💬"
+      kickerKey="learn.discuss.kicker"
+      titleKey="learn.discuss.title"
+      subtitleKey="learn.discuss.subtitle"
+      placeholderKey="learn.discuss.placeholder"
+      submitKey="learn.discuss.submit"
+    />
+  );
+}
+
+const EXPLAIN_LEVELS: TranslationKey[] = ['learn.explain.lvlBeginner', 'learn.explain.lvlIntermediate', 'learn.explain.lvlAdvanced'];
+
+/**
+ * 💡 Explain (mode=explain) — a comprehension workspace: a concept + a level
+ * (Beginner / Intermediate / Advanced) that frames the request so the teacher
+ * explains at the right depth with examples and analogies. Reuses the tutor API.
+ */
+function Explain() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const { t } = useI18n();
+  const router = useRouter();
+  const [q, setQ] = useState('');
+  const [level, setLevel] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const ask = async () => {
+    const question = q.trim();
+    if (!question || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const s = await api<TutorSessionSummary>('/tutor/sessions', { method: 'POST', body: {} });
+      const content = `${t('learn.explain.frame')} (${t(EXPLAIN_LEVELS[level])})\n\n${question}`;
+      await api(`/tutor/sessions/${s.id}/messages`, { method: 'POST', body: { content } });
+      router.push(`/tutor/${s.id}`);
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ScrollView contentContainerStyle={styles.container}>
+      <BackToLearn />
+      <View style={styles.freeHead}>
+        <Text style={styles.freeKicker}>💡 {t('learn.explain.kicker')}</Text>
+        <Text style={styles.freeTitle}>{t('learn.explain.title')}</Text>
+        <Text style={styles.freeSub}>{t('learn.explain.subtitle')}</Text>
+      </View>
+      {error ? <ErrorBanner message={error} /> : null}
+      <Card>
+        <Text style={styles.levelLabel}>{t('learn.explain.levelLabel')}</Text>
+        <View style={styles.levelRow}>
+          {EXPLAIN_LEVELS.map((lv, i) => {
+            const on = i === level;
+            return (
+              <Pressable key={lv} onPress={() => setLevel(i)} accessibilityRole="button" accessibilityState={{ selected: on }} style={[styles.levelPill, on && styles.levelPillOn]}>
+                <Text style={[styles.levelPillText, on && styles.levelPillTextOn]}>{t(lv)}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <TextInput
+          style={[styles.input, styles.freeInput]}
+          placeholder={t('learn.explain.placeholder')}
+          placeholderTextColor={c.textMuted}
+          value={q}
+          onChangeText={setQ}
+          multiline
+          autoFocus
+        />
+        <Button label={t('learn.explain.submit')} onPress={ask} busy={busy} disabled={!q.trim()} />
+      </Card>
+    </ScrollView>
+  );
+}
+
 /**
  * 🎙️ Oral Exercise (mode=oral_exercise) — a Voice Studio. The professor asks a
  * question; the learner answers out loud. Reuses the existing recorder and the
@@ -595,6 +681,12 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   freeSub: { fontSize: 15, color: c.textSecondary, lineHeight: 22 },
   freeInput: { minHeight: 110, textAlignVertical: 'top', marginBottom: 12 },
   freeNote: { fontSize: 13, color: c.textMuted, fontStyle: 'italic', lineHeight: 19 },
+  levelLabel: { fontSize: 11, fontWeight: '800', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 },
+  levelRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  levelPill: { borderWidth: 1, borderColor: c.border, borderRadius: 999, paddingVertical: 8, paddingHorizontal: 14, backgroundColor: c.surfaceElevated, minHeight: 40, justifyContent: 'center' },
+  levelPillOn: { borderColor: c.aiAccent, backgroundColor: c.aiAccentSoft },
+  levelPillText: { fontSize: 13, fontWeight: '700', color: c.textSecondary },
+  levelPillTextOn: { color: c.aiAccent },
   studio: { alignItems: 'center', gap: 12 },
   statusPill: { borderWidth: 1, borderColor: c.border, borderRadius: 999, paddingVertical: 5, paddingHorizontal: 14, backgroundColor: c.surfaceElevated },
   statusText: { fontSize: 12, fontWeight: '800', color: c.textSecondary, textTransform: 'uppercase', letterSpacing: 1 },
