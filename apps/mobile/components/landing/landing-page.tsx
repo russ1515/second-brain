@@ -95,6 +95,7 @@ export function LandingPage() {
       <KnowledgeGraph />
       <Revision />
       <OneExperience />
+      <Pricing />
       <Anchored id="faq" onAnchor={onAnchor}><Faq /></Anchored>
       <FinalCta />
       <Footer />
@@ -795,6 +796,133 @@ function OneExperience() {
         <Rail steps={steps} accent />
       </View>
     </Shell>
+  );
+}
+
+// ── FAQ accordion ────────────────────────────────────────────────────────────
+
+// ── Subscriptions (Free / Pro / Max) ─────────────────────────────────────────
+
+type Tier = { id: 'free' | 'pro' | 'max'; emoji: string; accent: boolean; primary: boolean };
+
+/** Marketing subscription section — presents the Free → Pro → Max progression.
+ *  No prices, no feature matrix, no billing logic: CTAs route to the existing
+ *  auth flow. The monthly/annual toggle is visual-only (ready to receive a
+ *  billingCycle later) — it never shows a fabricated price. */
+function Pricing() {
+  const { colors: c } = useTokens();
+  const { width } = useResponsive();
+  const gutter = useGutter();
+  const { t } = useI18n();
+  const reduced = useReducedMotion();
+  const wide = width >= 768;
+  const [annual, setAnnual] = useState(false);
+  const tiers: Tier[] = [
+    { id: 'free', emoji: '🌱', accent: false, primary: false },
+    { id: 'pro', emoji: '⚡', accent: true, primary: true },
+    { id: 'max', emoji: '🚀', accent: false, primary: true },
+  ];
+  return (
+    <View style={{ width: '100%' }}>
+      <View style={{ maxWidth: CONTENT_MAX, width: '100%', alignSelf: 'center', paddingHorizontal: gutter, paddingVertical: wide ? 72 : 48, gap: 28 }}>
+        <View style={{ gap: 12, alignItems: 'center' }}>
+          <Text style={{ color: c.textPrimary, fontSize: wide ? 32 : 26, fontWeight: '900', textAlign: 'center', lineHeight: wide ? 38 : 32 }}>{t(k('landing.pricing.title'))}</Text>
+          <Text style={{ color: c.textSecondary, fontSize: 15, textAlign: 'center', maxWidth: 560 }}>{t(k('landing.pricing.subtitle'))}</Text>
+          <BillingToggle annual={annual} onChange={setAnnual} />
+        </View>
+        <View style={{ flexDirection: wide ? 'row' : 'column', gap: 24, alignItems: 'stretch' }}>
+          {tiers.map((tier) => (
+            <PriceCard key={tier.id} tier={tier} reduced={reduced} />
+          ))}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function BillingToggle({ annual, onChange }: { annual: boolean; onChange: (v: boolean) => void }) {
+  const { colors: c, radius } = useTokens();
+  const { t } = useI18n();
+  const Opt = ({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) => (
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityState={{ selected: active }} style={{ borderRadius: radius.full, paddingVertical: 8, paddingHorizontal: 18, minHeight: 40, justifyContent: 'center', backgroundColor: active ? c.primary : 'transparent' }}>
+      <Text style={{ color: active ? c.onPrimary : c.textSecondary, fontSize: 13, fontWeight: '700' }}>{label}</Text>
+    </Pressable>
+  );
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.full, padding: 4 }}>
+        <Opt label={t(k('landing.pricing.billing.monthly'))} active={!annual} onPress={() => onChange(false)} />
+        <Opt label={t(k('landing.pricing.billing.annual'))} active={annual} onPress={() => onChange(true)} />
+      </View>
+      {annual ? (
+        <View style={{ borderWidth: 1, borderColor: c.success, backgroundColor: c.successSoft, borderRadius: radius.full, paddingVertical: 5, paddingHorizontal: 10 }}>
+          <Text style={{ color: c.success, fontSize: 11, fontWeight: '800' }}>{t(k('landing.pricing.billing.saving'))}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function PriceCard({ tier, reduced }: { tier: Tier; reduced: boolean }) {
+  const { colors: c, radius } = useTokens();
+  const { t } = useI18n();
+  const go = useGo();
+  const [hover, setHover] = useState(false);
+  const accent = tier.accent;
+  const name = t(k(`landing.pricing.${tier.id}.name`));
+  const desc = t(k(`landing.pricing.${tier.id}.description`));
+  const cta = t(k(`landing.pricing.${tier.id}.cta`));
+  const lift = hover && !reduced;
+  return (
+    <Pressable
+      onPress={go}
+      onHoverIn={() => setHover(true)}
+      onHoverOut={() => setHover(false)}
+      accessibilityRole="button"
+      accessibilityLabel={`${name} — ${cta}`}
+      style={[
+        {
+          flex: 1,
+          minWidth: 240,
+          borderWidth: accent ? 2 : 1,
+          borderColor: accent ? c.aiAccent : hover ? c.borderStrong : c.border,
+          backgroundColor: accent ? c.aiAccentSoft : c.surfaceElevated,
+          borderRadius: radius.xl,
+          padding: 24,
+          gap: 12,
+          transform: lift ? [{ translateY: -3 }] : undefined,
+        },
+        webOnly({
+          transition: 'transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease',
+          boxShadow: accent ? '0 26px 60px -32px rgba(0,0,0,0.5)' : hover ? '0 18px 44px -28px rgba(0,0,0,0.4)' : 'none',
+        }),
+      ]}
+    >
+      {accent ? (
+        <View style={{ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: radius.full, backgroundColor: c.aiAccent, paddingVertical: 4, paddingHorizontal: 10 }}>
+          <Text style={{ color: c.onAiAccent, fontSize: 11, fontWeight: '800' }}>★ {t(k('landing.pricing.pro.badge'))}</Text>
+        </View>
+      ) : null}
+      <Text style={{ fontSize: 26 }}>{tier.emoji}</Text>
+      <Text style={{ color: c.textPrimary, fontSize: 22, fontWeight: '900' }}>{name}</Text>
+      <Text style={{ color: c.textSecondary, fontSize: 14, lineHeight: 21 }}>{desc}</Text>
+      <View style={{ flex: 1, minHeight: 12 }} />
+      <View
+        style={{
+          borderRadius: radius.md,
+          minHeight: 48,
+          justifyContent: 'center',
+          alignItems: 'center',
+          paddingVertical: 12,
+          paddingHorizontal: 18,
+          backgroundColor: tier.primary ? c.primary : 'transparent',
+          borderWidth: tier.primary ? 0 : 1,
+          borderColor: c.borderStrong,
+        }}
+      >
+        <Text style={{ color: tier.primary ? c.onPrimary : c.textPrimary, fontSize: 15, fontWeight: '800' }}>{cta}</Text>
+      </View>
+    </Pressable>
   );
 }
 
