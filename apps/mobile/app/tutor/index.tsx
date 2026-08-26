@@ -1,4 +1,4 @@
-import { useCallback, useState, useMemo } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import type {
@@ -10,9 +10,11 @@ import type {
   SessionPlan,
   TutorSessionDetail,
   TutorSessionSummary,
+  VoiceTurnResponse,
 } from '@second-brain/shared';
 import { useAuth } from '../../lib/auth-context';
-import { api } from '../../lib/client';
+import { api, apiUpload } from '../../lib/client';
+import { createRecorder, RECORDING_SUPPORTED, type Recorder } from '../../lib/recorder';
 import { useTokens } from '../../lib/design/theme';
 import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
@@ -52,6 +54,7 @@ export default function TutorEntry() {
   const mode = Array.isArray(params.mode) ? params.mode[0] : params.mode;
   if (mode === 'free' || mode === 'free_search') return <FreeSearch />;
   if (mode === 'deepsearch' || mode === 'deep_research') return <DeepResearch />;
+  if (mode === 'oral_exercise') return <OralExercise />;
   if (mode && !TUTOR_MODES.has(mode)) return <ModeError />;
   return <TeacherHome />;
 }
@@ -442,6 +445,132 @@ function DeepResearch() {
   );
 }
 
+/**
+ * 🎙️ Oral Exercise (mode=oral_exercise) — a Voice Studio. The professor asks a
+ * question; the learner answers out loud. Reuses the existing recorder and the
+ * tutor /voice endpoint (transcript + spoken reply) — no parallel audio system.
+ * Honest states (Ready / Listening / Analyzing) and no fabricated pronunciation
+ * scores, since the backend returns only a transcript and the teacher's reply.
+ */
+function OralExercise() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const { t } = useI18n();
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [turns, setTurns] = useState<{ role: 'teacher' | 'you'; text: string }[]>([]);
+  const [status, setStatus] = useState<'init' | 'ready' | 'recording' | 'analyzing'>('init');
+  const [error, setError] = useState<string | null>(null);
+  const recorder = useRef<Recorder | null>(null);
+
+  const refresh = useCallback(async (sid: string) => {
+    const detail = await api<TutorSessionDetail>(`/tutor/sessions/${sid}`);
+    // Drop the synthetic framing turn (the first user message) from the view.
+    setTurns(
+      detail.messages
+        .slice(1)
+        .map((m) => ({ role: (m.role === 'assistant' ? 'teacher' : 'you') as 'teacher' | 'you', text: m.content }))
+        .filter((x) => x.text.trim()),
+    );
+  }, []);
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      try {
+        const s = await api<TutorSessionSummary>('/tutor/sessions', { method: 'POST', body: {} });
+        if (cancel) return;
+        setSessionId(s.id);
+        await api(`/tutor/sessions/${s.id}/messages`, { method: 'POST', body: { content: t('learn.oral.frame') } });
+        if (cancel) return;
+        await refresh(s.id);
+        if (!cancel) setStatus('ready');
+      } catch (e) {
+        if (!cancel) { setError((e as Error).message); setStatus('ready'); }
+      }
+    })();
+    return () => { cancel = true; };
+  }, [refresh, t]);
+
+  const stopAndSend = async () => {
+    if (!recorder.current || !sessionId) return;
+    setStatus('analyzing');
+    try {
+      const { blob, mimeType } = await recorder.current.stop();
+      const ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
+      const form = new FormData();
+      form.append('audio', blob, `turn.${ext}`);
+      await apiUpload<VoiceTurnResponse>(`/tutor/sessions/${sessionId}/voice`, form);
+      await refresh(sessionId);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      recorder.current = null;
+      setStatus('ready');
+    }
+  };
+
+  const toggleRecord = async () => {
+    if (status === 'analyzing' || status === 'init') return;
+    if (status === 'recording') { await stopAndSend(); return; }
+    if (!sessionId) return;
+    setError(null);
+    try {
+      recorder.current = createRecorder();
+      await recorder.current.start();
+      setStatus('recording');
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const statusKey: TranslationKey =
+    status === 'recording' ? 'learn.oral.recording'
+    : status === 'analyzing' ? 'learn.oral.analyzing'
+    : status === 'init' ? 'learn.oral.starting'
+    : 'learn.oral.ready';
+
+  return (
+    <ScrollView contentContainerStyle={styles.container}>
+      <BackToLearn />
+      <View style={styles.freeHead}>
+        <Text style={styles.freeKicker}>🎙️ {t('learn.oral.kicker')}</Text>
+        <Text style={styles.freeTitle}>{t('learn.oral.title')}</Text>
+        <Text style={styles.freeSub}>{t('learn.oral.subtitle')}</Text>
+      </View>
+      {error ? <ErrorBanner message={error} /> : null}
+
+      {!RECORDING_SUPPORTED ? (
+        <Card><Text style={styles.freeSub}>{t('learn.oral.noVoice')}</Text></Card>
+      ) : (
+        <>
+          {turns.map((turn, i) => (
+            <View key={i} style={turn.role === 'you' ? styles.youBubble : styles.teacherBubble}>
+              <Text style={styles.bubbleWho}>{turn.role === 'you' ? t('learn.oral.you') : t('learn.oral.teacher')}</Text>
+              <Text style={styles.bubbleText}>{turn.text}</Text>
+            </View>
+          ))}
+
+          <Card style={styles.studio}>
+            <View style={[styles.statusPill, status === 'recording' && { borderColor: c.error }, status === 'analyzing' && { borderColor: c.primary }]}>
+              <Text style={styles.statusText}>{t(statusKey)}</Text>
+            </View>
+            <Pressable
+              onPress={toggleRecord}
+              disabled={status === 'init' || status === 'analyzing'}
+              accessibilityRole="button"
+              accessibilityLabel={t(status === 'recording' ? 'learn.oral.stop' : 'learn.oral.record')}
+              style={[styles.micButton, status === 'recording' && { backgroundColor: c.error, borderColor: c.error }, (status === 'init' || status === 'analyzing') && { opacity: 0.6 }]}
+            >
+              <Text style={styles.micIcon}>{status === 'recording' ? '⏹' : '🎙️'}</Text>
+            </Pressable>
+            <Text style={styles.micLabel}>{t(status === 'recording' ? 'learn.oral.stop' : 'learn.oral.record')}</Text>
+          </Card>
+        </>
+      )}
+    </ScrollView>
+  );
+}
+
 /** Localised error for an unknown /tutor mode — never a blank page. */
 function ModeError() {
   const { colors: c } = useTokens();
@@ -466,6 +595,16 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   freeSub: { fontSize: 15, color: c.textSecondary, lineHeight: 22 },
   freeInput: { minHeight: 110, textAlignVertical: 'top', marginBottom: 12 },
   freeNote: { fontSize: 13, color: c.textMuted, fontStyle: 'italic', lineHeight: 19 },
+  studio: { alignItems: 'center', gap: 12 },
+  statusPill: { borderWidth: 1, borderColor: c.border, borderRadius: 999, paddingVertical: 5, paddingHorizontal: 14, backgroundColor: c.surfaceElevated },
+  statusText: { fontSize: 12, fontWeight: '800', color: c.textSecondary, textTransform: 'uppercase', letterSpacing: 1 },
+  micButton: { width: 88, height: 88, borderRadius: 44, borderWidth: 2, borderColor: c.primary, backgroundColor: c.surfaceElevated, alignItems: 'center', justifyContent: 'center' },
+  micIcon: { fontSize: 34 },
+  micLabel: { fontSize: 14, fontWeight: '700', color: c.textPrimary },
+  youBubble: { alignSelf: 'flex-end', maxWidth: '90%', backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.primary, borderRadius: 12, padding: 12, gap: 4 },
+  teacherBubble: { alignSelf: 'flex-start', maxWidth: '90%', backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, borderRadius: 12, padding: 12, gap: 4 },
+  bubbleWho: { fontSize: 11, fontWeight: '800', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.8 },
+  bubbleText: { fontSize: 15, color: c.textPrimary, lineHeight: 22 },
   flex: { flex: 1 },
   stage: {
     backgroundColor: c.surface,
