@@ -83,6 +83,8 @@ export default function BrainScreen() {
 
   const persona = brainPersona(category ?? null);
   const wide = width >= 760;
+  // A more immersive, near-fullscreen graph on large desktops.
+  const graphHeight = width >= 1440 ? 640 : width >= 1024 ? 560 : 420;
   const due = (path?.items ?? []).reduce((n, i) => n + i.dueCount, 0);
 
   const openLearn = (node: TwinGraphNode) =>
@@ -139,8 +141,8 @@ export default function BrainScreen() {
         <SectionLabel>{t('brain.graph')}</SectionLabel>
         {wide ? (
           <View style={{ flexDirection: 'row', gap: 14 }}>
-            <View style={{ flex: 1.4 }}>
-              <KnowledgeGraph graph={graph!} selectedId={selected?.id ?? null} onSelect={setSelected} height={420} />
+            <View style={{ flex: width >= 1024 ? 1.7 : 1.4 }}>
+              <KnowledgeGraph graph={graph!} selectedId={selected?.id ?? null} onSelect={setSelected} height={graphHeight} />
               <View style={{ marginTop: 8 }}><MasteryLegend /></View>
             </View>
             <View style={{ flex: 1 }}>{detail}</View>

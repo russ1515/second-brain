@@ -18,6 +18,7 @@ import { api } from '../../../lib/client';
 import { useTokens } from '../../../lib/design/theme';
 import type { ColorScale } from '../../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../../lib/i18n';
+import { useResponsive } from '../../../lib/responsive';
 import { Button, Card, ErrorBanner } from '../../../components/ui';
 import { Markdown } from '../../../components/markdown';
 
@@ -44,6 +45,8 @@ export default function WorkspaceScreen() {
   const styles = useMemo(() => makeStyles(c), [c]);
   const { id, title } = useLocalSearchParams<{ id: string; title?: string }>();
   const { t } = useI18n();
+  const { width } = useResponsive();
+  const wide = width >= 1024;
   const [analysis, setAnalysis] = useState<WorkAnalysis | null>(null);
   const [mode, setMode] = useState<WorkspaceMode>('guide');
   const [sent, setSent] = useState<WorkspaceMessage[]>([]);
@@ -128,21 +131,28 @@ export default function WorkspaceScreen() {
 
   const conversation = sent.slice(1); // hide the synthetic opener turn
 
-  return (
-    <ScrollView contentContainerStyle={styles.container} ref={scrollRef}>
-      <View style={styles.masthead}>
-        <Text style={styles.kicker}>🎓 {t('ws.title')}</Text>
-        <Text style={styles.docTitle}>{title || t('header.document')}</Text>
-      </View>
-
-      {error ? <ErrorBanner message={error} /> : null}
-
-      {/* Automatic work analysis */}
+  // LEFT panel — the "énoncé": the automatic work analysis + the finish action.
+  const analysisPanel = (
+    <>
       {analysis ? <AnalysisCard analysis={analysis} /> : (
         <Text style={styles.analysing}>{t('ws.analysing')}</Text>
       )}
+      {/* Finish → generate resources (feeds the brain) */}
+      <Card style={styles.finishCard}>
+        <Text style={styles.finishTitle}>✅ {t('ws.finishTitle')}</Text>
+        <Text style={styles.muted}>{t('ws.finishHint')}</Text>
+        {genDone ? (
+          <Text style={styles.done}>{t('ws.generated')}</Text>
+        ) : (
+          <Button label={t('ws.generate')} onPress={generateResources} busy={genBusy} />
+        )}
+      </Card>
+    </>
+  );
 
-      {/* Mode selector */}
+  // RIGHT panel — the AI teacher: guidance modes + conversation + input.
+  const teacherPanel = (
+    <>
       <Text style={styles.sectionLabel}>{t('ws.chooseMode')}</Text>
       <View style={styles.modeRow}>
         {MODES.map((m) => (
@@ -160,7 +170,6 @@ export default function WorkspaceScreen() {
         ))}
       </View>
 
-      {/* Conversation */}
       {conversation.map((m, i) => (
         <View key={i} style={m.role === 'user' ? styles.userBubble : styles.aiBubble}>
           {m.role === 'user' ? (
@@ -172,7 +181,6 @@ export default function WorkspaceScreen() {
       ))}
       {busy ? <Text style={styles.analysing}>{t('ws.thinking')}</Text> : null}
 
-      {/* Input */}
       <View style={styles.inputRow}>
         <TextInput
           style={styles.input}
@@ -184,17 +192,42 @@ export default function WorkspaceScreen() {
         />
         <Button label={t('ws.send')} onPress={send} busy={busy} disabled={!input.trim()} />
       </View>
+    </>
+  );
 
-      {/* Finish → generate resources (feeds the brain) */}
-      <Card style={styles.finishCard}>
-        <Text style={styles.finishTitle}>✅ {t('ws.finishTitle')}</Text>
-        <Text style={styles.muted}>{t('ws.finishHint')}</Text>
-        {genDone ? (
-          <Text style={styles.done}>{t('ws.generated')}</Text>
-        ) : (
-          <Button label={t('ws.generate')} onPress={generateResources} busy={genBusy} />
-        )}
-      </Card>
+  return (
+    <ScrollView contentContainerStyle={styles.container} ref={scrollRef}>
+      <View style={styles.masthead}>
+        <Text style={styles.kicker}>🎓 {t('ws.title')}</Text>
+        <Text style={styles.docTitle}>{title || t('header.document')}</Text>
+      </View>
+
+      {error ? <ErrorBanner message={error} /> : null}
+
+      {wide ? (
+        // Desktop: LEFT énoncé/analysis, RIGHT the AI teacher workspace.
+        <View style={{ flexDirection: 'row', gap: 20, alignItems: 'flex-start' }}>
+          <View style={{ flex: 1, gap: 12, minWidth: 0 }}>{analysisPanel}</View>
+          <View style={{ flex: 1.3, gap: 12, minWidth: 0 }}>{teacherPanel}</View>
+        </View>
+      ) : (
+        // Mobile / tablet: single-column stack (analysis, teacher, finish).
+        <>
+          {analysis ? <AnalysisCard analysis={analysis} /> : (
+            <Text style={styles.analysing}>{t('ws.analysing')}</Text>
+          )}
+          {teacherPanel}
+          <Card style={styles.finishCard}>
+            <Text style={styles.finishTitle}>✅ {t('ws.finishTitle')}</Text>
+            <Text style={styles.muted}>{t('ws.finishHint')}</Text>
+            {genDone ? (
+              <Text style={styles.done}>{t('ws.generated')}</Text>
+            ) : (
+              <Button label={t('ws.generate')} onPress={generateResources} busy={genBusy} />
+            )}
+          </Card>
+        </>
+      )}
     </ScrollView>
   );
 }
