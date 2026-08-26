@@ -14,8 +14,23 @@ import {
   type LoginResponse,
   type OnboardingState,
 } from '@second-brain/shared';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ApiError, api } from './client';
 import { clearSession, loadSession, saveSession } from './storage';
+
+/** Sync the UI's Learning Locale to the backend so deterministic AI content
+ *  (coach, predictions, insights…) is generated in the learner's language.
+ *  The picker persists it on change; this covers session start, when the
+ *  stored locale would otherwise never reach `preferredLanguage`. Best-effort:
+ *  a hiccup here never blocks auth. */
+async function syncLocale(): Promise<void> {
+  try {
+    const loc = await AsyncStorage.getItem('sb.locale');
+    if (loc) await api('/auth/locale', { method: 'PATCH', body: { locale: loc } });
+  } catch {
+    // best-effort
+  }
+}
 
 interface AuthState {
   user: AuthUser | null;
@@ -94,6 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!cancelled) {
           setUser(me);
           setOffline(false);
+          void syncLocale();
           void refreshOnboarding();
         }
       } catch (e) {
@@ -124,6 +140,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshToken: res.tokens.refreshToken,
     });
     setUser(res.user);
+    void syncLocale();
   }, []);
 
   const register = useCallback(

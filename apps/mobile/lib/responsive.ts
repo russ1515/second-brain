@@ -32,7 +32,7 @@ export function useResponsive(): Responsive {
   else if (isLandscape && width >= 560) columns = 3;
   else columns = 2;
 
-  const maxContentWidth = width >= 1200 ? 1080 : isTablet ? 960 : 720;
+  const maxContentWidth = width >= 1440 ? 1360 : width >= 1200 ? 1280 : isTablet ? 960 : 720;
 
   return { width, height, isLandscape, isTablet, columns, maxContentWidth };
 }
