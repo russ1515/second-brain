@@ -206,6 +206,11 @@ function Header({ onNav }: { onNav: (id: string) => void }) {
   const { t } = useI18n();
   const go = useGo();
   const wide = width >= 900;
+  // The centre nav + sign-in only appear once there is real room for all six
+  // links beside the logo and the CTA; the signature needs even more. Below
+  // that they hide (rather than crushing the logo block) — the CTA stays.
+  const roomy = width >= 1080;
+  const showSig = width >= 1240;
   const nav: [string, string][] = [
     ['features', 'landing.nav.features'],
     ['how', 'landing.nav.how'],
@@ -219,21 +224,21 @@ function Header({ onNav }: { onNav: (id: string) => void }) {
       <View style={{ maxWidth: CONTENT_MAX, width: '100%', alignSelf: 'center', paddingHorizontal: wide ? gutter : 12, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: wide ? 16 : 6 }}>
         <View style={{ flexShrink: 1 }}>
           <Text numberOfLines={1} style={{ color: c.aiAccent, fontSize: wide ? 16 : 15, fontWeight: '900', letterSpacing: 0.3 }}>🧠 {t(k('landing.brand'))}</Text>
-          {wide ? <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: '600' }}>{t(k('landing.signature'))}</Text> : null}
+          {showSig ? <Text numberOfLines={1} style={{ color: c.textMuted, fontSize: 11, fontWeight: '600' }}>{t(k('landing.signature'))}</Text> : null}
         </View>
         <View style={{ flex: 1, minWidth: 6 }} />
-        {wide ? (
+        {roomy ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18 }}>
             {nav.map(([id, key]) => (
               <Pressable key={id} onPress={() => onNav(id)} accessibilityRole="link">
-                <Text style={{ color: c.textSecondary, fontSize: 14, fontWeight: '600' }}>{t(k(key))}</Text>
+                <Text numberOfLines={1} style={{ color: c.textSecondary, fontSize: 14, fontWeight: '600' }}>{t(k(key))}</Text>
               </Pressable>
             ))}
           </View>
         ) : null}
-        <View style={{ width: wide ? 18 : 0 }} />
+        <View style={{ width: roomy ? 18 : 0 }} />
         <LangPill />
-        {wide ? (
+        {roomy ? (
           <Pressable onPress={go} accessibilityRole="button"><Text style={{ color: c.textSecondary, fontSize: 14, fontWeight: '700' }}>{t(k('landing.cta.signin'))}</Text></Pressable>
         ) : null}
         <PrimaryCta compact={!wide} label={t(k(wide ? 'landing.cta.start' : 'landing.cta.startShort'))} />
