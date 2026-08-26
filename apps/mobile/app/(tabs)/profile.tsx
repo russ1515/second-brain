@@ -105,61 +105,82 @@ export default function ProfileScreen() {
     (education?.category ? t(categoryLabel(education.category) as TranslationKey) : '—') +
     (education?.field ? ` — ${education.field}` : '');
 
-  const grid: ViewStyle = wide ? { flexDirection: 'row', flexWrap: 'wrap', gap: 14 } : { gap: 16 };
-  const cell: ViewStyle = wide ? { width: '48%', flexGrow: 1 } : {};
+  // Desktop (≥1024): a real 2-column workspace — LEFT profile summary, RIGHT
+  // settings & configuration. Below that, both columns stack into one.
+  const twoCol = wide;
+  const colStyle: ViewStyle = twoCol ? { flex: 1, gap: 16, minWidth: 0 } : { gap: 16 };
+
+  const photoHeader = (
+    <View style={{ alignItems: 'center', gap: 6, marginTop: 6 }}>
+      <ProfilePhoto photoUri={photo} avatarEmoji={identity.avatarEmoji} name={name} busy={busy} onPick={onPick} onChooseAvatar={onChooseAvatar} onRemove={onRemove} />
+      <Text style={{ color: c.textPrimary, fontSize: 22, fontWeight: '800' }}>{name || user?.email?.split('@')[0]}</Text>
+      <Text style={{ color: c.textMuted, fontSize: 13 }}>{user?.email ?? ''}</Text>
+    </View>
+  );
+
+  const kycCard = (
+    <Card>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+        <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: '800' }}>{t('profile.kyc.title')}</Text>
+        <Badge tone={kycComplete ? 'success' : 'warning'} label={kycComplete ? t('profile.kyc.complete') : t('profile.kyc.incomplete')} />
+      </View>
+      <Text style={{ color: c.textMuted, fontSize: 13, marginBottom: 12 }}>{t('profile.kyc.detail')}</Text>
+      <View style={{ gap: 8, marginBottom: 14 }}>
+        <SummaryRow c={c} label={t('profile.kyc.name')} value={name || (user?.email?.split('@')[0] ?? '—')} />
+        <SummaryRow c={c} label={t('profile.kyc.path')} value={pathLine} />
+        <SummaryRow c={c} label={t('profile.kyc.languagesRow')} value={langLine} />
+        <SummaryRow c={c} label={t('profile.kyc.goalsRow')} value={`${goals.length} ${t('profile.kyc.goalsN')}`} />
+      </View>
+      <Button label={t('profile.kyc.verify')} variant="secondary" icon="→" onPress={() => router.push('/onboarding')} />
+    </Card>
+  );
+
+  const cognitive = (
+    <CognitiveSummary strengths={strengths} retention={stats?.retention ?? twin?.summary.averageMastery ?? null} dailyMinutes={Math.max(10, Math.round(((stats?.due ?? 0) * 25) / 60) || 15)} />
+  );
+
+  const localeCard = (
+    <Card>
+      <LocalePicker />
+    </Card>
+  );
+
+  const teacherCard = (
+    <TeacherConfig tone={teacher.tone} explanations={teacher.explanations}
+      onTone={(v: NonNullable<KycTeacher['tone']>) => patch('teacher', { tone: v })}
+      onExplanations={(v: NonNullable<KycTeacher['explanations']>) => patch('teacher', { explanations: v })} />
+  );
+
+  const systemCard = (
+    <SystemConfig scheme={scheme} onScheme={setScheme} totalConcepts={twin?.summary.totalConcepts ?? 0} reviews={stats?.reviewsToday ?? 0}
+      onPrivacy={() => router.push('/privacy')} onMemory={() => router.push('/memory')} />
+  );
+
+  const accountCard = (
+    <Card>
+      <Button label={t('profile.manageSubscription')} variant="secondary" onPress={() => router.push('/subscription')} />
+      <View style={{ height: 8 }} />
+      <Button label={t('app.signOut')} variant="ghost" onPress={logout} />
+    </Card>
+  );
 
   return (
     <ScrollView contentContainerStyle={[styles.container, { maxWidth: maxContentWidth }]}>
-      {/* Photo + name */}
-      <View style={{ alignItems: 'center', gap: 6, marginTop: 6 }}>
-        <ProfilePhoto photoUri={photo} avatarEmoji={identity.avatarEmoji} name={name} busy={busy} onPick={onPick} onChooseAvatar={onChooseAvatar} onRemove={onRemove} />
-        <Text style={{ color: c.textPrimary, fontSize: 22, fontWeight: '800' }}>{name || user?.email?.split('@')[0]}</Text>
-        <Text style={{ color: c.textMuted, fontSize: 13 }}>{user?.email ?? ''}</Text>
-      </View>
-
-      {/* Compact KYC card (§20): a summary + a button into the KYC flow — never a
-          massive form in the profile page. Editing happens in the onboarding flow. */}
-      <Card>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-          <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: '800' }}>{t('profile.kyc.title')}</Text>
-          <Badge tone={kycComplete ? 'success' : 'warning'} label={kycComplete ? t('profile.kyc.complete') : t('profile.kyc.incomplete')} />
+      <View style={twoCol ? { flexDirection: 'row', gap: 20, alignItems: 'flex-start', width: '100%' } : { gap: 16 }}>
+        {/* LEFT — profile summary */}
+        <View style={colStyle}>
+          {photoHeader}
+          {kycCard}
+          {cognitive}
         </View>
-        <Text style={{ color: c.textMuted, fontSize: 13, marginBottom: 12 }}>{t('profile.kyc.detail')}</Text>
-        <View style={{ gap: 8, marginBottom: 14 }}>
-          <SummaryRow c={c} label={t('profile.kyc.name')} value={name || (user?.email?.split('@')[0] ?? '—')} />
-          <SummaryRow c={c} label={t('profile.kyc.path')} value={pathLine} />
-          <SummaryRow c={c} label={t('profile.kyc.languagesRow')} value={langLine} />
-          <SummaryRow c={c} label={t('profile.kyc.goalsRow')} value={`${goals.length} ${t('profile.kyc.goalsN')}`} />
-        </View>
-        <Button label={t('profile.kyc.verify')} variant="secondary" icon="→" onPress={() => router.push('/onboarding')} />
-      </Card>
-
-      {/* Interface-language selector (§21): premium, accessible, drives the whole
-          UI language via i18n setLocale (persisted). */}
-      <Card>
-        <LocalePicker />
-      </Card>
-
-      {/* Kept in-profile: AI-teacher posture + the read-only cognitive summary. */}
-      <View style={grid}>
-        <View style={cell}>
-          <TeacherConfig tone={teacher.tone} explanations={teacher.explanations}
-            onTone={(v: NonNullable<KycTeacher['tone']>) => patch('teacher', { tone: v })}
-            onExplanations={(v: NonNullable<KycTeacher['explanations']>) => patch('teacher', { explanations: v })} />
-        </View>
-        <View style={cell}>
-          <CognitiveSummary strengths={strengths} retention={stats?.retention ?? twin?.summary.averageMastery ?? null} dailyMinutes={Math.max(10, Math.round(((stats?.due ?? 0) * 25) / 60) || 15)} />
+        {/* RIGHT — settings & configuration */}
+        <View style={colStyle}>
+          {localeCard}
+          {teacherCard}
+          {systemCard}
+          {accountCard}
         </View>
       </View>
-
-      <SystemConfig scheme={scheme} onScheme={setScheme} totalConcepts={twin?.summary.totalConcepts ?? 0} reviews={stats?.reviewsToday ?? 0}
-        onPrivacy={() => router.push('/privacy')} onMemory={() => router.push('/memory')} />
-
-      <Card>
-        <Button label={t('profile.manageSubscription')} variant="secondary" onPress={() => router.push('/subscription')} />
-        <View style={{ height: 8 }} />
-        <Button label={t('app.signOut')} variant="ghost" onPress={logout} />
-      </Card>
 
       <Text style={{ color: c.textMuted, fontSize: 12, textAlign: 'center', marginTop: 4 }}>
         {t('profile.footer')}
