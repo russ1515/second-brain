@@ -82,7 +82,6 @@ export function LandingPage() {
     >
       <Header onNav={scrollTo} />
       <Hero onStart={undefined} onDiscover={() => scrollTo('features')} />
-      <SignalsBand />
 
       <Anchored id="features" onAnchor={onAnchor}><Showcase /></Anchored>
       <Comparison />
@@ -93,9 +92,7 @@ export function LandingPage() {
       <Anchored id="languages" onAnchor={onAnchor}><Languages /></Anchored>
       <Kyc />
       <DigitalTwin />
-      <KnowledgeGraph />
       <Revision />
-      <OneExperience />
       <Pricing />
       <Anchored id="faq" onAnchor={onAnchor}><Faq /></Anchored>
       <FinalCta />
@@ -454,26 +451,6 @@ function StatBar({ label, value, color }: { label: string; value: number; color:
   );
 }
 
-/** Thin product-signals band under the hero. */
-function SignalsBand() {
-  const { colors: c } = useTokens();
-  const gutter = useGutter();
-  const { t } = useI18n();
-  const items = ['landing.flow.professor', 'landing.flow.twin', 'landing.flow.graph', 'landing.hero.reassure3', 'landing.signals.multipdf', 'landing.signals.fsrs'];
-  return (
-    <View style={{ width: '100%', borderTopWidth: 1, borderBottomWidth: 1, borderColor: c.borderSubtle, backgroundColor: c.surfaceSunken }}>
-      <View style={{ maxWidth: CONTENT_MAX, width: '100%', alignSelf: 'center', paddingHorizontal: gutter, paddingVertical: 16, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 8 }}>
-        {items.map((key, i) => (
-          <View key={key} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Text style={{ color: c.textSecondary, fontSize: 13, fontWeight: '700' }}>{t(k(key))}</Text>
-            {i < items.length - 1 ? <Text style={{ color: c.aiAccent, fontSize: 12 }}>•</Text> : null}
-          </View>
-        ))}
-      </View>
-    </View>
-  );
-}
-
 // ── "What changes" comparison ────────────────────────────────────────────────
 
 function Comparison() {
@@ -738,6 +715,14 @@ function DigitalTwin() {
   const rtl = useRTL();
   const wide = width >= 820;
   const inputs = [1, 2, 3, 4, 5].map((n) => t(k(`landing.twin.i${n}`)));
+  const tree: { label: string; depth: number }[] = [
+    { label: 'Mathematics', depth: 0 },
+    { label: 'Algebra', depth: 1 },
+    { label: 'Equations', depth: 2 },
+    { label: 'Functions', depth: 2 },
+    { label: 'Geometry', depth: 1 },
+    { label: 'Theorems', depth: 2 },
+  ];
   return (
     <Shell tone="alt">
       <View style={{ gap: 8, marginBottom: 20 }}>
@@ -760,31 +745,14 @@ function DigitalTwin() {
           <Text style={{ color: c.textSecondary, fontSize: 13, textAlign: 'center', lineHeight: 19 }}>{t(k('landing.twin.lead'))}</Text>
         </View>
       </View>
-    </Shell>
-  );
-}
 
-// ── Knowledge Graph ──────────────────────────────────────────────────────────
-
-function KnowledgeGraph() {
-  const { colors: c, radius } = useTokens();
-  const { t } = useI18n();
-  const tree: { label: string; depth: number }[] = [
-    { label: 'Mathematics', depth: 0 },
-    { label: 'Algebra', depth: 1 },
-    { label: 'Equations', depth: 2 },
-    { label: 'Functions', depth: 2 },
-    { label: 'Geometry', depth: 1 },
-    { label: 'Theorems', depth: 2 },
-  ];
-  return (
-    <Shell>
-      <View style={{ gap: 8, marginBottom: 18 }}>
-        <Kicker>{t(k('landing.flow.graph'))}</Kicker>
-        <SectionTitle>{t(k('landing.graph.title'))}</SectionTitle>
+      {/* Knowledge Graph — folded into the Digital Twin: the twin's concepts
+          form a living, connected map rather than a separate section. */}
+      <View style={{ gap: 6, marginTop: 26 }}>
+        <Text style={{ color: c.textMuted, fontSize: 13, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8 }}>{t(k('landing.graph.title'))}</Text>
         <Lead>{t(k('landing.graph.lead'))}</Lead>
       </View>
-      <View style={{ borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.lg, padding: 18, gap: 8 }}>
+      <View style={{ borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.lg, padding: 18, gap: 8, marginTop: 10 }}>
         {tree.map((n) => (
           <View key={n.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginStart: n.depth * 22 }}>
             <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: n.depth === 0 ? c.aiAccent : n.depth === 1 ? c.primary : c.textMuted }} />
@@ -815,25 +783,6 @@ function Revision() {
     </Shell>
   );
 }
-
-// ── "One single experience" synthesis ────────────────────────────────────────
-
-function OneExperience() {
-  const { t } = useI18n();
-  const steps = [1, 2, 3, 4, 5, 6, 7].map((n) => t(k(`landing.one.s${n}`)));
-  return (
-    <Shell>
-      <View style={{ gap: 8, marginBottom: 20, alignItems: 'center' }}>
-        <SectionTitle>{t(k('landing.one.title'))}</SectionTitle>
-      </View>
-      <View style={{ alignItems: 'center' }}>
-        <Rail steps={steps} accent />
-      </View>
-    </Shell>
-  );
-}
-
-// ── FAQ accordion ────────────────────────────────────────────────────────────
 
 // ── Subscriptions (Free / Pro / Max) ─────────────────────────────────────────
 
