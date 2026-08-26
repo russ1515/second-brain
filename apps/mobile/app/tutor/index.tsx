@@ -57,6 +57,7 @@ export default function TutorEntry() {
   if (mode === 'oral_exercise') return <OralExercise />;
   if (mode === 'explain') return <Explain />;
   if (mode === 'discuss' || mode === 'chat_tutor') return <Discuss />;
+  if (mode === 'oral_exam') return <OralExam />;
   if (mode && !TUTOR_MODES.has(mode)) return <ModeError />;
   return <TeacherHome />;
 }
@@ -657,6 +658,168 @@ function OralExercise() {
   );
 }
 
+/**
+ * 🎓 Oral Exam (mode=oral_exam) — a voice exam simulation. The professor becomes
+ * an examiner: before → a framed start; during → a running client-side timer,
+ * the examiner's questions and voice answers (reusing the recorder + tutor
+ * /voice); after → the examiner's qualitative evaluation (strengths, gaps,
+ * recommendations). No fabricated numeric score — only what the examiner says.
+ */
+function OralExam() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const { t } = useI18n();
+  const [phase, setPhase] = useState<'setup' | 'starting' | 'exam' | 'evaluating' | 'result'>('setup');
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [turns, setTurns] = useState<{ role: 'examiner' | 'you'; text: string }[]>([]);
+  const [status, setStatus] = useState<'ready' | 'recording' | 'analyzing'>('ready');
+  const [error, setError] = useState<string | null>(null);
+  const [seconds, setSeconds] = useState(0);
+  const recorder = useRef<Recorder | null>(null);
+
+  useEffect(() => {
+    if (phase !== 'exam') return;
+    const timer = setInterval(() => setSeconds((s) => s + 1), 1000);
+    return () => clearInterval(timer);
+  }, [phase]);
+
+  const refresh = useCallback(async (sid: string) => {
+    const detail = await api<TutorSessionDetail>(`/tutor/sessions/${sid}`);
+    setTurns(
+      detail.messages
+        .slice(1)
+        .map((m) => ({ role: (m.role === 'assistant' ? 'examiner' : 'you') as 'examiner' | 'you', text: m.content }))
+        .filter((x) => x.text.trim()),
+    );
+  }, []);
+
+  const startExam = async () => {
+    setPhase('starting');
+    setError(null);
+    try {
+      const s = await api<TutorSessionSummary>('/tutor/sessions', { method: 'POST', body: {} });
+      setSessionId(s.id);
+      await api(`/tutor/sessions/${s.id}/messages`, { method: 'POST', body: { content: t('learn.exam.startFrame') } });
+      await refresh(s.id);
+      setPhase('exam');
+    } catch (e) {
+      setError((e as Error).message);
+      setPhase('setup');
+    }
+  };
+
+  const stopAndSend = async () => {
+    if (!recorder.current || !sessionId) return;
+    setStatus('analyzing');
+    try {
+      const { blob, mimeType } = await recorder.current.stop();
+      const ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
+      const form = new FormData();
+      form.append('audio', blob, `turn.${ext}`);
+      await apiUpload<VoiceTurnResponse>(`/tutor/sessions/${sessionId}/voice`, form);
+      await refresh(sessionId);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      recorder.current = null;
+      setStatus('ready');
+    }
+  };
+
+  const toggleRecord = async () => {
+    if (status === 'analyzing') return;
+    if (status === 'recording') { await stopAndSend(); return; }
+    if (!sessionId) return;
+    setError(null);
+    try {
+      recorder.current = createRecorder();
+      await recorder.current.start();
+      setStatus('recording');
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const endExam = async () => {
+    if (!sessionId) return;
+    setPhase('evaluating');
+    setError(null);
+    try {
+      await api(`/tutor/sessions/${sessionId}/messages`, { method: 'POST', body: { content: t('learn.exam.endFrame') } });
+      await refresh(sessionId);
+      setPhase('result');
+    } catch (e) {
+      setError((e as Error).message);
+      setPhase('exam');
+    }
+  };
+
+  const mmss = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+  const statusKey: TranslationKey = status === 'recording' ? 'learn.oral.recording' : status === 'analyzing' ? 'learn.oral.analyzing' : 'learn.oral.ready';
+
+  return (
+    <ScrollView contentContainerStyle={styles.container}>
+      <BackToLearn />
+      <View style={styles.freeHead}>
+        <Text style={styles.freeKicker}>🎓 {t('learn.exam.kicker')}</Text>
+        <Text style={styles.freeTitle}>{t('learn.exam.title')}</Text>
+        <Text style={styles.freeSub}>{t('learn.exam.subtitle')}</Text>
+      </View>
+      {error ? <ErrorBanner message={error} /> : null}
+
+      {!RECORDING_SUPPORTED ? (
+        <Card><Text style={styles.freeSub}>{t('learn.oral.noVoice')}</Text></Card>
+      ) : phase === 'setup' ? (
+        <Card style={{ gap: 12 }}>
+          <Text style={styles.freeSub}>{t('learn.exam.consignes')}</Text>
+          <Button label={t('learn.exam.start')} onPress={startExam} />
+        </Card>
+      ) : phase === 'starting' ? (
+        <Loading label={t('learn.exam.starting')} />
+      ) : (
+        <>
+          {(phase === 'exam' || phase === 'evaluating' || phase === 'result') ? (
+            <View style={styles.examBar}>
+              <Text style={styles.examTimerLabel}>{t('learn.exam.elapsed')}</Text>
+              <Text style={styles.examTimer}>⏱ {mmss}</Text>
+            </View>
+          ) : null}
+
+          {turns.map((turn, i) => (
+            <View key={i} style={turn.role === 'you' ? styles.youBubble : styles.teacherBubble}>
+              <Text style={styles.bubbleWho}>{turn.role === 'you' ? t('learn.oral.you') : t('learn.exam.examiner')}</Text>
+              <Text style={styles.bubbleText}>{turn.text}</Text>
+            </View>
+          ))}
+
+          {phase === 'exam' ? (
+            <>
+              <Card style={styles.studio}>
+                <View style={[styles.statusPill, status === 'recording' && { borderColor: c.error }, status === 'analyzing' && { borderColor: c.primary }]}>
+                  <Text style={styles.statusText}>{t(statusKey)}</Text>
+                </View>
+                <Pressable
+                  onPress={toggleRecord}
+                  disabled={status === 'analyzing'}
+                  accessibilityRole="button"
+                  accessibilityLabel={t(status === 'recording' ? 'learn.oral.stop' : 'learn.oral.record')}
+                  style={[styles.micButton, status === 'recording' && { backgroundColor: c.error, borderColor: c.error }, status === 'analyzing' && { opacity: 0.6 }]}
+                >
+                  <Text style={styles.micIcon}>{status === 'recording' ? '⏹' : '🎙️'}</Text>
+                </Pressable>
+                <Text style={styles.micLabel}>{t(status === 'recording' ? 'learn.oral.stop' : 'learn.oral.record')}</Text>
+              </Card>
+              <Button variant="ghost" label={t('learn.exam.end')} onPress={endExam} />
+            </>
+          ) : phase === 'evaluating' ? (
+            <Loading label={t('learn.exam.evaluating')} />
+          ) : null}
+        </>
+      )}
+    </ScrollView>
+  );
+}
+
 /** Localised error for an unknown /tutor mode — never a blank page. */
 function ModeError() {
   const { colors: c } = useTokens();
@@ -697,6 +860,9 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   teacherBubble: { alignSelf: 'flex-start', maxWidth: '90%', backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, borderRadius: 12, padding: 12, gap: 4 },
   bubbleWho: { fontSize: 11, fontWeight: '800', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.8 },
   bubbleText: { fontSize: 15, color: c.textPrimary, lineHeight: 22 },
+  examBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 16 },
+  examTimerLabel: { fontSize: 11, fontWeight: '800', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
+  examTimer: { fontSize: 20, fontWeight: '800', color: c.textPrimary, fontVariant: ['tabular-nums'] },
   flex: { flex: 1 },
   stage: {
     backgroundColor: c.surface,

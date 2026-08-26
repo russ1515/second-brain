@@ -94,7 +94,7 @@ export const MODES: TeachingMode[] = [
   { key: 'explain', icon: '💡', label: 'Expliquer', desc: '« Explique-moi ça » — au niveau défini par ton profil.', route: '/tutor', mode: 'explain' },
   { key: 'discuss', icon: '💬', label: 'Discuter', desc: 'Conversation pédagogique libre.', route: '/tutor', mode: 'discuss' },
   { key: 'oralex', icon: '🎙️', label: 'Exercice oral', desc: 'Le professeur pose des questions et évalue tes réponses.', route: '/tutor', mode: 'oral_exercise', oral: true },
-  { key: 'oralexam', icon: '🎓', label: 'Examen oral', desc: 'Le professeur devient examinateur.', route: '/examiner', mode: 'oral_exam', oral: true },
+  { key: 'oralexam', icon: '🎓', label: 'Examen oral', desc: 'Le professeur devient examinateur.', route: '/tutor', mode: 'oral_exam', oral: true },
   { key: 'guided', icon: '🧭', label: 'Session guidée', desc: 'Le système construit une séance complète.', route: '/daily-session', mode: 'guided' },
   // Deep-dive research (§10), still inside the pedagogical system.
   { key: 'deepsearch', icon: '🌐', label: 'Recherche approfondie', desc: 'Explore un sujet en profondeur avec le professeur.', route: '/tutor', mode: 'deepsearch' },
