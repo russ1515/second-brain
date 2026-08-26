@@ -391,6 +391,14 @@ const en = {
 
   'learn.title': 'Learn',
   'learn.intro': 'Where you take in new knowledge.',
+  'learn.backToLearn': 'Back to Learn',
+  'learn.free.kicker': 'Free Search',
+  'learn.free.title': 'Ask anything',
+  'learn.free.subtitle': 'A spontaneous question — academic, technical or general. Distinct from your pedagogical AI Professor.',
+  'learn.free.placeholder': 'Type your question…',
+  'learn.free.submit': 'Ask',
+  'learn.mode.errTitle': 'Unknown experience',
+  'learn.mode.errDetail': 'This learning mode doesn’t exist or isn’t available yet.',
   'learn.teacher.title': 'Ask your teacher',
   'learn.teacher.detail':
     'Discuss anything — answered from your own notes, by voice or text.',
@@ -2487,6 +2495,14 @@ const fr: Record<TranslationKey, string> = {
 
   'learn.title': 'Apprendre',
   'learn.intro': 'Là où tu acquiers de nouvelles connaissances.',
+  'learn.backToLearn': 'Retour à Apprendre',
+  'learn.free.kicker': 'Recherche Libre',
+  'learn.free.title': 'Pose ta question',
+  'learn.free.subtitle': 'Une question spontanée — académique, technique ou générale. Distincte de ton Professeur IA pédagogique.',
+  'learn.free.placeholder': 'Écris ta question…',
+  'learn.free.submit': 'Poser',
+  'learn.mode.errTitle': 'Expérience inconnue',
+  'learn.mode.errDetail': 'Ce mode d’apprentissage n’existe pas ou n’est pas encore disponible.',
   'learn.teacher.title': 'Parler à ton professeur',
   'learn.teacher.detail':
     'Discute de tout — avec des réponses tirées de tes notes, à l’oral ou à l’écrit.',

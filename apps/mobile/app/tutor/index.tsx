@@ -1,6 +1,6 @@
 import { useCallback, useState, useMemo } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import type {
   LearningPath,
   LearningPathItem,
@@ -36,7 +36,26 @@ const LEVEL_KEY: Record<MasteryLevel, TranslationKey> = {
  * is the primary move. The free discussion and history are kept below, so
  * nothing is lost — the feel changes, the capability does not.
  */
-export default function AiTeacherScreen() {
+/** Modes that legitimately route to /tutor. Not-yet-specialized ones fall back
+ *  to the teacher home; only Free Search has its own workspace so far. */
+const TUTOR_MODES = new Set(['free', 'free_search', 'explain', 'discuss', 'oral_exercise', 'deepsearch']);
+
+/**
+ * Entry point for /tutor — dispatches on the `?mode=` param so a specialised
+ * experience opens directly, instead of every sub-feature landing on the same
+ * generic teacher greeting. An unknown mode shows a localised error (never a
+ * blank page); no mode (or a known-but-not-yet-specialised one) keeps the
+ * teacher home.
+ */
+export default function TutorEntry() {
+  const params = useLocalSearchParams<{ mode?: string | string[] }>();
+  const mode = Array.isArray(params.mode) ? params.mode[0] : params.mode;
+  if (mode === 'free' || mode === 'free_search') return <FreeSearch />;
+  if (mode && !TUTOR_MODES.has(mode)) return <ModeError />;
+  return <TeacherHome />;
+}
+
+function TeacherHome() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { user } = useAuth();
@@ -312,8 +331,95 @@ function SessionRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Shared "← Back to Learn" row for the specialised mode workspaces. */
+function BackToLearn() {
+  const { colors: c } = useTokens();
+  const { t } = useI18n();
+  const router = useRouter();
+  return (
+    <Pressable onPress={() => router.push('/learn')} accessibilityRole="button" style={{ flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, alignSelf: 'flex-start' }}>
+      <Text style={{ color: c.textSecondary, fontSize: 15, fontWeight: '600' }}>← {t('learn.backToLearn')}</Text>
+    </Pressable>
+  );
+}
+
+/**
+ * 🔎 Free Search (mode=free) — a focused, spontaneous-question workspace, kept
+ * distinct from the pedagogical teacher. Reuses the tutor session API: the first
+ * question creates a general session and opens the existing conversation view.
+ */
+function FreeSearch() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const { t } = useI18n();
+  const router = useRouter();
+  const [q, setQ] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const ask = async () => {
+    const question = q.trim();
+    if (!question || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const session = await api<TutorSessionSummary>('/tutor/sessions', { method: 'POST', body: {} });
+      await api(`/tutor/sessions/${session.id}/messages`, { method: 'POST', body: { content: question } });
+      router.push(`/tutor/${session.id}`);
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ScrollView contentContainerStyle={styles.container}>
+      <BackToLearn />
+      <View style={styles.freeHead}>
+        <Text style={styles.freeKicker}>🔎 {t('learn.free.kicker')}</Text>
+        <Text style={styles.freeTitle}>{t('learn.free.title')}</Text>
+        <Text style={styles.freeSub}>{t('learn.free.subtitle')}</Text>
+      </View>
+      {error ? <ErrorBanner message={error} /> : null}
+      <Card>
+        <TextInput
+          style={[styles.input, styles.freeInput]}
+          placeholder={t('learn.free.placeholder')}
+          placeholderTextColor={c.textMuted}
+          value={q}
+          onChangeText={setQ}
+          multiline
+          autoFocus
+        />
+        <Button label={t('learn.free.submit')} onPress={ask} busy={busy} disabled={!q.trim()} />
+      </Card>
+    </ScrollView>
+  );
+}
+
+/** Localised error for an unknown /tutor mode — never a blank page. */
+function ModeError() {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const { t } = useI18n();
+  return (
+    <ScrollView contentContainerStyle={styles.container}>
+      <BackToLearn />
+      <View style={styles.freeHead}>
+        <Text style={styles.freeTitle}>{t('learn.mode.errTitle')}</Text>
+        <Text style={styles.freeSub}>{t('learn.mode.errDetail')}</Text>
+      </View>
+    </ScrollView>
+  );
+}
+
 const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 14, maxWidth: 1280, width: '100%', alignSelf: 'center' },
+  freeHead: { gap: 6 },
+  freeKicker: { fontSize: 12, fontWeight: '800', color: c.aiAccent, textTransform: 'uppercase', letterSpacing: 1.2 },
+  freeTitle: { fontSize: 26, fontWeight: '800', color: c.textPrimary },
+  freeSub: { fontSize: 15, color: c.textSecondary, lineHeight: 22 },
+  freeInput: { minHeight: 110, textAlignVertical: 'top', marginBottom: 12 },
   flex: { flex: 1 },
   stage: {
     backgroundColor: c.surface,
