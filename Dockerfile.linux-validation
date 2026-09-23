@@ -6,6 +6,13 @@ RUN corepack enable && corepack prepare pnpm@11.13.1 --activate
 
 WORKDIR /workspace
 
+# Keep every later pnpm invocation in the same isolated, already-frozen
+# dependency topology. The validation script also invokes pnpm after this
+# image is built; falling back to the workspace's hoisted linker would make
+# pnpm reconcile an API-filtered virtual lock against unrelated workspaces.
+ENV PNPM_CONFIG_NODE_LINKER=isolated \
+    PNPM_CONFIG_TRUST_LOCKFILE=true
+
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/package.json
 COPY apps/api/package.json apps/api/package.json
