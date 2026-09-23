@@ -8,6 +8,8 @@ import { AiOrchestratorService } from './ai-orchestrator.service';
 import { AiOrchestratorController } from './ai-orchestrator.controller';
 import { AdminGuard } from '../admin/admin.guard';
 import { LlmService } from './llm.service';
+import { UsageModule } from '../usage/usage.module';
+import { AdminModule } from '../admin/admin.module';
 
 /**
  * Binds the concrete LLM provider selected by LLM_PROVIDER in the environment.
@@ -28,6 +30,12 @@ const llmProviderFactory: Provider = {
           config.get<string>('llm.geminiApiKey') ?? '',
           model,
         );
+      case 'echo':
+        // Deterministic, offline provider used by local validation and as the
+        // documented low-cost routing fallback. It must be selectable just
+        // like Gemini; otherwise a safe staging boot fails before telemetry
+        // can be exercised.
+        return new EchoProvider();
       default:
         throw new Error(
           `LLM provider "${provider}" is not wired yet. ` +
@@ -39,8 +47,9 @@ const llmProviderFactory: Provider = {
 
 @Global()
 @Module({
+  imports: [UsageModule, AdminModule],
   controllers: [AiOrchestratorController],
-  providers: [llmProviderFactory, EchoProvider, AiOrchestratorService, AdminGuard, LlmService],
+  providers: [llmProviderFactory, EchoProvider, AiOrchestratorService, LlmService],
   exports: [LlmService, AiOrchestratorService],
 })
 export class LlmModule {}

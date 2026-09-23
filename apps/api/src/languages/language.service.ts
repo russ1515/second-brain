@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -10,6 +11,7 @@ import type {
   LanguageProfileDetail,
   LanguageProfileSummary,
 } from '@second-brain/shared';
+import { SUPPORTED_LANGUAGES, toSupportedLanguage } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateLanguageProfileDto } from './dto/create-language-profile.dto';
 import type { UpdateLanguageProfileDto } from './dto/update-language-profile.dto';
@@ -25,12 +27,12 @@ export class LanguageService {
     userId: string,
     dto: CreateLanguageProfileDto,
   ): Promise<LanguageProfileSummary> {
-    const language = dto.language.trim();
-    const normalizedLanguage = this.normalize(language);
-
-    const existing = await this.prisma.languageProfile.findUnique({
-      where: { userId_normalizedLanguage: { userId, normalizedLanguage } },
-    });
+    const languageCode = toSupportedLanguage(dto.language);
+    if (!languageCode) throw new BadRequestException('Unsupported learning language.');
+    const language = SUPPORTED_LANGUAGES[languageCode].englishName;
+    const normalizedLanguage = languageCode;
+    const existing = (await this.prisma.languageProfile.findMany({ where: { userId } }))
+      .find((profile) => toSupportedLanguage(profile.normalizedLanguage) === languageCode || toSupportedLanguage(profile.language) === languageCode);
     if (existing) {
       throw new ConflictException(`You are already learning ${existing.language}.`);
     }
@@ -49,39 +51,54 @@ export class LanguageService {
         userId,
         language,
         normalizedLanguage,
-        nativeLanguage: dto.nativeLanguage?.trim() || null,
+        nativeLanguage: this.canonicalLanguageName(dto.nativeLanguage),
         mode: dto.mode ?? 'beginner',
         cefrLevel: dto.cefrLevel ?? 'A1',
         goal: dto.goal?.trim() || null,
         vocabDeckId: deck.id,
       },
     });
-    return this.toSummary(profile, 0);
+    return this.summary(userId, profile);
   }
 
   async list(userId: string): Promise<LanguageProfileSummary[]> {
     const profiles = await this.prisma.languageProfile.findMany({
       where: { userId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { updatedAt: 'desc' },
+      include: {
+        _count: { select: { tutorSessions: true, lessons: true } },
+        tutorSessions: { select: { updatedAt: true }, orderBy: { updatedAt: 'desc' }, take: 1 },
+        lessons: { select: { createdAt: true }, orderBy: { createdAt: 'desc' }, take: 1 },
+      },
     });
-    return Promise.all(
-      profiles.map(async (p) =>
-        this.toSummary(p, await this.countVocab(userId, p.vocabDeckId)),
-      ),
-    );
+    const deckIds = profiles.map((profile) => profile.vocabDeckId).filter((id): id is string => !!id);
+    const [totals, due] = deckIds.length ? await Promise.all([
+      this.prisma.card.groupBy({ by: ['deckId'], where: { userId, deckId: { in: deckIds } }, _count: { _all: true } }),
+      this.prisma.card.groupBy({ by: ['deckId'], where: { userId, deckId: { in: deckIds }, due: { lte: new Date() } }, _count: { _all: true } }),
+    ]) : [[], []];
+    const totalByDeck = new Map(totals.map((row) => [row.deckId, row._count._all]));
+    const dueByDeck = new Map(due.map((row) => [row.deckId, row._count._all]));
+    return profiles.map((profile) => this.toSummary(profile, {
+      vocabCount: profile.vocabDeckId ? totalByDeck.get(profile.vocabDeckId) ?? 0 : 0,
+      vocabDue: profile.vocabDeckId ? dueByDeck.get(profile.vocabDeckId) ?? 0 : 0,
+      lessonCount: profile._count.lessons,
+      sessionCount: profile._count.tutorSessions,
+      lastActivityAt: this.latestDate(profile.tutorSessions[0]?.updatedAt, profile.lessons[0]?.createdAt),
+    }));
   }
 
   async get(userId: string, id: string): Promise<LanguageProfileDetail> {
     const profile = await this.requireOwned(userId, id);
-    const [vocabCount, vocabDue, lessonCount] = await Promise.all([
+    const [vocabCount, vocabDue, lessonCount, sessionCount, lastSession, lastLesson] = await Promise.all([
       this.countVocab(userId, profile.vocabDeckId),
       this.countVocabDue(userId, profile.vocabDeckId),
       this.prisma.lesson.count({ where: { userId, languageProfileId: id } }),
+      this.prisma.tutorSession.count({ where: { userId, languageProfileId: id } }),
+      this.prisma.tutorSession.findFirst({ where: { userId, languageProfileId: id }, orderBy: { updatedAt: 'desc' }, select: { updatedAt: true } }),
+      this.prisma.lesson.findFirst({ where: { userId, languageProfileId: id }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
     ]);
     return {
-      ...this.toSummary(profile, vocabCount),
-      vocabDue,
-      lessonCount,
+      ...this.toSummary(profile, { vocabCount, vocabDue, lessonCount, sessionCount, lastActivityAt: this.latestDate(lastSession?.updatedAt, lastLesson?.createdAt) }),
       immersionRatio:
         profile.mode === 'immersion' ? immersionRatio(profile.cefrLevel) : null,
     };
@@ -99,15 +116,12 @@ export class LanguageService {
         ...(dto.mode !== undefined ? { mode: dto.mode } : {}),
         ...(dto.cefrLevel !== undefined ? { cefrLevel: dto.cefrLevel } : {}),
         ...(dto.nativeLanguage !== undefined
-          ? { nativeLanguage: dto.nativeLanguage.trim() || null }
+          ? { nativeLanguage: this.canonicalLanguageName(dto.nativeLanguage) }
           : {}),
         ...(dto.goal !== undefined ? { goal: dto.goal.trim() || null } : {}),
       },
     });
-    return this.toSummary(
-      profile,
-      await this.countVocab(userId, profile.vocabDeckId),
-    );
+    return this.summary(userId, profile);
   }
 
   async remove(userId: string, id: string): Promise<void> {
@@ -154,8 +168,10 @@ export class LanguageService {
 
   // ── internals ────────────────────────────────────────────────────────────
 
-  private normalize(language: string): string {
-    return language.trim().toLowerCase().replace(/\s+/g, ' ');
+  private canonicalLanguageName(language?: string): string | null {
+    if (!language?.trim()) return null;
+    const code = toSupportedLanguage(language);
+    return code ? SUPPORTED_LANGUAGES[code].englishName : language.trim();
   }
 
   private countVocab(userId: string, deckId: string | null): Promise<number> {
@@ -172,19 +188,45 @@ export class LanguageService {
 
   private toSummary(
     profile: LanguageProfile,
-    vocabCount: number,
+    stats: { vocabCount: number; vocabDue: number; lessonCount: number; sessionCount: number; lastActivityAt: string | null },
   ): LanguageProfileSummary {
+    const languageCode = toSupportedLanguage(profile.normalizedLanguage) ?? toSupportedLanguage(profile.language);
+    const nativeLanguageCode = toSupportedLanguage(profile.nativeLanguage);
     return {
       id: profile.id,
       language: profile.language,
+      languageCode,
       nativeLanguage: profile.nativeLanguage,
+      nativeLanguageCode,
       mode: profile.mode as LanguageMode,
       cefrLevel: profile.cefrLevel as CefrLevel,
       goal: profile.goal,
       vocabDeckId: profile.vocabDeckId,
-      vocabCount,
+      ...stats,
+      cefrLevelSource: 'declared',
+      evaluatedCefrLevel: null,
       createdAt: profile.createdAt.toISOString(),
       updatedAt: profile.updatedAt.toISOString(),
     };
+  }
+
+  private async summary(userId: string, profile: LanguageProfile): Promise<LanguageProfileSummary> {
+    const [vocabCount, vocabDue, lessonCount, sessionCount, lastSession, lastLesson] = await Promise.all([
+      this.countVocab(userId, profile.vocabDeckId),
+      this.countVocabDue(userId, profile.vocabDeckId),
+      this.prisma.lesson.count({ where: { userId, languageProfileId: profile.id } }),
+      this.prisma.tutorSession.count({ where: { userId, languageProfileId: profile.id } }),
+      this.prisma.tutorSession.findFirst({ where: { userId, languageProfileId: profile.id }, orderBy: { updatedAt: 'desc' }, select: { updatedAt: true } }),
+      this.prisma.lesson.findFirst({ where: { userId, languageProfileId: profile.id }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
+    ]);
+    return this.toSummary(profile, {
+      vocabCount, vocabDue, lessonCount, sessionCount,
+      lastActivityAt: this.latestDate(lastSession?.updatedAt, lastLesson?.createdAt),
+    });
+  }
+
+  private latestDate(...dates: Array<Date | undefined>): string | null {
+    const timestamps = dates.filter((value): value is Date => value instanceof Date).map((value) => value.getTime());
+    return timestamps.length ? new Date(Math.max(...timestamps)).toISOString() : null;
   }
 }

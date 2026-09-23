@@ -57,9 +57,9 @@ export class MetricsService {
   }
 
   /** The Sentry/OpenTelemetry seam: forward errors to an APM when wired. */
-  captureError(err: unknown, context?: string): void {
+  captureError(_err: unknown, _context?: string): void {
     this.capturedErrors++;
-    this.logger.warn(`captured error${context ? ` [${context}]` : ''}: ${(err as Error)?.message ?? err}`);
+    this.logger.warn('Captured error.');
     // e.g. Sentry.captureException(err) — enabled once SENTRY_DSN is set.
   }
 

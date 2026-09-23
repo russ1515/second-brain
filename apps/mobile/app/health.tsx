@@ -12,7 +12,7 @@ const DEPENDENCIES: HealthDependency[] = ['postgres', 'redis', 'qdrant'];
 /** The Phase-0 health screen. It used to be the app's home; the classroom took
  *  that slot, so it lives here as a diagnostic. */
 export default function HealthScreen() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const [report, setReport] = useState<HealthReport | null>(null);
@@ -58,7 +58,7 @@ export default function HealthScreen() {
               {overallOk ? t('health.allOk') : t('health.degraded')}
             </Text>
             <Text style={styles.bannerDetail}>
-              {new Date(report.timestamp).toLocaleTimeString()}
+              {new Date(report.timestamp).toLocaleTimeString(locale)}
             </Text>
           </View>
 

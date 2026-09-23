@@ -28,8 +28,16 @@ model User {
   // Platform back office (Sprint 8.5). `isAdmin` grants the superadmin dashboard
   // (also bootstrappable via ADMIN_EMAILS env). `suspendedAt` soft-disables an
   // account without deleting anything.
-  isAdmin     Boolean   @default(false)
-  suspendedAt DateTime?
+  isAdmin             Boolean       @default(false)
+  suspendedAt         DateTime?
+  accountStatus       AccountStatus @default(active)
+  suspensionReason    String?
+  bannedAt            DateTime?
+  banReason           String?
+  banInternalNote     String?
+  banReference        String?
+  accountStateActorId String?
+  adminBootstrappedAt DateTime?
 
   // Analytics (Sprint 8.6): last time the user made an authenticated request,
   // updated (throttled) by ActivityInterceptor. Drives DAU/WAU/MAU.
@@ -79,7 +87,35 @@ model User {
   mentorGuidance          MentorGuidance?
   successPredictions      SuccessPrediction[]
   learningDna             LearningDna?
+  experienceSessions      ExperienceSession[]
+  academicWorkspaces      AcademicWorkspace[]
+  adminRoleAssignments    AdminRoleAssignment[]
+  quotaCycles             QuotaCycle[]
+  entitlementOverrides    EntitlementOverride[]
+  providerUsage           ProviderUsage[]
+  /// Sprint 4's durable, immutable provider-cost ledger.  Unlike the legacy
+  /// ProviderUsage envelope, an operation may contain several provider attempts
+  /// (retry / provider fallback) and a deleted user is intentionally detached
+  /// from its historical financial evidence.
+  providerUsageOperations ProviderUsageOperation[]
+  supportNotesForUser     AdminSupportNote[]       @relation("AdminSupportNotesForUser")
+  supportNotesAuthored    AdminSupportNote[]       @relation("AdminSupportNotesByActor")
+  profileReviewsForUser   AdminProfileReview[]     @relation("AdminProfileReviewsForUser")
+  profileReviewsAuthored  AdminProfileReview[]     @relation("AdminProfileReviewsByActor")
+  errorEvents             ErrorEvent[]             @relation("ErrorEventsForUser")
+  affectedBugGroups       BugAffectedUser[]
+  supportCases            SupportCase[]            @relation("SupportCasesForUser")
+  assignedBugGroups       BugGroup[]               @relation("AssignedBugGroups")
+  assignedSupportCases    SupportCase[]            @relation("AssignedSupportCases")
+  assignedIncidents       Incident[]               @relation("AssignedIncidents")
+  bugComments             BugComment[]             @relation("BugCommentsByActor")
+  supportCaseNotes        SupportCaseNote[]        @relation("SupportCaseNotesByActor")
+  incidentTimelineEvents  IncidentTimelineEvent[]  @relation("IncidentTimelineByActor")
+  diagnosticsRequested    BugDiagnostic[]          @relation("BugDiagnosticsRequestedBy")
 
+  @@index([lastActiveAt])
+  @@index([createdAt])
+  @@index([accountStatus, createdAt])
   @@map("users")
 }
 
@@ -138,13 +174,14 @@ model Document {
   /// When the AI enrichment last ran (null = not yet enriched).
   enrichedAt   DateTime?
 
-  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  collection Collection?       @relation(fields: [collectionId], references: [id], onDelete: SetNull)
-  chunks     DocumentChunk[]
-  cards      Card[]
-  concepts   ConceptDocument[]
-  lessons    Lesson[]
-  resources  StudyResource[]
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  collection         Collection?         @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+  chunks             DocumentChunk[]
+  cards              Card[]
+  concepts           ConceptDocument[]
+  lessons            Lesson[]
+  resources          StudyResource[]
+  experienceSessions ExperienceSession[]
 
   @@index([userId])
   @@index([userId, deletedAt])
@@ -301,13 +338,13 @@ model OnboardingProfile {
 }
 
 model EmailVerificationToken {
-  id        String    @id @default(cuid())
-  userId    String
+  id         String    @id @default(cuid())
+  userId     String
   /// SHA-256 hex of the high-entropy token; the raw token is only ever emailed.
-  tokenHash String    @unique
-  expiresAt DateTime
+  tokenHash  String    @unique
+  expiresAt  DateTime
   consumedAt DateTime?
-  createdAt DateTime  @default(now())
+  createdAt  DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -345,11 +382,13 @@ model Session {
   ipAddress        String?
   expiresAt        DateTime
   revokedAt        DateTime?
+  mfaVerifiedAt    DateTime?
   createdAt        DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([userId, revokedAt, createdAt])
   @@map("sessions")
 }
 
@@ -369,8 +408,8 @@ model Deck {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  cards Card[]
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cards            Card[]
   /// Set when this deck is a language's vocabulary deck.
   languageProfiles LanguageProfile[]
   planItems        DailyPlanItem[]
@@ -380,12 +419,12 @@ model Deck {
 }
 
 model Card {
-  id     String @id @default(cuid())
-  deckId String
+  id               String  @id @default(cuid())
+  deckId           String
   /// Denormalized owner id for per-user review queues.
-  userId String
-  front  String
-  back   String
+  userId           String
+  front            String
+  back             String
   /// Optional source document this card was generated from (increment 4).
   sourceDocumentId String?
 
@@ -420,17 +459,17 @@ model Card {
 
 /// One review event, kept for history and for FSRS optimisation later (increment 2 writes these).
 model ReviewLog {
-  id     String @id @default(cuid())
-  cardId String
-  userId String
+  id            String    @id @default(cuid())
+  cardId        String
+  userId        String
   /// Grade given: 1=Again, 2=Hard, 3=Good, 4=Easy.
-  rating Int
+  rating        Int
   /// Card state before this review.
-  state  CardState
+  state         CardState
   /// Days scheduled by this review.
   scheduledDays Int
   /// Card's due timestamp before this review.
-  reviewedAt DateTime @default(now())
+  reviewedAt    DateTime  @default(now())
 
   card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
 
@@ -461,10 +500,10 @@ enum LanguageMode {
 /// A language the learner is studying, and how it should be taught (Phase 5).
 /// Vocabulary is NOT a new SRS: `vocabDeck` holds ordinary FSRS cards.
 model LanguageProfile {
-  id     String @id @default(cuid())
-  userId String
+  id                 String       @id @default(cuid())
+  userId             String
   /// Target language as the learner typed it, e.g. "Spanish".
-  language String
+  language           String
   /// Lowercased/trimmed language used to enforce per-user uniqueness (dedup).
   normalizedLanguage String
   /// The learner's own language, used for translations and glosses.
@@ -473,17 +512,18 @@ model LanguageProfile {
   /// CEFR / CECRL level (Sprint 7.3): A1 | A2 | B1 | B2 | C1 | C2.
   cefrLevel          String       @default("A1")
   /// Free-text goal, e.g. "order food on holiday" or "pass the DELE B2".
-  goal        String?
+  goal               String?
   /// Deck holding this language's vocabulary cards (auto-created).
-  vocabDeckId String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  vocabDeckId        String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
 
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  vocabDeck     Deck?          @relation(fields: [vocabDeckId], references: [id], onDelete: SetNull)
-  lessons       Lesson[]
-  tutorSessions TutorSession[]
-  planItems     DailyPlanItem[]
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vocabDeck          Deck?               @relation(fields: [vocabDeckId], references: [id], onDelete: SetNull)
+  lessons            Lesson[]
+  tutorSessions      TutorSession[]
+  planItems          DailyPlanItem[]
+  experienceSessions ExperienceSession[]
 
   @@unique([userId, normalizedLanguage])
   @@index([userId])
@@ -492,32 +532,33 @@ model LanguageProfile {
 
 /// A tutoring conversation (Phase 5). Grounded in the learner's documents.
 model TutorSession {
-  id        String   @id @default(cuid())
-  userId    String
-  title     String?
+  id                String   @id @default(cuid())
+  userId            String
+  title             String?
   /// Optional concept this session is steering the learner through (twin-focused).
-  focusConceptId String?
+  focusConceptId    String?
   /// Set when this session is language practice; steers the tutor into its
   /// Language Professor role. Null = an ordinary session, unchanged.
   languageProfileId String?
   /// The subject this session is about, detected automatically (task 3.6). The
   /// role engine maps it to the specialist persona the teacher wears. Null until
   /// detected (a general teacher until then).
-  subject   String?
+  subject           String?
   /// Teaching Strategy Engine (Sprint 7.9, ITE): the pedagogical strategy the
   /// engine selected for this session (socratic, problem_solving, case_study…),
   /// cached for continuity. Null until the first turn selects one.
-  strategy       String?
+  strategy          String?
   /// Why that strategy was chosen (shown to the learner). Null until selected.
-  strategyReason String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  strategyReason    String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  focusConcept    Concept?         @relation(fields: [focusConceptId], references: [id], onDelete: SetNull)
-  languageProfile LanguageProfile? @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
-  messages        TutorMessage[]
-  lessons         Lesson[]
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  focusConcept       Concept?            @relation(fields: [focusConceptId], references: [id], onDelete: SetNull)
+  languageProfile    LanguageProfile?    @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
+  messages           TutorMessage[]
+  lessons            Lesson[]
+  experienceSessions ExperienceSession[]
 
   @@index([userId])
   @@map("tutor_sessions")
@@ -562,12 +603,12 @@ enum AchievementKind {
 /// A milestone the learner has passed. The unique key is the "celebrate once"
 /// guarantee: a win is awarded a single time, no matter how often it is checked.
 model Achievement {
-  id     String          @id @default(cuid())
-  userId String
-  kind   AchievementKind
+  id         String          @id @default(cuid())
+  userId     String
+  kind       AchievementKind
   /// The threshold crossed (e.g. kind=streak_days, threshold=7).
   threshold  Int
-  achievedAt DateTime @default(now())
+  achievedAt DateTime        @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -580,20 +621,20 @@ model Achievement {
 /// role, pedagogical flow steps 9-11 — assessment, detailed correction,
 /// personalised feedback). Kept as history: "nothing is forgotten".
 model ExerciseAttempt {
-  id       String @id @default(cuid())
-  userId   String
-  lessonId String
+  id             String @id @default(cuid())
+  userId         String
+  lessonId       String
   /// Index into the lesson's `exercises` JSON array.
-  exerciseIndex Int
+  exerciseIndex  Int
   /// Snapshotted so the attempt stays readable even if the lesson is deleted.
   question       String
   expectedAnswer String
   learnerAnswer  String
 
   /// The Examiner's verdict.
-  correct Boolean
+  correct    Boolean
   /// 0..1 — partial credit, since understanding is rarely binary.
-  score    Float
+  score      Float
   /// Detailed correction: what was right, what was wrong, why.
   correction String
   /// Personalised feedback aimed at this learner's next step.
@@ -608,7 +649,7 @@ model ExerciseAttempt {
   howToAvoid String?
 
   /// Concept the lesson taught, when it had one.
-  conceptId String?
+  conceptId          String?
   /// Knowledge-gap detection: the weakest unmet PREREQUISITE blamed for this
   /// mistake, found by walking the knowledge graph. Null when the answer was
   /// right or no prerequisite was weak.
@@ -616,10 +657,10 @@ model ExerciseAttempt {
 
   createdAt DateTime @default(now())
 
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  lesson        Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  concept       Concept? @relation("AttemptConcept", fields: [conceptId], references: [id], onDelete: SetNull)
-  rootCause     Concept? @relation("AttemptRootCause", fields: [rootCauseConceptId], references: [id], onDelete: SetNull)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson    Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  concept   Concept? @relation("AttemptConcept", fields: [conceptId], references: [id], onDelete: SetNull)
+  rootCause Concept? @relation("AttemptRootCause", fields: [rootCauseConceptId], references: [id], onDelete: SetNull)
 
   // No unique key: retrying an exercise is the point. Every attempt is history.
   @@index([userId])
@@ -657,10 +698,10 @@ enum PlanItemStatus {
 /// One learner's plan for one LOCAL day (Phase 5). Regenerated idempotently and
 /// adapted through the day as state changes.
 model DailyPlan {
-  id     String @id @default(cuid())
-  userId String
+  id          String   @id @default(cuid())
+  userId      String
   /// The learner's local calendar day this plan is for.
-  date   DateTime @db.Date
+  date        DateTime @db.Date
   /// Timezone the local day was computed in, kept so a later timezone change
   /// cannot silently reinterpret an existing plan.
   timezone    String
@@ -676,15 +717,15 @@ model DailyPlan {
 }
 
 model DailyPlanItem {
-  id       String         @id @default(cuid())
-  planId   String
-  slot     PlanSlot
-  kind     PlanItemKind
-  title    String
-  detail   String?
-  status   PlanItemStatus @default(pending)
+  id          String         @id @default(cuid())
+  planId      String
+  slot        PlanSlot
+  kind        PlanItemKind
+  title       String
+  detail      String?
+  status      PlanItemStatus @default(pending)
   /// Ordering within the slot.
-  position Int            @default(0)
+  position    Int            @default(0)
   /// How many cards / exercises this item covers, when countable.
   targetCount Int?
 
@@ -710,10 +751,10 @@ model DailyPlanItem {
 /// a given learner gets at most ONE notification per slot per local day, no
 /// matter how often the scheduler ticks.
 model Notification {
-  id     String   @id @default(cuid())
-  userId String
-  date   DateTime @db.Date
-  slot   PlanSlot
+  id      String   @id @default(cuid())
+  userId  String
+  date    DateTime @db.Date
+  slot    PlanSlot
   /// Transport that delivered it (log, mail, …).
   channel String
   title   String
@@ -729,9 +770,9 @@ model Notification {
 
 /// A unit of knowledge in the learner's Digital Twin (Phase 4).
 model Concept {
-  id     String @id @default(cuid())
-  userId String
-  name   String
+  id             String   @id @default(cuid())
+  userId         String
+  name           String
   /// Lowercased/trimmed name used to enforce per-user uniqueness (dedup).
   normalizedName String
   description    String?
@@ -787,46 +828,47 @@ model ConceptDocument {
 /// A complete written lesson package (Phase 5 — written-first learning). Generated
 /// from a topic / concept / tutoring interaction and indexed into long-term memory.
 model Lesson {
-  id             String  @id @default(cuid())
-  userId         String
-  tutorSessionId String?
-  conceptId      String?
+  id                String   @id @default(cuid())
+  userId            String
+  tutorSessionId    String?
+  conceptId         String?
   /// Target language, when this is a language lesson.
-  language       String?
+  language          String?
   /// The language profile this lesson belongs to, when generated by the
   /// language engine (carries the mode it was pitched at).
   languageProfileId String?
   /// Difficulty this lesson was actually pitched at ("beginner"|"intermediate"|
   /// "advanced"). Either given explicitly or derived from the learner's mastery
   /// of the concept — stored so the adaptation is auditable rather than a claim.
-  level          String?
-  topic          String
-  objective      String
-  intro          String
-  explanation    String
+  level             String?
+  topic             String
+  objective         String
+  intro             String
+  explanation       String
   /// string[] of worked examples.
-  examples       Json
+  examples          Json
   /// string[] of guided comprehension questions (standard flow step 5).
-  questions      Json?
+  questions         Json?
   /// string[] of concise key takeaways ("Points clés"). Null on lessons
   /// generated before this section existed.
-  keyPoints      Json?
+  keyPoints         Json?
   /// { question, answer }[] — exercises with model-answer corrections.
-  exercises      Json
-  homework       String
-  summary        String
-  revisionSheet  String
+  exercises         Json
+  homework          String
+  summary           String
+  revisionSheet     String
   /// The Document this lesson was indexed as, for retrieval / long-term memory.
-  sourceDocumentId String?
-  createdAt      DateTime @default(now())
+  sourceDocumentId  String?
+  createdAt         DateTime @default(now())
 
-  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tutorSession    TutorSession?    @relation(fields: [tutorSessionId], references: [id], onDelete: SetNull)
-  concept         Concept?         @relation(fields: [conceptId], references: [id], onDelete: SetNull)
-  sourceDocument  Document?        @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
-  languageProfile LanguageProfile? @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
-  attempts        ExerciseAttempt[]
-  assignment      Homework?
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tutorSession       TutorSession?       @relation(fields: [tutorSessionId], references: [id], onDelete: SetNull)
+  concept            Concept?            @relation(fields: [conceptId], references: [id], onDelete: SetNull)
+  sourceDocument     Document?           @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+  languageProfile    LanguageProfile?    @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
+  attempts           ExerciseAttempt[]
+  assignment         Homework?
+  experienceSessions ExperienceSession[]
 
   @@index([userId])
   @@map("lessons")
@@ -834,17 +876,18 @@ model Lesson {
 
 /// A learner goal (Sprint 5): daily / weekly / monthly objectives to persist.
 model Goal {
-  id     String @id @default(cuid())
-  userId String
+  id          String    @id @default(cuid())
+  userId      String
   /// daily | weekly | monthly
-  period String
-  title  String
+  period      String
+  title       String
   /// pending | done
-  status String @default("pending")
+  status      String    @default("pending")
   createdAt   DateTime  @default(now())
   completedAt DateTime?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  experienceSessions ExperienceSession[]
 
   @@index([userId])
   @@map("goals")
@@ -853,12 +896,12 @@ model Goal {
 /// An upcoming exam (Sprint 5): subject, date, priority. The "preparation level"
 /// is DERIVED from ConceptMastery at read time (engine communication), not stored.
 model Exam {
-  id      String  @id @default(cuid())
-  userId  String
-  subject String
-  date    DateTime
+  id        String   @id @default(cuid())
+  userId    String
+  subject   String
+  date      DateTime
   /// low | medium | high
-  priority String @default("medium")
+  priority  String   @default("medium")
   /// Optional concept to gauge preparation from; else matched by subject name.
   conceptId String?
   createdAt DateTime @default(now())
@@ -900,13 +943,13 @@ model SuccessPrediction {
 /// the other engines and are NOT stored here — only the learner's own events
 /// are, because only those are editable (the AI keeps priority).
 model CalendarEvent {
-  id     String   @id @default(cuid())
-  userId String
+  id        String   @id @default(cuid())
+  userId    String
   /// exam | objective | deadline
-  kind   String
-  title  String
+  kind      String
+  title     String
   /// The event's calendar day (time part ignored).
-  date   DateTime
+  date      DateTime
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -954,23 +997,24 @@ model Reviewable {
 /// loop the AI drives from Accueil to Fin. Snapshots the Digital Twin at start
 /// and end so "what moved" is a measured fact, not a claim.
 model StudySession {
-  id        String  @id @default(cuid())
-  userId    String
-  conceptId String?
-  lessonId  String?
+  id                  String    @id @default(cuid())
+  userId              String
+  conceptId           String?
+  lessonId            String?
   /// Concept or topic name this session is about.
-  subject   String
+  subject             String
   /// "learning" while in progress, "done" once completed.
-  status    String  @default("learning")
+  status              String    @default("learning")
   /// Learning Score (0..1) and concept mastery (0..1) at start / end.
   learningScoreBefore Float?
   masteryBefore       Float?
   learningScoreAfter  Float?
   masteryAfter        Float?
-  startedAt   DateTime  @default(now())
-  completedAt DateTime?
+  startedAt           DateTime  @default(now())
+  completedAt         DateTime?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  experienceSessions ExperienceSession[]
 
   @@index([userId])
   /// Sprint 10.1: coach/mentor/insights filter done sessions by user + recency.
@@ -978,24 +1022,141 @@ model StudySession {
   @@map("study_sessions")
 }
 
+/// Cross-product UX continuity envelope (UX-2, Lot 0). It references existing
+/// domain sessions and artifacts without replacing or duplicating them.
+enum ExperienceSessionType {
+  learning
+  tutor
+  research
+  review
+  language
+  workspace
+  document_processing @map("document-processing")
+}
+
+enum ExperienceSessionStatus {
+  active
+  paused
+  completed
+  abandoned
+  failed
+}
+
+enum ExperienceInputModality {
+  text
+  voice
+  photo
+  scan
+  file
+  mixed
+}
+
+model ExperienceSession {
+  id               String                   @id @default(cuid())
+  userId           String
+  type             ExperienceSessionType
+  status           ExperienceSessionStatus  @default(active)
+  title            String?
+  intent           String?
+  inputModality    ExperienceInputModality?
+  activeContexts   Json
+  currentStep      Json?
+  progress         Json?
+  productions      Json
+  sourceReferences Json
+  twinImpact       Json?
+  resumeTarget     Json?
+  nextBestAction   Json?
+
+  /// Direct links for existing persistent objects. Generic collections and
+  /// external sources remain in sourceReferences until they have stable models.
+  tutorSessionId    String?
+  studySessionId    String?
+  documentId        String?
+  lessonId          String?
+  goalId            String?
+  languageProfileId String?
+  /// Reserved bridge until Academic Workspace gets its own persistent model.
+  workspaceRef      String?
+
+  /// Safe retry key, unique only within one user's sessions.
+  idempotencyKey String?
+  version        Int       @default(1)
+  startedAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  pausedAt       DateTime?
+  completedAt    DateTime?
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tutorSession    TutorSession?    @relation(fields: [tutorSessionId], references: [id], onDelete: SetNull)
+  studySession    StudySession?    @relation(fields: [studySessionId], references: [id], onDelete: SetNull)
+  document        Document?        @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  lesson          Lesson?          @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  goal            Goal?            @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  languageProfile LanguageProfile? @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, status, updatedAt])
+  @@index([userId, type, updatedAt])
+  @@index([tutorSessionId])
+  @@index([studySessionId])
+  @@index([documentId])
+  @@index([lessonId])
+  @@index([goalId])
+  @@index([languageProfileId])
+  @@map("experience_sessions")
+}
+
+/// Persistent production environment for academic work. Research and document
+/// provenance live in `sources`; content is autosaved with an optimistic
+/// revision so two stale editors cannot silently overwrite one another.
+model AcademicWorkspace {
+  id                  String    @id @default(cuid())
+  userId              String
+  title               String
+  template            String
+  objective           String
+  dueAt               DateTime?
+  status              String    @default("active")
+  mode                String    @default("guide")
+  plan                Json
+  sources             Json
+  draftFormat         String    @default("markdown")
+  draftContent        String    @db.Text
+  assistantHistory    Json
+  progress            Json
+  autosaveRevision    Int       @default(0)
+  experienceSessionId String?
+  resumeTarget        Json
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, updatedAt])
+  @@index([userId, updatedAt])
+  @@index([experienceSessionId])
+  @@map("academic_workspaces")
+}
+
 /// Personalised homework generated after a lesson (Homework Engine). One per
 /// lesson; regenerating replaces it. Exercises are corrected by the Examiner on
 /// submission (ephemeral — homework practice does not persist attempts).
 model Homework {
-  id         String  @id @default(cuid())
-  userId     String
-  lessonId   String  @unique
-  conceptId  String?
-  language   String?
+  id                  String   @id @default(cuid())
+  userId              String
+  lessonId            String   @unique
+  conceptId           String?
+  language            String?
   /// Adaptive rationale: what this homework targets and why (learner's language).
-  focus      String
+  focus               String
   /// { type, question, answer, options? }[] — personalised exercises.
-  exercises  Json
+  exercises           Json
   /// string[] of reflective, open-ended questions.
-  questions  Json
+  questions           Json
   /// Concept mastery (0..1) captured when generated, for auditability.
   masteryAtGeneration Float?
-  createdAt  DateTime @default(now())
+  createdAt           DateTime @default(now())
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
@@ -1034,7 +1195,7 @@ model Assessment {
 /// carries per-question explanation + how-to-improve, and `advice` turns the
 /// whole attempt into next steps.
 model AssessmentSubmission {
-  id           String @id @default(cuid())
+  id           String   @id @default(cuid())
   assessmentId String
   userId       String
   /// string[] of the learner's answers, aligned to the questions.
@@ -1113,40 +1274,50 @@ model ReadingExercise {
 /// sprint builds only the ARCHITECTURE: the six plans are seeded but their
 /// quotas/features stay empty until limits & benefits are defined later.
 model Plan {
-  id   String @id @default(cuid())
+  id                   String   @id @default(cuid())
   /// Stable machine id (never shown): free | pro | pro_max | team | school | enterprise.
-  slug String @unique
+  slug                 String   @unique
   /// Display name (provisional, editable later).
-  name String
+  name                 String
   /// Ordering / upgrade comparison — higher means "more".
-  tier Int @default(0)
+  tier                 Int      @default(0)
   /// Who the plan targets: "individual" or "organization".
-  audience String @default("individual")
+  audience             String   @default("individual")
   /// Generic quota map { key: limit } (limit -1 or absent = unlimited). Empty
   /// until per-plan limits are defined.
-  quotas Json @default("{}")
+  quotas               Json     @default("{}")
   /// Generic feature flags { key: boolean }. Empty until benefits are defined.
-  features Json @default("{}")
+  features             Json     @default("{}")
   /// Billing architecture only — amounts stay null until pricing is set. Minor
   /// currency units (e.g. cents).
-  priceMonthly Int?
-  priceYearly  Int?
-  currency     String @default("usd")
-  isActive     Boolean @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  priceMonthly         Int?
+  priceYearly          Int?
+  currency             String   @default("usd")
+  isActive             Boolean  @default(true)
+  /// Public commercial catalog v1. Legacy organization plans remain available
+  /// internally but are not advertised by the public endpoint.
+  publicV1             Boolean  @default(false)
+  fallbackRatio        Float    @default(0.5)
+  configurationVersion Int      @default(1)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   subscriptions Subscription[]
+  versions      PlanVersion[]
 
   @@map("plans")
 }
 
 enum SubscriptionStatus {
+  free
+  payment_pending
   active
   trialing
   past_due
   canceled
   incomplete
+  expired
+  payment_failed
 }
 
 /// One subscriber's link to a plan. Individual (per-user) subscriptions for now;
@@ -1154,12 +1325,12 @@ enum SubscriptionStatus {
 /// organizationId will be added then, with a one-owner constraint). Payment-
 /// provider fields are deliberately absent — they belong to the Payments task.
 model Subscription {
-  id                 String             @id @default(cuid())
-  userId             String             @unique
-  planId             String
-  status             SubscriptionStatus @default(active)
+  id                     String             @id @default(cuid())
+  userId                 String             @unique
+  planId                 String
+  status                 SubscriptionStatus @default(active)
   /// Billing interval when on a paid cycle: "month" | "year" | null.
-  interval           String?
+  interval               String?
   /// Payment provider that owns the paid subscription (Sprint 8.2):
   /// "stripe" | "apple" | "google" | "fake" | null (free / unbilled).
   provider               String?
@@ -1168,17 +1339,19 @@ model Subscription {
   providerCustomerId     String?
   providerSubscriptionId String?
   /// Current billing window; null until a paid cycle is attached.
-  currentPeriodStart DateTime?
-  currentPeriodEnd   DateTime?
-  cancelAtPeriodEnd  Boolean            @default(false)
-  trialEndsAt        DateTime?
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
+  currentPeriodStart     DateTime?
+  currentPeriodEnd       DateTime?
+  cancelAtPeriodEnd      Boolean            @default(false)
+  planVersion            Int?
+  trialEndsAt            DateTime?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   plan Plan @relation(fields: [planId], references: [id])
 
   @@index([planId])
+  @@index([status, planId])
   @@map("subscriptions")
 }
 
@@ -1215,20 +1388,20 @@ enum PaymentStatus {
 /// A billing document (Sprint 8.2). Generated from verified provider events; the
 /// hosted provider (Stripe) may also expose a PDF, referenced by url.
 model Invoice {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   userId      String
   /// Human-facing sequential-ish number.
-  number      String   @unique
+  number      String    @unique
   provider    String
   amount      Int
-  currency    String   @default("usd")
+  currency    String    @default("usd")
   /// "paid" | "open" | "void" | "uncollectible"
-  status      String   @default("paid")
+  status      String    @default("paid")
   periodStart DateTime?
   periodEnd   DateTime?
   /// Provider-hosted PDF/receipt, when available.
   url         String?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -1240,11 +1413,16 @@ model Invoice {
 /// 8.2). Every inbound event is recorded by (provider, eventId) so re-delivery
 /// (which every provider does) is processed exactly once.
 model WebhookEvent {
-  id         String   @id @default(cuid())
-  provider   String
-  eventId    String
-  type       String
-  processedAt DateTime @default(now())
+  id           String    @id @default(cuid())
+  provider     String
+  eventId      String
+  type         String
+  receivedAt   DateTime  @default(now())
+  processedAt  DateTime?
+  status       String    @default("received")
+  attemptCount Int       @default(0)
+  lastError    String?
+  payloadHash  String?
 
   @@unique([provider, eventId])
   @@map("webhook_events")
@@ -1256,13 +1434,13 @@ model WebhookEvent {
 /// NOT stored here. Adding a new limit = a catalog entry + a number in
 /// `Plan.quotas` — no schema change.
 model UsageCounter {
-  id      String @id @default(cuid())
-  userId  String
+  id        String   @id @default(cuid())
+  userId    String
   /// Metric key (matches the usage catalog + Plan.quotas key), e.g. "ai_questions".
-  metric  String
+  metric    String
   /// Reset bucket — a calendar month "YYYY-MM" for now (aligns to billing later).
-  period  String
-  used    Int    @default(0)
+  period    String
+  used      Int      @default(0)
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1372,7 +1550,7 @@ enum RecommendationStatus {
 /// whose `status` keeps the AI's automatic SUGGESTION distinct from the learner's
 /// DECISION (accepted / dismissed). `dedupeKey` makes generation idempotent.
 model Recommendation {
-  id         String @id @default(cuid())
+  id         String  @id @default(cuid())
   userId     String
   kind       String // lesson | exercise | reading | review | practical | document
   title      String
@@ -1381,7 +1559,7 @@ model Recommendation {
   targetKind String?
   targetId   String?
   dedupeKey  String
-  priority   Int    @default(0)
+  priority   Int     @default(0)
 
   status      RecommendationStatus @default(suggested)
   createdAt   DateTime             @default(now())
@@ -1464,34 +1642,897 @@ enum IncidentSeverity {
 enum IncidentStatus {
   open
   investigating
+  identified
+  monitoring
   resolved
 }
 
 /// An operational incident the platform admins track (status-page style).
 model Incident {
-  id          String           @id @default(cuid())
-  title       String
-  description String?
-  severity    IncidentSeverity @default(medium)
-  status      IncidentStatus   @default(open)
-  createdAt   DateTime         @default(now())
-  resolvedAt  DateTime?
+  id             String           @id @default(cuid())
+  title          String
+  description    String?
+  severity       IncidentSeverity @default(medium)
+  status         IncidentStatus   @default(open)
+  assignedToId   String?
+  acknowledgedAt DateTime?
+  identifiedAt   DateTime?
+  monitoringAt   DateTime?
+  resolvedAt     DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  assignedTo  User?                   @relation("AssignedIncidents", fields: [assignedToId], references: [id], onDelete: SetNull)
+  bugGroups   BugGroup[]
+  errorEvents ErrorEvent[]
+  timeline    IncidentTimelineEvent[]
 
   @@index([status, createdAt])
+  @@index([assignedToId, status, updatedAt])
   @@map("incidents")
+}
+
+/// Source of truth for safe technical telemetry. All strings and metadata must
+/// be redacted and bounded before this immutable record is persisted.
+enum ErrorEventSource {
+  frontend
+  backend
+  provider
+  worker
+  payment
+  mail
+  quota
+  database
+  redis
+  qdrant
+  security
+}
+
+enum ErrorSeverity {
+  critical
+  high
+  medium
+  low
+}
+
+enum BugStatus {
+  new
+  triaged
+  investigating
+  fix_in_progress
+  fixed
+  monitoring
+  resolved
+  reopened
+  wont_fix
+  duplicate
+}
+
+enum ReportCorrelationStatus {
+  independent
+  suggested
+  linked
+}
+
+enum SupportCaseStatus {
+  open
+  in_progress
+  waiting_for_user
+  waiting_for_engineering
+  resolved
+  closed
+}
+
+enum SupportCasePriority {
+  critical
+  high
+  medium
+  low
+}
+
+enum DiagnosticKind {
+  rule_based
+  ai_assisted
+}
+
+enum DiagnosticStatus {
+  available
+  not_available
+  not_instrumented
+}
+
+enum DiagnosticConfidence {
+  unconfirmed
+  low
+  medium
+  high
+}
+
+enum IncidentTimelineType {
+  created
+  status_changed
+  bug_linked
+  note_added
+  acknowledged
+}
+
+model ErrorEvent {
+  id                      String           @id @default(cuid())
+  /// Client retry idempotency only. Null means a distinct occurrence.
+  ingestId                String?
+  occurredAt              DateTime         @default(now())
+  receivedAt              DateTime         @default(now())
+  environment             String
+  source                  ErrorEventSource
+  severity                ErrorSeverity    @default(medium)
+  errorCode               String?
+  errorType               String?
+  messageSanitized        String?
+  stackFingerprint        String?
+  stackDetailSanitized    String?
+  fingerprint             String
+  fingerprintVersion      Int              @default(1)
+  userId                  String?
+  sessionId               String?
+  requestId               String?
+  operationId             String?
+  route                   String?
+  feature                 String?
+  provider                String?
+  model                   String?
+  appVersion              String?
+  buildVersion            String?
+  platform                String?
+  deviceMetadataSanitized Json?
+  quotaState              QuotaState?
+  planSlug                String?
+  httpStatus              Int?
+  latencyMs               Int?
+  retryAttempt            Int?
+  metadataSanitized       Json?
+  providerUsageAttemptId  String?
+  bugGroupId              String?
+  incidentId              String?
+
+  user                 User?                 @relation("ErrorEventsForUser", fields: [userId], references: [id], onDelete: SetNull)
+  providerUsageAttempt ProviderUsageAttempt? @relation(fields: [providerUsageAttemptId], references: [id], onDelete: SetNull)
+  bugGroup             BugGroup?             @relation(fields: [bugGroupId], references: [id], onDelete: SetNull)
+  incident             Incident?             @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+
+  @@unique([environment, ingestId])
+  @@index([fingerprint, occurredAt])
+  @@index([bugGroupId, occurredAt])
+  @@index([requestId, occurredAt])
+  @@index([operationId, occurredAt])
+  @@index([userId, occurredAt])
+  @@index([source, occurredAt])
+  @@index([provider, model, occurredAt])
+  @@index([appVersion, buildVersion, occurredAt])
+  @@map("error_events")
+}
+
+/// A durable aggregate of matching ErrorEvents. Events remain the source of
+/// truth; aggregate counters are transactionally maintained for fast triage.
+model BugGroup {
+  id                     String           @id @default(cuid())
+  environment            String
+  fingerprint            String
+  fingerprintVersion     Int              @default(1)
+  title                  String
+  status                 BugStatus        @default(new)
+  severity               ErrorSeverity    @default(medium)
+  source                 ErrorEventSource
+  feature                String?
+  firstSeen              DateTime
+  lastSeen               DateTime
+  occurrenceCount        Int              @default(0)
+  affectedUsersCount     Int              @default(0)
+  incidentId             String?
+  assignedToId           String?
+  duplicateOfId          String?
+  fixReference           String?
+  targetRelease          String?
+  resolutionNote         String?
+  securityReviewRequired Boolean          @default(false)
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  incident      Incident?         @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+  assignedTo    User?             @relation("AssignedBugGroups", fields: [assignedToId], references: [id], onDelete: SetNull)
+  duplicateOf   BugGroup?         @relation("BugGroupDuplicates", fields: [duplicateOfId], references: [id], onDelete: SetNull)
+  duplicates    BugGroup[]        @relation("BugGroupDuplicates")
+  errorEvents   ErrorEvent[]
+  affectedUsers BugAffectedUser[]
+  reports       Report[]
+  supportCases  SupportCase[]
+  diagnostics   BugDiagnostic[]
+  comments      BugComment[]
+
+  @@unique([environment, fingerprintVersion, fingerprint])
+  @@index([status, severity, lastSeen])
+  @@index([incidentId, status])
+  @@index([assignedToId, status, updatedAt])
+  @@map("bug_groups")
+}
+
+/// Exact user-impact membership. The compound key lets a user count once per
+/// bug even while many matching events are ingested concurrently.
+model BugAffectedUser {
+  bugGroupId      String
+  userId          String
+  occurrenceCount Int      @default(0)
+  firstAffectedAt DateTime
+  lastAffectedAt  DateTime
+
+  bugGroup BugGroup @relation(fields: [bugGroupId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([bugGroupId, userId])
+  @@index([bugGroupId, lastAffectedAt])
+  @@map("bug_affected_users")
+}
+
+model BugComment {
+  id         String   @id @default(cuid())
+  bugGroupId String
+  actorId    String
+  body       String
+  createdAt  DateTime @default(now())
+
+  bugGroup BugGroup @relation(fields: [bugGroupId], references: [id], onDelete: Cascade)
+  actor    User     @relation("BugCommentsByActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([bugGroupId, createdAt])
+  @@map("bug_comments")
+}
+
+model IncidentTimelineEvent {
+  id         String               @id @default(cuid())
+  incidentId String
+  actorId    String?
+  type       IncidentTimelineType
+  note       String?
+  createdAt  DateTime             @default(now())
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  actor    User?    @relation("IncidentTimelineByActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([incidentId, createdAt])
+  @@map("incident_timeline_events")
+}
+
+/// Diagnostics are reviewable data; they never execute an operational action.
+model BugDiagnostic {
+  id                  String               @id @default(cuid())
+  bugGroupId          String
+  kind                DiagnosticKind
+  status              DiagnosticStatus     @default(available)
+  confidence          DiagnosticConfidence @default(unconfirmed)
+  observed            Json?
+  correlated          Json?
+  hypotheses          Json?
+  evidence            Json?
+  nextChecks          Json?
+  providerOperationId String?
+  requestedById       String?
+  createdAt           DateTime             @default(now())
+
+  bugGroup    BugGroup @relation(fields: [bugGroupId], references: [id], onDelete: Cascade)
+  requestedBy User?    @relation("BugDiagnosticsRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+
+  @@index([bugGroupId, createdAt])
+  @@map("bug_diagnostics")
+}
+
+/// A support workflow is intentionally smaller than a CRM. It preserves the
+/// relationship between an individual, their report, and a broader BugGroup.
+model SupportCase {
+  id           String              @id @default(cuid())
+  userId       String
+  reportId     String?
+  bugGroupId   String?
+  status       SupportCaseStatus   @default(open)
+  priority     SupportCasePriority @default(medium)
+  assignedToId String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  resolvedAt   DateTime?
+
+  user       User              @relation("SupportCasesForUser", fields: [userId], references: [id], onDelete: Cascade)
+  report     Report?           @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  bugGroup   BugGroup?         @relation(fields: [bugGroupId], references: [id], onDelete: SetNull)
+  assignedTo User?             @relation("AssignedSupportCases", fields: [assignedToId], references: [id], onDelete: SetNull)
+  notes      SupportCaseNote[]
+
+  @@index([status, assignedToId, updatedAt])
+  @@index([userId, status])
+  @@index([bugGroupId, status])
+  @@map("support_cases")
+}
+
+model SupportCaseNote {
+  id            String   @id @default(cuid())
+  supportCaseId String
+  actorId       String
+  body          String
+  createdAt     DateTime @default(now())
+
+  supportCase SupportCase @relation(fields: [supportCaseId], references: [id], onDelete: Cascade)
+  actor       User        @relation("SupportCaseNotesByActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([supportCaseId, createdAt])
+  @@map("support_case_notes")
 }
 
 /// An audit-log entry: who did what admin-relevant action, when.
 model AuditLog {
-  id        String   @id @default(cuid())
+  id         String   @id @default(cuid())
   /// Actor (admin) user id; null for system events.
-  actorId   String?
-  action    String
-  detail    String?
-  createdAt DateTime @default(now())
+  actorId    String?
+  action     String
+  detail     String?
+  actorRole  String?
+  targetType String?
+  targetId   String?
+  before     Json?
+  after      Json?
+  reason     String?
+  result     String   @default("success")
+  requestId  String?
+  sessionId  String?
+  ip         String?
+  userAgent  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
 
   @@index([createdAt])
+  @@index([targetId, createdAt])
   @@map("audit_logs")
+}
+
+enum AccountStatus {
+  active
+  suspended
+  banned
+  deletion_pending
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  TECH_OPS
+  SUPPORT
+  FINANCE
+  SECURITY
+  ANALYTICS
+}
+
+model AdminRoleAssignment {
+  id          String    @id @default(cuid())
+  userId      String
+  role        AdminRole
+  grantedById String?
+  reason      String?
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role])
+  @@index([userId, revokedAt])
+  @@map("admin_role_assignments")
+}
+
+model SecurityEvent {
+  id        String   @id @default(cuid())
+  actorId   String?
+  userId    String?
+  type      String
+  severity  String   @default("info")
+  result    String   @default("success")
+  requestId String?
+  sessionId String?
+  ip        String?
+  userAgent String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([type, createdAt])
+  @@index([userId, createdAt])
+  @@map("security_events")
+}
+
+enum DeletionRequestStatus {
+  requested
+  approved
+  rejected
+  completed
+}
+
+model AccountDeletionRequest {
+  id            String                @id @default(cuid())
+  userId        String
+  requestedById String
+  approvedById  String?
+  reason        String
+  status        DeletionRequestStatus @default(requested)
+  requestedAt   DateTime              @default(now())
+  resolvedAt    DateTime?
+  metadata      Json?
+
+  @@index([userId, status])
+  @@map("account_deletion_requests")
+}
+
+/// Internal Support/Admin note.  It is deliberately separate from learner
+/// content and always attributed to the administrator who wrote it.
+model AdminSupportNote {
+  id        String   @id @default(cuid())
+  userId    String
+  actorId   String
+  body      String
+  createdAt DateTime @default(now())
+
+  user  User @relation("AdminSupportNotesForUser", fields: [userId], references: [id], onDelete: Cascade)
+  actor User @relation("AdminSupportNotesByActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@map("admin_support_notes")
+}
+
+/// Traceable administrative review of a learner profile.  Requesting a user
+/// update is recorded here even when delivery is not yet instrumented.
+model AdminProfileReview {
+  id             String   @id @default(cuid())
+  userId         String
+  adminId        String
+  action         String
+  reason         String
+  deliveryStatus String   @default("NOT_APPLICABLE")
+  createdAt      DateTime @default(now())
+
+  user  User @relation("AdminProfileReviewsForUser", fields: [userId], references: [id], onDelete: Cascade)
+  admin User @relation("AdminProfileReviewsByActor", fields: [adminId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@map("admin_profile_reviews")
+}
+
+model PlanVersion {
+  id            String    @id @default(cuid())
+  planId        String
+  version       Int
+  priceMonthly  Int?
+  priceYearly   Int?
+  currency      String
+  quotas        Json
+  features      Json
+  fallbackRatio Float     @default(0.5)
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime?
+  publishedAt   DateTime  @default(now())
+  createdById   String?
+  reason        String?
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, version])
+  @@index([planId, effectiveFrom])
+  @@map("plan_versions")
+}
+
+enum QuotaResource {
+  AI_TEXT
+  VOICE_SECONDS
+  DOCUMENT_PAGES
+  OCR_PAGES
+  EMBEDDING_UNITS
+  WEB_SEARCH
+  DEEP_RESEARCH
+  ACADEMIC_AI
+}
+
+enum QuotaCycleStatus {
+  ACTIVE
+  CLOSED
+}
+
+model QuotaCycle {
+  id             String           @id @default(cuid())
+  userId         String
+  subscriptionId String?
+  planSlug       String
+  planVersion    Int
+  startsAt       DateTime
+  endsAt         DateTime
+  status         QuotaCycleStatus @default(ACTIVE)
+  source         String
+  predecessorId  String?
+  createdAt      DateTime         @default(now())
+  closedAt       DateTime?
+
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accounts     QuotaAccount[]
+  reservations QuotaReservation[]
+
+  @@unique([userId, startsAt, endsAt])
+  @@index([userId, status, startsAt, endsAt])
+  @@index([status, startsAt, endsAt])
+  @@map("quota_cycles")
+}
+
+enum QuotaState {
+  PRIMARY
+  FALLBACK
+  BLOCKED
+}
+
+model QuotaAccount {
+  id            String        @id @default(cuid())
+  cycleId       String
+  resource      QuotaResource
+  primaryLimit  Int?
+  fallbackLimit Int           @default(0)
+  primaryUsed   Int           @default(0)
+  fallbackUsed  Int           @default(0)
+  state         QuotaState    @default(PRIMARY)
+  version       Int           @default(0)
+  updatedAt     DateTime      @updatedAt
+
+  cycle        QuotaCycle         @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  reservations QuotaReservation[]
+
+  @@unique([cycleId, resource])
+  @@index([cycleId, state])
+  @@map("quota_accounts")
+}
+
+enum QuotaReservationStatus {
+  RESERVED
+  FINALIZED
+  RELEASED
+}
+
+model QuotaReservation {
+  id             String                 @id @default(cuid())
+  idempotencyKey String
+  userId         String
+  cycleId        String
+  accountId      String
+  resource       QuotaResource
+  feature        String
+  requestedUnits Int
+  primaryUnits   Int                    @default(0)
+  fallbackUnits  Int                    @default(0)
+  actualUnits    Int?
+  status         QuotaReservationStatus @default(RESERVED)
+  createdAt      DateTime               @default(now())
+  completedAt    DateTime?
+
+  cycle                   QuotaCycle               @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  account                 QuotaAccount             @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  ledger                  UsageLedger[]
+  providerUsage           ProviderUsage?
+  providerUsageOperations ProviderUsageOperation[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@map("quota_reservations")
+}
+
+enum UsageLedgerEvent {
+  RESERVE
+  FINALIZE
+  RELEASE
+  ADJUST
+}
+
+model UsageLedger {
+  id             String           @id @default(cuid())
+  reservationId  String?
+  userId         String
+  cycleId        String
+  resource       QuotaResource
+  event          UsageLedgerEvent
+  primaryDelta   Int              @default(0)
+  fallbackDelta  Int              @default(0)
+  actualUnits    Int?
+  actorId        String?
+  reason         String?
+  idempotencyKey String           @unique
+  metadata       Json?
+  createdAt      DateTime         @default(now())
+
+  reservation QuotaReservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+
+  @@index([userId, cycleId, resource, createdAt])
+  @@map("usage_ledger")
+}
+
+model ProviderUsage {
+  id                  String        @id @default(cuid())
+  userId              String
+  subscriptionId      String?
+  planSlug            String
+  planVersion         Int
+  feature             String
+  resource            QuotaResource
+  provider            String
+  model               String?
+  requestId           String
+  internalOperationId String        @unique
+  status              String
+  inputTokens         Int?
+  outputTokens        Int?
+  cachedTokens        Int?
+  audioInputSeconds   Int?
+  audioOutputSeconds  Int?
+  pages               Int?
+  searchCount         Int?
+  providerCostMinor   Int?
+  providerCurrency    String?
+  pricingVersion      String?
+  latencyMs           Int?
+  metadata            Json?
+  startedAt           DateTime      @default(now())
+  completedAt         DateTime?
+  reservationId       String?       @unique
+
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reservation QuotaReservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+
+  @@index([userId, startedAt])
+  @@index([provider, model, startedAt])
+  @@index([startedAt, resource, status])
+  @@map("provider_usage")
+}
+
+model ProviderPricing {
+  id               String    @id @default(cuid())
+  provider         String
+  model            String
+  version          String
+  currency         String
+  inputTokenPrice  Float?
+  outputTokenPrice Float?
+  audioSecondPrice Float?
+  pagePrice        Float?
+  searchPrice      Float?
+  effectiveFrom    DateTime
+  effectiveTo      DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@unique([provider, model, version])
+  @@map("provider_pricing")
+}
+
+// ── Sprint 4: provider usage & cost ledger ─────────────────────────────────
+//
+// ProviderUsage above remains the backwards-compatible logical envelope used
+// by earlier Admin surfaces.  The tables below are the financial source of
+// truth: each immutable final attempt carries its precise usage, the price
+// snapshot that was applicable at the time, and an explicit confidence state.
+
+enum ProviderUsageOperationStatus {
+  STARTED
+  SUCCEEDED
+  FAILED
+  FINALIZATION_PENDING
+  BLOCKED
+}
+
+enum ProviderUsageAttemptStatus {
+  STARTED
+  SUCCEEDED
+  FAILED
+}
+
+enum ProviderCostStatus {
+  MEASURED
+  ESTIMATED
+  UNKNOWN
+  NOT_AVAILABLE
+  NOT_INSTRUMENTED
+}
+
+enum ProviderPricingStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+enum ProviderCostAdjustmentKind {
+  CORRECTION
+  RECONCILIATION
+}
+
+/**
+ * One user-intended logical operation.  An operation is deliberately separate
+ * from individual attempts: a retry is visible and billable independently but
+ * still rolls up to the one action that initiated it.
+ */
+model ProviderUsageOperation {
+  id                 String                       @id @default(cuid())
+  idempotencyKey     String                       @unique
+  requestId          String?
+  userId             String?
+  subscriptionId     String?
+  planSlug           String?
+  planVersion        Int?
+  feature            String
+  resource           QuotaResource?
+  quotaReservationId String?
+  quotaState         QuotaState?
+  status             ProviderUsageOperationStatus @default(STARTED)
+  unattributedReason String?
+  metadata           Json?
+  startedAt          DateTime                     @default(now())
+  completedAt        DateTime?
+
+  user             User?                    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  quotaReservation QuotaReservation?        @relation(fields: [quotaReservationId], references: [id], onDelete: SetNull)
+  attempts         ProviderUsageAttempt[]
+  adjustments      ProviderCostAdjustment[]
+
+  @@index([startedAt, status])
+  @@index([userId, startedAt])
+  @@index([planSlug, feature, startedAt])
+  @@index([quotaState, startedAt])
+  @@map("provider_usage_operations")
+}
+
+/**
+ * A provider call attempt.  Once finalized, it is never repriced or mutated.
+ */
+model ProviderUsageAttempt {
+  id                 String                     @id @default(cuid())
+  operationId        String
+  attemptNumber      Int
+  attemptId          String                     @unique
+  providerRequestId  String?                    @unique
+  provider           String
+  model              String?
+  status             ProviderUsageAttemptStatus @default(STARTED)
+  costStatus         ProviderCostStatus         @default(NOT_INSTRUMENTED)
+  measurementSource  String                     @default("PROVIDER")
+  inputTokens        Int?
+  cachedInputTokens  Int?
+  outputTokens       Int?
+  reasoningTokens    Int?
+  audioInputSeconds  Int?
+  audioOutputSeconds Int?
+  ocrPages           Int?
+  visionCalls        Int?
+  embeddingUnits     Int?
+  searchUnits        Int?
+  otherUnits         Int?
+  originalAmount     Decimal?                   @db.Decimal(20, 12)
+  originalCurrency   String?
+  referenceAmountUsd Decimal?                   @db.Decimal(20, 12)
+  fxRate             Decimal?                   @db.Decimal(20, 12)
+  fxRateSource       String?
+  fxRateTimestamp    DateTime?
+  pricingVersionId   String?
+  pricingVersion     String?
+  pricingSnapshot    Json?
+  latencyMs          Int?
+  errorCode          String?
+  metadata           Json?
+  startedAt          DateTime                   @default(now())
+  completedAt        DateTime?
+  finalizedAt        DateTime?
+
+  operation   ProviderUsageOperation   @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  adjustments ProviderCostAdjustment[]
+  errorEvents ErrorEvent[]
+
+  @@unique([operationId, attemptNumber])
+  @@index([provider, model, startedAt])
+  @@index([costStatus, startedAt])
+  @@index([operationId, startedAt])
+  @@map("provider_usage_attempts")
+}
+
+/**
+ * Immutable correction/reconciliation entries.  They are intentionally not a
+ * mutable column on ProviderUsageAttempt so a historical provider calculation
+ * can always be reproduced and audited.
+ */
+model ProviderCostAdjustment {
+  id               String                     @id @default(cuid())
+  operationId      String
+  attemptId        String?
+  kind             ProviderCostAdjustmentKind
+  amountDeltaUsd   Decimal?                   @db.Decimal(20, 12)
+  originalAmount   Decimal?                   @db.Decimal(20, 12)
+  originalCurrency String?
+  reason           String
+  createdById      String?
+  metadata         Json?
+  createdAt        DateTime                   @default(now())
+
+  operation ProviderUsageOperation @relation(fields: [operationId], references: [id], onDelete: Restrict)
+  attempt   ProviderUsageAttempt?  @relation(fields: [attemptId], references: [id], onDelete: Restrict)
+
+  @@index([operationId, createdAt])
+  @@index([attemptId, createdAt])
+  @@map("provider_cost_adjustments")
+}
+
+/**
+ * Versioned provider price catalog.  Rates are Decimal amounts per named unit,
+ * never Float.  A finalized attempt stores its own snapshot, so later catalog
+ * versions never recalculate history.
+ */
+model ProviderPricingVersion {
+  id                     String                @id @default(cuid())
+  provider               String
+  model                  String
+  version                String
+  status                 ProviderPricingStatus @default(DRAFT)
+  currency               String
+  inputTokenPrice        Decimal?              @db.Decimal(20, 12)
+  cachedInputTokenPrice  Decimal?              @db.Decimal(20, 12)
+  outputTokenPrice       Decimal?              @db.Decimal(20, 12)
+  reasoningTokenPrice    Decimal?              @db.Decimal(20, 12)
+  audioInputSecondPrice  Decimal?              @db.Decimal(20, 12)
+  audioOutputSecondPrice Decimal?              @db.Decimal(20, 12)
+  ocrPagePrice           Decimal?              @db.Decimal(20, 12)
+  visionCallPrice        Decimal?              @db.Decimal(20, 12)
+  embeddingUnitPrice     Decimal?              @db.Decimal(20, 12)
+  searchUnitPrice        Decimal?              @db.Decimal(20, 12)
+  otherUnitPrice         Decimal?              @db.Decimal(20, 12)
+  otherUnitName          String?
+  effectiveFrom          DateTime
+  effectiveTo            DateTime?
+  sourceReference        String?
+  createdById            String?
+  reason                 String?
+  createdAt              DateTime              @default(now())
+
+  @@unique([provider, model, version])
+  @@index([provider, model, status, effectiveFrom])
+  @@map("provider_pricing_versions")
+}
+
+/**
+ * Config-only financial guardrail.  It drives observation and alerts, never quotas or routing.
+ */
+model ProviderCostBudget {
+  id               String   @id @default(cuid())
+  scope            String
+  scopeKey         String?
+  currency         String   @default("USD")
+  monthlyAmountUsd Decimal  @db.Decimal(20, 12)
+  warningPercent   Int      @default(80)
+  criticalPercent  Int      @default(100)
+  reason           String
+  createdById      String?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([scope, scopeKey, active])
+  @@map("provider_cost_budgets")
+}
+
+model EntitlementOverride {
+  id          String    @id @default(cuid())
+  userId      String
+  kind        String
+  key         String
+  value       Json
+  reason      String
+  grantedById String
+  startsAt    DateTime  @default(now())
+  endsAt      DateTime?
+  revokedAt   DateTime?
+  revokedById String?
+  createdAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startsAt, endsAt, revokedAt])
+  @@map("entitlement_overrides")
 }
 
 enum ReportStatus {
@@ -1502,16 +2543,41 @@ enum ReportStatus {
 
 /// A user-submitted report / flag (abuse, bug, content). Admins triage these.
 model Report {
-  id         String       @id @default(cuid())
-  reporterId String?
+  id                           String                  @id @default(cuid())
+  reporterId                   String?
   /// Free category, e.g. "content" | "bug" | "abuse".
-  category   String       @default("other")
-  message    String
-  status     ReportStatus @default(open)
-  createdAt  DateTime     @default(now())
-  reviewedAt DateTime?
+  category                     String                  @default("other")
+  /// Always redacted/truncated by the reporting service before persistence.
+  message                      String
+  status                       ReportStatus            @default(open)
+  /// Request that submitted this report. It is distinct from the observed
+  /// failing request retained below for evidence-only correlation.
+  requestId                    String?
+  observedRequestId            String?
+  operationId                  String?
+  route                        String?
+  feature                      String?
+  appVersion                   String?
+  buildVersion                 String?
+  platform                     String?
+  environment                  String?
+  consentAdditionalDiagnostics Boolean                 @default(false)
+  correlationStatus            ReportCorrelationStatus @default(independent)
+  correlationConfidence        DiagnosticConfidence    @default(unconfirmed)
+  bugGroupId                   String?
+  linkedAt                     DateTime?
+  linkedById                   String?
+  createdAt                    DateTime                @default(now())
+  reviewedAt                   DateTime?
+
+  bugGroup     BugGroup?     @relation(fields: [bugGroupId], references: [id], onDelete: SetNull)
+  supportCases SupportCase[]
 
   @@index([status, createdAt])
+  @@index([reporterId, createdAt])
+  @@index([requestId, createdAt])
+  @@index([observedRequestId, createdAt])
+  @@index([bugGroupId, status])
   @@map("reports")
 }
 
@@ -1602,12 +2668,12 @@ model GroupMember {
 
 /// A directed edge between two concepts (prerequisite / related).
 model ConceptEdge {
-  id       String          @id @default(cuid())
-  userId   String
-  sourceId String
-  targetId String
-  relation ConceptRelation
-  createdAt DateTime       @default(now())
+  id        String          @id @default(cuid())
+  userId    String
+  sourceId  String
+  targetId  String
+  relation  ConceptRelation
+  createdAt DateTime        @default(now())
 
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   source Concept @relation("EdgeSource", fields: [sourceId], references: [id], onDelete: Cascade)

@@ -188,7 +188,7 @@ function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () 
 }
 
 function formatDay(date: string, locale: string): string {
-  return new Date(`${date}T12:00:00`).toLocaleDateString(locale === 'fr' ? 'fr-FR' : 'en-US', {
+  return new Date(`${date}T12:00:00`).toLocaleDateString(locale, {
     weekday: 'short',
     day: 'numeric',
     month: 'short',

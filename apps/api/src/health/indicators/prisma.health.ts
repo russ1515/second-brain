@@ -10,8 +10,10 @@ export class PrismaHealthIndicator {
     try {
       await this.prisma.$queryRaw`SELECT 1`;
       return { status: 'up' };
-    } catch (error) {
-      return { status: 'down', message: (error as Error).message };
+    } catch {
+      // Health is public: driver messages can contain hostnames, connection
+      // strings, or other operational details. The component status is enough.
+      return { status: 'down' };
     }
   }
 }

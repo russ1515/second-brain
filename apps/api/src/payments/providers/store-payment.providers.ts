@@ -1,5 +1,4 @@
 import { Logger, ServiceUnavailableException } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
 import type { PaymentProviderName } from '@second-brain/shared';
 import type {
   CheckoutParams,
@@ -13,13 +12,6 @@ function noWebCheckout(name: string): never {
   throw new ServiceUnavailableException(
     `${name} purchases happen in the app's native store UI, not a web checkout.`,
   );
-}
-
-function periodEnd(interval: string): Date {
-  const end = new Date();
-  if (interval === 'year') end.setFullYear(end.getFullYear() + 1);
-  else end.setMonth(end.getMonth() + 1);
-  return end;
 }
 
 /**
@@ -47,39 +39,15 @@ export class AppleIapProvider implements PaymentProvider {
     return Promise.resolve(null);
   }
 
-  async verifyMobilePurchase(params: MobileVerifyParams): Promise<NormalizedBillingEvent> {
-    const sharedSecret = process.env.APPLE_SHARED_SECRET;
-    if (!sharedSecret) {
-      throw new ServiceUnavailableException(
-        'Apple IAP is not configured (APPLE_SHARED_SECRET missing).',
-      );
-    }
-    // Real shape: POST the receipt to verifyReceipt / App Store Server API, check
-    // the bundle id, product id and expiry, then map to an activation event.
-    const res = await fetch('https://buy.itunes.apple.com/verifyReceipt', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        'receipt-data': params.receipt,
-        password: sharedSecret,
-        'exclude-old-transactions': true,
-      }),
-    });
-    const body = (await res.json()) as { status: number };
-    if (body.status !== 0) {
-      throw new ServiceUnavailableException(
-        `Apple receipt verification failed (status ${body.status}).`,
-      );
-    }
-    return {
-      eventId: `apple_${randomUUID()}`,
-      type: 'subscription_activated',
-      userId: params.userId,
-      planSlug: params.planSlug,
-      interval: params.interval,
-      currentPeriodStart: new Date(),
-      currentPeriodEnd: periodEnd(params.interval),
-    };
+  verifyMobilePurchase(params: MobileVerifyParams): Promise<NormalizedBillingEvent> {
+    void params;
+    // A status-only verifyReceipt call is not sufficient proof: it must also
+    // validate the signed transaction, bundle id, product-to-plan mapping,
+    // ownership and provider expiry. Until that complete verifier is wired, fail
+    // closed so an unrelated valid receipt can never activate a paid plan.
+    throw new ServiceUnavailableException(
+      'Apple purchase verification is not enabled yet; no subscription was changed.',
+    );
   }
 }
 
@@ -106,21 +74,12 @@ export class GooglePlayProvider implements PaymentProvider {
   }
 
   verifyMobilePurchase(params: MobileVerifyParams): Promise<NormalizedBillingEvent> {
-    if (!process.env.GOOGLE_PLAY_SERVICE_ACCOUNT) {
-      throw new ServiceUnavailableException(
-        'Google Play Billing is not configured (GOOGLE_PLAY_SERVICE_ACCOUNT missing).',
-      );
-    }
-    // Real shape: call androidpublisher.purchases.subscriptionsv2.get with the
-    // token, check the acknowledgement/expiry, then map to an activation event.
-    return Promise.resolve({
-      eventId: `google_${randomUUID()}`,
-      type: 'subscription_activated',
-      userId: params.userId,
-      planSlug: params.planSlug,
-      interval: params.interval,
-      currentPeriodStart: new Date(),
-      currentPeriodEnd: periodEnd(params.interval),
-    });
+    void params;
+    // Presence of service-account JSON is not verification. A real verifier must
+    // call subscriptionsv2.get and validate package, product/base plan,
+    // ownership, acknowledgement, state and expiry. Never synthesize a success.
+    throw new ServiceUnavailableException(
+      'Google Play purchase verification is not enabled yet; no subscription was changed.',
+    );
   }
 }

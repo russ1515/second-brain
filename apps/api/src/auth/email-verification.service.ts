@@ -41,10 +41,8 @@ export class EmailVerificationService {
           `Or submit this token to POST /api/auth/verify-email:\n${token}\n\n` +
           `This link expires in ${this.ttlHours()} hours.`,
       });
-    } catch (error) {
-      this.logger.warn(
-        `Failed to send verification email to ${user.email}: ${(error as Error).message}`,
-      );
+    } catch {
+      this.logger.warn('Failed to send verification email.');
     }
   }
 

@@ -6,11 +6,13 @@
 set -euo pipefail
 
 COMPOSE="docker compose -f docker-compose.prod.yml"
+RELEASE_TAG="${RELEASE_TAG:-$(git rev-parse --short HEAD)}"
+export API_IMAGE="${API_IMAGE:-second-brain-api:$RELEASE_TAG}"
 
 echo "① Backing up the database…"
 scripts/backup.sh || echo "  (skipped — no DB reachable yet)"
 
-echo "② Building + rolling out…"
+echo "② Building + rolling out $API_IMAGE…"
 $COMPOSE up -d --build
 
 echo "③ Waiting for the API to become healthy…"

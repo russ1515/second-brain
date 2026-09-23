@@ -1,4 +1,6 @@
 import {
+  ArrayMaxSize,
+  IsArray,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -30,6 +32,12 @@ export class SearchDto implements SearchRequest {
   @IsOptional()
   @IsString()
   documentId?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  documentIds?: string[];
 
   @IsOptional()
   @IsString()

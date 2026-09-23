@@ -6,7 +6,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
 
 jobs:
@@ -21,7 +21,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: Install
@@ -31,17 +31,26 @@ jobs:
         run: pnpm --filter @second-brain/shared build
 
       - name: Generate Prisma client
-        run: pnpm --filter @second-brain/api exec prisma generate
+        run: pnpm --filter @second-brain/api run prisma:generate
 
       - name: Typecheck API
         run: pnpm --filter @second-brain/api typecheck
 
+      - name: Build API
+        run: pnpm --filter @second-brain/api build
+
+      - name: API stabilization tests
+        run: pnpm --filter @second-brain/api test:unit
+
       - name: Typecheck mobile
-        run: pnpm --filter @second-brain/mobile exec tsc --noEmit
+        run: pnpm --filter @second-brain/mobile run typecheck
+
+      - name: Bundle Expo Web
+        run: pnpm --filter @second-brain/mobile run export:web -- --output-dir dist-web-ci
 
   docker:
     needs: build-and-check
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

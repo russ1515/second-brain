@@ -13,7 +13,9 @@ export type MemoryKind =
   | 'conversation'
   | 'homework'
   | 'report'
-  | 'document';
+  | 'document'
+  | 'concept'
+  | 'connection';
 
 export interface MemoryEntry {
   id: string;
@@ -39,6 +41,8 @@ export interface MemorySummary {
   homework: number;
   reports: number;
   documents: number;
+  concepts: number;
+  connections: number;
   /** Total remembered events. */
   total: number;
 }
@@ -47,4 +51,9 @@ export interface LearningMemory {
   summary: MemorySummary;
   /** Most recent memories, newest first. */
   entries: MemoryEntry[];
+}
+
+export interface LearningMemoryPage extends LearningMemory {
+  /** ISO timestamp cursor for the next, older page. */
+  nextCursor: string | null;
 }

@@ -18,12 +18,27 @@ export class SessionService {
    *  what has already been studied today so the queue shrinks as you review. */
   async queue(
     userId: string,
-    options: { newLimit?: number; reviewLimit?: number } = {},
+    options: {
+      newLimit?: number;
+      reviewLimit?: number;
+      limit?: number;
+      conceptId?: string;
+      documentId?: string;
+      deckId?: string;
+    } = {},
   ): Promise<ReviewQueue> {
     const now = new Date();
     const startOfDay = this.startOfUtcDay(now);
     const newLimit = this.clampLimit(options.newLimit, DEFAULT_NEW_LIMIT);
     const reviewLimit = this.clampLimit(options.reviewLimit, DEFAULT_REVIEW_LIMIT);
+    const batchLimit = Math.min(this.clampLimit(options.limit, MAX_LIMIT), MAX_LIMIT);
+    const scopedWhere = {
+      ...(options.deckId ? { deckId: options.deckId } : {}),
+      ...(options.documentId ? { sourceDocumentId: options.documentId } : {}),
+      ...(options.conceptId
+        ? { concepts: { some: { conceptId: options.conceptId } } }
+        : {}),
+    };
 
     const [newIntroducedToday, reviewsDoneToday] = await Promise.all([
       this.prisma.reviewLog.count({
@@ -40,17 +55,18 @@ export class SessionService {
     const reviewCards =
       reviewRemaining > 0
         ? await this.prisma.card.findMany({
-            where: { userId, state: { not: 'new' }, due: { lte: now } },
+            where: { userId, state: { not: 'new' }, due: { lte: now }, ...scopedWhere },
             orderBy: { due: 'asc' },
-            take: reviewRemaining,
+            take: Math.min(reviewRemaining, batchLimit),
           })
         : [];
+    const remainingBatchSlots = Math.max(0, batchLimit - reviewCards.length);
     const newCards =
-      newRemaining > 0
+      newRemaining > 0 && remainingBatchSlots > 0
         ? await this.prisma.card.findMany({
-            where: { userId, state: 'new', due: { lte: now } },
+            where: { userId, state: 'new', due: { lte: now }, ...scopedWhere },
             orderBy: { createdAt: 'asc' },
-            take: newRemaining,
+            take: Math.min(newRemaining, remainingBatchSlots),
           })
         : [];
 

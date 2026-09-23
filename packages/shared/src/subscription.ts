@@ -24,11 +24,15 @@ export const PLAN_SLUGS: readonly PlanSlug[] = [
 export type PlanAudience = 'individual' | 'organization';
 
 export type SubscriptionStatus =
+  | 'free'
+  | 'payment_pending'
   | 'active'
   | 'trialing'
   | 'past_due'
   | 'canceled'
-  | 'incomplete';
+  | 'incomplete'
+  | 'expired'
+  | 'payment_failed';
 
 /** A generic quota map: limit per key. A missing key or -1 means "unlimited". */
 export type QuotaMap = Record<string, number>;
@@ -48,6 +52,9 @@ export interface PlanView {
   priceYearly: number | null;
   currency: string;
   isActive: boolean;
+  publicV1?: boolean;
+  fallbackRatio?: number;
+  configurationVersion?: number;
 }
 
 export interface SubscriptionView {

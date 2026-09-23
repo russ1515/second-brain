@@ -6,8 +6,8 @@ import type { LearningCategory } from '@second-brain/shared';
  * The six pedagogical CAPABILITIES and the pedagogical MODES that make up the
  * Learn workspace. Everything here only ROUTES into flows that already exist
  * (tutor, lessons, library, examiner, languages, scan) — Sprint 4 is UX over
- * the existing engines, no new business logic. Copy is French (product voice),
- * matching the onboarding catalog; folding into i18n is later content work.
+ * the existing engines, no new business logic. Display copy is localized by
+ * the consuming screen; these values remain fallbacks for isolated previews.
  *
  * Academic Workspace is a CAPABILITY under Apprendre — never a seventh main tab.
  */
@@ -52,7 +52,7 @@ export const CAPABILITIES: Capability[] = [
     icon: '📚',
     title: 'Bibliothèque',
     subtitle: 'Tes documents, prêts à être enseignés.',
-    route: '/library',
+    route: '/library/workspace',
   },
   {
     key: 'work',
@@ -97,7 +97,7 @@ export const MODES: TeachingMode[] = [
   { key: 'oralexam', icon: '🎓', label: 'Examen oral', desc: 'Le professeur devient examinateur.', route: '/tutor', mode: 'oral_exam', oral: true },
   { key: 'guided', icon: '🧭', label: 'Session guidée', desc: 'Le système construit une séance complète.', route: '/daily-session', mode: 'guided' },
   // Deep-dive research (§10), still inside the pedagogical system.
-  { key: 'deepsearch', icon: '🌐', label: 'Recherche approfondie', desc: 'Explore un sujet en profondeur avec le professeur.', route: '/tutor', mode: 'deepsearch' },
+  { key: 'deepsearch', icon: '🌐', label: 'Recherche approfondie', desc: 'Explore un sujet en profondeur avec des sources explicites.', route: '/research', mode: 'deep' },
 ];
 
 // ── Universal entry (4, convergence) ─────────────────────────────────────────

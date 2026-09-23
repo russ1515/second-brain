@@ -65,9 +65,7 @@ export class TextExtractionService {
       if (text.length < pages * MIN_PDF_CHARS_PER_PAGE && this.llm.supportsVision) {
         const ocr = await this.ocrPdf(file.buffer, pages);
         if (ocr && ocr.length > text.length) {
-          this.logger.log(
-            `OCR'd scanned PDF "${file.originalname}" (${pages}p): ${text.length} -> ${ocr.length} chars.`,
-          );
+          this.logger.log('Scanned PDF OCR completed.');
           return { text: ocr, title };
         }
       }
@@ -100,10 +98,8 @@ export class TextExtractionService {
         if (text.trim().length > 0) {
           return { text, title: article?.title ?? undefined };
         }
-      } catch (error) {
-        this.logger.warn(
-          `article-extractor failed for ${finalUrl}: ${(error as Error).message}`,
-        );
+      } catch {
+        this.logger.warn('Article extraction failed.');
       }
       // Fallback: strip tags from the raw HTML.
       const text = this.htmlToText(body);
@@ -132,13 +128,11 @@ export class TextExtractionService {
       const result = await this.llm.readImages(
         [{ mimeType: 'application/pdf', data: buffer.toString('base64') }],
         DOCUMENT_INTELLIGENCE_PROMPT,
-        { temperature: 0, maxOutputTokens: 8192 },
+        { temperature: 0, maxOutputTokens: 8192, operation: 'ocr' },
       );
       return result.text.trim() || null;
-    } catch (error) {
-      this.logger.warn(
-        `PDF OCR failed (${pages}p): ${(error as Error).message}`,
-      );
+    } catch {
+      this.logger.warn('PDF OCR failed.');
       return null;
     }
   }

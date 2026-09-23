@@ -3,10 +3,10 @@
  *
  * ONE source of truth shared by the API and the mobile app: the set of
  * languages Second Brain supports, each with its native name, English name and
- * flag. The user's chosen language drives BOTH the UI (interface strings, with
- * English fallback) AND the AI Professor's teaching language (see
- * `localeToLanguage` / `localeDirective` on the API). Adding a language is one
- * entry here — no engine change.
+ * secondary icon. UI locale and learning language are deliberately separate:
+ * this registry validates and presents both choices, while each experience
+ * receives the relevant one explicitly. Adding a language is one entry here —
+ * no engine change.
  */
 
 export type SupportedLanguageCode =
@@ -19,25 +19,28 @@ export interface LanguageMeta {
   /** Name in the language itself. */
   name: string;
   englishName: string;
+  /** Flag when unambiguous, otherwise a neutral international symbol. */
   flag: string;
   /** Right-to-left script (Arabic). Lets the UI mirror when needed. */
   rtl?: boolean;
+  /** A neutral glyph is used when no single country reasonably represents the language. */
+  neutralIcon?: boolean;
 }
 
 export const SUPPORTED_LANGUAGES: Record<SupportedLanguageCode, LanguageMeta> = {
   fr: { code: 'fr', name: 'Français', englishName: 'French', flag: '🇫🇷' },
-  en: { code: 'en', name: 'English', englishName: 'English', flag: '🇬🇧' },
+  en: { code: 'en', name: 'English', englishName: 'English', flag: '🌐', neutralIcon: true },
   es: { code: 'es', name: 'Español', englishName: 'Spanish', flag: '🇪🇸' },
   de: { code: 'de', name: 'Deutsch', englishName: 'German', flag: '🇩🇪' },
   it: { code: 'it', name: 'Italiano', englishName: 'Italian', flag: '🇮🇹' },
-  pt: { code: 'pt', name: 'Português', englishName: 'Portuguese', flag: '🇵🇹' },
+  pt: { code: 'pt', name: 'Português', englishName: 'Portuguese', flag: '🌐', neutralIcon: true },
   nl: { code: 'nl', name: 'Nederlands', englishName: 'Dutch', flag: '🇳🇱' },
   pl: { code: 'pl', name: 'Polski', englishName: 'Polish', flag: '🇵🇱' },
   ru: { code: 'ru', name: 'Русский', englishName: 'Russian', flag: '🇷🇺' },
-  zh: { code: 'zh', name: '中文', englishName: 'Chinese', flag: '🇨🇳' },
+  zh: { code: 'zh', name: '中文', englishName: 'Chinese', flag: '🌐', neutralIcon: true },
   ja: { code: 'ja', name: '日本語', englishName: 'Japanese', flag: '🇯🇵' },
   ko: { code: 'ko', name: '한국어', englishName: 'Korean', flag: '🇰🇷' },
-  ar: { code: 'ar', name: 'العربية', englishName: 'Arabic', flag: '🇸🇦', rtl: true },
+  ar: { code: 'ar', name: 'العربية', englishName: 'Arabic', flag: '🌐', rtl: true, neutralIcon: true },
   hi: { code: 'hi', name: 'हिन्दी', englishName: 'Hindi', flag: '🇮🇳' },
   tr: { code: 'tr', name: 'Türkçe', englishName: 'Turkish', flag: '🇹🇷' },
   sv: { code: 'sv', name: 'Svenska', englishName: 'Swedish', flag: '🇸🇪' },
@@ -63,5 +66,12 @@ export const SUPPORTED_LANGUAGE_CODES = Object.keys(
 export function toSupportedLanguage(value: string | null | undefined): SupportedLanguageCode | null {
   if (!value) return null;
   const base = value.toLowerCase().split(/[-_]/)[0];
-  return (base in SUPPORTED_LANGUAGES ? (base as SupportedLanguageCode) : null);
+  if (base in SUPPORTED_LANGUAGES) return base as SupportedLanguageCode;
+  const normalized = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+  return SUPPORTED_LANGUAGE_CODES.find((code) => {
+    const language = SUPPORTED_LANGUAGES[code];
+    return [language.name, language.englishName].some((name) =>
+      name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase() === normalized,
+    );
+  }) ?? null;
 }

@@ -5,7 +5,9 @@ import { Badge, Button, Card, Input, Progress, SegmentedControl } from '../ds/co
 import { AITeacherMessage, PostureBadge, type Posture } from '../ds/ai';
 import { LessonStep } from '../ds/learning';
 import { BilingualText, TranslationHint } from '../ds/language';
+import { SourceCitation as DesignSystemSourceCitation } from '../ds/sources';
 import type { Capability, StartEntry, TeachingMode } from '../../lib/learn/catalog';
+import { useI18n } from '../../lib/i18n';
 
 /**
  * Apprendre component library (UI/UX Sprint 4, task 18).
@@ -93,6 +95,7 @@ export function UniversalStartBar({
   onPick: (e: StartEntry) => void;
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const [text, setText] = useState('');
   const submit = () => {
     const v = text.trim();
@@ -101,12 +104,12 @@ export function UniversalStartBar({
   };
   return (
     <Card elevated style={{ borderColor: c.aiAccent, gap: 12 }}>
-      <Text style={{ color: c.textPrimary, fontSize: 18, fontWeight: '800' }}>🤖 Apprendre avec mon professeur</Text>
+      <Text style={{ color: c.textPrimary, fontSize: 18, fontWeight: '800' }}>🤖 {t('learn.teacher.title')}</Text>
       <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-end' }}>
         <View style={{ flex: 1 }}>
-          <Input placeholder="Pose une question, ou décris ce que tu veux apprendre…" value={text} onChangeText={setText} onSubmitEditing={submit} returnKeyType="send" />
+          <Input placeholder={t('h.capture.placeholder')} value={text} onChangeText={setText} onSubmitEditing={submit} returnKeyType="send" />
         </View>
-        <Button label="→" variant="ai" onPress={submit} disabled={!text.trim()} accessibilityLabel="Envoyer" />
+        <Button label="→" variant="ai" onPress={submit} disabled={!text.trim()} accessibilityLabel={t('tutor.send')} />
       </View>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         {entries.map((e) => (
@@ -380,14 +383,7 @@ export function DeepSearchScope({ value, onChange }: { value: 'docs' | 'web'; on
   );
 }
 export function SourceCitation({ title, external }: { title: string; external?: boolean }) {
-  const { colors: c, radius } = useTokens();
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: external ? c.warning : c.border, borderRadius: radius.sm, paddingVertical: 6, paddingHorizontal: 10, alignSelf: 'flex-start' }}>
-      <Text style={{ fontSize: 12 }}>{external ? '🌐' : '📄'}</Text>
-      <Text style={{ color: c.textSecondary, fontSize: 12 }}>{title}</Text>
-      {external ? <Badge label="externe" tone="warning" /> : null}
-    </View>
-  );
+  return <DesignSystemSourceCitation title={title} kind={external ? 'external' : 'document'} />;
 }
 
 // ── Concept explanation (4.15) ───────────────────────────────────────────────
@@ -411,7 +407,7 @@ export function ProgressFeedback({ concept, mastery, note }: { concept: string; 
         <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '700' }}>{concept}</Text>
         <Text style={{ color: c.textMuted, fontSize: 14, fontWeight: '700' }}>{Math.round(mastery * 100)}%</Text>
       </View>
-      <Progress value={mastery} tone={mastery >= 0.8 ? 'success' : mastery >= 0.5 ? 'primary' : 'ai'} />
+      <Progress value={mastery * 100} tone={mastery >= 0.8 ? 'success' : mastery >= 0.5 ? 'primary' : 'ai'} />
       {note ? <AITeacherMessage text={note} posture="challenging" /> : null}
     </Card>
   );
@@ -432,11 +428,12 @@ export function AITeacherPanel({
   children?: ReactNode;
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   return (
     <Card style={{ gap: 10, borderColor: c.aiAccent }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Text style={{ fontSize: 20 }}>👨‍🏫</Text>
-        <Text style={{ color: c.aiAccent, fontSize: 12, fontWeight: '800', letterSpacing: 0.5 }}>PROFESSEUR IA</Text>
+        <Text style={{ color: c.aiAccent, fontSize: 12, fontWeight: '800', letterSpacing: 0.5 }}>{t('ai.professor').toUpperCase()}</Text>
         <PostureBadge posture={posture} />
       </View>
       <AITeacherMessage text={message} posture={posture} />

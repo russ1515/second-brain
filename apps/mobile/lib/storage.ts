@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { AuthUser } from '@second-brain/shared';
 
 /**
  * Token storage.
@@ -10,6 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
  */
 const ACCESS = 'sb.accessToken';
 const REFRESH = 'sb.refreshToken';
+const CACHED_USER = 'sb.cachedAuthUser';
 
 export interface StoredSession {
   accessToken: string;
@@ -33,5 +35,23 @@ export async function saveSession(session: StoredSession): Promise<void> {
 }
 
 export async function clearSession(): Promise<void> {
-  await AsyncStorage.multiRemove([ACCESS, REFRESH]);
+  await AsyncStorage.multiRemove([ACCESS, REFRESH, CACHED_USER]);
+}
+
+/** Non-secret identity projection used only to isolate offline caches. */
+export async function saveCachedAuthUser(user: AuthUser): Promise<void> {
+  await AsyncStorage.setItem(CACHED_USER, JSON.stringify(user));
+}
+
+export async function loadCachedAuthUser(): Promise<AuthUser | null> {
+  try {
+    const raw = await AsyncStorage.getItem(CACHED_USER);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<AuthUser>;
+    return typeof value.id === 'string' && typeof value.email === 'string'
+      ? value as AuthUser
+      : null;
+  } catch {
+    return null;
+  }
 }

@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -34,6 +34,7 @@ export function Button({
   icon,
   fullWidth,
   accessibilityLabel,
+  testID,
 }: {
   label: string;
   onPress?: () => void;
@@ -44,6 +45,7 @@ export function Button({
   icon?: string;
   fullWidth?: boolean;
   accessibilityLabel?: string;
+  testID?: string;
 }) {
   const { colors: c, radius } = useTokens();
   const [focused, setFocused] = useState(false);
@@ -60,6 +62,7 @@ export function Button({
 
   return (
     <Pressable
+      testID={testID}
       onPress={off ? undefined : onPress}
       disabled={off}
       accessibilityRole="button"
@@ -221,10 +224,10 @@ export function Switch({ value, onChange, label }: { value: boolean; onChange: (
 }
 
 // ── Progress ─────────────────────────────────────────────────────────────────
-export function Progress({ value, tone = 'primary' }: { value: number; tone?: 'primary' | 'ai' | 'success' }) {
+export function Progress({ value, tone = 'primary', color }: { value: number; tone?: 'primary' | 'ai' | 'success'; color?: string }) {
   const { colors: c, radius } = useTokens();
   const pct = Math.max(0, Math.min(100, value));
-  const col = tone === 'ai' ? c.aiAccent : tone === 'success' ? c.success : c.primary;
+  const col = color ?? (tone === 'ai' ? c.aiAccent : tone === 'success' ? c.success : c.primary);
   return (
     <View
       accessibilityRole="progressbar"
@@ -240,14 +243,20 @@ export function Progress({ value, tone = 'primary' }: { value: number; tone?: 'p
 export function Skeleton({ height = 16, width = '100%' as number | `${number}%` }: { height?: number; width?: number | `${number}%` }) {
   const { colors: c, radius, reducedMotion } = useTokens();
   const anim = useRef(new Animated.Value(0.5)).current;
-  if (!reducedMotion) {
-    Animated.loop(
+  useEffect(() => {
+    if (reducedMotion) {
+      anim.setValue(0.7);
+      return;
+    }
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(anim, { toValue: 1, duration: 700, useNativeDriver: true }),
         Animated.timing(anim, { toValue: 0.5, duration: 700, useNativeDriver: true }),
       ]),
-    ).start();
-  }
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [anim, reducedMotion]);
   return <Animated.View style={{ height, width, borderRadius: radius.xs, backgroundColor: c.surfaceSunken, opacity: reducedMotion ? 0.7 : anim }} />;
 }
 

@@ -178,11 +178,11 @@ export class ReadingService {
           { role: 'system', content: READING_PERSONA },
           { role: 'user', content: user },
         ],
-        { temperature: 0.6 },
+        { temperature: 0.6, operation: 'language-content' },
       );
       raw = result.text;
     } catch (error) {
-      this.logger.error(`Reading generation failed: ${(error as Error).message}`);
+      this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'The reading coach is temporarily unavailable. Please try again shortly.',
       );
@@ -258,11 +258,11 @@ export class ReadingService {
           { role: 'system', content: READING_PERSONA },
           { role: 'user', content: user },
         ],
-        { temperature: 0.2 },
+        { temperature: 0.2, operation: 'grading' },
       );
       raw = result.text;
     } catch (error) {
-      this.logger.error(`Reading evaluation failed: ${(error as Error).message}`);
+      this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'Could not mark those answers. Please try again shortly.',
       );

@@ -3,6 +3,7 @@ import { ConceptModule } from '../concepts/concept.module';
 import { RevisionModule } from '../revision/revision.module';
 import { RecommendationController } from './recommendation.controller';
 import { RecommendationService } from './recommendation.service';
+import { NextBestActionAdapter } from './next-best-action.adapter';
 
 /** Recommendation Engine (Sprint 9.4). A separate, replaceable engine that
  *  COMPOSES the learning path (LearningPathService), the FSRS queue
@@ -11,7 +12,7 @@ import { RecommendationService } from './recommendation.service';
 @Module({
   imports: [ConceptModule, RevisionModule],
   controllers: [RecommendationController],
-  providers: [RecommendationService],
-  exports: [RecommendationService],
+  providers: [RecommendationService, NextBestActionAdapter],
+  exports: [RecommendationService, NextBestActionAdapter],
 })
 export class RecommendationModule {}

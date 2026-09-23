@@ -14,6 +14,13 @@ export interface TranscriptionResult {
   model: string | null;
 }
 
+export interface SpeechCapabilities {
+  provider: string;
+  transcription: boolean;
+  synthesis: boolean;
+  audioAnalysis: boolean;
+}
+
 export interface SynthesisResult {
   /** Raw audio bytes, base64-encoded for JSON transport. */
   audioBase64: string;

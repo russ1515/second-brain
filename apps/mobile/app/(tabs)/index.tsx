@@ -1,259 +1,195 @@
-import { useCallback, useState, type ReactNode } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useQuery } from '@tanstack/react-query';
+import { useRouter } from 'expo-router';
+import { RefreshControl, ScrollView, View } from 'react-native';
 import type {
-  DailyPlanItemView,
-  DailyPlanView,
-  ExamView,
-  InitiativeView,
-  LearningPath,
-  LearningPathItem,
-  LessonSummary,
-  MentorOverview,
-  OnboardingState,
-  ProactiveBriefing,
-  StudyRecommendation,
+  ActionDestination,
+  HomeOverview,
+  HomeResumableSession,
+  HomeUpcomingItem,
 } from '@second-brain/shared';
+import { resolveHomeComposition } from '@second-brain/shared';
 import { useAuth } from '../../lib/auth-context';
 import { api } from '../../lib/client';
-import { enqueue } from '../../lib/offline';
 import { useI18n } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
-import { Skeleton } from '../../components/ds/core';
-import { homePersona } from '../../lib/home/persona';
+import { actionDestinationHref } from '../../lib/action-destination';
+import { Alert, Skeleton } from '../../components/ds/core';
+import { Page } from '../../components/ds/layout';
+import { SmartErrorState, SmartState } from '../../components/ds/states';
 import {
-  BlockError,
-  CapacityBar,
-  ContinueLearning,
-  DailyPlan,
-  HeroBriefing,
-  MasterySnapshot,
-  NextBestAction,
-  ProactiveState,
-  ProgressWeek,
-  QuickCapture,
-  Recommendations,
-  StreakStrip,
-  UpcomingExams,
-  type HomeContext,
-} from '../../components/home/blocks';
+  HomeContextHeader,
+  HomeQuickActions,
+  MainGoalPreview,
+  NextBestActionCard,
+  ProgressSummary,
+  ResumeSection,
+  UpcomingSection,
+} from '../../components/home/decision';
 
 /**
- * 🏠 Home — the daily control hub (UI/UX Sprint 3).
- *
- * Rebuilt on the Sprint 1 design system and personalised by the Sprint 2 KYC.
- * It is NOT a wall of statistics: it opens with what the AI teacher recommends
- * NOW and WHY, then the day's plan, then progress, then secondary signals — the
- * strict information hierarchy (3.15). Every block is fed by an existing engine
- * (journey, coach, mentor, twin, exams); `allSettled` keeps one dead endpoint
- * from blanking the board, and each block states its empty case honestly.
+ * Accueil is a decision surface: one server-ranked next action, then continuity
+ * and planning. Business priority stays on the API so every client sees the
+ * same factual recommendation and the same explanation.
  */
 export default function HomeScreen() {
   const { user } = useAuth();
-  const { t } = useI18n();
-  const { colors: c } = useTokens();
-  const { width, maxContentWidth } = useResponsive();
+  const { t, locale } = useI18n();
   const router = useRouter();
+  const { colors: c, spacing } = useTokens();
+  const { width } = useResponsive();
+  const composition = resolveHomeComposition(width);
 
-  const [plan, setPlan] = useState<DailyPlanView | null>(null);
-  const [mentor, setMentor] = useState<MentorOverview | null>(null);
-  const [lastLesson, setLastLesson] = useState<LessonSummary | null>(null);
-  const [coach, setCoach] = useState<ProactiveBriefing | null>(null);
-  const [initiatives, setInitiatives] = useState<InitiativeView[]>([]);
-  const [path, setPath] = useState<LearningPath | null>(null);
-  const [exams, setExams] = useState<ExamView[]>([]);
-  const [kyc, setKyc] = useState<OnboardingState | null>(null);
-  const [failed, setFailed] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const overview = useQuery<HomeOverview>({
+    queryKey: ['home', 'overview', locale, user?.id],
+    queryFn: ({ signal }) => api<HomeOverview>('/home/overview', { signal }),
+    enabled: Boolean(user),
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+    retry: 1,
+    placeholderData: (previous) => previous,
+  });
 
-  const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
-    if (mode === 'refresh') setRefreshing(true);
-    const results = await Promise.allSettled([
-      api<DailyPlanView>('/journey/today'),
-      api<MentorOverview>('/mentor'),
-      api<LessonSummary[]>('/lessons'),
-      api<ProactiveBriefing>('/coach/today'),
-      api<InitiativeView[]>('/proactive'),
-      api<LearningPath>('/twin/next'),
-      api<ExamView[]>('/exams'),
-      api<OnboardingState>('/onboarding'),
-    ]);
-    const [planR, mentorR, lessonsR, coachR, initR, pathR, examsR, kycR] = results;
-    const fail = new Set<string>();
-    if (planR.status === 'fulfilled') setPlan(planR.value); else fail.add('plan');
-    if (mentorR.status === 'fulfilled') setMentor(mentorR.value); else fail.add('mentor');
-    if (lessonsR.status === 'fulfilled') setLastLesson(lessonsR.value[0] ?? null); else fail.add('lesson');
-    if (coachR.status === 'fulfilled') setCoach(coachR.value); else fail.add('coach');
-    if (initR.status === 'fulfilled') setInitiatives(initR.value); else fail.add('initiatives');
-    if (pathR.status === 'fulfilled') setPath(pathR.value); else fail.add('path');
-    if (examsR.status === 'fulfilled') setExams(examsR.value); else fail.add('exams');
-    if (kycR.status === 'fulfilled') setKyc(kycR.value); else fail.add('kyc');
-    setFailed(fail);
-    setLoading(false);
-    setRefreshing(false);
-  }, []);
-
-  useFocusEffect(
-    useCallback(() => {
-      if (user) void load();
-    }, [user, load]),
-  );
-
-  const name = user?.displayName?.trim() || user?.email?.split('@')[0] || '';
-  const persona = homePersona(kyc?.answers.education?.category ?? null);
-
-  // ── derived signals (no new logic — all from the fetched engine data) ──────
-  const context = computeContext({ lastLesson, plan, mentor, exams });
-  const nbaItem =
-    path?.items.find((i) => i.status === 'at_risk') ??
-    path?.items.find((i) => i.status === 'in_progress') ??
-    path?.items.find((i) => i.status === 'ready') ??
-    null;
-  const capacityMinutes = (coach?.recommendations ?? []).reduce((s, r) => s + r.minutes, 0);
-
-  // ── routing (Home is an entry point; it routes INTO Learn/Study, 3.21) ─────
-  const openItem = (item: DailyPlanItemView) => {
-    if (['review', 'quick_revision', 'vocabulary'].includes(item.kind)) return router.push('/revision');
-    router.push({ pathname: '/lesson/new', params: { conceptId: item.conceptId ?? '', title: item.title } });
+  const open = (destination: ActionDestination) => {
+    router.push(actionDestinationHref(destination) as never);
   };
-  const startNba = (item: LearningPathItem | null) => {
-    if (!item) return router.push('/revision');
-    if (item.status === 'at_risk' || item.status === 'in_progress') return router.push('/revision');
-    router.push({ pathname: '/lesson/new', params: { conceptId: item.conceptId, title: item.name } });
-  };
-  const openRecommendation = (r: StudyRecommendation) => {
-    if (r.kind === 'review' || r.kind === 'vocabulary') return router.push('/revision');
-    router.push({ pathname: '/lesson/new', params: { conceptId: r.conceptId ?? '', title: r.activity } });
-  };
-  const respondInitiative = async (id: string, action: 'act' | 'dismiss') => {
-    setInitiatives((prev) => prev.filter((i) => i.id !== id));
-    await enqueue({
-      method: 'POST',
-      path: `/proactive/${id}/${action}`,
-      label: action === 'act' ? 'Accepted a suggestion' : 'Dismissed a suggestion',
-    });
-  };
-  // Universal input (3.11): Home routes into the teacher / scan / library — it
-  // never becomes the library itself.
-  const captureText = (text: string) =>
-    router.push({ pathname: '/tutor', params: { q: text } });
-  const captureSpeak = () => router.push('/tutor');
-  const captureScan = () => router.push('/scan');
-  const captureImport = () => router.push('/library');
+  const resume = (session: HomeResumableSession) => open(session.destination);
+  const openUpcoming = (item: HomeUpcomingItem) => open(item.destination);
 
-  const wide = width >= 760;
+  if (overview.isPending || !user) {
+    return <HomeSkeleton />;
+  }
 
-  if (loading) return <HomeSkeleton maxWidth={maxContentWidth} />;
-
-  // Two-column pairing on wide screens (3.16); stacked on mobile (3.17).
-  const Pair = ({ a, b }: { a: ReactNode; b: ReactNode }) =>
-    wide ? (
-      <View style={{ flexDirection: 'row', gap: 14 }}>
-        <View style={{ flex: 1 }}>{a}</View>
-        <View style={{ flex: 1 }}>{b}</View>
-      </View>
-    ) : (
-      <>
-        {a}
-        {b}
-      </>
+  if (!overview.data) {
+    return (
+      <ScrollView style={{ flex: 1, backgroundColor: c.background }} contentContainerStyle={{ flexGrow: 1 }}>
+        <Page width="wide">
+          <SmartErrorState
+            title={t('home4.unavailable')}
+            retryable
+            onRetry={() => { void overview.refetch(); }}
+          />
+        </Page>
+      </ScrollView>
     );
+  }
+
+  const data = overview.data;
+  const name = user.displayName?.trim().split(' ')[0] ?? '';
+  const showSplit = composition !== 'single-column';
+  const hasResume = data.resumableSessions.length > 0;
+  const hasGoal = data.mainGoal !== null;
+  const hasProgress = data.progress !== null;
+
+  const resumeSection = <ResumeSection sessions={data.resumableSessions} onResume={resume} />;
+  const upcomingSection = (
+    <UpcomingSection
+      items={data.upcoming}
+      onOpen={openUpcoming}
+      onPlanning={() => router.push('/calendar' as never)}
+    />
+  );
+  const goalSection = data.mainGoal ? (
+    <MainGoalPreview goal={data.mainGoal} onOpen={() => open(data.mainGoal!.destination)} />
+  ) : null;
+  const progressSection = data.progress ? (
+    <ProgressSummary progress={data.progress} onOpen={() => router.push('/brain' as never)} />
+  ) : null;
 
   return (
     <ScrollView
-      contentContainerStyle={[styles.container, { maxWidth: maxContentWidth }]}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load('refresh')} tintColor={c.textMuted} />}
-    >
-      {/* Level 1 — the teacher's briefing + the one action */}
-      {failed.has('coach') && failed.has('mentor') ? (
-        <BlockError onRetry={() => load('refresh')} />
-      ) : (
-        <HeroBriefing
-          name={name}
-          context={context}
-          coach={coach}
-          onStart={() => router.push('/daily-session')}
-          onDetail={() => router.push('/progress')}
+      style={{ flex: 1, backgroundColor: c.background }}
+      contentContainerStyle={{ flexGrow: 1 }}
+      refreshControl={(
+        <RefreshControl
+          refreshing={overview.isRefetching}
+          onRefresh={() => { void overview.refetch(); }}
+          tintColor={c.primary}
+          colors={[c.primary]}
         />
       )}
+    >
+      <Page width="wide" style={{ gap: spacing.xl, paddingBottom: spacing.huge }} testID="home-decision-surface">
+        <HomeContextHeader name={name} context={data.context} />
 
-      {failed.has('path') ? <BlockError onRetry={() => load('refresh')} /> : <NextBestAction item={nbaItem} onStart={startNba} />}
+        {overview.error ? (
+          <SmartState state="stale" detail={t('home4.stale')} />
+        ) : data.partial ? (
+          <SmartState state="partial" detail={t('home4.partial')} />
+        ) : null}
 
-      {/* Universal input — the daily door into learning */}
-      <QuickCapture persona={persona} onText={captureText} onSpeak={captureSpeak} onScan={captureScan} onImport={captureImport} />
+        {data.nextBestAction ? (
+          <NextBestActionCard action={data.nextBestAction} onOpen={() => open(data.nextBestAction!.primaryAction.destination)} />
+        ) : (
+          <Alert tone="warning" title={t('home4.unavailable')} detail={t('home4.partial')} />
+        )}
 
-      {/* Level 1.5 — the AI took the initiative */}
-      <ProactiveState initiatives={initiatives} onAct={(id) => respondInitiative(id, 'act')} onDismiss={(id) => respondInitiative(id, 'dismiss')} />
+        {showSplit && hasResume ? (
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.xl }}>
+            <View style={{ flex: composition === 'wide' ? 1.25 : 1, minWidth: 0 }}>{resumeSection}</View>
+            <View style={{ flex: 1, minWidth: 0 }}>{upcomingSection}</View>
+          </View>
+        ) : (
+          <>
+            {resumeSection}
+            {upcomingSection}
+          </>
+        )}
 
-      {/* Level 3 — the programme */}
-      <Pair
-        a={failed.has('plan') ? <BlockError onRetry={() => load('refresh')} /> : <DailyPlan plan={plan} onOpen={openItem} />}
-        b={failed.has('lesson') ? <BlockError onRetry={() => load('refresh')} /> : <ContinueLearning lesson={lastLesson} onOpen={() => lastLesson && router.push(`/lesson/${lastLesson.id}`)} />}
-      />
+        {showSplit && hasGoal && hasProgress ? (
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.xl }}>
+            <View style={{ flex: 1, minWidth: 0 }}>{goalSection}</View>
+            <View style={{ flex: 1, minWidth: 0 }}>{progressSection}</View>
+          </View>
+        ) : (
+          <>
+            {goalSection}
+            {progressSection}
+          </>
+        )}
 
-      {capacityMinutes > 0 ? <CapacityBar minutes={capacityMinutes} /> : null}
-
-      {/* Level 4 — progression */}
-      {failed.has('mentor') ? <BlockError onRetry={() => load('refresh')} /> : <ProgressWeek mentor={mentor} />}
-      <StreakStrip mentor={mentor} />
-
-      {/* Level 5 — secondary signals; order tuned by the KYC persona */}
-      <Pair
-        a={persona.showMastery ? <MasterySnapshot items={path?.items ?? []} /> : <View />}
-        b={persona.exams !== 'hidden' ? <UpcomingExams exams={exams} onPlan={() => router.push('/exams')} /> : <View />}
-      />
-
-      <Recommendations recs={coach?.recommendations ?? []} onAct={openRecommendation} />
-
-      <Text style={{ color: c.textMuted, fontSize: 12, textAlign: 'center', marginTop: 4 }}>
-        {plan ? new Date(`${plan.date}T00:00:00Z`).toDateString() : ''}
-      </Text>
+        <HomeQuickActions
+          onWrite={() => router.push('/tutor' as never)}
+          onSpeak={() => router.push('/tutor?mode=voice' as never)}
+          onScan={() => router.push('/scan' as never)}
+          onImport={() => router.push('/library?action=import' as never)}
+        />
+      </Page>
     </ScrollView>
   );
 }
 
-/** The opening context (3.13) — derived from real signals, never random. */
-function computeContext({
-  lastLesson,
-  plan,
-  mentor,
-  exams,
-}: {
-  lastLesson: LessonSummary | null;
-  plan: DailyPlanView | null;
-  mentor: MentorOverview | null;
-  exams: ExamView[];
-}): HomeContext {
-  const hasHistory = (mentor?.stats.cardsReviewed ?? 0) > 0 || !!lastLesson;
-  if (!hasHistory && (plan?.items.length ?? 0) === 0) return 'new';
-  if ((mentor?.newlyEarned?.length ?? 0) > 0) return 'success';
-  if (exams.some((e) => e.daysUntil >= 0 && e.daysUntil <= 10)) return 'exam';
-  if ((mentor?.stats.atRiskConcepts ?? 0) > 0 || (mentor?.stats.dueNow ?? 0) >= 5) return 'revision';
-  if ((mentor?.streak.current ?? 0) === 0 && hasHistory) return 'inactive';
-  return 'active';
-}
-
-/** Block-level loading (3.19): the shape of the board, not a spinner. */
-function HomeSkeleton({ maxWidth }: { maxWidth: number }) {
+function HomeSkeleton() {
+  const { colors: c, spacing, radius } = useTokens();
+  const { t } = useI18n();
   return (
-    <ScrollView contentContainerStyle={[styles.container, { maxWidth }]}>
-      <Skeleton height={150} />
-      <Skeleton height={120} />
-      <Skeleton height={90} />
-      <Skeleton height={110} />
-      <Skeleton height={90} />
+    <ScrollView
+      accessibilityLabel={t('home4.loading')}
+      style={{ flex: 1, backgroundColor: c.background }}
+      contentContainerStyle={{ flexGrow: 1 }}
+    >
+      <Page width="wide" style={{ gap: spacing.xl }}>
+        <View style={{ gap: spacing.sm }}>
+          <Skeleton height={36} width="45%" />
+          <Skeleton height={20} width="65%" />
+        </View>
+        <View style={{ padding: spacing.lg, gap: spacing.md, borderRadius: radius.lg, backgroundColor: c.surface }}>
+          <Skeleton height={20} width={150} />
+          <Skeleton height={44} width="70%" />
+          <Skeleton height={22} width="90%" />
+          <Skeleton height={48} />
+        </View>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.lg }}>
+          <View style={{ flexGrow: 1, flexBasis: 320, gap: spacing.sm }}>
+            <Skeleton height={28} width={190} />
+            <Skeleton height={180} />
+          </View>
+          <View style={{ flexGrow: 1, flexBasis: 280, gap: spacing.sm }}>
+            <Skeleton height={28} width={170} />
+            <Skeleton height={180} />
+          </View>
+        </View>
+      </Page>
     </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    padding: 20,
-    gap: 14,
-    width: '100%',
-    alignSelf: 'center',
-    paddingBottom: 48,
-  },
-});

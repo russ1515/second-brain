@@ -25,21 +25,37 @@ function paragraphs(text: string): string {
  * Exercise ANSWERS are included — this is the learner's own study sheet, and a
  * revision sheet without the corrections is half a lesson.
  */
-export function lessonHtml(lesson: LessonView): string {
+export function lessonHtml(lesson: LessonView, locale = 'en'): string {
+  const fr = locale.toLowerCase().startsWith('fr');
+  const copy = fr
+    ? {
+        examples: 'Exemples guidés', exercises: 'Exercices', answer: 'Réponse',
+        keyPoints: 'Points clés', objective: 'Objectif', explanation: 'Explication',
+        homework: 'Devoirs', summary: 'Résumé', revision: 'Fiche de révision',
+        level: 'niveau', footerOne: 'carte de cette leçon est planifiée',
+        footerMany: 'cartes de cette leçon sont planifiées', queue: 'dans ta file de révision',
+      }
+    : {
+        examples: 'Worked examples', exercises: 'Exercises', answer: 'Answer',
+        keyPoints: 'Key takeaways', objective: 'Objective', explanation: 'Explanation',
+        homework: 'Homework', summary: 'Summary', revision: 'Revision sheet',
+        level: 'level', footerOne: 'flashcard from this lesson is scheduled',
+        footerMany: 'flashcards from this lesson are scheduled', queue: 'in your revision queue',
+      };
   const section = (title: string, body: string) =>
     body?.trim() ? `<h2>${esc(title)}</h2>${paragraphs(body)}` : '';
 
   const examples = lesson.examples.length
-    ? `<h2>Worked examples</h2><ol>${lesson.examples
+    ? `<h2>${copy.examples}</h2><ol>${lesson.examples
         .map((e) => `<li>${esc(e).replace(/\n/g, '<br/>')}</li>`)
         .join('')}</ol>`
     : '';
 
   const exercises = lesson.exercises.length
-    ? `<h2>Exercises</h2><ol>${lesson.exercises
+    ? `<h2>${copy.exercises}</h2><ol>${lesson.exercises
         .map(
           (e) =>
-            `<li><p class="q">${esc(e.question)}</p><p class="a"><strong>Answer:</strong> ${esc(
+            `<li><p class="q">${esc(e.question)}</p><p class="a"><strong>${copy.answer} :</strong> ${esc(
               e.answer,
             )}</p></li>`,
         )
@@ -47,7 +63,7 @@ export function lessonHtml(lesson: LessonView): string {
     : '';
 
   const keyPoints = lesson.keyPoints.length
-    ? `<h2>Key takeaways</h2><ul>${lesson.keyPoints
+    ? `<h2>${copy.keyPoints}</h2><ul>${lesson.keyPoints
         .map((p) => `<li>${esc(p)}</li>`)
         .join('')}</ul>`
     : '';
@@ -76,27 +92,27 @@ export function lessonHtml(lesson: LessonView): string {
     <h1>${esc(lesson.topic)}</h1>
     <div class="meta">
       ${lesson.language ? `${esc(lesson.language)} · ` : ''}${
-        lesson.level ? `${esc(lesson.level)} level · ` : ''
-      }${new Date(lesson.createdAt).toLocaleDateString()}
+        lesson.level ? `${esc(lesson.level)} ${copy.level} · ` : ''
+      }${new Date(lesson.createdAt).toLocaleDateString(locale)}
     </div>
-    <div class="objective"><strong>Objective.</strong> ${esc(lesson.objective)}</div>
+    <div class="objective"><strong>${copy.objective}.</strong> ${esc(lesson.objective)}</div>
     ${lesson.intro ? paragraphs(lesson.intro) : ''}
-    ${section('Explanation', lesson.explanation)}
+    ${section(copy.explanation, lesson.explanation)}
     ${examples}
     ${exercises}
     ${keyPoints}
-    ${section('Homework', lesson.homework)}
-    ${section('Summary', lesson.summary)}
-    ${section('Revision sheet', lesson.revisionSheet)}
-    <footer>Second Brain — ${lesson.cardCount} flashcard${
-      lesson.cardCount === 1 ? '' : 's'
-    } from this lesson are scheduled in your revision queue.</footer>
+    ${section(copy.homework, lesson.homework)}
+    ${section(copy.summary, lesson.summary)}
+    ${section(copy.revision, lesson.revisionSheet)}
+    <footer>Second Brain — ${lesson.cardCount} ${
+      lesson.cardCount === 1 ? copy.footerOne : copy.footerMany
+    } ${copy.queue}.</footer>
   </body>
 </html>`;
 }
 
 /** Open the platform's print/save dialog for this lesson. On web this is the
  *  browser's print sheet, where "Save as PDF" is the standard destination. */
-export async function saveLessonAsPdf(lesson: LessonView): Promise<void> {
-  await Print.printAsync({ html: lessonHtml(lesson) });
+export async function saveLessonAsPdf(lesson: LessonView, locale = 'en'): Promise<void> {
+  await Print.printAsync({ html: lessonHtml(lesson, locale) });
 }

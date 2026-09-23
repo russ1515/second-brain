@@ -15,6 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
 import { RootCauseService } from '../concepts/root-cause.service';
 import { RevisionEngineService } from '../revision/revision-engine.service';
+import { localeDirective, resolveLocale } from '../common/learning-locale';
 
 const MAX_ANSWER_CHARS = 4000;
 
@@ -95,7 +96,7 @@ export class AssessmentService {
       language: lesson.language,
       conceptId: lesson.conceptId,
     };
-    const verdict = await this.mark(ctx, exercise, answer);
+    const verdict = await this.mark(userId, ctx, exercise, answer);
 
     // Knowledge-gap detection: a wrong answer is a symptom, not the disease.
     const gap =
@@ -167,7 +168,7 @@ export class AssessmentService {
     exerciseIndex: number,
     answer: string,
   ): Promise<SubmitAttemptResponse> {
-    const verdict = await this.mark(ctx, exercise, answer);
+    const verdict = await this.mark(userId, ctx, exercise, answer);
     const gap =
       !verdict.correct && ctx.conceptId
         ? await this.rootCause.findFor(userId, ctx.conceptId).catch(() => null)
@@ -221,13 +222,14 @@ export class AssessmentService {
   }
 
   private async mark(
+    userId: string,
     ctx: MarkContext,
     exercise: LessonExercise,
     answer: string,
   ): Promise<RawVerdict> {
     const language = ctx.language
       ? ` This is a ${ctx.language} language exercise; mark the ${ctx.language} too.`
-      : '';
+      : localeDirective(await resolveLocale(this.prisma, userId));
     let text: string;
     try {
       const result = await this.llm.generate(
@@ -243,11 +245,11 @@ export class AssessmentService {
           },
         ],
         // Marking should be reproducible, not creative.
-        { temperature: 0.1 },
+        { temperature: 0.1, operation: 'assessment' },
       );
       text = result.text;
     } catch (error) {
-      this.logger.error(`Examiner LLM call failed: ${(error as Error).message}`);
+      this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'The examiner is temporarily unavailable. Please try again shortly.',
       );

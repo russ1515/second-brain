@@ -129,7 +129,7 @@ export class AuthService {
     const email = this.normalizeEmail(dto.email);
     const user = await this.prisma.user.findUnique({
       where: { email },
-      include: { profile: true },
+      include: { profile: true, adminRoleAssignments: { where: { revokedAt: null }, select: { id: true } } },
     });
 
     // Generic failure — never reveal whether the email exists.
@@ -142,7 +142,15 @@ export class AuthService {
 
     const passwordOk = await argon2.verify(user.passwordHash, dto.password);
     if (!passwordOk) {
+      if (this.isPotentialAdmin(user)) await this.recordAdminAuthEvent(user.id, 'ADMIN_LOGIN_FAILED', ctx, 'failed');
       throw invalid;
+    }
+
+    try {
+      this.assertAccountActive(user);
+    } catch (error) {
+      if (this.isPotentialAdmin(user)) await this.recordAdminAuthEvent(user.id, 'ADMIN_LOGIN_FAILED_ACCOUNT_STATE', ctx, 'denied');
+      throw error;
     }
 
     // Password OK. If 2FA is on, stop here and hand back a challenge.
@@ -150,7 +158,11 @@ export class AuthService {
       return { twoFactorRequired: true, challengeToken: await this.signChallengeToken(user) };
     }
 
-    return this.issueLoginResponse(user, user.profile?.displayName ?? null, ctx);
+    if (this.isPotentialAdmin(user)) {
+      await this.recordAdminAuthEvent(user.id, 'ADMIN_LOGIN_MFA_NOT_CONFIGURED', ctx, 'denied');
+    }
+
+    return this.issueLoginResponse(user, user.profile?.displayName ?? null, ctx, false);
   }
 
   /** Build the full authenticated response (user + fresh tokens). Public so the
@@ -159,8 +171,10 @@ export class AuthService {
     user: User,
     displayName: string | null,
     ctx: SessionContext = {},
+    mfaVerified = false,
   ): Promise<AuthResponse> {
-    const tokens = await this.issueTokens(user, ctx);
+    this.assertAccountActive(user);
+    const tokens = await this.issueTokens(user, ctx, mfaVerified);
     return { user: this.toAuthUser(user, displayName), tokens };
   }
 
@@ -203,6 +217,7 @@ export class AuthService {
       // Token was valid but the account is gone.
       throw new UnauthorizedException('Account no longer exists.');
     }
+    this.assertAccountActive(user);
     return this.toAuthUser(user, user.profile?.displayName ?? null);
   }
 
@@ -257,7 +272,9 @@ export class AuthService {
       throw invalid;
     }
 
-    return this.rotate(session.id, session.user, ctx);
+    this.assertAccountActive(session.user);
+
+    return this.rotate(session.id, session.user, ctx, session.mfaVerifiedAt);
   }
 
   /** Revoke the single session tied to a refresh token. Idempotent and silent —
@@ -315,6 +332,7 @@ export class AuthService {
     oldSessionId: string,
     user: AccessSubject,
     ctx: SessionContext,
+    mfaVerifiedAt: Date | null,
   ): Promise<AuthTokens> {
     const refreshTtl = this.config.getOrThrow<number>('auth.refreshTtl');
     const { secret, hash } = await this.mintRefreshSecret();
@@ -331,11 +349,12 @@ export class AuthService {
           expiresAt: new Date(Date.now() + refreshTtl * 1000),
           userAgent: ctx.userAgent ?? null,
           ipAddress: ctx.ipAddress ?? null,
+          mfaVerifiedAt,
         },
       }),
     ]);
 
-    const { token, expiresIn } = await this.signAccessToken(user);
+    const { token, expiresIn } = await this.signAccessToken(user, newSession.id, mfaVerifiedAt);
     return {
       accessToken: token,
       refreshToken: `${newSession.id}.${secret}`,
@@ -352,7 +371,11 @@ export class AuthService {
    *  session (register/login). The refresh token is `${sessionId}.${secret}`;
    *  only an Argon2 hash of the secret is stored, so a database leak cannot be
    *  replayed and the session id lets us locate the row for rotation/revocation. */
-  private async issueTokens(user: User, ctx: SessionContext): Promise<AuthTokens> {
+  private async issueTokens(
+    user: User,
+    ctx: SessionContext,
+    mfaVerified = false,
+  ): Promise<AuthTokens> {
     const refreshTtl = this.config.getOrThrow<number>('auth.refreshTtl');
     const { secret, hash } = await this.mintRefreshSecret();
 
@@ -363,10 +386,15 @@ export class AuthService {
         expiresAt: new Date(Date.now() + refreshTtl * 1000),
         userAgent: ctx.userAgent ?? null,
         ipAddress: ctx.ipAddress ?? null,
+        mfaVerifiedAt: mfaVerified ? new Date() : null,
       },
     });
 
-    const { token, expiresIn } = await this.signAccessToken(user);
+    const { token, expiresIn } = await this.signAccessToken(
+      user,
+      session.id,
+      session.mfaVerifiedAt,
+    );
     return {
       accessToken: token,
       refreshToken: `${session.id}.${secret}`,
@@ -378,18 +406,49 @@ export class AuthService {
   /** Sign a short-lived access token for the given subject. */
   private async signAccessToken(
     user: AccessSubject,
+    sessionId: string,
+    mfaVerifiedAt: Date | null,
   ): Promise<{ token: string; expiresIn: number }> {
     const accessTtl = this.config.getOrThrow<number>('auth.accessTtl');
     const payload: JwtAccessPayload = {
       sub: user.id,
       email: user.email,
       purpose: ACCESS_PURPOSE,
+      sessionId,
+      ...(mfaVerifiedAt ? { mfaVerifiedAt: mfaVerifiedAt.getTime() } : {}),
     };
     const token = await this.jwt.signAsync(payload, {
       secret: this.config.getOrThrow<string>('auth.accessSecret'),
       expiresIn: accessTtl,
     });
     return { token, expiresIn: accessTtl };
+  }
+
+  /** Central account-state authority used by login, refresh and 2FA completion. */
+  assertAccountActive(user: Pick<User, 'accountStatus' | 'suspendedAt' | 'bannedAt'>): void {
+    if (user.accountStatus === 'banned' || user.bannedAt) {
+      throw new UnauthorizedException({ code: 'ACCOUNT_BANNED', message: 'Account access denied.' });
+    }
+    if (user.accountStatus !== 'active' || user.suspendedAt) {
+      throw new UnauthorizedException({ code: 'ACCOUNT_SUSPENDED', message: 'Account access is suspended.' });
+    }
+  }
+
+  async recordAdminAuthEvent(userId: string, type: string, ctx: SessionContext, result = 'success'): Promise<void> {
+    const assignments = await this.prisma.adminRoleAssignment.count({ where: { userId, revokedAt: null } });
+    if (!assignments) {
+      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true, isAdmin: true } });
+      const bootstrap = (process.env.ADMIN_EMAILS ?? '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+      if (!user || (!user.isAdmin && !bootstrap.includes(user.email.toLowerCase()))) return;
+    }
+    await this.prisma.securityEvent.create({
+      data: { userId, actorId: userId, type, result, severity: result === 'success' ? 'info' : 'high', ip: ctx.ipAddress ?? null, userAgent: ctx.userAgent ?? null },
+    });
+  }
+
+  private isPotentialAdmin(user: { isAdmin: boolean; email: string; adminRoleAssignments: unknown[] }): boolean {
+    const bootstrap = (process.env.ADMIN_EMAILS ?? '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+    return user.adminRoleAssignments.length > 0 || user.isAdmin || bootstrap.includes(user.email.toLowerCase());
   }
 
   /** Generate a fresh refresh-token secret and its Argon2 hash for storage. */

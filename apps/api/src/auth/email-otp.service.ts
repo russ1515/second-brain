@@ -51,10 +51,8 @@ export class EmailOtpService {
 
     try {
       await this.mail.send(this.compose(purpose, code, ttl, user.email));
-    } catch (error) {
-      this.logger.warn(
-        `Failed to send ${purpose} OTP to ${user.email}: ${(error as Error).message}`,
-      );
+    } catch {
+      this.logger.warn('Failed to send OTP email.');
     }
   }
 

@@ -1,599 +1,333 @@
-import { useCallback, useEffect, useState, useMemo } from 'react';
-import {
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
-import type {
-  DocumentDifficulty,
-  LibraryDocument,
-  LibraryFacets,
-  LibraryFilter,
-  PipelineStage,
+import {
+  isQuotaError,
+  type DocumentDifficulty,
+  type LibraryDocument,
+  type LibraryFacets,
+  type LibraryFilter,
+  type LibraryPage,
+  type LibrarySort,
+  type QuotaErrorContract,
 } from '@second-brain/shared';
-import { api, apiUpload } from '../lib/client';
+import { ApiError, api } from '../lib/client';
+import { pickDocuments, uploadPickedDocument } from '../lib/document-import';
+import { loadLibraryCache, saveLibraryCache } from '../lib/library-cache';
+import { useAuth } from '../lib/auth-context';
 import { useTokens } from '../lib/design/theme';
-import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { useResponsive } from '../lib/responsive';
-import { Button, Card, ErrorBanner, Loading } from '../components/ui';
+import { Alert, Badge, Button, Card, SegmentedControl } from '../components/ds/core';
+import { SmartEmptyState, SmartLoadingState } from '../components/ds/states';
+import { DocumentPipeline } from '../components/document/document-pipeline';
+import { BatchImport } from '../components/document/batch-import';
 
-const SHELVES: { filter: LibraryFilter; key: TranslationKey; icon: string }[] = [
-  { filter: 'all', key: 'lib.all', icon: '📚' },
-  { filter: 'favorites', key: 'lib.favorites', icon: '⭐' },
-  { filter: 'recent', key: 'lib.recent', icon: '🕑' },
-  { filter: 'shared', key: 'lib.shared', icon: '🤝' },
-  { filter: 'trash', key: 'lib.trash', icon: '🗑️' },
+const SHELVES: Array<{ filter: LibraryFilter; key: TranslationKey; icon: string }> = [
+  { filter: 'all', key: 'lib.all', icon: '▤' },
+  { filter: 'favorites', key: 'lib.favorites', icon: '★' },
+  { filter: 'recent', key: 'lib.recent', icon: '◷' },
+  { filter: 'trash', key: 'lib.trash', icon: '⌫' },
 ];
 
 const DIFFICULTY_KEY: Record<DocumentDifficulty, TranslationKey> = {
-  beginner: 'lib.diff.beginner',
-  intermediate: 'lib.diff.intermediate',
-  advanced: 'lib.diff.advanced',
-};
-const difficultyColor = (c: ColorScale): Record<DocumentDifficulty, string> => ({
-  beginner: c.success,
-  intermediate: c.warning,
-  advanced: c.error,
-});
-const SOURCE_ICON: Record<string, string> = {
-  text: '📝',
-  file: '📄',
-  url: '🔗',
+  beginner: 'lib.diff.beginner', intermediate: 'lib.diff.intermediate', advanced: 'lib.diff.advanced',
 };
 
-/** The Smart Upload Pipeline stages, in order, for the live progress row. */
-const PIPELINE: { stage: PipelineStage; key: TranslationKey; icon: string }[] = [
-  { stage: 'cleaning', key: 'lib.stage.cleaning', icon: '🧹' },
-  { stage: 'segmenting', key: 'lib.stage.segmenting', icon: '✂️' },
-  { stage: 'embedding', key: 'lib.stage.embedding', icon: '🧠' },
-  { stage: 'indexing', key: 'lib.stage.indexing', icon: '🗂️' },
-  { stage: 'graphing', key: 'lib.stage.graphing', icon: '🕸️' },
-];
-
-/** Selected cross-cutting facet (a subject / language / collection). */
 type Facet =
   | { kind: 'subject'; value: string }
   | { kind: 'language'; value: string }
   | { kind: 'collection'; id: string; name: string }
   | null;
 
-/**
- * 📚 Smart Library (Sprint 6.1) — an Evernote-style home for every document,
- * organized by shelves (All/Favorites/Recent/Shared/Trash) and cross-cutting
- * facets (Subjects/Languages/Collections). Each card shows the AI-derived
- * metadata: preview, summary, detected concepts, difficulty, subject, language,
- * author and date. Nothing is faked — a document still being analysed says so.
- */
+type ErrorState = { message: string; quota: QuotaErrorContract | null } | null;
+
 export default function LibraryScreen() {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  const { t } = useI18n();
+  const { user, offline } = useAuth();
   const router = useRouter();
   const { width } = useResponsive();
-  const wide = width >= 1024;
+  const desktop = width >= 1024;
+  const { colors: c, spacing, typography } = useTokens();
+  const { t, locale } = useI18n();
   const [facets, setFacets] = useState<LibraryFacets | null>(null);
-  const [docs, setDocs] = useState<LibraryDocument[] | null>(null);
+  const [documents, setDocuments] = useState<LibraryDocument[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
   const [shelf, setShelf] = useState<LibraryFilter>('all');
   const [facet, setFacet] = useState<Facet>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
+  const [sort, setSort] = useState<LibrarySort>('newest');
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [stale, setStale] = useState(false);
+  const [error, setError] = useState<ErrorState>(null);
+  const [panel, setPanel] = useState<'import' | 'batch' | 'collection' | null>(null);
+  const request = useRef<AbortController | null>(null);
+  const documentsRef = useRef<LibraryDocument[]>([]);
 
-  const query = useCallback((): string => {
-    const params = new URLSearchParams({ filter: shelf });
+  useEffect(() => { documentsRef.current = documents; }, [documents]);
+
+  const query = useMemo(() => {
+    const params = new URLSearchParams({ filter: shelf, sort, limit: '24' });
+    if (search.trim()) params.set('q', search.trim());
     if (facet?.kind === 'subject') params.set('subject', facet.value);
     if (facet?.kind === 'language') params.set('language', facet.value);
     if (facet?.kind === 'collection') params.set('collectionId', facet.id);
     return params.toString();
-  }, [shelf, facet]);
+  }, [facet, search, shelf, sort]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (append = false) => {
+    if (!user) { setLoading(false); return; }
+    if (append && !cursor) return;
+    if (!append) request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    append ? setLoadingMore(true) : setLoading(true);
+    const pageQuery = append && cursor ? `${query}&cursor=${encodeURIComponent(cursor)}` : query;
     try {
-      const [f, d] = await Promise.all([
-        api<LibraryFacets>('/library/facets'),
-        api<LibraryDocument[]>(`/library?${query()}`),
+      if (offline) throw new ApiError(0, t('library7.offline'));
+      const [nextFacets, page] = await Promise.all([
+        api<LibraryFacets>('/library/facets', { signal: controller.signal }),
+        api<LibraryPage>(`/library/paged?${pageQuery}`, { signal: controller.signal }),
       ]);
-      setFacets(f);
-      setDocs(d);
+      const currentDocuments = documentsRef.current;
+      const nextDocuments = append
+        ? [...currentDocuments, ...page.items.filter((item) => !currentDocuments.some((existing) => existing.id === item.id))]
+        : page.items;
+      setFacets(nextFacets);
+      setDocuments(nextDocuments);
+      setCursor(page.nextCursor);
+      setStale(false);
       setError(null);
-    } catch (e) {
-      setError((e as Error).message);
+      await saveLibraryCache(user.id, { query, documents: nextDocuments, facets: nextFacets, nextCursor: page.nextCursor });
+    } catch (caught) {
+      if ((caught as { name?: string }).name === 'AbortError') return;
+      if (!append) {
+        const cached = await loadLibraryCache(user.id, query);
+        if (cached) {
+          setDocuments(cached.documents);
+          setFacets(cached.facets);
+          setCursor(cached.nextCursor);
+          setStale(true);
+        }
+      }
+      setError(errorState(caught));
+    } finally {
+      append ? setLoadingMore(false) : setLoading(false);
     }
-  }, [query]);
+  }, [cursor, offline, query, t, user]);
 
-  useFocusEffect(
-    useCallback(() => {
-      void load();
-    }, [load]),
-  );
+  useFocusEffect(useCallback(() => {
+    const timer = setTimeout(() => void load(false), search ? 300 : 0);
+    return () => { clearTimeout(timer); request.current?.abort(); };
+  }, [query, offline]));
 
-  // Live progress: while any document is still moving through the pipeline,
-  // re-poll so the learner watches the automatic stages advance on their own.
-  const processing = docs?.some((d) => d.status === 'pending' || d.status === 'processing') ?? false;
+  const processing = documents.some((document) => document.status === 'pending' || document.status === 'processing');
   useEffect(() => {
-    if (!processing) return;
-    const timer = setTimeout(() => void load(), 2500);
+    if (!processing || offline) return;
+    const timer = setTimeout(() => void load(false), 3000);
     return () => clearTimeout(timer);
-  }, [processing, docs, load]);
+  }, [processing, offline, documents, load]);
 
-  const pickShelf = (f: LibraryFilter) => {
-    setShelf(f);
-    setFacet(null);
-    setDocs(null);
-    // load() re-runs via focus effect? No — trigger explicitly.
-    void reload(f, null);
-  };
-  const pickFacet = (next: Facet) => {
-    setFacet(next);
-    setShelf('all');
-    setDocs(null);
-    void reload('all', next);
-  };
-
-  // Explicit reload so a tap reflects immediately (state updates are async).
-  const reload = async (f: LibraryFilter, fc: Facet) => {
-    const params = new URLSearchParams({ filter: f });
-    if (fc?.kind === 'subject') params.set('subject', fc.value);
-    if (fc?.kind === 'language') params.set('language', fc.value);
-    if (fc?.kind === 'collection') params.set('collectionId', fc.id);
+  const chooseShelf = (next: LibraryFilter) => { setShelf(next); setFacet(null); setCursor(null); };
+  const chooseFacet = (next: Facet) => { setFacet(next); setShelf('all'); setCursor(null); };
+  const mutate = async (document: LibraryDocument, action: 'favorite' | 'trash' | 'restore') => {
     try {
-      const [facetsRes, list] = await Promise.all([
-        api<LibraryFacets>('/library/facets'),
-        api<LibraryDocument[]>(`/library?${params.toString()}`),
-      ]);
-      setFacets(facetsRes);
-      setDocs(list);
-      setError(null);
-    } catch (e) {
-      setError((e as Error).message);
-    }
+      await api(`/library/documents/${document.id}/${action === 'favorite' ? 'favorite' : action}`, { method: action === 'favorite' ? 'PATCH' : 'POST' });
+      await load(false);
+    } catch (caught) { setError(errorState(caught)); }
   };
 
-  const toggleFavorite = async (doc: LibraryDocument) => {
-    try {
-      await api<LibraryDocument>(`/library/documents/${doc.id}/favorite`, {
-        method: 'PATCH',
-      });
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
-  const trash = async (doc: LibraryDocument) => {
-    try {
-      const action = doc.deletedAt ? 'restore' : 'trash';
-      await api<LibraryDocument>(`/library/documents/${doc.id}/${action}`, {
-        method: 'POST',
-      });
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
-  if (error && !docs) {
-    return (
-      <ScrollView contentContainerStyle={styles.container}>
-        <ErrorBanner message={error} />
-        <Button variant="ghost" label={t('app.tryAgain')} onPress={() => void load()} />
-      </ScrollView>
-    );
-  }
-  if (!facets || !docs) return <Loading label={t('lib.loading')} />;
-
-  const count = (f: LibraryFilter): number => facets[f];
-
-  // Filters (shelves + subject/language/collection facets) — rendered vertically
-  // in the desktop LEFT rail, or as the current horizontal chips on mobile.
-  const shelfChips = SHELVES.map((s) => (
-    <Chip key={s.filter} label={`${s.icon} ${t(s.key)}`} badge={count(s.filter)} on={shelf === s.filter && !facet} onPress={() => pickShelf(s.filter)} />
-  ));
-  const facetGroups = (
-    <>
-      {facets.subjects.length > 0 ? (
-        <FacetGroup title={t('lib.subjects')}>
-          {facets.subjects.map((s) => (
-            <Chip key={s.value} label={s.value} badge={s.count} on={facet?.kind === 'subject' && facet.value === s.value} onPress={() => pickFacet({ kind: 'subject', value: s.value })} />
-          ))}
-        </FacetGroup>
-      ) : null}
-      {facets.languages.length > 0 ? (
-        <FacetGroup title={t('lib.languages')}>
-          {facets.languages.map((l) => (
-            <Chip key={l.value} label={l.value} badge={l.count} on={facet?.kind === 'language' && facet.value === l.value} onPress={() => pickFacet({ kind: 'language', value: l.value })} />
-          ))}
-        </FacetGroup>
-      ) : null}
-      {facets.collections.length > 0 ? (
-        <FacetGroup title={t('lib.collections')}>
-          {facets.collections.map((col) => (
-            <Chip key={col.id} label={`📁 ${col.name}`} badge={col.documentCount} on={facet?.kind === 'collection' && facet.id === col.id} onPress={() => pickFacet({ kind: 'collection', id: col.id, name: col.name })} />
-          ))}
-        </FacetGroup>
-      ) : null}
-    </>
-  );
-
-  const filtersRail = (
-    <>
-      <View style={styles.chips}>{shelfChips}</View>
-      {facetGroups}
-    </>
-  );
-  const filtersMobile = (
-    <>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-        {shelfChips}
-      </ScrollView>
-      {facetGroups}
-    </>
-  );
-
-  const docNodes =
-    shelf === 'shared' && !facet ? (
-      <Text style={styles.empty}>{t('lib.sharedSoon')}</Text>
-    ) : docs.length === 0 ? (
-      <Text style={styles.empty}>{t('lib.empty')}</Text>
-    ) : (
-      docs.map((doc) => (
-        <View key={doc.id} style={wide ? styles.docCell : undefined}>
-          <DocCard
-            doc={doc}
-            onOpen={() => router.push(`/library/${doc.id}`)}
-            onFavorite={() => toggleFavorite(doc)}
-            onTrash={() => trash(doc)}
-          />
-        </View>
-      ))
-    );
+  const filters = facets ? (
+    <View style={{ gap: spacing.md }}>
+      <View style={{ gap: spacing.xs }}>
+        {SHELVES.map((item) => <FilterButton key={item.filter} label={`${item.icon} ${t(item.key)}`} count={facets[item.filter]} selected={shelf === item.filter && !facet} onPress={() => chooseShelf(item.filter)} />)}
+      </View>
+      <FacetGroup title={t('lib.collections')}>
+        {facets.collections.map((collection) => <FilterButton key={collection.id} label={collection.name} count={collection.documentCount} selected={facet?.kind === 'collection' && facet.id === collection.id} onPress={() => chooseFacet({ kind: 'collection', id: collection.id, name: collection.name })} />)}
+        <Button label={t('library7.collection.create')} variant="ghost" size="sm" onPress={() => setPanel(panel === 'collection' ? null : 'collection')} />
+      </FacetGroup>
+      {facets.subjects.length ? <FacetGroup title={t('lib.subjects')}>{facets.subjects.slice(0, 8).map((item) => <FilterButton key={item.value} label={item.value} count={item.count} selected={facet?.kind === 'subject' && facet.value === item.value} onPress={() => chooseFacet({ kind: 'subject', value: item.value })} />)}</FacetGroup> : null}
+      {facets.languages.length ? <FacetGroup title={t('lib.languages')}>{facets.languages.slice(0, 8).map((item) => <FilterButton key={item.value} label={item.value} count={item.count} selected={facet?.kind === 'language' && facet.value === item.value} onPress={() => chooseFacet({ kind: 'language', value: item.value })} />)}</FacetGroup> : null}
+    </View>
+  ) : null;
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <View style={styles.masthead}>
-        <Text style={styles.kicker}>📚 {t('lib.title')}</Text>
-        <Text style={styles.intro}>{t('lib.intro')}</Text>
+    <ScrollView contentContainerStyle={{ padding: desktop ? 28 : 16, gap: spacing.lg, maxWidth: 1320, width: '100%', alignSelf: 'center' }} keyboardShouldPersistTaps="handled">
+      <View style={{ gap: spacing.xs }}>
+        <Text style={[typography.overline, { color: c.primary }]}>{t('library7.owned')}</Text>
+        <Text accessibilityRole="header" style={[typography.display, { color: c.textPrimary }]}>{t('lib.title')}</Text>
+        <Text style={[typography.body, { color: c.textSecondary, maxWidth: 700 }]}>{t('library7.mission')}</Text>
       </View>
 
-      {error ? <ErrorBanner message={error} /> : null}
+      {stale || offline ? <Alert tone="warning" title={t('library7.stale.title')} detail={t('library7.stale.detail')} /> : null}
+      {error ? <LibraryError value={error} onRetry={() => void load(false)} onUsage={() => router.push('/usage')} /> : null}
 
-      {/* Add row */}
-      <View style={styles.addRow}>
-        <Button label={t('lib.add')} onPress={() => setAdding((v) => !v)} />
-        <Button variant="ghost" label={`📷 ${t('lib.scan')}`} onPress={() => router.push('/scan')} />
-        <Button variant="ghost" label={`❓ ${t('lib.askLibrary')}`} onPress={() => router.push('/library/ask')} />
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+        <Button label={t('library7.import')} icon="＋" onPress={() => setPanel(panel === 'import' ? null : 'import')} />
+        <Button label={t('library7.scan')} variant="secondary" icon="▣" onPress={() => router.push('/scan')} />
+        <Button label={t('library7.batch')} variant="secondary" icon="▤" onPress={() => setPanel(panel === 'batch' ? null : 'batch')} />
+        <Button label={t('library7.ask')} variant="ghost" icon="?" onPress={() => router.push('/library/ask')} />
       </View>
-      {adding ? <AddPanel onDone={() => { setAdding(false); void load(); }} /> : null}
 
-      {wide ? (
-        // Desktop: LEFT filters rail + RIGHT documents grid filling the width.
-        <View style={{ flexDirection: 'row', gap: 20, alignItems: 'flex-start' }}>
-          <View style={{ width: 260, gap: 12 }}>{filtersRail}</View>
-          <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start', alignContent: 'flex-start' }}>
-            {docNodes}
+      {panel === 'import' ? <ImportPanel onDone={(id) => { setPanel(null); void load(false); router.push(`/library/${id}`); }} /> : null}
+      {panel === 'batch' ? <BatchImport onChanged={() => void load(false)} onOpen={(id) => router.push(`/library/${id}`)} onUsage={() => router.push('/usage')} /> : null}
+      {panel === 'collection' ? <CollectionPanel onDone={() => { setPanel(null); void load(false); }} /> : null}
+
+      <View style={{ flexDirection: desktop ? 'row' : 'column', alignItems: 'flex-start', gap: spacing.lg }}>
+        {desktop ? <View style={{ width: 240 }}>{filters}</View> : (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxWidth: '100%' }} contentContainerStyle={{ gap: spacing.xs }}>
+            {SHELVES.map((item) => <FilterButton key={item.filter} label={`${item.icon} ${t(item.key)}`} count={facets?.[item.filter]} selected={shelf === item.filter && !facet} onPress={() => chooseShelf(item.filter)} />)}
+            {facets?.collections.map((collection) => <FilterButton key={collection.id} label={collection.name} count={collection.documentCount} selected={facet?.kind === 'collection' && facet.id === collection.id} onPress={() => chooseFacet({ kind: 'collection', id: collection.id, name: collection.name })} />)}
+          </ScrollView>
+        )}
+
+        <View style={{ flex: 1, width: '100%', gap: spacing.md }}>
+          <View style={{ flexDirection: desktop ? 'row' : 'column', gap: spacing.sm, justifyContent: 'space-between' }}>
+            <TextInput accessibilityLabel={t('library7.search')} placeholder={t('library7.search')} placeholderTextColor={c.textMuted} value={search} onChangeText={setSearch} style={{ minHeight: 46, flex: 1, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface, color: c.textPrimary, paddingHorizontal: 14, borderRadius: 10 }} />
+            <SegmentedControl options={['newest', 'oldest', 'title'] as const} value={sort} onChange={(value) => { setSort(value); setCursor(null); }} labelFor={(value) => t(`library7.sort.${value}`)} />
           </View>
+
+          {loading && !documents.length ? <SmartLoadingState title={t('lib.loading')} /> : documents.length === 0 ? (
+            <LibraryEmpty onImport={() => setPanel('import')} onScan={() => router.push('/scan')} />
+          ) : (
+            <View accessibilityRole="list" style={{ gap: spacing.sm }}>
+              {documents.map((document) => <DocumentRow key={document.id} document={document} locale={locale} onOpen={() => router.push(`/library/${document.id}`)} onFavorite={() => void mutate(document, 'favorite')} onTrash={() => void mutate(document, document.deletedAt ? 'restore' : 'trash')} />)}
+            </View>
+          )}
+          {cursor ? <Button label={t('library7.more')} variant="secondary" loading={loadingMore} onPress={() => void load(true)} /> : null}
         </View>
-      ) : (
-        // Mobile / tablet: unchanged single-column stack.
-        <>
-          {filtersMobile}
-          {docNodes}
-        </>
-      )}
+      </View>
     </ScrollView>
   );
 }
 
-/** Inline quick-add: paste text, or ingest a URL. */
-function AddPanel({ onDone }: { onDone: () => void }) {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
+function LibraryEmpty({ onImport, onScan }: { onImport: () => void; onScan: () => void }) {
+  const { colors: c, spacing, typography } = useTokens();
   const { t } = useI18n();
-  const [mode, setMode] = useState<'text' | 'url'>('text');
+  return (
+    <Card style={{ gap: spacing.md }}>
+      <SmartEmptyState icon="▤" title={t('library7.empty.title')} detail={t('library7.empty.detail')} />
+      <View accessibilityLabel={t('library7.empty.pipeline')} style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: spacing.xs }}>
+        {(['import', 'read', 'understand', 'connect', 'ready'] as const).map((step, index) => <Text key={step} style={[typography.caption, { color: c.textMuted }]}>{index ? '→ ' : ''}{t(`library7.empty.${step}`)}</Text>)}
+      </View>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: spacing.sm }}>
+        <Button label={t('library7.import')} onPress={onImport} />
+        <Button label={t('library7.scan')} variant="secondary" onPress={onScan} />
+      </View>
+    </Card>
+  );
+}
+
+function DocumentRow({ document, locale, onOpen, onFavorite, onTrash }: { document: LibraryDocument; locale: string; onOpen: () => void; onFavorite: () => void; onTrash: () => void }) {
+  const { colors: c, spacing, typography } = useTokens();
+  const { t } = useI18n();
+  return (
+    <Card testID={`library-document-${document.id}`} style={{ gap: spacing.sm }}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm }}>
+        <Pressable onPress={onOpen} accessibilityRole="link" style={{ flex: 1, minHeight: 44 }}>
+          <Text numberOfLines={2} style={[typography.title, { color: c.textPrimary }]}>{document.source === 'url' ? '↗' : document.source === 'text' ? '≡' : '▤'} {document.title}</Text>
+          <Text style={[typography.caption, { color: c.textMuted }]}>{new Date(document.createdAt).toLocaleDateString(locale)} · {document.charCount.toLocaleString(locale)} {t('lib.chars')}</Text>
+        </Pressable>
+        <Button label={document.isFavorite ? '★' : '☆'} accessibilityLabel={t('library7.favorite')} variant="ghost" size="sm" onPress={onFavorite} />
+        <Button label={document.deletedAt ? '↺' : '⌫'} accessibilityLabel={document.deletedAt ? t('lib.restore') : t('lib.moveToTrash')} variant="ghost" size="sm" onPress={onTrash} />
+      </View>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+        <Badge label={t(`lib.status.${document.status}`)} tone={document.status === 'ready' ? 'success' : document.status === 'failed' ? 'error' : 'ai'} />
+        {document.subject ? <Badge label={document.subject} /> : null}
+        {document.difficulty ? <Badge label={t(DIFFICULTY_KEY[document.difficulty])} tone="info" /> : null}
+        {document.collectionName ? <Badge label={document.collectionName} tone="primary" /> : null}
+      </View>
+      {document.status === 'pending' || document.status === 'processing' || document.status === 'failed' ? <DocumentPipeline status={document.status} stage={document.stage} compact /> : <Text numberOfLines={3} style={[typography.bodySmall, { color: c.textSecondary }]}>{document.summary ?? document.preview}</Text>}
+      {document.concepts.length ? <Text style={[typography.caption, { color: c.textMuted }]}>{t('library7.conceptsCount').replace('{n}', String(document.concepts.length))} · {document.concepts.slice(0, 4).map((concept) => concept.name).join(' · ')}</Text> : null}
+    </Card>
+  );
+}
+
+function ImportPanel({ onDone }: { onDone: (documentId: string) => void }) {
+  const router = useRouter();
+  const { colors: c, spacing, typography } = useTokens();
+  const { t } = useI18n();
+  const [mode, setMode] = useState<'file' | 'text' | 'url'>('file');
   const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
+  const [content, setContent] = useState('');
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
+  const [error, setError] = useState<ErrorState>(null);
   const submit = async () => {
-    setBusy(true);
-    setErr(null);
+    setBusy(true); setError(null);
     try {
-      if (mode === 'text') {
-        if (!title.trim() || !body.trim()) throw new Error(t('lib.addTextRequired'));
-        await api('/documents', {
-          method: 'POST',
-          body: { title: title.trim(), content: body },
-        });
+      if (mode === 'file') {
+        const picked = (await pickDocuments(false))[0];
+        if (!picked) return;
+        onDone((await uploadPickedDocument(picked)).id);
+      } else if (mode === 'text') {
+        if (!title.trim() || !content.trim()) throw new Error(t('lib.addTextRequired'));
+        onDone((await api<{ id: string }>('/documents', { method: 'POST', body: { title: title.trim(), content } })).id);
       } else {
-        if (!body.trim()) throw new Error(t('lib.addUrlRequired'));
-        await api('/documents/from-url', { method: 'POST', body: { url: body.trim() } });
+        if (!content.trim()) throw new Error(t('lib.addUrlRequired'));
+        onDone((await api<{ id: string }>('/documents/from-url', { method: 'POST', body: { url: content.trim(), ...(title.trim() ? { title: title.trim() } : {}) } })).id);
       }
-      setTitle('');
-      setBody('');
-      onDone();
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    } catch (caught) { setError(errorState(caught)); } finally { setBusy(false); }
   };
-
-  // Web file picker → the upload pipeline. Handles text PDFs AND scanned PDFs
-  // (those are OCR'd server-side by Document Intelligence). Web-only for now;
-  // native document-picker is a follow-up.
-  const pickFile = () => {
-    const g = globalThis as unknown as { document?: any };
-    if (!g.document) return;
-    const input = g.document.createElement('input');
-    input.type = 'file';
-    input.accept = '.pdf,.txt,.md,application/pdf,text/plain';
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      setBusy(true);
-      setErr(null);
-      try {
-        const form = new FormData();
-        form.append('file', file);
-        await apiUpload('/documents/upload', form);
-        onDone();
-      } catch (e) {
-        setErr((e as Error).message);
-      } finally {
-        setBusy(false);
-      }
-    };
-    input.click();
-  };
-
   return (
-    <Card style={styles.addCard}>
-      <View style={styles.chips}>
-        <Chip label={t('lib.addText')} on={mode === 'text'} onPress={() => setMode('text')} />
-        <Chip label={t('lib.addUrl')} on={mode === 'url'} onPress={() => setMode('url')} />
-      </View>
-      {Platform.OS === 'web' ? (
-        <Button variant="ghost" label={t('lib.addFile')} onPress={pickFile} busy={busy} />
-      ) : null}
-      {err ? <ErrorBanner message={err} /> : null}
-      {mode === 'text' ? (
-        <>
-          <TextInput
-            style={styles.input}
-            placeholder={t('lib.addTitle')}
-            placeholderTextColor={c.textMuted}
-            value={title}
-            onChangeText={setTitle}
-          />
-          <TextInput
-            style={[styles.input, styles.inputMultiline]}
-            placeholder={t('lib.addBody')}
-            placeholderTextColor={c.textMuted}
-            value={body}
-            onChangeText={setBody}
-            multiline
-          />
-        </>
-      ) : (
-        <TextInput
-          style={styles.input}
-          placeholder="https://…"
-          placeholderTextColor={c.textMuted}
-          value={body}
-          onChangeText={setBody}
-          autoCapitalize="none"
-        />
-      )}
-      <Button label={t('lib.addBtn')} onPress={submit} busy={busy} />
+    <Card style={{ gap: spacing.md }}>
+      <Text accessibilityRole="header" style={[typography.title, { color: c.textPrimary }]}>{t('library7.import.title')}</Text>
+      <SegmentedControl options={['file', 'text', 'url'] as const} value={mode} onChange={setMode} labelFor={(value) => t(`library7.import.${value}`)} />
+      {mode !== 'file' ? <>
+        <TextInput placeholder={t('lib.addTitle')} placeholderTextColor={c.textMuted} value={title} onChangeText={setTitle} style={{ minHeight: 46, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12, color: c.textPrimary }} />
+        <TextInput multiline={mode === 'text'} placeholder={mode === 'text' ? t('lib.addBody') : 'https://…'} placeholderTextColor={c.textMuted} value={content} onChangeText={setContent} autoCapitalize="none" style={{ minHeight: mode === 'text' ? 120 : 46, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12, color: c.textPrimary, textAlignVertical: 'top' }} />
+      </> : <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('library7.import.formats')}</Text>}
+      {error ? <LibraryError value={error} onUsage={() => router.push('/usage')} /> : null}
+      <Button label={mode === 'file' ? t('library7.import.choose') : t('lib.addBtn')} loading={busy} onPress={() => void submit()} />
     </Card>
   );
 }
 
-function DocCard({
-  doc,
-  onOpen,
-  onFavorite,
-  onTrash,
-}: {
-  doc: LibraryDocument;
-  onOpen: () => void;
-  onFavorite: () => void;
-  onTrash: () => void;
-}) {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  const { t, locale } = useI18n();
-  return (
-    <Card style={styles.doc}>
-      <View style={styles.docHead}>
-        <Pressable style={styles.flex} onPress={onOpen} accessibilityRole="button">
-          <Text style={styles.docTitle} numberOfLines={2}>
-            {SOURCE_ICON[doc.source] ?? '📄'} {doc.title}
-          </Text>
-        </Pressable>
-        <Pressable onPress={onFavorite} accessibilityRole="button" hitSlop={8}>
-          <Text style={styles.star}>{doc.isFavorite ? '⭐' : '☆'}</Text>
-        </Pressable>
-        <Pressable onPress={onTrash} accessibilityRole="button" hitSlop={8}>
-          <Text style={styles.trash}>{doc.deletedAt ? '♻️' : '🗑️'}</Text>
-        </Pressable>
-      </View>
-
-      {/* Metadata badges */}
-      <View style={styles.badges}>
-        {doc.subject ? <Badge label={doc.subject} tone={c.primary} /> : null}
-        {doc.language ? <Badge label={doc.language} tone={c.textSecondary} /> : null}
-        {doc.difficulty ? (
-          <Badge label={t(DIFFICULTY_KEY[doc.difficulty])} tone={difficultyColor(c)[doc.difficulty]} />
-        ) : null}
-        {doc.status === 'failed' ? (
-          <Badge label={t('lib.status.failed')} tone={c.error} />
-        ) : null}
-      </View>
-
-      {/* Smart Upload Pipeline progress, or the AI summary once ready */}
-      {doc.status === 'pending' || doc.status === 'processing' ? (
-        <PipelineProgress stage={doc.stage} />
-      ) : doc.summary ? (
-        <Text style={styles.summary} numberOfLines={3}>{doc.summary}</Text>
-      ) : doc.enriched ? (
-        <Text style={styles.preview} numberOfLines={2}>{doc.preview}</Text>
-      ) : (
-        <Text style={styles.analysing}>{t('lib.analysing')}</Text>
-      )}
-
-      {/* Detected concepts */}
-      {doc.concepts.length > 0 ? (
-        <View style={styles.concepts}>
-          {doc.concepts.slice(0, 6).map((c) => (
-            <Text key={c.id} style={styles.concept}>🧩 {c.name}</Text>
-          ))}
-        </View>
-      ) : null}
-
-      {/* Footer: author + date */}
-      <Text style={styles.meta}>
-        {doc.author ? `✍️ ${doc.author} · ` : ''}
-        {new Date(doc.createdAt).toLocaleDateString(locale === 'fr' ? 'fr-FR' : 'en-US', {
-          day: 'numeric', month: 'short', year: 'numeric',
-        })}
-      </Text>
-    </Card>
-  );
-}
-
-/** The automatic Smart Upload Pipeline, shown live while a document processes.
- *  Completed stages are green, the running one is highlighted, the rest faint —
- *  the learner watches it advance without doing anything. */
-function PipelineProgress({ stage }: { stage: PipelineStage | null }) {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
+function CollectionPanel({ onDone }: { onDone: () => void }) {
+  const { colors: c, spacing } = useTokens();
   const { t } = useI18n();
-  const currentIndex = stage ? PIPELINE.findIndex((s) => s.stage === stage) : -1;
-  return (
-    <View style={styles.pipeline}>
-      <Text style={styles.pipelineLabel}>⚙️ {t('lib.pipelineRunning')}</Text>
-      <View style={styles.pipelineSteps}>
-        {PIPELINE.map((s, i) => {
-          const done = currentIndex > i;
-          const active = currentIndex === i;
-          return (
-            <View
-              key={s.stage}
-              style={[
-                styles.stagePill,
-                done && styles.stageDone,
-                active && styles.stageActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.stageText,
-                  done && styles.stageDoneText,
-                  active && styles.stageActiveText,
-                ]}
-              >
-                {done ? '✓' : s.icon} {t(s.key)}
-              </Text>
-            </View>
-          );
-        })}
-      </View>
-    </View>
-  );
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return <Card style={{ gap: spacing.sm }}>
+    <TextInput accessibilityLabel={t('library7.collection.name')} placeholder={t('library7.collection.name')} placeholderTextColor={c.textMuted} value={name} onChangeText={setName} style={{ minHeight: 46, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12, color: c.textPrimary }} />
+    {error ? <Alert tone="error" title={t('state.error')} detail={error} /> : null}
+    <Button label={t('library7.collection.create')} disabled={!name.trim()} loading={busy} onPress={() => { setBusy(true); setError(null); void api('/library/collections', { method: 'POST', body: { name: name.trim() } }).then(onDone).catch((caught) => setError((caught as Error).message)).finally(() => setBusy(false)); }} />
+  </Card>;
 }
 
-function Chip({
-  label,
-  badge,
-  on,
-  onPress,
-}: {
-  label: string;
-  badge?: number;
-  on: boolean;
-  onPress: () => void;
-}) {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  return (
-    <Pressable style={[styles.chip, on && styles.chipOn]} onPress={onPress} accessibilityRole="button">
-      <Text style={[styles.chipText, on && styles.chipTextOn]}>
-        {label}
-        {badge !== undefined && badge > 0 ? `  ${badge}` : ''}
-      </Text>
-    </Pressable>
-  );
+function FilterButton({ label, count, selected, onPress }: { label: string; count?: number; selected: boolean; onPress: () => void }) {
+  const { colors: c, radius, spacing, typography } = useTokens();
+  return <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress} style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, paddingHorizontal: spacing.sm, borderRadius: radius.sm, backgroundColor: selected ? c.surfaceSunken : 'transparent' }}>
+    <Text numberOfLines={1} style={[typography.bodySmall, { color: selected ? c.primary : c.textSecondary, fontWeight: selected ? '700' : '500' }]}>{label}</Text>
+    {count !== undefined ? <Text style={[typography.caption, { color: c.textMuted }]}>{count}</Text> : null}
+  </Pressable>;
 }
 
 function FacetGroup({ title, children }: { title: string; children: React.ReactNode }) {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  return (
-    <View style={styles.facetGroup}>
-      <Text style={styles.facetTitle}>{title}</Text>
-      <View style={styles.facetChips}>{children}</View>
-    </View>
-  );
+  const { colors: c, spacing, typography } = useTokens();
+  return <View style={{ gap: spacing.xxs }}><Text style={[typography.overline, { color: c.textMuted }]}>{title}</Text>{children}</View>;
 }
 
-function Badge({ label, tone }: { label: string; tone: string }) {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  return (
-    <View style={[styles.badge, { borderColor: tone }]}>
-      <Text style={[styles.badgeText, { color: tone }]}>{label}</Text>
+function LibraryError({ value, onRetry, onUsage }: { value: NonNullable<ErrorState>; onRetry?: () => void; onUsage?: () => void }) {
+  const { spacing } = useTokens();
+  const { t, locale } = useI18n();
+  const reset = value.quota?.resetAt ? new Date(value.quota.resetAt).toLocaleString(locale) : null;
+  return <View style={{ gap: spacing.sm }}>
+    <Alert tone={value.quota ? 'warning' : 'error'} title={value.quota ? t('library7.quota.title') : t('state.error')} detail={value.quota ? `${value.message}${reset ? ` ${t('library7.quota.reset').replace('{date}', reset)}` : ''}` : value.message} />
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+      {onRetry ? <Button label={t('app.tryAgain')} variant="secondary" size="sm" onPress={onRetry} /> : null}
+      {value.quota && onUsage ? <Button label={t('library7.quota.usage')} variant="ghost" size="sm" onPress={onUsage} /> : null}
     </View>
-  );
+  </View>;
 }
 
-const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
-  masthead: { gap: 4 },
-  kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
-  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
-  addRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  addCard: { gap: 10 },
-  input: { backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12, fontSize: 15, color: c.textPrimary },
-  inputMultiline: { minHeight: 90, textAlignVertical: 'top' },
-  chips: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', paddingVertical: 2 },
-  chip: { borderWidth: 1, borderColor: c.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: c.surfaceElevated },
-  chipOn: { borderColor: c.primary, backgroundColor: c.primary },
-  chipText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
-  chipTextOn: { color: c.onPrimary },
-  facetGroup: { gap: 6 },
-  facetTitle: { fontSize: 11, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.8 },
-  facetChips: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  empty: { fontSize: 14, color: c.textSecondary, paddingVertical: 12 },
-  docCell: { width: '48%', flexGrow: 1, minWidth: 320 },
-  doc: { gap: 8 },
-  docHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  flex: { flex: 1 },
-  docTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
-  star: { fontSize: 20 },
-  trash: { fontSize: 18 },
-  badges: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
-  badge: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2 },
-  badgeText: { fontSize: 11, fontWeight: '700' },
-  summary: { fontSize: 14, color: c.textPrimary, lineHeight: 20 },
-  preview: { fontSize: 13, color: c.textSecondary, lineHeight: 19 },
-  analysing: { fontSize: 13, color: c.textMuted, fontStyle: 'italic' },
-  pipeline: { gap: 6 },
-  pipelineLabel: { fontSize: 12, color: c.primary, fontWeight: '700' },
-  pipelineSteps: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
-  stagePill: { borderWidth: 1, borderColor: c.border, borderRadius: 14, paddingHorizontal: 8, paddingVertical: 3, backgroundColor: c.surfaceElevated },
-  stageDone: { borderColor: c.success },
-  stageActive: { borderColor: c.primary, backgroundColor: c.primary },
-  stageText: { fontSize: 11, color: c.textMuted, fontWeight: '600' },
-  stageDoneText: { color: c.success },
-  stageActiveText: { color: c.onPrimary },
-  concepts: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  concept: { fontSize: 12, color: c.primary, fontWeight: '600' },
-  meta: { fontSize: 12, color: c.textMuted },
-});
+function errorState(error: unknown): NonNullable<ErrorState> {
+  if (error instanceof ApiError) {
+    const direct = isQuotaError(error.payload) ? error.payload : null;
+    const nested = !direct && error.payload && typeof error.payload === 'object' && 'message' in error.payload && isQuotaError((error.payload as { message: unknown }).message)
+      ? (error.payload as { message: QuotaErrorContract }).message
+      : null;
+    return { message: error.message, quota: direct ?? nested };
+  }
+  return { message: (error as Error).message, quota: null };
+}

@@ -22,7 +22,8 @@ const SYSTEM_PROMPT = [
   'understanding of the key facts and concepts. Each card must be self-contained.',
   'Respond with ONLY a JSON array of objects, each with string fields "front"',
   '(the question or prompt) and "back" (the concise answer). No markdown, no code',
-  'fences, no commentary.',
+  'fences, no commentary. Write every card directly in the same language as the',
+  'source material.',
 ].join(' ');
 
 interface RawCard {
@@ -136,11 +137,11 @@ export class CardGenerationService {
               ` (titled "${title}"):\n\n${material}`,
           },
         ],
-        { temperature: 0.3 },
+        { temperature: 0.3, operation: 'flashcards' },
       );
       text = result.text;
-    } catch (error) {
-      this.logger.error(`LLM generation failed: ${(error as Error).message}`);
+    } catch {
+      this.logger.error('Flashcard generation failed.');
       throw new ServiceUnavailableException(
         'The language model is temporarily unavailable. Please try again shortly.',
       );

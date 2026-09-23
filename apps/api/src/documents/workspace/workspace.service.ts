@@ -93,11 +93,11 @@ export class WorkspaceService {
               `Academic work titled "${doc.title}":\n\n${doc.content.slice(0, MAX_CONTENT_CHARS)}`,
           },
         ],
-        { temperature: 0.2 },
+        { temperature: 0.2, operation: 'analysis' },
       );
       raw = result.text;
-    } catch (error) {
-      this.logger.error(`Work analysis failed: ${(error as Error).message}`);
+    } catch {
+      this.logger.error('Document workspace analysis failed.');
       throw new ServiceUnavailableException(
         'The language model is temporarily unavailable. Please try again shortly.',
       );
@@ -136,11 +136,11 @@ export class WorkspaceService {
     try {
       const result = await this.llm.generate(
         [{ role: 'system', content: system }, ...history],
-        { temperature: 0.4 },
+        { temperature: 0.4, operation: 'document-workspace-tutor' },
       );
       return result.text.trim();
-    } catch (error) {
-      this.logger.error(`Workspace assist failed: ${(error as Error).message}`);
+    } catch {
+      this.logger.error('Document workspace assistance failed.');
       throw new ServiceUnavailableException(
         'The language model is temporarily unavailable. Please try again shortly.',
       );

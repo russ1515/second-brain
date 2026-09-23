@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import type { Goal, GoalPeriod } from '@second-brain/shared';
 import { api } from '../lib/client';
 import { useTokens } from '../lib/design/theme';
@@ -18,6 +19,7 @@ export default function GoalsScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
+  const router = useRouter();
   const [goals, setGoals] = useState<Goal[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
@@ -128,6 +130,7 @@ export default function GoalsScreen() {
                   <Text style={[styles.goalText, g.status === 'done' && styles.goalDone]} numberOfLines={2}>
                     {g.title}
                   </Text>
+                  {g.status !== 'done' ? <Pressable onPress={() => router.push({ pathname: '/revision', params: { goalId: g.id } })} accessibilityRole="link" accessibilityLabel={t('review9.goalReview')} style={styles.reviewLink}><Text style={styles.reviewLinkText}>{t('review9.goalReview')}</Text></Pressable> : null}
                   <Pressable onPress={() => remove(g.id)} accessibilityRole="button" hitSlop={6}>
                     <Text style={styles.remove}>✕</Text>
                   </Pressable>
@@ -165,4 +168,6 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   goalText: { flex: 1, fontSize: 15, color: c.textPrimary },
   goalDone: { color: c.textMuted, textDecorationLine: 'line-through' },
   remove: { fontSize: 16, color: c.error, fontWeight: '700', paddingHorizontal: 4 },
+  reviewLink: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 6 },
+  reviewLinkText: { fontSize: 13, color: c.primary, fontWeight: '700' },
 });

@@ -29,17 +29,17 @@ export class CacheService {
         this.hits++;
         return JSON.parse(cached) as T;
       }
-    } catch (err) {
+    } catch {
       // Cache read failed — treat as a miss, never fail the request.
-      this.logger.warn(`cache read failed for ${key}: ${(err as Error).message}`);
+      this.logger.warn('Cache read failed.');
     }
 
     this.misses++;
     const value = await compute();
     try {
       await this.redis.connection.set(key, JSON.stringify(value), 'EX', ttlSeconds);
-    } catch (err) {
-      this.logger.warn(`cache write failed for ${key}: ${(err as Error).message}`);
+    } catch {
+      this.logger.warn('Cache write failed.');
     }
     return value;
   }
@@ -48,8 +48,8 @@ export class CacheService {
   async invalidate(key: string): Promise<void> {
     try {
       await this.redis.connection.del(key);
-    } catch (err) {
-      this.logger.warn(`cache invalidate failed for ${key}: ${(err as Error).message}`);
+    } catch {
+      this.logger.warn('Cache invalidation failed.');
     }
   }
 
@@ -58,8 +58,8 @@ export class CacheService {
     try {
       const keys = await this.redis.connection.keys(`${prefix}*`);
       if (keys.length) await this.redis.connection.del(...keys);
-    } catch (err) {
-      this.logger.warn(`cache invalidatePrefix failed for ${prefix}: ${(err as Error).message}`);
+    } catch {
+      this.logger.warn('Cache-prefix invalidation failed.');
     }
   }
 

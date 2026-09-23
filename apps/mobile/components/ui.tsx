@@ -1,12 +1,7 @@
-import {
-  ActivityIndicator,
-  Pressable,
-  Text,
-  View,
-  type ViewStyle,
-} from 'react-native';
+import { type ViewStyle } from 'react-native';
 import type { ReactNode } from 'react';
-import { useTokens } from '../lib/design/theme';
+import { Alert, Button as DesignSystemButton, Card as DesignSystemCard } from './ds/core';
+import { SmartEmptyState, SmartLoadingState } from './ds/states';
 
 /**
  * Legacy shared primitives used by screens migrating to the design system.
@@ -18,6 +13,7 @@ import { useTokens } from '../lib/design/theme';
  * these primitives follow the active scheme with them.
  */
 
+/** @deprecated Import `Card` from `components/ds` or `components/ds/core`. */
 export function Card({
   children,
   style,
@@ -27,26 +23,10 @@ export function Card({
   style?: ViewStyle;
   testID?: string;
 }) {
-  const { colors: c, radius, spacing } = useTokens();
-  return (
-    <View
-      testID={testID}
-      style={[
-        {
-          backgroundColor: c.surface,
-          borderRadius: radius.lg,
-          padding: spacing.md,
-          borderWidth: 1,
-          borderColor: c.borderSubtle,
-        },
-        style,
-      ]}
-    >
-      {children}
-    </View>
-  );
+  return <DesignSystemCard testID={testID} style={style}>{children}</DesignSystemCard>;
 }
 
+/** @deprecated Import `Button` from `components/ds` or `components/ds/core`. */
 export function Button({
   label,
   onPress,
@@ -60,70 +40,33 @@ export function Button({
   busy?: boolean;
   variant?: 'primary' | 'ghost' | 'danger';
 }) {
-  const { colors: c, radius, spacing } = useTokens();
-  const off = disabled || busy;
-  const bg = variant === 'primary' ? c.primary : 'transparent';
-  const borderCol = variant === 'ghost' ? c.border : variant === 'danger' ? c.error : 'transparent';
-  const fg = variant === 'primary' ? c.onPrimary : variant === 'danger' ? c.error : c.textSecondary;
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled: !!off, busy: !!busy }}
+    <DesignSystemButton
+      label={label}
       onPress={onPress}
-      disabled={off}
-      style={({ pressed }) => ({
-        backgroundColor: bg,
-        borderRadius: radius.md,
-        borderWidth: variant === 'primary' ? 0 : 1,
-        borderColor: borderCol,
-        paddingVertical: 14,
-        paddingHorizontal: spacing.md,
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: 48,
-        // Micro-interaction (§42): subtle press feedback for tactile response.
-        opacity: off ? 0.5 : pressed ? 0.85 : 1,
-        transform: [{ scale: pressed && !off ? 0.985 : 1 }],
-      })}
-    >
-      {busy ? (
-        <ActivityIndicator color={fg} />
-      ) : (
-        <Text style={{ color: fg, fontSize: 16, fontWeight: '600' }}>{label}</Text>
-      )}
-    </Pressable>
+      disabled={disabled}
+      loading={busy}
+      variant={variant}
+      fullWidth
+    />
   );
 }
 
+/** @deprecated Use `SmartErrorState` or `Alert` from `components/ds`. */
 export function ErrorBanner({ message }: { message: string }) {
-  const { colors: c, radius, spacing } = useTokens();
-  return (
-    <View style={{ backgroundColor: c.errorSoft, borderRadius: radius.md, padding: spacing.sm }}>
-      <Text style={{ color: c.error, fontSize: 14 }}>{message}</Text>
-    </View>
-  );
+  return <Alert tone="error" title={message} />;
 }
 
+/** @deprecated Use `SmartLoadingState` from `components/ds/states`. */
 export function Loading({ label }: { label?: string }) {
-  const { colors: c, spacing } = useTokens();
-  return (
-    <View style={{ paddingVertical: spacing.xl, alignItems: 'center', gap: spacing.sm }}>
-      <ActivityIndicator size="large" color={c.primary} />
-      {label ? <Text style={{ color: c.textSecondary, fontSize: 14 }}>{label}</Text> : null}
-    </View>
-  );
+  return <SmartLoadingState title={label} />;
 }
 
+/** @deprecated Use `SmartEmptyState` from `components/ds/states`. */
 export function Empty({ title, detail }: { title: string; detail?: string }) {
-  const { colors: c } = useTokens();
   return (
-    <Card>
-      <Text style={{ color: c.textPrimary, fontSize: 16, fontWeight: '600' }}>{title}</Text>
-      {detail ? (
-        <Text style={{ color: c.textSecondary, fontSize: 14, marginTop: 6, lineHeight: 20 }}>
-          {detail}
-        </Text>
-      ) : null}
-    </Card>
+    <DesignSystemCard>
+      <SmartEmptyState title={title} detail={detail} />
+    </DesignSystemCard>
   );
 }

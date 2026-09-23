@@ -82,6 +82,22 @@ export default function PrivacyScreen() {
       {error ? <ErrorBanner message={error} /> : null}
       {notice ? <Card style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></Card> : null}
 
+      <Text style={styles.section}>{t('priv.controls')}</Text>
+      <Card style={styles.relatedCard}>
+        <View style={styles.flex}>
+          <Text style={styles.rowName}>{t('priv.memory')}</Text>
+          <Text style={styles.sub}>{t('priv.memoryHelp')}</Text>
+        </View>
+        <Button variant="ghost" label={t('profile.privacy.memory')} onPress={() => router.push('/memory')} />
+      </Card>
+      <Card style={styles.relatedCard}>
+        <View style={styles.flex}>
+          <Text style={styles.rowName}>{t('priv.documents')}</Text>
+          <Text style={styles.sub}>{t('priv.documentsHelp')}</Text>
+        </View>
+        <Button variant="ghost" label={t('profile.privacy.documents')} onPress={() => router.push('/library')} />
+      </Card>
+
       {/* Consents */}
       <Text style={styles.section}>{t('priv.consents')}</Text>
       {consents?.map((c) => (
@@ -146,6 +162,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   noticeText: { color: c.success, fontSize: 14 },
   section: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginTop: 14 },
   rowCard: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  relatedCard: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 10 },
   row: { flexDirection: 'row', gap: 10 },
   flex: { flex: 1 },
   rowName: { fontSize: 15, fontWeight: '600', color: c.textPrimary },

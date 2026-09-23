@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '../lib/auth-context';
 import { useI18n } from '../lib/i18n';
 import { useTokens } from '../lib/design/theme';
 import { Loading } from '../components/ui';
 import { BrainViz } from '../components/landing/landing-page';
 import { useOnboarding } from '../lib/onboarding/use-onboarding';
+import { safeReturnPath } from '../lib/navigation';
 import type { StepProps } from '../components/onboarding/steps';
 import {
   StepAcademic,
@@ -36,6 +37,8 @@ export default function OnboardingScreen() {
   const { colors: c } = useTokens();
   const { t } = useI18n();
   const router = useRouter();
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string | string[] }>();
+  const destination = safeReturnPath(returnTo);
   const { refreshOnboarding } = useAuth();
   const ctrl = useOnboarding();
   const [entering, setEntering] = useState(false);
@@ -59,7 +62,7 @@ export default function OnboardingScreen() {
     try {
       await ctrl.complete();
       await refreshOnboarding?.();
-      router.replace('/(tabs)');
+      router.replace(destination);
     } catch {
       setEntering(false);
     }

@@ -1,30 +1,40 @@
-import { useCallback, useState, useMemo } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
-import type { UsageItem, UsageView } from '@second-brain/shared';
+import { useCallback, useState } from 'react';
+import { ScrollView, Text, View } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
+import type { SubscriptionView, UsageView } from '@second-brain/shared';
 import { api } from '../lib/client';
 import { useTokens } from '../lib/design/theme';
-import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
-import { Card, ErrorBanner, Loading } from '../components/ui';
-
-const GB = 1024 * 1024 * 1024;
+import { Page, PageHeader } from '../components/ds/layout';
+import { Alert, Badge, Button, Card } from '../components/ds/core';
+import { SmartErrorState, SmartLoadingState, SmartState } from '../components/ds/states';
+import { UsageMeter } from '../components/ds/usage';
+import { formatResetAt, formatUsageValue, usageMetricLabel } from '../lib/usage-display';
 
 /** Usage & Quotas (Sprint 8.3) — how much of each plan limit has been used. */
 export default function UsageScreen() {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  const { t } = useI18n();
+  const { colors: c, typography } = useTokens();
+  const { t, locale } = useI18n();
+  const router = useRouter();
   const [usage, setUsage] = useState<UsageView | null>(null);
+  const [subscription, setSubscription] = useState<SubscriptionView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [partial, setPartial] = useState(false);
 
   const load = useCallback(async () => {
-    try {
-      setUsage(await api<UsageView>('/usage'));
-    } catch (e) {
-      setError((e as Error).message);
+    setError(null);
+    const [usageResult, subscriptionResult] = await Promise.allSettled([
+      api<UsageView>('/usage'),
+      api<SubscriptionView>('/subscription'),
+    ]);
+    if (usageResult.status === 'fulfilled') {
+      setUsage(usageResult.value);
+    } else {
+      setError(usageResult.reason instanceof Error ? usageResult.reason.message : t('state.error'));
     }
-  }, []);
+    if (subscriptionResult.status === 'fulfilled') setSubscription(subscriptionResult.value);
+    setPartial(usageResult.status === 'rejected' || subscriptionResult.status === 'rejected');
+  }, [t]);
 
   useFocusEffect(
     useCallback(() => {
@@ -32,65 +42,63 @@ export default function UsageScreen() {
     }, [load]),
   );
 
-  if (!usage && !error) return <Loading />;
+  if (!usage && !error) return <SmartLoadingState title={t('usage.loading')} />;
 
-  const fmt = (item: UsageItem, value: number): string => {
-    if (item.unit === 'bytes') return `${(value / GB).toFixed(1)} ${t('usage.gb')}`;
-    if (item.unit === 'minutes') return `${value} ${t('usage.min')}`;
-    return String(value);
-  };
+  const exhausted = usage?.items.filter((item) => item.limit !== null && item.used >= item.limit) ?? [];
+  const firstExhausted = exhausted[0];
+  const formattedReset = firstExhausted ? formatResetAt(firstExhausted.resetAt, locale) : null;
+  const limitDetail = firstExhausted
+    ? `${usageMetricLabel(firstExhausted.key, t)}. ${formattedReset
+      ? t('usage.limitResetKnown').replace('{date}', formattedReset)
+      : t('usage.limitNoReset')} ${t('usage.nonAiAvailable')}`
+    : null;
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.h1}>{t('usage.title')}</Text>
-      <Text style={styles.intro}>{t('usage.intro')}</Text>
+    <ScrollView style={{ backgroundColor: c.background }}>
+      <Page width="content">
+        <PageHeader
+          title={t('usage.title')}
+          description={t('usage.intro')}
+          action={<Button label={t('usage.managePlan')} variant="secondary" onPress={() => router.push('/subscription')} />}
+        />
 
-      {error ? <ErrorBanner message={error} /> : null}
+        {error ? <SmartErrorState detail={error} retryable onRetry={() => void load()} /> : null}
+        {partial && usage ? <SmartState state="partial" detail={t('usage.partial')} /> : null}
 
-      {usage?.items.map((item) => {
-        const unlimited = item.limit === null;
-        const ratio =
-          item.limit === null || item.limit === 0
-            ? 0
-            : Math.min(1, item.used / item.limit);
-        const near = ratio >= 0.8;
-        return (
-          <Card key={item.key} style={styles.card}>
-            <View style={styles.row}>
-              <Text style={styles.label}>{t(`usage.metric.${item.key}` as TranslationKey)}</Text>
-              <Text style={styles.value}>
-                {fmt(item, item.used)}
-                {unlimited ? ` / ${t('usage.unlimited')}` : ` / ${fmt(item, item.limit as number)}`}
-              </Text>
-            </View>
-            <View style={styles.track}>
-              <View
-                style={[
-                  styles.fill,
-                  { width: `${Math.round(ratio * 100)}%` },
-                  near ? styles.fillNear : null,
-                ]}
+        <Card style={{ gap: 8 }}>
+          <Text style={[typography.caption, { color: c.textMuted }]}>{t('usage.currentPlan')}</Text>
+          {subscription ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+              <Text style={[typography.h2, { color: c.textPrimary }]}>{subscription.planName}</Text>
+              <Badge
+                tone={subscription.status === 'active' || subscription.status === 'trialing' ? 'success' : 'warning'}
+                label={t(`sub.status.${subscription.status}` as TranslationKey)}
               />
             </View>
-          </Card>
-        );
-      })}
+          ) : (
+            <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('usage.planUnavailable')}</Text>
+          )}
+        </Card>
 
-      <Text style={styles.note}>{t('usage.note')}</Text>
+        {limitDetail ? <Alert tone="warning" title={t('usage.limitReached')} detail={limitDetail} /> : null}
+
+        {usage?.items.map((item) => (
+          <UsageMeter
+            key={item.key}
+            label={usageMetricLabel(item.key, t)}
+            used={item.used}
+            limit={item.limit}
+            unit={item.unit}
+            resetAt={formatResetAt(item.resetAt, locale)}
+            formatValue={(value, unit) => formatUsageValue(value, unit, locale, t)}
+            unlimitedLabel={t('usage.unlimited')}
+            remainingLabel={t('usage.remaining')}
+            resetLabel={t('usage.reset')}
+          />
+        ))}
+
+        <Text style={[typography.caption, { color: c.textMuted, fontStyle: 'italic' }]}>{t('usage.note')}</Text>
+      </Page>
     </ScrollView>
   );
 }
-
-const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
-  h1: { fontSize: 28, fontWeight: '700', color: c.textPrimary },
-  intro: { fontSize: 14, color: c.textSecondary, lineHeight: 20, marginBottom: 4 },
-  card: { gap: 10 },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  label: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
-  value: { fontSize: 14, color: c.textSecondary, fontVariant: ['tabular-nums'] },
-  track: { height: 8, borderRadius: 999, backgroundColor: c.surfaceElevated, overflow: 'hidden' },
-  fill: { height: 8, borderRadius: 999, backgroundColor: c.primary },
-  fillNear: { backgroundColor: c.warning },
-  note: { fontSize: 12, color: c.textMuted, fontStyle: 'italic', marginTop: 4 },
-});

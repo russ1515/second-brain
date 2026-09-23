@@ -35,10 +35,10 @@ export class SmtpMailer implements Mailer {
     // in the logs immediately instead of on the first user registration.
     this.transporter
       .verify()
-      .then(() => this.logger.log(`SMTP ready (${config.host}:${config.port})`))
-      .catch((error: Error) =>
-        this.logger.error(`SMTP connection failed: ${error.message}`),
-      );
+      .then(() => this.logger.log('SMTP ready'))
+      // SMTP errors can embed a URL or credential-derived detail. Keep logs
+      // operationally useful without making them a secret transport.
+      .catch(() => this.logger.error('SMTP connection verification failed'));
   }
 
   async send(message: MailMessage): Promise<void> {
@@ -49,8 +49,9 @@ export class SmtpMailer implements Mailer {
       text: message.text,
       html: message.html,
     });
-    this.logger.log(
-      `[email:smtp] sent to=${message.to} subject="${message.subject}" id=${info.messageId}`,
-    );
+    void info;
+    // Recipient, subject and message ID are personal/content data and do not
+    // belong in application logs.
+    this.logger.log('[email:smtp] sent');
   }
 }

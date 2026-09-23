@@ -1,6 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
-import { AdminGuard } from '../admin/admin.guard';
+import { AdminModule } from '../admin/admin.module';
 import { MetricsService } from './metrics.service';
 import { MonitoringInterceptor } from './monitoring.interceptor';
 import { MetricsController, MonitoringController } from './monitoring.controller';
@@ -13,10 +13,10 @@ import { MetricsController, MonitoringController } from './monitoring.controller
  */
 @Global()
 @Module({
+  imports: [AdminModule],
   controllers: [MetricsController, MonitoringController],
   providers: [
     MetricsService,
-    AdminGuard,
     { provide: APP_INTERCEPTOR, useClass: MonitoringInterceptor },
   ],
   exports: [MetricsService],

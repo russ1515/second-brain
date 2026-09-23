@@ -10,8 +10,10 @@ export class QdrantHealthIndicator {
     try {
       await this.qdrant.listCollections();
       return { status: 'up' };
-    } catch (error) {
-      return { status: 'down', message: (error as Error).message };
+    } catch {
+      // The public health route reports component availability, never a raw
+      // provider exception or Qdrant connection detail.
+      return { status: 'down' };
     }
   }
 }

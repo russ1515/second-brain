@@ -6,6 +6,7 @@ import { DocumentModule } from '../documents/document.module';
 import { ConceptModule } from '../concepts/concept.module';
 import { LessonModule } from '../lessons/lesson.module';
 import { UsageModule } from '../usage/usage.module';
+import { ExperienceSessionModule } from '../experience-sessions/experience-session.module';
 
 /** Adaptive tutoring (Phase 5): grounded, twin-steered conversational tutor,
  *  plus the voice layer — spoken turns run through the same flow and always
@@ -13,7 +14,7 @@ import { UsageModule } from '../usage/usage.module';
  *  @Global SpeechModule. No cycle with LessonModule: LessonService reads tutor
  *  sessions via Prisma, never via TutorService. */
 @Module({
-  imports: [DocumentModule, ConceptModule, LessonModule, UsageModule],
+  imports: [DocumentModule, ConceptModule, LessonModule, UsageModule, ExperienceSessionModule],
   controllers: [TutorController],
   providers: [TutorService, VoiceService],
   exports: [TutorService],

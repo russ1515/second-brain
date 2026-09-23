@@ -3,15 +3,27 @@ import { ScrollView, StyleSheet, Text, TextInput, View, type ViewStyle } from 'r
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type {
   CefrLevel,
+  ExperienceSession,
+  ExperienceSessionPage,
   ExtractVocabularyResponse,
+  ImmersionIntensity,
+  LanguageCorrectionIntensity,
   LanguageLessonResponse,
+  LanguagePracticeFormat,
   LanguageProfileDetail,
   LanguageSkillResponse,
   PronunciationAssessment,
   PronunciationCoaching,
   StartConversationResponse,
+  SpeechCapabilities,
 } from '@second-brain/shared';
-import { CEFR_LEVELS } from '@second-brain/shared';
+import {
+  CEFR_LEVELS,
+  IMMERSION_INTENSITIES,
+  LANGUAGE_CORRECTION_INTENSITIES,
+  LANGUAGE_PRACTICE_FORMATS,
+  languageNextAction,
+} from '@second-brain/shared';
 import type {
   EssayCorrection as EssayCorrectionResult,
   LanguageDialogue,
@@ -25,8 +37,328 @@ import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
 import { Markdown } from '../../components/markdown';
 import { SpeakButton } from '../../components/speak-button';
+import { Alert, Badge, Button as DsButton, Card as DsCard, Input, SegmentedControl } from '../../components/ds/core';
+import { LanguageBadge } from '../../components/ds/language';
+import { Page, PageHeader, ResponsiveSplit, Section as DsSection } from '../../components/ds/layout';
+import { SmartErrorState, SmartLoadingState } from '../../components/ds/states';
+import { ContextBar } from '../../components/context/context-bar';
+import { useAuth } from '../../lib/auth-context';
+import { CourseEntryCard } from '../../components/language/course-ui';
+import { loadRlleCourse, type RlleCourseLoad } from '../../lib/language-rll-client';
 
-export default function LanguageScreen() {
+function firstParam(value?: string | string[]): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+export default function LanguageExperienceScreen() {
+  const params = useLocalSearchParams<{
+    id: string;
+    practice?: string | string[];
+    courseSessionId?: string | string[];
+    unitId?: string | string[];
+    lessonId?: string | string[];
+    stage?: string | string[];
+  }>();
+  const profileId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const practiceParam = Array.isArray(params.practice) ? params.practice[0] : params.practice;
+  const requestedPractice = LANGUAGE_PRACTICE_FORMATS.includes(practiceParam as LanguagePracticeFormat)
+    ? practiceParam as LanguagePracticeFormat
+    : null;
+  const courseContext: CoursePracticeContext | null = firstParam(params.courseSessionId)
+    ? {
+        courseSessionId: firstParam(params.courseSessionId)!,
+        unitId: firstParam(params.unitId),
+        lessonId: firstParam(params.lessonId),
+        courseStage: firstParam(params.stage),
+      }
+    : null;
+  const router = useRouter();
+  const { offline } = useAuth();
+  const { t } = useI18n();
+  const { colors: c, spacing, typography } = useTokens();
+  const [profile, setProfile] = useState<LanguageProfileDetail | null>(null);
+  const [sessions, setSessions] = useState<ExperienceSession[]>([]);
+  const [format, setFormat] = useState<LanguagePracticeFormat>(requestedPractice ?? 'conversation');
+  const [error, setError] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<SpeechCapabilities | null>(null);
+  const [course, setCourse] = useState<RlleCourseLoad | null>(null);
+
+  const load = useCallback(async () => {
+    if (!profileId) return;
+    setError(null);
+    try {
+      const [nextProfile, recent, speech, nextCourse] = await Promise.all([
+        api<LanguageProfileDetail>(`/languages/${profileId}`),
+        api<ExperienceSessionPage>('/experience-sessions/recent?limit=20').catch(() => ({ items: [], nextCursor: null })),
+        api<SpeechCapabilities>('/speech/capabilities').catch(() => null),
+        loadRlleCourse(profileId).catch(() => null),
+      ]);
+      setProfile(nextProfile);
+      setSessions(recent.items.filter((session) => session.type === 'language' && session.links.languageProfileId === profileId));
+      setCapabilities(speech);
+      setCourse(nextCourse);
+      if (!requestedPractice && nextProfile.vocabDue > 0) setFormat('vocabulary');
+    } catch (cause) {
+      setError((cause as Error).message);
+    }
+  }, [profileId, requestedPractice]);
+
+  useEffect(() => { void load(); }, [load]);
+  if (!profile && !error) return <SmartLoadingState />;
+  if (!profile) return <SmartErrorState detail={error ?? undefined} retryable onRetry={() => void load()} />;
+
+  const activeSession = sessions.find((session) => session.status === 'active' || session.status === 'paused') ?? sessions[0] ?? null;
+  const recommendation = languageNextAction(profile);
+  const open = (href: string) => router.push(href as never);
+
+  return (
+    <ScrollView contentContainerStyle={{ paddingBottom: spacing.xxl }}>
+      <Page width="wide">
+        <PageHeader
+          eyebrow={t('languages11.space.eyebrow')}
+          title={profile.language}
+          description={profile.goal || t('languages11.goal.empty')}
+          action={profile.languageCode ? <LanguageBadge code={profile.languageCode} /> : undefined}
+        />
+        {offline ? <Alert tone="warning" title={t('languages11.offline.title')} detail={t('languages11.offline.detail')} /> : null}
+        {activeSession ? <ContextBar items={activeSession.activeContexts.items} /> : null}
+        {error ? <SmartErrorState detail={error} retryable onRetry={() => void load()} /> : null}
+
+        <ResponsiveSplit
+          secondaryWidth={320}
+          primary={
+            <View style={{ gap: spacing.md }}>
+              <CourseEntryCard
+                profile={profile}
+                course={course}
+                onOpen={() => open(`/languages/${profile.id}/course`)}
+              />
+
+              <DsCard elevated style={{ gap: spacing.sm, borderColor: c.aiAccent }}>
+                <Badge label={t('languages11.nba.badge')} tone="ai" />
+                <Text style={[typography.h2, { color: c.textPrimary }]}>
+                  {t(recommendation.messageCode as TranslationKey).replace('{count}', String(recommendation.count ?? ''))}
+                </Text>
+                <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t(recommendation.reasonCode as TranslationKey)}</Text>
+                <DsButton label={t('languages11.nba.start')} variant="ai" onPress={() => {
+                  if (recommendation.kind === 'review-vocabulary') open(`/revision?languageProfileId=${profile.id}`);
+                  else setFormat(recommendation.kind === 'create-lesson' ? 'grammar' : 'conversation');
+                }} />
+              </DsCard>
+
+              <DsSection title={t(`languages11.practice.${format}` as TranslationKey)} description={t('languages11.practice.focused')}>
+                <Practice
+                  format={format}
+                  profile={profile}
+                  capabilities={capabilities}
+                  courseContext={courseContext}
+                  coursePreferences={course?.kind === 'live' ? {
+                    immersionIntensity: course.course.immersionIntensity,
+                    correctionIntensity: course.course.correctionIntensity,
+                  } : null}
+                  onChanged={() => void load()}
+                />
+              </DsSection>
+            </View>
+          }
+          secondary={
+            <View style={{ gap: spacing.md }}>
+              <DsCard style={{ gap: spacing.sm }}>
+                <Text style={[typography.title, { color: c.textPrimary }]}>{t('languages11.level.title')}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
+                  <Badge label={profile.cefrLevel} tone="info" />
+                  <Text style={[typography.caption, { color: c.textMuted }]}>{t('languages11.level.declared')}</Text>
+                </View>
+                <Text style={[typography.caption, { color: c.textSecondary }]}>{t('languages11.level.notEvaluated')}</Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+                  <Badge label={`${profile.vocabCount} ${t('languages11.metric.words')}`} />
+                  <Badge label={`${profile.vocabDue} ${t('languages11.metric.due')}`} tone={profile.vocabDue ? 'warning' : 'success'} />
+                  <Badge label={`${profile.sessionCount} ${t('languages11.metric.sessions')}`} />
+                </View>
+              </DsCard>
+
+              <DsSection title={t('languages11.formats.title')} description={t('languages11.formats.detail')}>
+                <View accessibilityRole="tablist" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+                  {LANGUAGE_PRACTICE_FORMATS.map((item) => (
+                    <DsButton
+                      key={item}
+                      size="sm"
+                      variant={format === item ? 'primary' : 'secondary'}
+                      label={t(`languages11.practice.${item}` as TranslationKey)}
+                      onPress={() => setFormat(item)}
+                    />
+                  ))}
+                </View>
+              </DsSection>
+
+              {activeSession?.resumeTarget?.path ? (
+                <DsCard style={{ gap: spacing.sm }}>
+                  <Text style={[typography.title, { color: c.textPrimary }]}>{t('languages11.resume.title')}</Text>
+                  <Text style={[typography.caption, { color: c.textSecondary }]}>{activeSession.title ?? profile.language}</Text>
+                  <DsButton label={t('languages11.resume.action')} variant="secondary" onPress={() => open(activeSession.resumeTarget!.path!)} />
+                </DsCard>
+              ) : null}
+            </View>
+          }
+        />
+      </Page>
+    </ScrollView>
+  );
+}
+
+type CoursePracticeContext = {
+  courseSessionId: string;
+  unitId?: string;
+  lessonId?: string;
+  courseStage?: string;
+};
+
+function Practice({ format, profile, capabilities, courseContext, coursePreferences, onChanged }: {
+  format: LanguagePracticeFormat;
+  profile: LanguageProfileDetail;
+  capabilities: SpeechCapabilities | null;
+  courseContext: CoursePracticeContext | null;
+  coursePreferences: {
+    immersionIntensity: ImmersionIntensity;
+    correctionIntensity: LanguageCorrectionIntensity;
+  } | null;
+  onChanged: () => void;
+}) {
+  const { t } = useI18n();
+  const { spacing } = useTokens();
+  const router = useRouter();
+  if (format === 'conversation') return <ConversationSetup profile={profile} voice={false} courseContext={courseContext} coursePreferences={coursePreferences} onChanged={onChanged} />;
+  if (format === 'oral') return <ConversationSetup profile={profile} voice courseContext={courseContext} coursePreferences={coursePreferences} onChanged={onChanged} />;
+  if (format === 'vocabulary') return <VocabularyPractice profileId={profile.id} courseContext={courseContext} onChanged={onChanged} />;
+  if (format === 'grammar' || format === 'conjugation' || format === 'comprehension') return <SkillPractice profile={profile} kind={format} />;
+  if (format === 'reading') return (
+    <View style={{ gap: spacing.md }}>
+      <SkillPractice profile={profile} kind="comprehension" />
+      <DsButton label={t('languages11.reading.history')} variant="ghost" onPress={() => router.push('/reading' as never)} />
+    </View>
+  );
+  if (format === 'writing') return (
+    <View style={{ gap: spacing.md }}>
+      <EssayCorrection profileId={profile.id} />
+      <DsButton
+        label={t('languages11.writing.workspace')}
+        variant="ghost"
+        onPress={() => router.push(`/writing?type=redaction&instructions=${encodeURIComponent(`Write in ${profile.language}. ${profile.goal ?? ''}`)}` as never)}
+      />
+    </View>
+  );
+  if (format === 'pronunciation') {
+    return (
+      <View style={{ gap: spacing.md }}>
+        <Pronunciation profileId={profile.id} />
+        {capabilities?.audioAnalysis ? <PronunciationCoach profileId={profile.id} /> : null}
+      </View>
+    );
+  }
+  return (
+    <DsCard style={{ gap: spacing.sm }}>
+      <Text>{t('languages11.quiz.detail')}</Text>
+      <DsButton label={t('languages11.quiz.action')} onPress={() => router.push(`/revision?languageProfileId=${profile.id}${courseContext ? `&returnTo=course&sourceSessionId=${encodeURIComponent(courseContext.courseSessionId)}` : ''}` as never)} />
+    </DsCard>
+  );
+}
+
+function ConversationSetup({ profile, voice, courseContext, coursePreferences, onChanged }: { profile: LanguageProfileDetail; voice: boolean; courseContext: CoursePracticeContext | null; coursePreferences: { immersionIntensity: ImmersionIntensity; correctionIntensity: LanguageCorrectionIntensity } | null; onChanged: () => void }) {
+  const { t } = useI18n();
+  const { colors: c, spacing, typography } = useTokens();
+  const router = useRouter();
+  const [scenario, setScenario] = useState('');
+  const [immersion, setImmersion] = useState<ImmersionIntensity>(coursePreferences?.immersionIntensity ?? 'mixed');
+  const [correction, setCorrection] = useState<LanguageCorrectionIntensity>(coursePreferences?.correctionIntensity ?? 'balanced');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api<StartConversationResponse>(`/languages/${profile.id}/conversation`, {
+        method: 'POST',
+        body: {
+          ...(scenario.trim() ? { scenario: scenario.trim() } : {}),
+          immersionIntensity: immersion,
+          correctionIntensity: correction,
+          inputModality: voice ? 'voice' : 'text',
+          ...(courseContext ?? {}),
+        },
+      });
+      onChanged();
+      router.push(`/tutor/${result.session.id}${voice ? '?voice=1' : ''}` as never);
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <DsCard style={{ gap: spacing.md }}>
+      <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{voice ? t('languages11.oral.detail') : t('languages11.conversation.detail')}</Text>
+      <Input label={t('languages11.scenario.label')} value={scenario} onChangeText={setScenario} placeholder={t('languages11.scenario.placeholder')} maxLength={200} />
+      <Text style={[typography.label, { color: c.textMuted }]}>{t('languages11.immersion.title')}</Text>
+      <SegmentedControl options={IMMERSION_INTENSITIES} value={immersion} onChange={setImmersion} labelFor={(value) => t(`languages11.immersion.${value}` as TranslationKey)} />
+      <Text style={[typography.label, { color: c.textMuted }]}>{t('languages11.correction.title')}</Text>
+      <SegmentedControl options={LANGUAGE_CORRECTION_INTENSITIES} value={correction} onChange={setCorrection} labelFor={(value) => t(`languages11.correction.${value}` as TranslationKey)} />
+      {error ? <SmartErrorState detail={error} retryable onRetry={() => void start()} /> : null}
+      <DsButton label={voice ? t('languages11.oral.start') : t('languages11.conversation.start')} icon={voice ? '🎤' : undefined} loading={busy} onPress={() => void start()} />
+    </DsCard>
+  );
+}
+
+function VocabularyPractice({ profileId, courseContext, onChanged }: { profileId: string; courseContext: CoursePracticeContext | null; onChanged: () => void }) {
+  const { t } = useI18n();
+  const { spacing } = useTokens();
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const create = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api<ExtractVocabularyResponse>(`/languages/${profileId}/vocabulary`, { method: 'POST', body: { text: text.trim(), sourcePhrase: text.trim().slice(0, 120), ...(courseContext ? { experienceSessionId: courseContext.courseSessionId } : {}) } });
+      setNotice(t('lang.vocabResult').replace('{n}', String(result.created)).replace('{had}', result.skipped ? t('lang.vocabHad').replace('{n}', String(result.skipped)) : ''));
+      setText('');
+      onChanged();
+    } catch (cause) { setError((cause as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <DsCard style={{ gap: spacing.sm }}>
+      <Input multiline label={t('lang.vocabulary')} value={text} onChangeText={setText} placeholder={t('lang.vocabPlaceholder')} />
+      {notice ? <Text>{notice}</Text> : null}
+      {error ? <SmartErrorState detail={error} /> : null}
+      <DsButton label={t('lang.mineVocab')} loading={busy} disabled={!text.trim()} onPress={() => void create()} />
+    </DsCard>
+  );
+}
+
+function SkillPractice({ profile, kind }: { profile: LanguageProfileDetail; kind: 'grammar' | 'conjugation' | 'comprehension' }) {
+  const { t } = useI18n();
+  const { colors: c, spacing, typography } = useTokens();
+  const [topic, setTopic] = useState('');
+  const [result, setResult] = useState<LanguageSkillResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async () => {
+    setBusy(true); setError(null);
+    try {
+      setResult(await api<LanguageSkillResponse>(`/languages/${profile.id}/${kind}`, { method: 'POST', body: kind === 'conjugation' ? { verb: topic.trim() || undefined } : { topic: topic.trim() || undefined } }));
+    } catch (cause) { setError((cause as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <DsCard style={{ gap: spacing.sm }}>
+      <Input value={topic} onChangeText={setTopic} label={t(`languages11.practice.${kind}` as TranslationKey)} placeholder={t('lang.skillPlaceholder')} />
+      {error ? <SmartErrorState detail={error} /> : null}
+      <DsButton label={t('languages11.generate')} loading={busy} onPress={() => void run()} />
+      {result ? <View style={{ gap: spacing.sm }}><Text style={[typography.title, { color: c.textPrimary }]}>{result.title}</Text><SpeakButton text={result.content} language={profile.language} label={t('lang.listen')} /><Markdown text={result.content} /></View> : null}
+    </DsCard>
+  );
+}
+
+function LegacyLanguageScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();

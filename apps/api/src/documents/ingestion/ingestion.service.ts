@@ -3,13 +3,11 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { EmbeddingsService } from '../../embeddings/embeddings.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { QdrantService, type VectorPoint } from '../../qdrant/qdrant.service';
+import { DOCUMENT_CHUNKS_COLLECTION } from '../../qdrant/qdrant.constants';
 import { ConceptExtractionService } from '../../concepts/concept-extraction.service';
 import { KnowledgeIntegrationService } from '../integration/knowledge-integration.service';
 import { ChunkingService } from './chunking.service';
 import { CleaningService } from './cleaning.service';
-
-/** Qdrant collection holding every user's document-chunk embeddings. */
-export const CHUNK_COLLECTION = 'document_chunks';
 
 /**
  * The Smart Upload Pipeline (Sprint 6.2).
@@ -39,14 +37,12 @@ export class IngestionService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     try {
       await this.qdrant.ensureCollection(
-        CHUNK_COLLECTION,
+        DOCUMENT_CHUNKS_COLLECTION,
         this.embeddings.dimensions,
       );
-    } catch (error) {
+    } catch {
       // Don't crash boot if Qdrant is momentarily unavailable; ingest will retry.
-      this.logger.warn(
-        `Could not ensure Qdrant collection at boot: ${(error as Error).message}`,
-      );
+      this.logger.warn('Could not ensure the Qdrant collection at boot.');
     }
   }
 
@@ -72,7 +68,7 @@ export class IngestionService implements OnModuleInit {
             });
 
       await this.qdrant.ensureCollection(
-        CHUNK_COLLECTION,
+        DOCUMENT_CHUNKS_COLLECTION,
         this.embeddings.dimensions,
       );
       await this.purgeVectors(documentId); // idempotent re-ingest
@@ -93,7 +89,7 @@ export class IngestionService implements OnModuleInit {
           vector: vectors[index],
           payload: { userId: doc.userId, documentId, chunkIndex: index, content },
         }));
-        await this.qdrant.upsert(CHUNK_COLLECTION, points);
+        await this.qdrant.upsert(DOCUMENT_CHUNKS_COLLECTION, points);
         await this.prisma.documentChunk.createMany({
           data: points.map((point, index) => ({
             documentId,
@@ -109,36 +105,29 @@ export class IngestionService implements OnModuleInit {
       // concepts, or a transient LLM outage, must still finish as `ready`).
       await this.setStage(documentId, 'graphing');
       try {
-        const result = await this.concepts.extractFromDocument(
+        await this.concepts.extractFromDocument(
           doc.userId,
           documentId,
         );
-        this.logger.log(
-          `Graphed document ${documentId}: +${result.createdConcepts} concept(s), +${result.createdEdges} edge(s).`,
-        );
+        this.logger.log('Knowledge-Graph stage completed.');
         // Smart Knowledge Integration (Sprint 6.8): connect the new concepts to
         // the learner's existing knowledge so the graph is one connected brain.
         await this.integration.linkToExisting(doc.userId, documentId);
-      } catch (error) {
-        this.logger.warn(
-          `Knowledge-Graph stage skipped for ${documentId}: ${(error as Error).message}`,
-        );
+      } catch {
+        this.logger.warn('Knowledge-Graph stage was skipped.');
       }
 
       await this.prisma.document.update({
         where: { id: documentId },
         data: { status: 'ready', stage: null, error: null },
       });
-      this.logger.log(
-        `Pipeline complete for ${documentId}: ${chunks.length} chunk(s) via ${this.embeddings.activeProvider}.`,
-      );
-    } catch (error) {
-      const message = (error as Error).message;
-      this.logger.error(`Pipeline failed for ${documentId}: ${message}`);
+      this.logger.log('Document-ingestion pipeline completed.');
+    } catch {
+      this.logger.error('Document-ingestion pipeline failed.');
       await this.prisma.document
         .update({
           where: { id: documentId },
-          data: { status: 'failed', stage: null, error: message.slice(0, 500) },
+          data: { status: 'failed', stage: null, error: 'PROCESSING_FAILED' },
         })
         .catch(() => undefined);
     }
@@ -154,7 +143,10 @@ export class IngestionService implements OnModuleInit {
 
   /** Remove a document's chunks from both Qdrant and Postgres. */
   async purgeVectors(documentId: string): Promise<void> {
-    await this.qdrant.deleteByDocument(CHUNK_COLLECTION, documentId);
+    await this.qdrant.deleteByDocument(
+      DOCUMENT_CHUNKS_COLLECTION,
+      documentId,
+    );
     await this.prisma.documentChunk.deleteMany({ where: { documentId } });
   }
 }

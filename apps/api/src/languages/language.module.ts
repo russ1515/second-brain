@@ -8,6 +8,8 @@ import { LanguageWritingService } from './language-writing.service';
 import { LanguageSkillsService } from './language-skills.service';
 import { TutorModule } from '../tutor/tutor.module';
 import { LessonModule } from '../lessons/lesson.module';
+import { ExperienceSessionModule } from '../experience-sessions/experience-session.module';
+import { RealLifeLanguageService } from './real-life-language.service';
 
 /** Language engine (Phase 5, Educational Engine): the professional language
  *  teacher. It orchestrates rather than duplicates — vocabulary is ordinary
@@ -15,7 +17,7 @@ import { LessonModule } from '../lessons/lesson.module';
  *  from TutorService, pronunciation from the @Global SpeechService. What it adds
  *  is per-language state and the seven teaching modes. */
 @Module({
-  imports: [TutorModule, LessonModule],
+  imports: [TutorModule, LessonModule, ExperienceSessionModule],
   controllers: [LanguageController],
   providers: [
     LanguageService,
@@ -24,7 +26,8 @@ import { LessonModule } from '../lessons/lesson.module';
     PronunciationService,
     LanguageWritingService,
     LanguageSkillsService,
+    RealLifeLanguageService,
   ],
-  exports: [LanguageService],
+  exports: [LanguageService, RealLifeLanguageService],
 })
 export class LanguageModule {}

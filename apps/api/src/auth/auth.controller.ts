@@ -199,6 +199,17 @@ export class AuthController {
     );
   }
 
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseGuards(JwtAccessGuard)
+  @Post('2fa/step-up')
+  @HttpCode(HttpStatus.OK)
+  stepUp(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: TwoFactorCodeDto,
+  ): Promise<{ mfaVerifiedAt: string }> {
+    return this.twoFactor.stepUp(user.userId, user.sessionId, dto.code);
+  }
+
   @UseGuards(JwtAccessGuard)
   @Get('me')
   me(@CurrentUser() user: AuthenticatedUser): Promise<AuthUser> {

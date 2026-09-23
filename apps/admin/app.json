@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "Second Brain Admin",
+    "slug": "second-brain-admin",
+    "version": "0.1.0",
+    "orientation": "default",
+    "userInterfaceStyle": "automatic",
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "name": "Second Brain — Control Center",
+      "shortName": "SB Admin",
+      "lang": "en",
+      "description": "Secure internal control center for Second Brain.",
+      "themeColor": "#0b1220"
+    },
+    "plugins": ["expo-router"]
+  }
+}

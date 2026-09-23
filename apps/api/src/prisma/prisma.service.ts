@@ -121,16 +121,12 @@ export class PrismaService
       } catch (error) {
         if (attempt >= CONNECT_ATTEMPTS) {
           this.logger.error(
-            `Could not reach PostgreSQL after ${CONNECT_ATTEMPTS} attempts.`,
+            'Could not reach PostgreSQL after configured retry attempts.',
           );
           throw error;
         }
         const wait = CONNECT_BACKOFF_MS * attempt;
-        this.logger.warn(
-          `PostgreSQL not reachable (attempt ${attempt}/${CONNECT_ATTEMPTS}); retrying in ${wait}ms — ${
-            (error as Error).message.split('\n')[0]
-          }`,
-        );
+        this.logger.warn('PostgreSQL is temporarily unavailable; retrying.');
         await sleep(wait);
       }
     }

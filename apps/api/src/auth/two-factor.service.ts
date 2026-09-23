@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -86,6 +87,10 @@ export class TwoFactorService {
   /** Turn 2FA off after confirming a current TOTP or recovery code. */
   async disable(userId: string, code: string): Promise<void> {
     const user = await this.requireUser(userId);
+    const adminRoles = await this.prisma.adminRoleAssignment.count({ where: { userId, revokedAt: null } });
+    if (user.isAdmin || adminRoles > 0) {
+      throw new ConflictException({ code: 'ADMIN_MFA_REQUIRED', message: 'Administrators cannot disable MFA.' });
+    }
     if (!user.twoFactorEnabled) {
       throw new BadRequestException('Two-factor auth is not enabled.');
     }
@@ -115,14 +120,37 @@ export class TwoFactorService {
     if (!user || !user.twoFactorEnabled) {
       throw new UnauthorizedException('Two-factor auth is not available.');
     }
+    this.auth.assertAccountActive(user);
     if (!(await this.verifyCode(user, code))) {
+      await this.auth.recordAdminAuthEvent(user.id, 'ADMIN_LOGIN_FAILED_MFA', ctx, 'failed');
       throw new UnauthorizedException('Invalid authentication code.');
     }
+    await this.auth.recordAdminAuthEvent(user.id, 'ADMIN_LOGIN_SUCCESS', ctx);
     return this.auth.issueLoginResponse(
       user,
       user.profile?.displayName ?? null,
       ctx,
+      true,
     );
+  }
+
+  /** Refresh the session's MFA timestamp for critical admin actions. */
+  async stepUp(userId: string, sessionId: string, code: string): Promise<{ mfaVerifiedAt: string }> {
+    const user = await this.requireUser(userId);
+    this.auth.assertAccountActive(user);
+    if (!user.twoFactorEnabled || !(await this.verifyCode(user, code))) {
+      // The bearer session is still valid: only the proof for this privileged
+      // operation failed.  A typed 403 lets clients keep that session and
+      // offer another code instead of treating a mistyped TOTP as logout.
+      throw new ForbiddenException({ code: 'MFA_CODE_INVALID', message: 'Invalid authentication code.' });
+    }
+    const at = new Date();
+    const updated = await this.prisma.session.updateMany({
+      where: { id: sessionId, userId, revokedAt: null, expiresAt: { gt: at } },
+      data: { mfaVerifiedAt: at },
+    });
+    if (updated.count !== 1) throw new UnauthorizedException('Session is no longer active.');
+    return { mfaVerifiedAt: at.toISOString() };
   }
 
   // ── internals ──────────────────────────────────────────────────────────

@@ -37,6 +37,22 @@ class EnvironmentVariables {
 
   @IsOptional()
   @IsString()
+  CORS_ALLOWED_ORIGINS?: string;
+
+  @IsOptional()
+  @IsString()
+  ADMIN_EMAILS?: string;
+
+  @IsOptional()
+  @IsString()
+  ADMIN_BOOTSTRAP_ENABLED?: string;
+
+  @IsOptional()
+  @IsInt()
+  ADMIN_STEP_UP_TTL?: number;
+
+  @IsOptional()
+  @IsString()
   QDRANT_API_KEY?: string;
 
   @IsString()
@@ -135,6 +151,39 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   NOTIFY_TRANSPORT?: string;
+
+  // ── UX rollout flags (UX-2, default false) ──
+  @IsOptional()
+  @IsString()
+  FEATURE_NEW_APP_SHELL?: string;
+
+  @IsOptional()
+  @IsString()
+  FEATURE_EXPERIENCE_SESSIONS?: string;
+
+  @IsOptional()
+  @IsString()
+  FEATURE_UNIVERSAL_COMPOSER?: string;
+
+  @IsOptional()
+  @IsString()
+  FEATURE_NEW_HOME_NBA?: string;
+
+  @IsOptional()
+  @IsString()
+  FEATURE_NEW_BRAIN?: string;
+
+  @IsOptional()
+  @IsString()
+  FEATURE_DOCUMENT_INTELLIGENCE?: string;
+
+  @IsOptional()
+  @IsString()
+  FEATURE_NEW_TUTOR_EXPERIENCE?: string;
+
+  @IsOptional()
+  @IsString()
+  FEATURE_NEW_LANDING?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>) {

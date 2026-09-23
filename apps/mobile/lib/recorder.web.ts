@@ -1,4 +1,5 @@
 import type { Recorder, Recording } from './recorder';
+import { tr } from './i18n';
 
 export type { Recorder, Recording };
 
@@ -33,27 +34,29 @@ export function createRecorder(): Recorder {
   let stream: MediaStream | null = null;
   let chunks: BlobPart[] = [];
   let startedAt = 0;
+  let pausedAt = 0;
+  let pausedMs = 0;
 
   const release = () => {
     stream?.getTracks().forEach((t) => t.stop()); // drop the mic indicator
     stream = null;
     recorder = null;
     chunks = [];
+    pausedAt = 0;
+    pausedMs = 0;
   };
 
   return {
     async start() {
       if (!RECORDING_SUPPORTED) {
-        throw new Error('This browser cannot record audio.');
+        throw new Error(tr('voice.error.recordUnsupported'));
       }
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (e) {
         // The browser's own error text is unreadable ("Permission denied");
         // say what the learner actually has to do.
-        throw new Error(
-          'Microphone access was refused. Allow the microphone for this site and try again.',
-        );
+        throw new Error(tr('voice.error.micDenied'));
       }
       const mimeType = pickMimeType();
       recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
@@ -62,23 +65,45 @@ export function createRecorder(): Recorder {
         if (e.data.size > 0) chunks.push(e.data);
       };
       startedAt = Date.now();
+      pausedAt = 0;
+      pausedMs = 0;
       recorder.start();
+    },
+
+    async pause() {
+      if (!recorder || recorder.state === 'inactive') {
+        throw new Error(tr('voice.error.notRecording'));
+      }
+      if (recorder.state === 'paused') return;
+      recorder.pause();
+      pausedAt = Date.now();
+    },
+
+    async resume() {
+      if (!recorder || recorder.state === 'inactive') {
+        throw new Error(tr('voice.error.notRecording'));
+      }
+      if (recorder.state !== 'paused') return;
+      pausedMs += Date.now() - pausedAt;
+      pausedAt = 0;
+      recorder.resume();
     },
 
     stop() {
       return new Promise<Recording>((resolve, reject) => {
         if (!recorder) {
-          reject(new Error('Not recording.'));
+          reject(new Error(tr('voice.error.notRecording')));
           return;
         }
         const active = recorder;
         active.onstop = () => {
           const mimeType = active.mimeType || 'audio/webm';
           const blob = new Blob(chunks, { type: mimeType });
-          const durationMs = Date.now() - startedAt;
+          const pendingPause = pausedAt ? Date.now() - pausedAt : 0;
+          const durationMs = Math.max(0, Date.now() - startedAt - pausedMs - pendingPause);
           release();
           if (blob.size === 0) {
-            reject(new Error('Nothing was recorded — check your microphone.'));
+            reject(new Error(tr('voice.error.empty')));
             return;
           }
           resolve({ blob, mimeType, durationMs });

@@ -1,4 +1,4 @@
-import { Redirect, Tabs } from 'expo-router';
+import { Redirect, Tabs, usePathname } from 'expo-router';
 import { ScrollView, StyleSheet, Text } from 'react-native';
 import { useAuth } from '../../lib/auth-context';
 import { useI18n } from '../../lib/i18n';
@@ -7,6 +7,8 @@ import { Button, Empty, Loading } from '../../components/ui';
 import { ResponsiveTabBar } from '../../components/nav/responsive-tab-bar';
 import { SidebarProvider, useSidebar, useIsRTL } from '../../components/nav/app-shell';
 import { LandingPage } from '../../components/landing/landing-page';
+import { newAppShellEnabledForPath } from '../../lib/navigation';
+import { featureFlags } from '../../lib/feature-flags';
 
 function TabIcon({ emoji, color }: { emoji: string; color: string }) {
   return <Text style={{ fontSize: 20, color }}>{emoji}</Text>;
@@ -22,12 +24,14 @@ function TabIcon({ emoji, color }: { emoji: string; color: string }) {
 export default function TabsLayout() {
   const { user, loading, offline, onboarded, retry, logout } = useAuth();
   const { t } = useI18n();
+  const pathname = usePathname();
 
   if (loading) return <Loading label={t('classroom.opening')} />;
 
   // Session kept but the API is unreachable: do NOT bounce to sign-in, which
   // reads as "you were logged out" and invites re-entering a password never lost.
-  if (offline) {
+  const routeCanUseCache = pathname === '/library' || pathname === '/brain';
+  if (offline && !routeCanUseCache) {
     return (
       <ScrollView contentContainerStyle={styles.offline}>
         <Empty
@@ -40,17 +44,24 @@ export default function TabsLayout() {
     );
   }
 
-  // Public landing (UI/UX Sprint 8): a logged-out visitor to `/` (or any app
-  // route) sees the marketing landing, whose CTAs route into the auth flow
-  // (/sign-in → OTP → onboarding → app). The auth + onboarding gates below are
-  // untouched.
-  if (!user) return <LandingPage />;
+  // Public landing rollout: a logged-out visitor sees the demonstrative page
+  // only when its operational flag is enabled. Disabling the flag restores the
+  // existing auth entry point without changing routes or data.
+  if (!user) {
+    if (!featureFlags.newLanding) return <Redirect href="/sign-in" />;
+    return <LandingPage />;
+  }
 
   // The Universal KYC gate (UI/UX Sprint 2): a signed-in learner who has not
   // finished onboarding is sent to build their space first. `onboarded === null`
   // (unknown / status check failed) deliberately falls through to the app so a
   // status hiccup never traps them out of the classroom.
   if (onboarded === false) return <Redirect href="/onboarding" />;
+
+  // Under the route-aware shell the root layout owns all navigation chrome.
+  // Keeping this decision path-based makes the legacy Tabs shell an immediate
+  // rollback for any route omitted from the rollout allowlist.
+  if (newAppShellEnabledForPath(pathname)) return <Shell externallyManaged />;
 
   // Responsive App Shell: a permanent, collapsible sidebar on desktop (≥1024px),
   // the bottom bar otherwise — same 5 spaces. The workspace offset is lifted into
@@ -62,17 +73,19 @@ export default function TabsLayout() {
   );
 }
 
-function Shell() {
+function Shell({ externallyManaged = false }: { externallyManaged?: boolean }) {
   const { t } = useI18n();
   const { width } = useResponsive();
   const rtl = useIsRTL();
   const { width: sidebarW } = useSidebar();
   const desktop = width >= 1024;
-  const sceneStyle = desktop ? (rtl ? { paddingRight: sidebarW } : { paddingLeft: sidebarW }) : undefined;
+  const sceneStyle = !externallyManaged && desktop
+    ? (rtl ? { paddingRight: sidebarW } : { paddingLeft: sidebarW })
+    : undefined;
 
   return (
     <Tabs
-      tabBar={(props) => <ResponsiveTabBar {...props} />}
+      tabBar={externallyManaged ? () => null : (props) => <ResponsiveTabBar {...props} />}
       screenOptions={{
         headerShown: false,
         sceneStyle,

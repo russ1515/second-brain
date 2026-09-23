@@ -89,11 +89,11 @@ export class StudyResourceService {
             content: `Document titled "${doc.title}":\n\n${doc.content.slice(0, MAX_CONTENT_CHARS)}`,
           },
         ],
-        { temperature: 0.3 },
+        { temperature: 0.3, operation: 'study-resource' },
       );
       body = result.text.trim();
-    } catch (error) {
-      this.logger.error(`Resource LLM call failed: ${(error as Error).message}`);
+    } catch {
+      this.logger.error('Study-resource generation failed.');
       throw new ServiceUnavailableException(
         'The language model is temporarily unavailable. Please try again shortly.',
       );

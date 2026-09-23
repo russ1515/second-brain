@@ -1,4 +1,4 @@
-import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import type { SendTutorMessageRequest, TutorPace } from '@second-brain/shared';
 
 export class SendTutorMessageDto implements SendTutorMessageRequest {
@@ -10,4 +10,8 @@ export class SendTutorMessageDto implements SendTutorMessageRequest {
   @IsOptional()
   @IsIn(['slower', 'faster'])
   pace?: TutorPace;
+
+  @IsOptional()
+  @IsBoolean()
+  viaVoice?: boolean;
 }

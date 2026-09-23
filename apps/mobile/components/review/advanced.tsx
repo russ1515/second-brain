@@ -5,6 +5,7 @@ import { useTokens } from '../../lib/design/theme';
 import { Badge, Button, Card, SegmentedControl } from '../ds/core';
 import { AITeacherMessage, PostureBadge, type Posture } from '../ds/ai';
 import { PronunciationIndicator, TranslationHint } from '../ds/language';
+import { useI18n, type TranslationKey } from '../../lib/i18n';
 import {
   CARD_TYPES,
   GRADES,
@@ -21,7 +22,7 @@ import {
  * the existing FSRS + twin: the "Aujourd'hui" briefing, concepts-to-consolidate,
  * the teacher explanation / session dual-pane, the retention map, the watch
  * list, the temporal planner, the vocabulary card, and the empty state. No new
- * scheduling logic. Copy is French (product voice).
+ * scheduling logic. User-facing copy is resolved through the shared catalogs.
  */
 
 function toneColor(c: ReturnType<typeof useTokens>['colors'], t: string): string {
@@ -53,6 +54,7 @@ export function TodayBriefing({
   onStart: () => void;
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const total = counts.critical + counts.regular + counts.fresh;
   const stat = (icon: string, n: number, col: string) => (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
@@ -62,7 +64,7 @@ export function TodayBriefing({
   );
   return (
     <Card elevated style={{ borderColor: c.aiAccent, gap: 10 }}>
-      <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800' }}>👋 {name ? `${name}, ` : ''}ta séance du jour</Text>
+      <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800' }}>👋 {name ? `${name} — ` : ''}{t('session.yourSession')}</Text>
       <View style={{ flexDirection: 'row', gap: 16, alignItems: 'center' }}>
         {stat('🔴', counts.critical, c.error)}
         {stat('🟡', counts.regular, c.warning)}
@@ -71,10 +73,10 @@ export function TodayBriefing({
         <Badge label={`~${minutes} min`} tone="ai" />
       </View>
       <View style={{ backgroundColor: c.aiAccentSoft, borderRadius: 12, padding: 12, gap: 6 }}>
-        <Text style={{ color: c.aiAccent, fontSize: 11, fontWeight: '800' }}>👨‍🏫 POURQUOI AUJOURD’HUI</Text>
+        <Text style={{ color: c.aiAccent, fontSize: 11, fontWeight: '800' }}>👨‍🏫 {t('ai.explanation').toUpperCase()}</Text>
         <Text style={{ color: c.textSecondary, fontSize: 13, lineHeight: 19 }}>{why}</Text>
       </View>
-      <Button label={total > 0 ? '▶ Commencer' : 'Tout est à jour'} variant="ai" onPress={onStart} disabled={total === 0} />
+      <Button label={total > 0 ? t('briefing.start') : t('briefing.upToDate')} variant="ai" onPress={onStart} disabled={total === 0} />
     </Card>
   );
 }
@@ -88,10 +90,11 @@ export function ConceptsToConsolidate({
   onReview: (id: string) => void;
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   if (concepts.length === 0) return null;
   return (
     <Card style={{ gap: 8 }}>
-      <SectionLabel>Concepts à consolider</SectionLabel>
+      <SectionLabel>{t('apath.a.consolidate')}</SectionLabel>
       {concepts.slice(0, 5).map((k) => {
         const p = PRIORITIES[k.priority];
         return (
@@ -99,7 +102,7 @@ export function ConceptsToConsolidate({
             style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 }}>
             <Text style={{ fontSize: 12 }}>{p.icon}</Text>
             <Text style={{ color: c.textPrimary, fontSize: 15, flex: 1 }} numberOfLines={1}>{k.name}</Text>
-            {k.type ? <Badge label={CARD_TYPES[k.type].label} tone="neutral" /> : null}
+            {k.type ? <Badge label={t(CARD_TYPE_COPY[k.type])} tone="neutral" /> : null}
             <Text style={{ color: c.aiAccent, fontSize: 18 }}>›</Text>
           </Pressable>
         );
@@ -119,11 +122,12 @@ export function TeacherExplanation({
   children?: ReactNode;
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   return (
     <Card style={{ borderColor: c.aiAccent, gap: 8 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Text style={{ fontSize: 18 }}>👨‍🏫</Text>
-        <Text style={{ color: c.aiAccent, fontSize: 12, fontWeight: '800' }}>PROFESSEUR IA</Text>
+        <Text style={{ color: c.aiAccent, fontSize: 12, fontWeight: '800' }}>{t('ai.professor').toUpperCase()}</Text>
         <PostureBadge posture={posture} />
       </View>
       <AITeacherMessage text={message} posture={posture} />
@@ -156,9 +160,10 @@ export function ReviewSessionPane({ card, teacher, wide }: { card: ReactNode; te
 // ── Retention map — solide / progresse / fragile / urgent (task 5) ───────────
 export function RetentionMap({ counts }: { counts: Record<RetentionState, number> }) {
   const { colors: c, radius } = useTokens();
+  const { t } = useI18n();
   return (
     <Card style={{ gap: 10 }}>
-      <SectionLabel>Progression de rétention</SectionLabel>
+      <SectionLabel>{t('progress.retention')}</SectionLabel>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
         {(Object.keys(RETENTION_STATES) as RetentionState[]).map((k) => {
           const v = RETENTION_STATES[k];
@@ -167,7 +172,7 @@ export function RetentionMap({ counts }: { counts: Record<RetentionState, number
             <View key={k} style={{ width: '47%', flexGrow: 1, borderWidth: 1, borderColor: col, borderRadius: radius.md, padding: 12, gap: 2 }}>
               <Text style={{ fontSize: 13 }}>{v.icon}</Text>
               <Text style={{ color: c.textPrimary, fontSize: 22, fontWeight: '800' }}>{counts[k]}</Text>
-              <Text style={{ color: col, fontSize: 12, fontWeight: '700' }}>{v.label}</Text>
+              <Text style={{ color: col, fontSize: 12, fontWeight: '700' }}>{t(RETENTION_COPY[k])}</Text>
             </View>
           );
         })}
@@ -185,10 +190,11 @@ export function WatchList({
   onReview: (id: string) => void;
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   if (items.length === 0) return null;
   return (
     <Card style={{ borderColor: c.warning, gap: 8 }}>
-      <Text style={{ color: c.warning, fontSize: 13, fontWeight: '800' }}>👀 À surveiller</Text>
+      <Text style={{ color: c.warning, fontSize: 13, fontWeight: '800' }}>👀 {t('brain.panel.attention')}</Text>
       {items.slice(0, 4).map((it) => (
         <Pressable key={it.id} onPress={() => onReview(it.id)} accessibilityRole="button"
           style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 }}>
@@ -211,20 +217,21 @@ export function RevisionPlanner({
   keyDates: { id: string; label: string; when: string }[];
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const [view, setView] = useState<'today' | 'tomorrow' | 'key'>('today');
   const rows = view === 'today' ? today : view === 'tomorrow' ? tomorrow : [];
   return (
     <Card style={{ gap: 10 }}>
-      <SectionLabel>Planning des prochaines révisions</SectionLabel>
+      <SectionLabel>{t('daily.planningIntro')}</SectionLabel>
       <SegmentedControl
         options={['today', 'tomorrow', 'key'] as const}
         value={view}
         onChange={setView}
-        labelFor={(v) => (v === 'today' ? 'Aujourd’hui' : v === 'tomorrow' ? 'Demain' : 'Dates clés')}
+        labelFor={(v) => (v === 'today' ? t('cal.today') : v === 'tomorrow' ? t('cal.tomorrow') : t('cal.k.deadline'))}
       />
       {view === 'key' ? (
         keyDates.length === 0 ? (
-          <Text style={{ color: c.textMuted, fontSize: 13 }}>Aucune date clé enregistrée.</Text>
+          <Text style={{ color: c.textMuted, fontSize: 13 }}>{t('exams.none')}</Text>
         ) : (
           keyDates.map((k) => (
             <View key={k.id} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 }}>
@@ -234,13 +241,13 @@ export function RevisionPlanner({
           ))
         )
       ) : rows.length === 0 ? (
-        <Text style={{ color: c.textMuted, fontSize: 13 }}>Rien de prévu.</Text>
+        <Text style={{ color: c.textMuted, fontSize: 13 }}>{t('cal.nothing')}</Text>
       ) : (
         rows.map((r) => (
           <View key={r.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 }}>
             <Text style={{ fontSize: 12 }}>{PRIORITIES[r.priority].icon}</Text>
             <Text style={{ color: c.textPrimary, fontSize: 15, flex: 1 }} numberOfLines={1}>{r.name}</Text>
-            <Text style={{ color: c.textMuted, fontSize: 12 }}>{PRIORITIES[r.priority].label}</Text>
+            <Text style={{ color: c.textMuted, fontSize: 12 }}>{t(PRIORITY_COPY[r.priority])}</Text>
           </View>
         ))
       )}
@@ -263,23 +270,24 @@ export function VocabCard({
   onRate: (rating: ReviewRating) => void;
 }) {
   const { colors: c, radius } = useTokens();
+  const { t } = useI18n();
   const [flipped, setFlipped] = useState(false);
   return (
     <Card style={{ gap: 12 }}>
-      <Badge label="🌍 Vocabulaire" tone="ai" />
+      <Badge label={`🌍 ${t('lang.vocabulary')}`} tone="ai" />
       <Pressable onPress={() => setFlipped((f) => !f)} accessibilityRole="button"
         style={{ minHeight: 130, borderRadius: radius.lg, borderWidth: 1, borderColor: flipped ? c.aiAccent : c.border, backgroundColor: flipped ? c.aiAccentSoft : c.surfaceElevated, alignItems: 'center', justifyContent: 'center', padding: 20, gap: 8 }}>
         <Text style={{ color: c.textPrimary, fontSize: 22, fontWeight: '700' }}>{term}</Text>
         {ipa ? <PronunciationIndicator ipa={ipa} /> : null}
-        {flipped ? <TranslationHint term={term} translation={translation} /> : <Text style={{ color: c.textMuted, fontSize: 12 }}>Appuie pour la traduction</Text>}
+        {flipped ? <TranslationHint term={term} translation={translation} /> : <Text style={{ color: c.textMuted, fontSize: 12 }}>{t('revision.tapReveal')}</Text>}
         {flipped && example ? <Text style={{ color: c.textSecondary, fontSize: 14, fontStyle: 'italic', textAlign: 'center' }}>{example}</Text> : null}
       </Pressable>
       {flipped ? (
         <View style={{ flexDirection: 'row', gap: 8 }}>
           {GRADES.map((g) => (
-            <Pressable key={g.rating} onPress={() => onRate(g.rating)} accessibilityRole="button" accessibilityLabel={g.label}
+            <Pressable key={g.rating} onPress={() => onRate(g.rating)} accessibilityRole="button" accessibilityLabel={t(GRADE_COPY[g.rating])}
               style={{ flex: 1, borderRadius: radius.sm, paddingVertical: 12, alignItems: 'center', backgroundColor: toneColor(c, g.tone) }}>
-              <Text style={{ color: c.onColor, fontSize: 13, fontWeight: '800' }}>{g.label}</Text>
+              <Text style={{ color: c.onColor, fontSize: 13, fontWeight: '800' }}>{t(GRADE_COPY[g.rating])}</Text>
             </Pressable>
           ))}
         </View>
@@ -291,14 +299,43 @@ export function VocabCard({
 // ── Empty state — first use (task 9) ─────────────────────────────────────────
 export function EmptyReview({ onStart }: { onStart: () => void }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   return (
     <Card style={{ alignItems: 'center', gap: 12, paddingVertical: 40 }}>
       <Text style={{ fontSize: 44 }}>🃏</Text>
-      <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>Tes cartes de révision arrivent.</Text>
+      <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>{t('revision.nothingDue')}</Text>
       <Text style={{ color: c.textSecondary, fontSize: 15, textAlign: 'center', lineHeight: 22, maxWidth: 360 }}>
-        Dès que tu apprends un cours ou parles avec ton professeur, Second Brain crée automatiquement les cartes à réviser ici.
+        {t('revision.nothingDetail')}
       </Text>
-      <Button label="Commencer à apprendre" variant="ai" onPress={onStart} />
+      <Button label={t('auth.start')} variant="ai" onPress={onStart} />
     </Card>
   );
 }
+
+const GRADE_COPY: Record<ReviewRating, TranslationKey> = {
+  1: 'revision.again',
+  2: 'revision.hard',
+  3: 'revision.good',
+  4: 'revision.easy',
+};
+
+const CARD_TYPE_COPY: Record<CardType, TranslationKey> = {
+  qr: 'examiner.question',
+  comprehension: 'onb.skill.comprehension',
+  application: 'lesson.exercises',
+  recognition: 'revision.reveal',
+};
+
+const RETENTION_COPY: Record<RetentionState, TranslationKey> = {
+  solid: 'twin.band.strong',
+  progressing: 'twin.band.building',
+  fragile: 'twin.band.weak',
+  urgent: 'graph.s.at_risk',
+};
+
+const PRIORITY_COPY: Record<Priority, TranslationKey> = {
+  critical: 'graph.s.at_risk',
+  reinforce: 'apath.a.consolidate',
+  stable: 'twin.speed.steady',
+  mastered: 'brain.panel.mastered',
+};

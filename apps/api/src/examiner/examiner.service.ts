@@ -233,11 +233,11 @@ export class ExaminerService {
           { role: 'system', content: EXAMINER_PERSONA },
           { role: 'user', content: user },
         ],
-        { temperature: 0.5 },
+        { temperature: 0.5, operation: 'assessment' },
       );
       raw = result.text;
-    } catch (error) {
-      this.logger.error(`Assessment generation failed: ${(error as Error).message}`);
+    } catch {
+      this.logger.error('Assessment generation failed.');
       throw new ServiceUnavailableException(
         'The examiner is temporarily unavailable. Please try again shortly.',
       );
@@ -320,11 +320,11 @@ export class ExaminerService {
           { role: 'system', content: EXAMINER_PERSONA },
           { role: 'user', content: user },
         ],
-        { temperature: 0.2 },
+        { temperature: 0.2, operation: 'grading' },
       );
       raw = result.text;
-    } catch (error) {
-      this.logger.error(`Assessment grading failed: ${(error as Error).message}`);
+    } catch {
+      this.logger.error('Assessment grading failed.');
       throw new ServiceUnavailableException(
         'Could not mark that submission. Please try again shortly.',
       );

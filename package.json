@@ -5,17 +5,16 @@
   "description": "Second Brain — an AI-driven Personal Learning Operating System.",
   "packageManager": "pnpm@11.13.1",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "scripts": {
-    "build": "turbo run build",
-    "dev": "turbo run dev",
-    "lint": "turbo run lint",
-    "typecheck": "turbo run typecheck",
-    "clean": "turbo run clean"
+    "build": "pnpm -r --if-present run build",
+    "dev": "pnpm -r --parallel --stream --if-present run dev",
+    "lint": "pnpm -r --if-present run lint",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "clean": "pnpm -r --if-present run clean"
   },
   "devDependencies": {
-    "turbo": "^2.3.3",
     "typescript": "^5.7.2"
   }
 }

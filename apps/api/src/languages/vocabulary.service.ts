@@ -17,6 +17,7 @@ import { toCardView } from '../flashcards/card.mapper';
 import { LanguageService } from './language.service';
 import { modeSpec } from './language-modes';
 import type { ExtractVocabularyDto } from './dto/extract-vocabulary.dto';
+import { ExperienceSessionService } from '../experience-sessions/experience-session.service';
 
 const DEFAULT_COUNT = 12;
 const MAX_COUNT = 40;
@@ -34,6 +35,7 @@ export class VocabularyService {
     private readonly prisma: PrismaService,
     private readonly llm: LlmService,
     private readonly languages: LanguageService,
+    private readonly experiences: ExperienceSessionService,
   ) {}
 
   async extract(
@@ -42,6 +44,18 @@ export class VocabularyService {
     dto: ExtractVocabularyDto,
   ): Promise<ExtractVocabularyResponse> {
     const profile = await this.languages.requireOwned(userId, profileId);
+    const sourceExperience = dto.experienceSessionId
+      ? await this.experiences.get(userId, dto.experienceSessionId)
+      : null;
+    if (
+      sourceExperience &&
+      (sourceExperience.type !== 'language' ||
+        sourceExperience.links.languageProfileId !== profile.id)
+    ) {
+      throw new BadRequestException(
+        'The vocabulary source session does not match this language.',
+      );
+    }
     const source = await this.resolveSource(userId, dto);
     const count = this.clampCount(dto.count);
     const deckId = await this.languages.ensureVocabDeck(profile);
@@ -77,10 +91,32 @@ export class VocabularyService {
             userId,
             front: item.term.slice(0, MAX_FIELD_CHARS),
             back: this.formatBack(item).slice(0, MAX_FIELD_CHARS),
+            sourceDocumentId: dto.documentId ?? null,
           },
         }),
       ),
     );
+
+    if (sourceExperience && created.length > 0) {
+      await this.experiences.updateState(userId, sourceExperience.id, {
+        productions: [
+          ...sourceExperience.productions.slice(-49),
+          {
+            id: `language-vocabulary:${created[0].id}`,
+            kind: 'language-vocabulary',
+            referenceId: deckId,
+            title: dto.sourcePhrase?.trim() || `${created.length} vocabulary items`,
+            createdAt: new Date().toISOString(),
+            metadata: {
+              language: profile.language,
+              count: created.length,
+              terms: fresh.map((item) => item.term).join(' · ').slice(0, 1000),
+              ...(dto.documentId ? { documentId: dto.documentId } : {}),
+            },
+          },
+        ],
+      });
+    }
 
     return {
       deckId,
@@ -131,8 +167,11 @@ export class VocabularyService {
     const system = [
       `You are a professional ${profile.language} teacher building vocabulary`,
       `cards for a learner at "${profile.mode}" level. ${spec.directive}`,
-      `Pick the ${count} most useful items for THIS learner from the material —`,
-      'high-frequency and level-appropriate, not obscure trivia.',
+      `Pick the ${count} most useful reusable language items for THIS learner from the material —`,
+      'high-frequency and level-appropriate, not obscure trivia. Include words, expressions,',
+      'collocations and frequent verbs. When the material explicitly teaches a conjugated form,',
+      'verb construction or compact grammar pattern, it may be an item too; keep it usable in',
+      'one real sentence and never invent a rule absent from the material.',
       'Respond with ONLY a JSON array of objects with string fields:',
       `"term" (the ${profile.language} word/phrase, in ${profile.language}),`,
       `"translation" (its meaning in ${native}),`,
@@ -150,11 +189,11 @@ export class VocabularyService {
             content: `Mine vocabulary from this material:\n\n${source}`,
           },
         ],
-        { temperature: 0.3 },
+        { temperature: 0.3, operation: 'language-content' },
       );
       text = result.text;
     } catch (error) {
-      this.logger.error(`Vocabulary LLM call failed: ${(error as Error).message}`);
+      this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'The teacher is temporarily unavailable. Please try again shortly.',
       );

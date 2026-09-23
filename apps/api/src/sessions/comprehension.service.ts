@@ -12,6 +12,7 @@ import type {
 import { LlmService } from '../llm/llm.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MasteryService } from '../concepts/mastery.service';
+import { localeDirective, resolveLocale } from '../common/learning-locale';
 
 const MAX_LESSON_CHARS = 4000;
 const VERDICTS: ComprehensionVerdict[] = ['understood', 'partial', 'confused'];
@@ -73,6 +74,7 @@ export class ComprehensionService {
     }
 
     const level = await this.level(userId);
+    const locale = await resolveLocale(this.prisma, userId);
     const lessonText = [lesson.objective, lesson.explanation]
       .filter(Boolean)
       .join('\n\n')
@@ -82,7 +84,7 @@ export class ComprehensionService {
     try {
       const result = await this.llm.generate(
         [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: `${SYSTEM_PROMPT} ${localeDirective(locale)}` },
           {
             role: 'user',
             content:
@@ -90,11 +92,11 @@ export class ComprehensionService {
               `QUESTION: ${question}\n\nSTUDENT'S ANSWER: ${answer}`,
           },
         ],
-        { temperature: 0.2 },
+        { temperature: 0.2, operation: 'assessment' },
       );
       raw = result.text;
     } catch (error) {
-      this.logger.error(`Comprehension check failed: ${(error as Error).message}`);
+      this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'The language model is temporarily unavailable. Please try again shortly.',
       );

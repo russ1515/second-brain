@@ -6,6 +6,7 @@ import { GeminiSpeechProvider } from './providers/gemini-speech.provider';
 import { FakeSpeechProvider } from './providers/fake-speech.provider';
 import { SpeechService } from './speech.service';
 import { SpeechController } from './speech.controller';
+import { UsageModule } from '../usage/usage.module';
 
 /**
  * Binds the speech provider selected by SPEECH_PROVIDER. This factory is the
@@ -29,6 +30,9 @@ const speechProviderFactory: Provider = {
           config.getOrThrow<string>('speech.voice'),
         );
       case 'fake':
+        if (config.get<string>('nodeEnv') === 'production') {
+          throw new Error('SPEECH_PROVIDER=fake is restricted to development and test.');
+        }
         return new FakeSpeechProvider();
       default:
         throw new Error(
@@ -41,6 +45,7 @@ const speechProviderFactory: Provider = {
 
 @Global()
 @Module({
+  imports: [UsageModule],
   controllers: [SpeechController],
   providers: [speechProviderFactory, SpeechService],
   exports: [SpeechService],

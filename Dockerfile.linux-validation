@@ -1,0 +1,27 @@
+# Isolated Linux runner for the non-production Sprint 5 PostgreSQL gate.
+# It intentionally contains only the API test closure and no .env files.
+FROM node:22-alpine
+
+RUN corepack enable && corepack prepare pnpm@11.13.1 --activate
+
+WORKDIR /workspace
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages/shared/package.json packages/shared/package.json
+COPY apps/api/package.json apps/api/package.json
+
+# Install Linux-native dependencies. Never mount Windows node_modules into this
+# image: native Prisma/argon2 binaries must match the Linux runner.
+RUN pnpm --config.node-linker=isolated --config.trust-lockfile=true \
+    --filter @second-brain/api... install --frozen-lockfile
+
+COPY packages/shared packages/shared
+COPY apps/api apps/api
+COPY scripts/run-linux-pg-validation.sh scripts/run-linux-pg-validation.sh
+
+# The API imports the published shared package, whose entrypoint is dist/index.js.
+# Build it explicitly: the API test script builds only the API.
+RUN pnpm --filter @second-brain/shared build \
+ && chmod 0555 scripts/run-linux-pg-validation.sh
+
+CMD ["sh", "-lc", "sleep infinity"]

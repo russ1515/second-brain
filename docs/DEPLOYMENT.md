@@ -22,7 +22,11 @@ docker build -t second-brain-api .
 ```
 
 Multi-stage (`Dockerfile`): builds `@second-brain/shared` + the API, then a lean
-runtime with production dependencies and the Prisma engine only.
+runtime with production dependencies, the Prisma engine, and the Prisma CLI
+needed by `migrate deploy`.
+
+The existing PostgreSQL database was safely baselined without replaying SQL or
+resetting data. See [`DATABASE-BASELINE.md`](./DATABASE-BASELINE.md).
 
 ## Deploy
 
@@ -31,7 +35,7 @@ scripts/deploy.sh
 ```
 
 1. backs up the database (`scripts/backup.sh`);
-2. builds the API image and rolls the stack forward (`docker compose -f docker-compose.prod.yml up -d --build`);
+2. tags the API image with the current Git SHA (or `RELEASE_TAG`) and rolls the stack forward;
 3. the API container runs `prisma migrate deploy` on start, so **migrations are
    applied automatically and idempotently**;
 4. waits for `GET /api/health` to go green.
@@ -47,13 +51,15 @@ Schedule `backup.sh` (cron / CI) for automated, retained backups.
 
 ## Rollback
 
-Code rollback is instant and safe:
+Code rollback reuses a locally available immutable image tag:
 
 ```bash
 scripts/rollback.sh <previous-image-tag>   # e.g. a git SHA
 ```
 
-Database rollback is a **separate, deliberate** step — forward migrations can be
+The rollback script fails closed when the requested image is absent; retrieve
+that exact image from the registry before retrying. Database rollback is a
+**separate, deliberate** step — forward migrations can be
 destructive, so data is never auto-reverted. When a release included a
 destructive migration, restore the matching backup:
 
@@ -64,14 +70,16 @@ scripts/restore.sh backups/<file>.sql.gz
 ## CI/CD
 
 `.github/workflows/ci.yml` runs on every push/PR: install → build shared →
-Prisma generate → typecheck API + mobile. On `main` it also builds the Docker
-image. Push-to-registry + rollout are the final wiring (owner's infrastructure:
+Prisma generate → typecheck API + mobile. On `main` or `master` it also builds
+the Docker image. Push-to-registry + rollout are the final wiring (owner's infrastructure:
 container registry, host, secrets).
 
 ## Owner-supplied (not in the repo)
 
-- Secrets: `JWT_ACCESS_SECRET`, `GEMINI_API_KEY` (and any other provider keys),
-  DB credentials, `ADMIN_EMAILS` — injected via the deploy environment.
+- Required production values: `DATABASE_URL`, `POSTGRES_PASSWORD`,
+  `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `TWO_FACTOR_ENC_KEY`, and
+  `PAYMENT_PROVIDER`. Provider/mail credentials are required when those
+  integrations are enabled. See `.env.example` for the complete inventory.
 - A container registry + host (VM / Kubernetes — later) and DNS/TLS.
 - App-store distribution for the mobile builds (EAS / Play Console / App Store).
 

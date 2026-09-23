@@ -52,6 +52,14 @@ import { ActivityInterceptor } from './common/activity.interceptor';
 import { MentorModule } from './mentor/mentor.module';
 import { CoachModule } from './coach/coach.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
+import { FeatureFlagsModule } from './config/feature-flags.module';
+import { ExperienceSessionModule } from './experience-sessions/experience-session.module';
+import { HomeModule } from './home/home.module';
+import { BrainModule } from './brain/brain.module';
+import { ResearchModule } from './research/research.module';
+import { AcademicWorkspaceModule } from './workspaces/academic-workspace.module';
+import { RequestContextModule } from './common/request-context.module';
+import { DiagnosticsModule } from './diagnostics/diagnostics.module';
 
 @Module({
   imports: [
@@ -63,6 +71,8 @@ import { OnboardingModule } from './onboarding/onboarding.module';
       load: [configuration],
       validate: validateEnv,
     }),
+    RequestContextModule,
+    FeatureFlagsModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
     // Drives the daily journey's hourly sweep (JourneyScheduler).
     ScheduleModule.forRoot(),
@@ -87,6 +97,11 @@ import { OnboardingModule } from './onboarding/onboarding.module';
     LessonModule,
     HomeworkModule,
     SessionModule,
+    ExperienceSessionModule,
+    HomeModule,
+    BrainModule,
+    ResearchModule,
+    AcademicWorkspaceModule,
     MemoryModule,
     RevisionModule,
     PlannerModule,
@@ -104,6 +119,7 @@ import { OnboardingModule } from './onboarding/onboarding.module';
     UsageModule,
     OrganizationModule,
     AdminModule,
+    DiagnosticsModule,
     PrivacyModule,
     IntelligenceModule,
     PredictionModule,

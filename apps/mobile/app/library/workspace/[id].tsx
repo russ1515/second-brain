@@ -1,307 +1,203 @@
-import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
-import type {
-  WorkAnalysis,
-  WorkspaceAssistResponse,
-  WorkspaceMessage,
-  WorkspaceMode,
+  workspaceProgressFromPlan,
+  type LibraryDocument,
+  type LibraryPage,
+  type PersistentWorkspace,
+  type WorkspacePlanItem,
+  type WorkspaceSaveState,
+  type WorkspaceSourceReference,
 } from '@second-brain/shared';
-import { api } from '../../../lib/client';
-import { useTokens } from '../../../lib/design/theme';
-import type { ColorScale } from '../../../lib/design/tokens';
+import { api, ApiError } from '../../../lib/client';
 import { useI18n, type TranslationKey } from '../../../lib/i18n';
+import { useTokens } from '../../../lib/design/theme';
 import { useResponsive } from '../../../lib/responsive';
-import { Button, Card, ErrorBanner } from '../../../components/ui';
-import { Markdown } from '../../../components/markdown';
+import { Alert, Badge, Button, Card, Progress, SegmentedControl } from '../../../components/ds/core';
+import { Page } from '../../../components/ds/layout';
+import { SourceCitation, SourcePreview } from '../../../components/ds/sources';
+import { SmartErrorState, SmartLoadingState } from '../../../components/ds/states';
+import { WorkspaceAssistant } from '../../../components/workspace/assistant';
 
-const MODES: { mode: WorkspaceMode; key: TranslationKey; icon: string }[] = [
-  { mode: 'guide', key: 'ws.mode.guide', icon: '👨‍🏫' },
-  { mode: 'accompany', key: 'ws.mode.accompany', icon: '📝' },
-  { mode: 'solve', key: 'ws.mode.solve', icon: '✅' },
-];
+type WorkspaceArea = 'plan' | 'work' | 'sources' | 'assistant';
+const AREAS: readonly WorkspaceArea[] = ['plan', 'work', 'sources', 'assistant'];
 
-const OPENER: Record<WorkspaceMode, string> = {
-  guide: 'Aide-moi à comprendre et démarrer ce travail — guide-moi sans le résoudre à ma place.',
-  accompany: 'Résolvons ce travail ensemble, étape par étape. Commence par la première étape.',
-  solve: 'Donne-moi la solution complète et entièrement expliquée de ce travail.',
-};
-
-/**
- * 🎓 AI Academic Workspace (Sprint 6.7). The student works on an academic
- * document with the AI teacher: an automatic twin-adapted analysis, then one of
- * three accompaniment modes (guidance / accompanied / full solution), and a
- * one-tap turn of the finished work into saved study resources.
- */
-export default function WorkspaceScreen() {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  const { id, title } = useLocalSearchParams<{ id: string; title?: string }>();
+export default function AcademicWorkspaceScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
   const { t } = useI18n();
-  const { width } = useResponsive();
-  const wide = width >= 1024;
-  const [analysis, setAnalysis] = useState<WorkAnalysis | null>(null);
-  const [mode, setMode] = useState<WorkspaceMode>('guide');
-  const [sent, setSent] = useState<WorkspaceMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [genBusy, setGenBusy] = useState(false);
-  const [genDone, setGenDone] = useState(false);
+  const { colors: c, spacing, typography } = useTokens();
+  const { width, isLandscape } = useResponsive();
+  const desktop = width >= 1100;
+  const tabletSplit = width >= 760 && isLandscape;
+  const [workspace, setWorkspace] = useState<PersistentWorkspace | null>(null);
+  const [content, setContent] = useState('');
+  const [selection, setSelection] = useState({ start: 0, end: 0 });
+  const [activeArea, setActiveArea] = useState<WorkspaceArea>('work');
+  const [saveState, setSaveState] = useState<WorkspaceSaveState>('idle');
   const [error, setError] = useState<string | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
+  const [showSourcePicker, setShowSourcePicker] = useState(false);
+  const [library, setLibrary] = useState<LibraryDocument[]>([]);
+  const revisionRef = useRef(0);
+  const lastSavedRef = useRef('');
+  const loadedRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Auto-analyse on open.
-  useEffect(() => {
-    api<WorkAnalysis>(`/library/documents/${id}/workspace/analyze`, { method: 'POST', body: {} })
-      .then(setAnalysis)
-      .catch((e) => setError((e as Error).message));
-  }, [id]);
-
-  const openMode = useCallback(
-    async (m: WorkspaceMode) => {
-      setMode(m);
-      setBusy(true);
-      setError(null);
-      const history: WorkspaceMessage[] = [{ role: 'user', content: OPENER[m] }];
-      try {
-        const res = await api<WorkspaceAssistResponse>(
-          `/library/documents/${id}/workspace/assist`,
-          { method: 'POST', body: { mode: m, messages: history } },
-        );
-        setSent([...history, { role: 'assistant', content: res.reply }]);
-      } catch (e) {
-        setError((e as Error).message);
-        setSent([]);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [id],
-  );
-
-  // Open the default mode once.
-  useEffect(() => {
-    void openMode('guide');
-  }, [openMode]);
-
-  const send = async () => {
-    const q = input.trim();
-    if (!q || busy) return;
-    const history: WorkspaceMessage[] = [...sent, { role: 'user', content: q }];
-    setSent(history);
-    setInput('');
-    setBusy(true);
+  const load = async () => {
     setError(null);
     try {
-      const res = await api<WorkspaceAssistResponse>(
-        `/library/documents/${id}/workspace/assist`,
-        { method: 'POST', body: { mode, messages: history } },
-      );
-      setSent([...history, { role: 'assistant', content: res.reply }]);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
+      const next = await api<PersistentWorkspace>(`/workspaces/${id}`);
+      setWorkspace(next);
+      setContent(next.draft.content);
+      lastSavedRef.current = next.draft.content;
+      revisionRef.current = next.autosaveRevision;
+      loadedRef.current = true;
+      setSaveState('saved');
+    } catch (caught) {
+      setError((caught as Error).message);
     }
   };
 
-  // Turn the finished work into saved resources (feeds FSRS via flashcards).
-  const generateResources = async () => {
-    setGenBusy(true);
-    setError(null);
+  useEffect(() => { void load(); }, [id]);
+
+  useEffect(() => {
+    if (!loadedRef.current || content === lastSavedRef.current) return;
+    setSaveState('dirty');
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => { void save(content); }, 1_200);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [content]);
+
+  const save = async (nextContent: string) => {
+    if (!workspace || nextContent === lastSavedRef.current) return;
+    setSaveState('saving');
     try {
-      for (const type of ['summary', 'flashcards', 'quiz'] as const) {
-        await api(`/library/documents/${id}/resources`, { method: 'POST', body: { type } });
-      }
-      setGenDone(true);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setGenBusy(false);
+      const result = await api<{ saved: boolean; revision: number; updatedAt: string }>(`/workspaces/${workspace.id}/autosave`, {
+        method: 'PATCH',
+        body: { workspaceId: workspace.id, expectedRevision: revisionRef.current, draft: { format: 'markdown', content: nextContent } },
+      });
+      revisionRef.current = result.revision;
+      lastSavedRef.current = nextContent;
+      setWorkspace((current) => current ? { ...current, autosaveRevision: result.revision, draft: { ...current.draft, content: nextContent, revision: result.revision, updatedAt: result.updatedAt }, updatedAt: result.updatedAt } : current);
+      setSaveState('saved');
+    } catch (caught) {
+      const apiError = caught as ApiError;
+      setSaveState(apiError.status === 0 ? 'offline' : 'error');
+      setError(apiError.status === 409 ? t('workspace10.conflict') : (caught as Error).message);
     }
   };
 
-  const conversation = sent.slice(1); // hide the synthetic opener turn
+  const patchWorkspace = async (patch: Record<string, unknown>) => {
+    if (!workspace) return;
+    try {
+      const next = await api<PersistentWorkspace>(`/workspaces/${workspace.id}`, { method: 'PATCH', body: patch });
+      setWorkspace(next);
+    } catch (caught) {
+      setError((caught as Error).message);
+    }
+  };
 
-  // LEFT panel — the "énoncé": the automatic work analysis + the finish action.
-  const analysisPanel = (
-    <>
-      {analysis ? <AnalysisCard analysis={analysis} /> : (
-        <Text style={styles.analysing}>{t('ws.analysing')}</Text>
-      )}
-      {/* Finish → generate resources (feeds the brain) */}
-      <Card style={styles.finishCard}>
-        <Text style={styles.finishTitle}>✅ {t('ws.finishTitle')}</Text>
-        <Text style={styles.muted}>{t('ws.finishHint')}</Text>
-        {genDone ? (
-          <Text style={styles.done}>{t('ws.generated')}</Text>
-        ) : (
-          <Button label={t('ws.generate')} onPress={generateResources} busy={genBusy} />
-        )}
+  const updatePlan = async (plan: WorkspacePlanItem[]) => {
+    setWorkspace((current) => current ? { ...current, plan, progress: workspaceProgressFromPlan(plan) } : current);
+    await patchWorkspace({ plan });
+  };
+
+  const movePlan = (index: number, delta: number) => {
+    if (!workspace) return;
+    const target = index + delta;
+    if (target < 0 || target >= workspace.plan.length) return;
+    const plan = [...workspace.plan];
+    [plan[index], plan[target]] = [plan[target]!, plan[index]!];
+    void updatePlan(plan.map((item, order) => ({ ...item, order })));
+  };
+
+  const addPlanItem = () => {
+    if (!workspace) return;
+    void updatePlan([...workspace.plan, { id: `section-${Date.now()}`, title: t('workspace10.plan.new'), order: workspace.plan.length, completed: false }]);
+  };
+
+  const removePlanItem = (idToRemove: string) => workspace && void updatePlan(workspace.plan.filter((item) => item.id !== idToRemove).map((item, order) => ({ ...item, order })));
+
+  const insertMarkup = (prefix: string, suffix = '') => {
+    const selected = content.slice(selection.start, selection.end);
+    const insertion = `${prefix}${selected}${suffix}`;
+    setContent(`${content.slice(0, selection.start)}${insertion}${content.slice(selection.end)}`);
+  };
+
+  const openSourcePicker = async () => {
+    setShowSourcePicker(true);
+    if (library.length) return;
+    try {
+      const page = await api<LibraryPage>('/library/paged?filter=all&sort=newest&limit=50');
+      setLibrary(page.items.filter((item) => item.status === 'ready'));
+    } catch (caught) {
+      setError((caught as Error).message);
+    }
+  };
+
+  const toggleDocumentSource = async (document: LibraryDocument) => {
+    if (!workspace) return;
+    const exists = workspace.sources.some((source) => source.kind === 'document' && source.id === document.id);
+    const sources = exists
+      ? workspace.sources.filter((source) => source.kind !== 'document' || source.id !== document.id)
+      : [...workspace.sources, { kind: 'document' as const, id: document.id, title: document.title }];
+    await patchWorkspace({ sources });
+  };
+
+  if (!workspace && !error) return <SmartLoadingState title={t('workspace10.opening')} detail={t('workspace10.openingDetail')} />;
+  if (!workspace) return <SmartErrorState title={t('workspace10.unavailable')} detail={error ?? undefined} onRetry={() => void load()} />;
+
+  const selectedText = content.slice(selection.start, selection.end).trim();
+  const total = workspace.plan.length;
+  const done = workspace.plan.filter((item) => item.completed).length;
+  const progress = total ? Math.round((done / total) * 100) : null;
+  const nextSection = workspace.plan.find((item) => !item.completed);
+  const planPanel = <PlanPanel workspace={workspace} onUpdate={updatePlan} onMove={movePlan} onRemove={removePlanItem} onAdd={addPlanItem} />;
+  const sourcesPanel = <SourcesPanel workspace={workspace} showPicker={showSourcePicker} library={library} onOpenPicker={() => void openSourcePicker()} onToggleDocument={(document) => void toggleDocumentSource(document)} onOpenDocument={(documentId) => router.push(`/library/${documentId}`)} />;
+  const assistantPanel = <WorkspaceAssistant workspaceId={workspace.id} initialHistory={workspace.assistantHistory} selectedText={selectedText} />;
+  const editor = <EditorPanel content={content} saveState={saveState} onChange={setContent} onSelection={setSelection} onInsert={insertMarkup} onSave={() => void save(content)} />;
+
+  return <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1, backgroundColor: c.background }}>
+    <Page width="fluid" style={{ gap: spacing.lg, paddingBottom: spacing.huge }} testID="academic-workspace">
+      <View style={{ gap: spacing.sm }}>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md }}>
+          <View style={{ flex: 1, minWidth: 240 }}><Text style={[typography.overline, { color: c.aiAccent }]}>{t(`workspace10.template.${workspace.template}` as TranslationKey)}</Text><Text accessibilityRole="header" style={[typography.h1, { color: c.textPrimary }]}>{workspace.title}</Text><Text style={[typography.bodySmall, { color: c.textSecondary }]}>{workspace.objective || t('workspace10.noObjective')}</Text></View>
+          <Badge tone={saveState === 'saved' ? 'success' : saveState === 'error' || saveState === 'offline' ? 'warning' : 'neutral'} label={t(`workspace10.save.${saveState}` as TranslationKey)} />
+        </View>
+        {progress !== null ? <View style={{ gap: spacing.xs }}><Progress value={progress} /><Text style={[typography.caption, { color: c.textMuted }]}>{t('workspace10.steps').replace('{done}', String(done)).replace('{total}', String(total))}</Text></View> : null}
+      </View>
+      {error ? <Alert tone="error" title={t('state.error')} detail={error} /> : null}
+      {!desktop ? <SegmentedControl options={AREAS} value={activeArea} onChange={setActiveArea} labelFor={(value) => t(`workspace10.area.${value}`)} /> : null}
+
+      {desktop ? <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md }}><View style={{ width: 270, gap: spacing.md }}>{planPanel}{sourcesPanel}</View><View style={{ flex: 1, minWidth: 0 }}>{editor}</View><View style={{ width: 340 }}>{assistantPanel}</View></View>
+        : tabletSplit ? <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md }}><View style={{ width: 280 }}>{activeArea === 'assistant' ? assistantPanel : activeArea === 'sources' ? sourcesPanel : planPanel}</View><View style={{ flex: 1, minWidth: 0 }}>{editor}</View></View>
+          : activeArea === 'plan' ? planPanel : activeArea === 'sources' ? sourcesPanel : activeArea === 'assistant' ? assistantPanel : editor}
+
+      <Card style={{ gap: spacing.sm, borderColor: c.aiAccent }}>
+        <Text style={[typography.overline, { color: c.aiAccent }]}>{t('workspace10.next')}</Text>
+        <Text style={[typography.h3, { color: c.textPrimary }]}>{nextSection ? t('workspace10.nextSection').replace('{section}', nextSection.title) : t('workspace10.nextSources')}</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}><Button label={nextSection ? t('workspace10.continue') : t('workspace10.addSource')} onPress={() => setActiveArea(nextSection ? 'work' : 'sources')} /><Button label={t('workspace10.askTutor')} variant="secondary" onPress={() => router.push({ pathname: '/tutor', params: { mode: 'discuss', workspaceId: workspace.id, workspaceTitle: workspace.title } })} /><Button label={t('workspace10.research')} variant="ghost" onPress={() => router.push({ pathname: '/research', params: { q: workspace.objective || workspace.title, workspaceId: workspace.id } })} /></View>
       </Card>
-    </>
-  );
-
-  // RIGHT panel — the AI teacher: guidance modes + conversation + input.
-  const teacherPanel = (
-    <>
-      <Text style={styles.sectionLabel}>{t('ws.chooseMode')}</Text>
-      <View style={styles.modeRow}>
-        {MODES.map((m) => (
-          <Pressable
-            key={m.mode}
-            style={[styles.modeChip, mode === m.mode && styles.modeChipOn]}
-            onPress={() => openMode(m.mode)}
-            disabled={busy}
-            accessibilityRole="button"
-          >
-            <Text style={[styles.modeText, mode === m.mode && styles.modeTextOn]}>
-              {m.icon} {t(m.key)}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-
-      {conversation.map((m, i) => (
-        <View key={i} style={m.role === 'user' ? styles.userBubble : styles.aiBubble}>
-          {m.role === 'user' ? (
-            <Text style={styles.userText}>{m.content}</Text>
-          ) : (
-            <Markdown text={m.content} />
-          )}
-        </View>
-      ))}
-      {busy ? <Text style={styles.analysing}>{t('ws.thinking')}</Text> : null}
-
-      <View style={styles.inputRow}>
-        <TextInput
-          style={styles.input}
-          placeholder={t('ws.placeholder')}
-          placeholderTextColor={c.textMuted}
-          value={input}
-          onChangeText={setInput}
-          multiline
-        />
-        <Button label={t('ws.send')} onPress={send} busy={busy} disabled={!input.trim()} />
-      </View>
-    </>
-  );
-
-  return (
-    <ScrollView contentContainerStyle={styles.container} ref={scrollRef}>
-      <View style={styles.masthead}>
-        <Text style={styles.kicker}>🎓 {t('ws.title')}</Text>
-        <Text style={styles.docTitle}>{title || t('header.document')}</Text>
-      </View>
-
-      {error ? <ErrorBanner message={error} /> : null}
-
-      {wide ? (
-        // Desktop: LEFT énoncé/analysis, RIGHT the AI teacher workspace.
-        <View style={{ flexDirection: 'row', gap: 20, alignItems: 'flex-start' }}>
-          <View style={{ flex: 1, gap: 12, minWidth: 0 }}>{analysisPanel}</View>
-          <View style={{ flex: 1.3, gap: 12, minWidth: 0 }}>{teacherPanel}</View>
-        </View>
-      ) : (
-        // Mobile / tablet: single-column stack (analysis, teacher, finish).
-        <>
-          {analysis ? <AnalysisCard analysis={analysis} /> : (
-            <Text style={styles.analysing}>{t('ws.analysing')}</Text>
-          )}
-          {teacherPanel}
-          <Card style={styles.finishCard}>
-            <Text style={styles.finishTitle}>✅ {t('ws.finishTitle')}</Text>
-            <Text style={styles.muted}>{t('ws.finishHint')}</Text>
-            {genDone ? (
-              <Text style={styles.done}>{t('ws.generated')}</Text>
-            ) : (
-              <Button label={t('ws.generate')} onPress={generateResources} busy={genBusy} />
-            )}
-          </Card>
-        </>
-      )}
-    </ScrollView>
-  );
+    </Page>
+  </ScrollView>;
 }
 
-function AnalysisCard({ analysis }: { analysis: WorkAnalysis }) {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
+function PlanPanel({ workspace, onUpdate, onMove, onRemove, onAdd }: { workspace: PersistentWorkspace; onUpdate: (plan: WorkspacePlanItem[]) => Promise<void>; onMove: (index: number, delta: number) => void; onRemove: (id: string) => void; onAdd: () => void }) {
   const { t } = useI18n();
-  return (
-    <Card style={styles.analysisCard}>
-      <Text style={styles.analysisTitle}>
-        🔍 {t('ws.analysisTitle')} · {t('ws.levelAdapted')} {analysis.level}
-      </Text>
-      <AnalysisBlock label={t('ws.objectives')} items={analysis.objectives} />
-      <AnalysisBlock label={t('ws.skills')} items={analysis.skillsEvaluated} />
-      <AnalysisBlock label={t('ws.prerequisites')} items={analysis.prerequisites} />
-      <AnalysisBlock label={t('ws.successCriteria')} items={analysis.successCriteria} />
-      <AnalysisBlock label={t('ws.keyNotions')} items={analysis.keyNotions} />
-      {analysis.likelyDifficult.length > 0 ? (
-        <View style={styles.block}>
-          <Text style={styles.blockLabel}>⚠️ {t('ws.likelyHard')}</Text>
-          {analysis.likelyDifficult.map((d, i) => (
-            <Text key={i} style={styles.hardItem}>
-              • <Text style={styles.hardConcept}>{d.concept}</Text>
-              {d.reason ? ` — ${d.reason}` : ''}
-            </Text>
-          ))}
-        </View>
-      ) : null}
-    </Card>
-  );
+  const { colors: c, spacing, typography } = useTokens();
+  return <Card style={{ gap: spacing.sm }} testID="workspace-plan"><Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('workspace10.plan')}</Text>{workspace.plan.map((item, index) => <View key={item.id} style={{ gap: spacing.xs, borderBottomWidth: index === workspace.plan.length - 1 ? 0 : 1, borderBottomColor: c.borderSubtle, paddingBottom: spacing.sm }}><View style={{ flexDirection: 'row', gap: spacing.xs, alignItems: 'center' }}><Pressable accessibilityRole="checkbox" accessibilityState={{ checked: item.completed }} onPress={() => void onUpdate(workspace.plan.map((row) => row.id === item.id ? { ...row, completed: !row.completed } : row))} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: item.completed ? c.success : c.textMuted, fontSize: 18 }}>{item.completed ? '✓' : '○'}</Text></Pressable><TextInput defaultValue={item.title} onEndEditing={(event) => { const title = event.nativeEvent.text.trim(); if (title && title !== item.title) void onUpdate(workspace.plan.map((row) => row.id === item.id ? { ...row, title } : row)); }} style={[typography.bodySmall, { flex: 1, color: c.textPrimary, minHeight: 44 }]} accessibilityLabel={t('workspace10.plan.rename')} /></View><View style={{ flexDirection: 'row', gap: spacing.xs }}><Button size="sm" variant="ghost" label="↑" disabled={index === 0} onPress={() => onMove(index, -1)} /><Button size="sm" variant="ghost" label="↓" disabled={index === workspace.plan.length - 1} onPress={() => onMove(index, 1)} /><Button size="sm" variant="ghost" label={t('workspace10.plan.remove')} onPress={() => onRemove(item.id)} /></View></View>)}<Button size="sm" variant="secondary" label={t('workspace10.plan.add')} onPress={onAdd} /></Card>;
 }
 
-function AnalysisBlock({ label, items }: { label: string; items: string[] }) {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  if (items.length === 0) return null;
-  return (
-    <View style={styles.block}>
-      <Text style={styles.blockLabel}>{label}</Text>
-      {items.map((it, i) => (
-        <Text key={i} style={styles.blockItem}>• {it}</Text>
-      ))}
-    </View>
-  );
+function EditorPanel({ content, saveState, onChange, onSelection, onInsert, onSave }: { content: string; saveState: WorkspaceSaveState; onChange: (value: string) => void; onSelection: (selection: { start: number; end: number }) => void; onInsert: (prefix: string, suffix?: string) => void; onSave: () => void }) {
+  const { t } = useI18n();
+  const { colors: c, radius, spacing, typography } = useTokens();
+  return <Card style={{ gap: spacing.sm, minHeight: 620 }} testID="workspace-editor"><View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}><Button size="sm" variant="ghost" label={t('workspace10.editor.heading')} onPress={() => onInsert('## ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.list')} onPress={() => onInsert('- ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.quote')} onPress={() => onInsert('> ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.reference')} onPress={() => onInsert('[', ']')} /></View><TextInput value={content} onChangeText={onChange} onSelectionChange={(event) => onSelection(event.nativeEvent.selection)} multiline textAlignVertical="top" placeholder={t('workspace10.editor.placeholder')} placeholderTextColor={c.textMuted} accessibilityLabel={t('workspace10.editor.label')} style={[typography.body, { flex: 1, minHeight: 520, borderWidth: 1, borderColor: c.border, borderRadius: radius.sm, backgroundColor: c.surfaceElevated, color: c.textPrimary, padding: spacing.md }]} /><View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }}><Text accessibilityLiveRegion="polite" style={[typography.caption, { color: saveState === 'error' || saveState === 'offline' ? c.warning : c.textMuted }]}>{t(`workspace10.save.${saveState}` as TranslationKey)}</Text><Button size="sm" variant="secondary" label={t('workspace10.saveNow')} disabled={saveState === 'saving' || saveState === 'saved'} onPress={onSave} /></View></Card>;
 }
 
-const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
-  masthead: { gap: 4 },
-  kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
-  docTitle: { fontSize: 20, fontWeight: '700', color: c.textPrimary },
-  analysing: { fontSize: 14, color: c.textMuted, fontStyle: 'italic' },
-  thinking: { fontSize: 14, color: c.textMuted },
-  analysisCard: { gap: 10, borderColor: c.primary },
-  analysisTitle: { fontSize: 13, fontWeight: '700', color: c.primary },
-  block: { gap: 3 },
-  blockLabel: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
-  blockItem: { fontSize: 14, color: c.textPrimary, lineHeight: 20 },
-  hardItem: { fontSize: 14, color: c.textPrimary, lineHeight: 20 },
-  hardConcept: { fontWeight: '700', color: c.warning },
-  sectionLabel: { fontSize: 11, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.8 },
-  modeRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  modeChip: { borderWidth: 1, borderColor: c.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: c.surfaceElevated },
-  modeChipOn: { borderColor: c.primary, backgroundColor: c.primary },
-  modeText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
-  modeTextOn: { color: c.onPrimary },
-  aiBubble: { backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, borderRadius: 12, padding: 12 },
-  userBubble: { backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.primary, borderRadius: 12, padding: 12, alignSelf: 'flex-end', maxWidth: '90%' },
-  userText: { fontSize: 15, color: c.textPrimary, lineHeight: 21 },
-  inputRow: { gap: 8 },
-  input: { backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12, fontSize: 15, color: c.textPrimary, minHeight: 70, textAlignVertical: 'top' },
-  finishCard: { gap: 8, borderColor: c.success },
-  finishTitle: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
-  muted: { fontSize: 13, color: c.textSecondary, lineHeight: 19 },
-  done: { fontSize: 14, color: c.success, fontWeight: '700' },
-});
+function SourcesPanel({ workspace, showPicker, library, onOpenPicker, onToggleDocument, onOpenDocument }: { workspace: PersistentWorkspace; showPicker: boolean; library: LibraryDocument[]; onOpenPicker: () => void; onToggleDocument: (document: LibraryDocument) => void; onOpenDocument: (id: string) => void }) {
+  const { t } = useI18n();
+  const { colors: c, spacing, typography } = useTokens();
+  const [preview, setPreview] = useState<WorkspaceSourceReference | null>(null);
+  return <Card style={{ gap: spacing.sm }} testID="workspace-sources"><Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('workspace10.sources')}</Text>{workspace.sources.length ? workspace.sources.map((source, index) => <SourceCitation key={`${source.kind}:${source.id}`} title={source.title ?? source.id} kind={source.kind === 'research-source' ? 'external' : 'document'} index={index + 1} compact={false} onPress={() => setPreview(source)} />) : <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('workspace10.sourcesEmpty')}</Text>}<Button size="sm" variant="secondary" label={t('workspace10.addSource')} onPress={onOpenPicker} />{showPicker ? <View style={{ gap: spacing.xs }}>{library.map((document) => { const checked = workspace.sources.some((source) => source.kind === 'document' && source.id === document.id); return <Pressable key={document.id} accessibilityRole="checkbox" accessibilityState={{ checked }} onPress={() => onToggleDocument(document)} style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}><Text style={{ color: c.primary }}>{checked ? '✓' : '○'}</Text><Text numberOfLines={1} style={[typography.bodySmall, { color: c.textPrimary, flex: 1 }]}>{document.title}</Text></Pressable>; })}</View> : null}{preview ? <SourcePreview title={preview.title ?? preview.id} snippet={preview.synthesis ?? preview.question ?? null} kind={preview.kind === 'research-source' ? 'external' : 'document'} onOpen={preview.kind === 'document' ? () => onOpenDocument(preview.id) : undefined} onClose={() => setPreview(null)} /> : null}</Card>;
+}

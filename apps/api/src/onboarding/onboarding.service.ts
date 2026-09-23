@@ -21,6 +21,7 @@ import {
 import type { OnboardingProfile, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
+import { localeDirective, resolveLocale } from '../common/learning-locale';
 
 const CATEGORY_LABELS: Record<LearningCategory, string> = {
   kindergarten: 'Maternelle',
@@ -134,11 +135,12 @@ export class OnboardingService {
   /** A short adaptive diagnostic for one subject (2.12). Best-effort LLM; on
    *  failure the client falls back to a self-rating (aiGenerated=false). */
   async generateAssessment(
-    _userId: string,
+    userId: string,
     dto: GenerateAssessmentRequest,
   ): Promise<GenerateAssessmentResponse> {
     const count = Math.min(Math.max(dto.count ?? 3, 1), 5);
     const subject = dto.subject.trim();
+    const locale = await resolveLocale(this.prisma, userId);
     try {
       const result = await this.llm.generate(
         [
@@ -149,23 +151,22 @@ export class OnboardingService {
               'knows about a subject. Pick the most foundational concepts. ' +
               'Reply with ONLY a JSON array of objects ' +
               '{"concept": string, "question": string} and nothing else. ' +
-              'Questions must be answerable in one or two sentences.',
+              'Questions must be answerable in one or two sentences. ' +
+              localeDirective(locale),
           },
           {
             role: 'user',
             content: `Subject: ${subject}. Give exactly ${count} concepts.`,
           },
         ],
-        { temperature: 0.3 },
+        { temperature: 0.3, operation: 'assessment' },
       );
       const items = this.parseAssessment(result.text).slice(0, count);
       if (items.length > 0) {
         return { subject, items, aiGenerated: true };
       }
-    } catch (error) {
-      this.logger.warn(
-        `Assessment generation fell back to self-rating: ${(error as Error).message}`,
-      );
+    } catch {
+      this.logger.warn('Assessment generation fell back to self-rating.');
     }
     // Fallback: no questions, the learner self-rates the subject as a whole.
     return { subject, items: [], aiGenerated: false };

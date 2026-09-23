@@ -234,11 +234,11 @@ export class DocumentUnderstandingService {
           { role: 'system', content: system },
           { role: 'user', content: user },
         ],
-        { temperature: 0.3 },
+        { temperature: 0.3, operation: 'analysis' },
       );
       return result.text.trim();
-    } catch (error) {
-      this.logger.error(`Understanding LLM call failed: ${(error as Error).message}`);
+    } catch {
+      this.logger.error('Document understanding operation failed.');
       throw new ServiceUnavailableException(
         'The language model is temporarily unavailable. Please try again shortly.',
       );

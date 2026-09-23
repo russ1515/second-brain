@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import type { PaymentProviderName } from '@second-brain/shared';
 import type { PaymentProvider } from './payment-provider.interface';
 import { FakePaymentProvider } from './providers/fake-payment.provider';
@@ -29,7 +33,15 @@ export class PaymentRegistry {
     ]);
   }
 
+  /** Fake checkout is a local development/test tool, never a production seam. */
+  get fakeAllowed(): boolean {
+    return process.env.NODE_ENV !== 'production';
+  }
+
   get(name: PaymentProviderName): PaymentProvider {
+    if (name === 'fake' && !this.fakeAllowed) {
+      throw new NotFoundException('The fake payment provider is disabled.');
+    }
     const provider = this.providers.get(name);
     if (!provider) throw new NotFoundException(`Unknown payment provider "${name}".`);
     return provider;
@@ -38,7 +50,16 @@ export class PaymentRegistry {
   /** The provider used for hosted web checkout. */
   get defaultWebProviderName(): PaymentProviderName {
     const configured = process.env.PAYMENT_PROVIDER as PaymentProviderName | undefined;
-    return configured === 'stripe' ? 'stripe' : 'fake';
+    if (configured === 'stripe') return 'stripe';
+    if ((configured === 'fake' || !configured) && this.fakeAllowed) return 'fake';
+    if (!configured) {
+      throw new ServiceUnavailableException(
+        'PAYMENT_PROVIDER must be configured explicitly in production.',
+      );
+    }
+    throw new ServiceUnavailableException(
+      `Payment provider "${configured}" cannot be used for web checkout.`,
+    );
   }
 
   defaultWebProvider(): PaymentProvider {

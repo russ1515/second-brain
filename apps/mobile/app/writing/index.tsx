@@ -1,6 +1,6 @@
 import { useCallback, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import {
   WRITING_TYPES,
   type WritingSubmissionSummary,
@@ -27,10 +27,13 @@ export default function WritingScreen() {
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
+  const params = useLocalSearchParams<{ type?: string; instructions?: string }>();
   const [items, setItems] = useState<WritingSubmissionSummary[] | null>(null);
-  const [type, setType] = useState<WritingType>('redaction');
+  const [type, setType] = useState<WritingType>(
+    WRITING_TYPES.includes(params.type as WritingType) ? params.type as WritingType : 'redaction',
+  );
   const [title, setTitle] = useState('');
-  const [instructions, setInstructions] = useState('');
+  const [instructions, setInstructions] = useState(params.instructions ?? '');
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

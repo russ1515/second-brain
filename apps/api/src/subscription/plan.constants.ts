@@ -12,6 +12,11 @@ export interface PlanSeed {
   /** Example quota limits (Sprint 8.3). Keys match the usage metric catalog;
    *  -1 = unlimited. These are DATA — tune freely; they seed each boot for now. */
   quotas: Record<string, number>;
+  priceMonthly: number | null;
+  priceYearly: number | null;
+  currency: string;
+  publicV1: boolean;
+  fallbackRatio: number;
 }
 
 const GB = 1024 * 1024 * 1024;
@@ -23,6 +28,11 @@ export const PLAN_SEED: readonly PlanSeed[] = [
     tier: 0,
     audience: 'individual',
     quotas: { documents: 100, storage: 10 * GB, ai_questions: 1000, voice_minutes: 300 },
+    priceMonthly: 0,
+    priceYearly: 0,
+    currency: 'usd',
+    publicV1: true,
+    fallbackRatio: 0,
   },
   {
     slug: 'pro',
@@ -30,6 +40,11 @@ export const PLAN_SEED: readonly PlanSeed[] = [
     tier: 10,
     audience: 'individual',
     quotas: { documents: 1000, storage: 100 * GB, ai_questions: 10000, voice_minutes: 3000 },
+    priceMonthly: 1999,
+    priceYearly: 19900,
+    currency: 'usd',
+    publicV1: true,
+    fallbackRatio: 0.5,
   },
   {
     slug: 'pro_max',
@@ -37,6 +52,11 @@ export const PLAN_SEED: readonly PlanSeed[] = [
     tier: 20,
     audience: 'individual',
     quotas: { documents: 5000, storage: 500 * GB, ai_questions: 50000, voice_minutes: 10000 },
+    priceMonthly: 4999,
+    priceYearly: 49900,
+    currency: 'usd',
+    publicV1: true,
+    fallbackRatio: 0.5,
   },
   {
     slug: 'team',
@@ -44,6 +64,11 @@ export const PLAN_SEED: readonly PlanSeed[] = [
     tier: 30,
     audience: 'organization',
     quotas: { documents: -1, storage: -1, ai_questions: -1, voice_minutes: -1 },
+    priceMonthly: null,
+    priceYearly: null,
+    currency: 'usd',
+    publicV1: false,
+    fallbackRatio: 0.5,
   },
   {
     slug: 'school',
@@ -51,6 +76,11 @@ export const PLAN_SEED: readonly PlanSeed[] = [
     tier: 40,
     audience: 'organization',
     quotas: { documents: -1, storage: -1, ai_questions: -1, voice_minutes: -1 },
+    priceMonthly: null,
+    priceYearly: null,
+    currency: 'usd',
+    publicV1: false,
+    fallbackRatio: 0.5,
   },
   {
     slug: 'enterprise',
@@ -58,6 +88,11 @@ export const PLAN_SEED: readonly PlanSeed[] = [
     tier: 50,
     audience: 'organization',
     quotas: { documents: -1, storage: -1, ai_questions: -1, voice_minutes: -1 },
+    priceMonthly: null,
+    priceYearly: null,
+    currency: 'usd',
+    publicV1: false,
+    fallbackRatio: 0.5,
   },
 ] as const;
 

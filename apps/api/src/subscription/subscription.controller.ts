@@ -21,8 +21,8 @@ import { EntitlementsService } from './entitlements.service';
 import { ChangePlanDto } from './dto/change-plan.dto';
 
 /** Subscription Engine (Sprint 8.1): read the plan catalog, the current user's
- *  subscription, and their effective entitlements. Changing plan here is a plain
- *  state change — payment authorization is added by the Payments task. */
+ *  subscription, and their effective entitlements. The direct plan route only
+ *  permits a return to Free; paid activation belongs to verified billing events. */
 @UseGuards(JwtAccessGuard)
 @Controller()
 export class SubscriptionController {

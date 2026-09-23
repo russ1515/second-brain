@@ -3,19 +3,33 @@
   "version": "0.0.1",
   "private": true,
   "description": "Second Brain API — NestJS backend.",
+  "files": [
+    "dist",
+    "prisma"
+  ],
   "scripts": {
     "prebuild": "prisma generate",
     "build": "nest build",
     "dev": "nest start --watch",
     "start": "node dist/main.js",
+    "test": "pnpm run build && node --test test/stabilization.test.cjs test/lot0.test.cjs test/home.test.cjs test/learn.test.cjs test/tutor-experience.test.cjs test/document-intelligence.test.cjs test/brain.test.cjs test/review-experience.test.cjs test/research-workspace.test.cjs test/languages-voice.test.cjs test/real-life-language.test.cjs test/admin-sprint1.test.cjs",
+    "test:unit": "node --test test/stabilization.test.cjs test/lot0.test.cjs test/home.test.cjs test/learn.test.cjs test/tutor-experience.test.cjs test/document-intelligence.test.cjs test/brain.test.cjs test/review-experience.test.cjs test/research-workspace.test.cjs test/languages-voice.test.cjs test/real-life-language.test.cjs test/admin-sprint1.test.cjs",
+    "test:sprint4:postgres": "pnpm run build && node --test test/sprint4-postgres.integration.test.cjs",
+    "test:sprint4:http": "node --test test/sprint4-costs-http.test.cjs",
+    "test:sprint4": "pnpm run test:sprint4:postgres && pnpm run test:sprint4:http",
+    "test:sprint5:postgres": "pnpm run build && node --test test/sprint5-postgres.integration.test.cjs",
+    "test:sprint5:http": "node --test test/sprint5-http.test.cjs",
+    "test:sprint5": "pnpm run test:sprint5:postgres && pnpm run test:sprint5:http",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prisma:generate": "prisma generate",
+    "prisma:deploy": "prisma migrate deploy",
     "prisma:migrate": "prisma migrate dev",
     "clean": "rimraf dist"
   },
   "dependencies": {
     "@extractus/article-extractor": "^8.0.16",
-    "@google/generative-ai": "^0.21.0",
+    "@google/genai": "^2.18.0",
+    "@google/generative-ai": "^0.24.1",
     "@nestjs/common": "^10.4.15",
     "@nestjs/config": "^3.3.0",
     "@nestjs/core": "^10.4.15",
@@ -30,6 +44,7 @@
     "argon2": "^0.41.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "express": "^4.22.1",
     "helmet": "^8.0.0",
     "ioredis": "^5.4.2",
     "nodemailer": "^9.0.5",
@@ -37,6 +52,7 @@
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pdf-parse": "^1.1.1",
+    "prisma": "^6.2.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "ts-fsrs": "^4.4.0",
@@ -45,12 +61,12 @@
   "devDependencies": {
     "@nestjs/cli": "^10.4.9",
     "@nestjs/schematics": "^10.2.3",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.10.5",
     "@types/nodemailer": "^8.0.1",
     "@types/passport-jwt": "^4.0.1",
     "@types/pdf-parse": "^1.1.4",
-    "prisma": "^6.2.1",
     "rimraf": "^6.0.1",
-    "typescript": "^5.7.2"
+    "typescript": "~5.7.2"
   }
 }

@@ -142,11 +142,11 @@ export class ConceptExtractionService {
               ` (titled "${title}"):\n\n${content.slice(0, MAX_CONTENT_CHARS)}`,
           },
         ],
-        { temperature: 0.2 },
+        { temperature: 0.2, operation: 'concept-extraction' },
       );
       return result.text;
-    } catch (error) {
-      this.logger.error(`LLM extraction failed: ${(error as Error).message}`);
+    } catch {
+      this.logger.error('Concept extraction failed.');
       throw new ServiceUnavailableException(
         'The language model is temporarily unavailable. Please try again shortly.',
       );

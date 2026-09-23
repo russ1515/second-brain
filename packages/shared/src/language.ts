@@ -3,6 +3,8 @@
 import type { CardView } from './flashcards';
 import type { LessonView } from './lesson';
 import type { TutorSessionDetail } from './tutor';
+import type { ActionDestination } from './next-best-action';
+import type { SupportedLanguageCode } from './languages';
 
 /** The seven teaching modes from the Educational Engine spec. */
 export type LanguageMode =
@@ -39,7 +41,10 @@ export const CEFR_LEVELS: readonly CefrLevel[] = [
 export interface LanguageProfileSummary {
   id: string;
   language: string;
+  /** Canonical registry code when this is one of the 27 supported languages. */
+  languageCode: SupportedLanguageCode | null;
   nativeLanguage: string | null;
+  nativeLanguageCode: SupportedLanguageCode | null;
   mode: LanguageMode;
   /** CEFR / CECRL level (Sprint 7.3). */
   cefrLevel: CefrLevel;
@@ -47,14 +52,18 @@ export interface LanguageProfileSummary {
   /** Deck holding this language's vocabulary (ordinary FSRS cards). */
   vocabDeckId: string | null;
   vocabCount: number;
+  vocabDue: number;
+  lessonCount: number;
+  sessionCount: number;
+  lastActivityAt: string | null;
+  /** Existing CEFR is self-declared until a real assessment explicitly says otherwise. */
+  cefrLevelSource: 'declared';
+  evaluatedCefrLevel: CefrLevel | null;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface LanguageProfileDetail extends LanguageProfileSummary {
-  /** Vocabulary items due for review right now (FSRS). */
-  vocabDue: number;
-  lessonCount: number;
   /** Immersion depth (7.8): target-language share 0..1, or null when the mode
    *  is not immersion. Rises automatically with the CEFR level. */
   immersionRatio: number | null;
@@ -109,6 +118,10 @@ export interface ExtractVocabularyRequest {
   documentId?: string;
   /** Max items to create (default 12, max 40). */
   count?: number;
+  /** Active language session that produced the vocabulary, when applicable. */
+  experienceSessionId?: string;
+  /** Short learner-visible phrase/topic that explains where the words came from. */
+  sourcePhrase?: string;
 }
 
 export interface VocabularyItem {
@@ -129,6 +142,15 @@ export interface ExtractVocabularyResponse {
 export interface StartConversationRequest {
   /** Optional scenario, e.g. "at the pharmacy". */
   scenario?: string;
+  immersionIntensity?: ImmersionIntensity;
+  correctionIntensity?: LanguageCorrectionIntensity;
+  inputModality?: 'text' | 'voice';
+  /** Optional structured-course origin. The API validates ownership and the
+   * active lesson before copying this context into the Tutor ExperienceSession. */
+  courseSessionId?: string;
+  unitId?: string;
+  lessonId?: string;
+  courseStage?: string;
 }
 
 /** One pronunciation attempt, scored against a target phrase.
@@ -215,6 +237,71 @@ export interface LanguageLessonResponse {
 
 export interface StartConversationResponse {
   session: TutorSessionDetail;
+}
+
+export const IMMERSION_INTENSITIES = ['guided', 'mixed', 'full'] as const;
+export type ImmersionIntensity = (typeof IMMERSION_INTENSITIES)[number];
+
+export const LANGUAGE_CORRECTION_INTENSITIES = ['light', 'balanced', 'detailed'] as const;
+export type LanguageCorrectionIntensity = (typeof LANGUAGE_CORRECTION_INTENSITIES)[number];
+
+export const LANGUAGE_PRACTICE_FORMATS = [
+  'conversation', 'vocabulary', 'grammar', 'conjugation', 'comprehension',
+  'reading', 'writing', 'pronunciation', 'oral', 'quiz',
+] as const;
+export type LanguagePracticeFormat = (typeof LANGUAGE_PRACTICE_FORMATS)[number];
+
+export const VOICE_EXPERIENCE_STATES = [
+  'READY', 'LISTENING', 'TRANSCRIPTION', 'THINKING', 'RESPONSE', 'PAUSED', 'ERROR',
+] as const;
+export type VoiceExperienceState = (typeof VOICE_EXPERIENCE_STATES)[number];
+
+export interface LanguageNextAction {
+  kind: 'review-vocabulary' | 'start-conversation' | 'continue-session' | 'create-lesson';
+  messageCode: string;
+  reasonCode: string;
+  count?: number;
+  durationMinutes?: number;
+  destination: ActionDestination;
+}
+
+/** Deterministic recommendation based only on persisted counters. */
+export function languageNextAction(profile: LanguageProfileSummary): LanguageNextAction {
+  if (profile.vocabDue > 0) {
+    return {
+      kind: 'review-vocabulary',
+      messageCode: 'languages11.nba.review',
+      reasonCode: 'languages11.nba.reasonDue',
+      count: profile.vocabDue,
+      durationMinutes: Math.min(12, Math.max(3, Math.ceil(profile.vocabDue / 2))),
+      destination: { kind: 'route', path: '/revision', params: { languageProfileId: profile.id } },
+    };
+  }
+  if (profile.sessionCount === 0) {
+    return {
+      kind: 'start-conversation',
+      messageCode: 'languages11.nba.firstConversation',
+      reasonCode: 'languages11.nba.reasonStart',
+      durationMinutes: 8,
+      destination: { kind: 'route', path: `/languages/${profile.id}`, params: { practice: 'conversation' } },
+    };
+  }
+  if (profile.lessonCount === 0) {
+    return {
+      kind: 'create-lesson',
+      messageCode: 'languages11.nba.lesson',
+      reasonCode: 'languages11.nba.reasonLesson',
+      durationMinutes: 12,
+      destination: { kind: 'route', path: `/languages/${profile.id}`, params: { practice: 'grammar' } },
+    };
+  }
+  return {
+    kind: 'start-conversation',
+    messageCode: 'languages11.nba.conversation',
+    reasonCode: 'languages11.nba.reasonPractice',
+    durationMinutes: 8,
+    destination: { kind: 'route', path: `/languages/${profile.id}`, params: { practice: 'conversation' } },
+  };
 }
 
 // ── Dialogues (written practice conversations) ──

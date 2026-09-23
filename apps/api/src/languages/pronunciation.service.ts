@@ -76,10 +76,10 @@ export class PronunciationService {
         mimeType: audio.mimetype || 'application/octet-stream',
         language: profile.language,
         instruction,
-      });
+      }, 'LANGUAGE_VOICE');
       raw = result.text;
     } catch (error) {
-      this.logger.error(`Pronunciation coaching failed: ${(error as Error).message}`);
+      this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'Could not analyse that audio. Please try again shortly.',
       );
@@ -207,10 +207,10 @@ export class PronunciationService {
         // Tell the recogniser what language to expect, or it will happily
         // transcribe learner speech as accented English.
         language: profile.language,
-      });
+      }, 'LANGUAGE_VOICE');
       text = result.text.trim();
     } catch (error) {
-      this.logger.error(`Pronunciation STT failed: ${(error as Error).message}`);
+      this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'Could not transcribe that audio. Please try again shortly.',
       );
@@ -256,13 +256,11 @@ export class PronunciationService {
               `Word accuracy: ${Math.round(accuracy * 100)}%`,
           },
         ],
-        { temperature: 0.3 },
+        { temperature: 0.3, operation: 'language-grading' },
       );
       return result.text.trim();
     } catch (error) {
-      this.logger.warn(
-        `Pronunciation coaching failed: ${(error as Error).message}`,
-      );
+      this.logger.warn('Learning operation failed.');
       return accuracy === 1
         ? 'Every word was recognised correctly.'
         : 'Some words were not recognised as expected — compare the highlighted words above and try again.';

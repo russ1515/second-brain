@@ -11,7 +11,7 @@ import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 export default function ProgressScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [overview, setOverview] = useState<MentorOverview | null>(null);
   const [briefing, setBriefing] = useState<MentorBriefing | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +76,7 @@ export default function ProgressScreen() {
             <View key={`${a.kind}-${a.threshold}`} style={styles.win}>
               <Text style={styles.winLabel}>{a.label}</Text>
               <Text style={styles.winDate}>
-                {new Date(a.achievedAt).toLocaleDateString()}
+                {new Date(a.achievedAt).toLocaleDateString(locale)}
               </Text>
             </View>
           ))}

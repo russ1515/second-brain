@@ -84,11 +84,11 @@ export class LanguageSkillsService {
           { role: 'system', content: system },
           { role: 'user', content: `${user} Output only the markdown.` },
         ],
-        { temperature: 0.4 },
+        { temperature: 0.4, operation: 'language-content' },
       );
       return { title, content: result.text.trim() };
     } catch (error) {
-      this.logger.error(`Language skill generation failed: ${(error as Error).message}`);
+      this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'The language teacher is temporarily unavailable. Please try again shortly.',
       );

@@ -16,6 +16,54 @@ export type PipelineStage =
   | 'indexing'
   | 'graphing';
 
+/** Product-facing phases derived only from persisted backend state. Several
+ * technical stages can intentionally resolve to the same readable phase. */
+export type DocumentPipelinePhase =
+  | 'queued'
+  | 'reading'
+  | 'extracting'
+  | 'indexing'
+  | 'connecting'
+  | 'completed'
+  | 'failed';
+
+export interface DocumentPipelineState {
+  phase: DocumentPipelinePhase;
+  /** Stable i18n code; the shared package never ships UI copy. */
+  messageCode: string;
+  /** No percentage is exposed because the current backend has no real one. */
+  progress: { mode: 'indeterminate' } | { mode: 'determinate'; percent: number };
+  canRetry: boolean;
+}
+
+/** Convert persisted ingestion state to honest product state. This does not
+ * infer elapsed time, synthesize sub-steps, or expose embedding jargon. */
+export function resolveDocumentPipeline(
+  status: DocumentStatus,
+  stage: PipelineStage | null,
+): DocumentPipelineState {
+  if (status === 'ready') {
+    return { phase: 'completed', messageCode: 'document.pipeline.completed', progress: { mode: 'determinate', percent: 100 }, canRetry: false };
+  }
+  if (status === 'failed') {
+    return { phase: 'failed', messageCode: 'document.pipeline.failed', progress: { mode: 'indeterminate' }, canRetry: true };
+  }
+  const phaseByStage: Partial<Record<PipelineStage, DocumentPipelinePhase>> = {
+    cleaning: 'reading',
+    segmenting: 'extracting',
+    embedding: 'indexing',
+    indexing: 'indexing',
+    graphing: 'connecting',
+  };
+  const phase = (stage && phaseByStage[stage]) || 'queued';
+  return {
+    phase,
+    messageCode: `document.pipeline.${phase}`,
+    progress: { mode: 'indeterminate' },
+    canRetry: false,
+  };
+}
+
 /** List-view projection of a document (no full content). */
 export interface DocumentSummary {
   id: string;
@@ -111,6 +159,57 @@ export interface LibraryFacets {
   subjects: LibraryFacet[];
   languages: LibraryFacet[];
   collections: Collection[];
+}
+
+export type LibrarySort = 'newest' | 'oldest' | 'title';
+
+export interface LibraryPage {
+  items: LibraryDocument[];
+  nextCursor: string | null;
+}
+
+export type DocumentBatchItemStatus =
+  | 'waiting'
+  | 'uploading'
+  | 'processing'
+  | 'ready'
+  | 'failed';
+
+export interface DocumentBatchItemLike {
+  status: DocumentBatchItemStatus;
+}
+
+export interface DocumentBatchSummary {
+  total: number;
+  completed: number;
+  processing: number;
+  failed: number;
+  waiting: number;
+  /** Present only because item counts are real and complete. */
+  percent: number;
+}
+
+export function summarizeDocumentBatch(
+  items: readonly DocumentBatchItemLike[],
+): DocumentBatchSummary {
+  const summary = {
+    total: items.length,
+    completed: 0,
+    processing: 0,
+    failed: 0,
+    waiting: 0,
+    percent: 0,
+  };
+  for (const item of items) {
+    if (item.status === 'ready') summary.completed += 1;
+    else if (item.status === 'failed') summary.failed += 1;
+    else if (item.status === 'waiting') summary.waiting += 1;
+    else summary.processing += 1;
+  }
+  summary.percent = summary.total === 0
+    ? 0
+    : Math.round(((summary.completed + summary.failed) / summary.total) * 100);
+  return summary;
 }
 
 export interface CreateCollectionRequest {
@@ -305,10 +404,12 @@ export interface CreateUrlDocumentRequest {
 
 /** Narrows RAG / search to part of the library (Sprint 6.4 — Adaptive RAG).
  *  All optional; omit everything to search the whole library. Precedence:
- *  documentId > collectionId > subject. */
+ *  documentId > documentIds > collectionId > subject. */
 export interface RagScope {
   /** Restrict to a single document. */
   documentId?: string;
+  /** Restrict to an explicit user-selected set (bounded by the API). */
+  documentIds?: string[];
   /** Restrict to a collection. */
   collectionId?: string;
   /** Restrict to an AI-detected subject (e.g. "Biology"). */

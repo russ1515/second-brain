@@ -101,15 +101,13 @@ export class NotificationService {
         body,
       });
       return true;
-    } catch (error) {
+    } catch {
       // Delivery failed after the claim: drop the claim so a later tick can
       // retry, rather than silently swallowing the learner's nudge.
       await this.prisma.notification
         .delete({ where: { userId_date_slot: { userId, date, slot } } })
         .catch(() => undefined);
-      this.logger.error(
-        `Nudge delivery failed for ${userId} (${slot}): ${(error as Error).message}`,
-      );
+      this.logger.error('Nudge delivery failed.');
       return false;
     }
   }

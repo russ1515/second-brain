@@ -1,35 +1,37 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
+import { ScrollView, Text, View } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
 import type {
   KycTeacher,
-  LearningCategory,
   OnboardingAnswers,
   OnboardingState,
-  ReviewStats,
   StrengthsWeaknesses,
+  SubscriptionView,
   TwinOverview,
+  UsageView,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
 import { useAuth } from '../../lib/auth-context';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { useTheme, useTokens } from '../../lib/design/theme';
-import { useResponsive } from '../../lib/responsive';
 import { Badge, Button, Card } from '../../components/ds/core';
+import { Page, PageHeader, ResponsiveSplit, Section } from '../../components/ds/layout';
+import { SmartLoadingState, SmartState } from '../../components/ds/states';
 import { categoryLabel } from '../../lib/onboarding/catalog';
 import { LocalePicker } from '../../components/locale-picker';
 import { clearAvatarPhoto, loadAvatarPhoto, pickPhoto, saveAvatarPhoto } from '../../lib/profile/photo';
-import { CognitiveSummary, ProfilePhoto, SystemConfig, TeacherConfig } from '../../components/profile/components';
+import { ProfilePhoto, TeacherConfig } from '../../components/profile/components';
+import {
+  AccountUsageCard,
+  BrainProfilePreview,
+  DataPrivacyCard,
+  LanguageExperienceCard,
+} from '../../components/profile/account';
 
 /**
- * 👤 Profil & KYC universel (UI/UX Sprint 7 unified).
- *
- * Full learner configuration on the Sprint 1 design system: native profile
- * photo, identity (prénom/nom/date/catégorie), full academic path, languages +
- * mobility, success goals, AI-teacher posture, the cognitive summary and system
- * settings. Every edit PATCHes the KYC (OnboardingProfile) and refreshes it, so
- * the twin + teacher context propagate to Home / Learn / Brain / Study. On
- * desktop the cards lay out in a 2-column grid; on mobile they stack.
+ * Account control centre. Detailed mastery and Learning DNA deliberately remain
+ * in My Brain; this screen owns identity, preferences, languages, billing and
+ * privacy entry points.
  */
 export default function ProfileScreen() {
   const router = useRouter();
@@ -37,34 +39,48 @@ export default function ProfileScreen() {
   const { user, logout, refreshOnboarding } = useAuth();
   const { colors: c } = useTokens();
   const { scheme, setScheme } = useTheme();
-  const { width, maxContentWidth } = useResponsive();
-  const wide = width >= 1024;
 
   const [kyc, setKyc] = useState<OnboardingState | null>(null);
   const [twin, setTwin] = useState<TwinOverview | null>(null);
   const [sw, setSw] = useState<StrengthsWeaknesses | null>(null);
-  const [stats, setStats] = useState<ReviewStats | null>(null);
+  const [subscription, setSubscription] = useState<SubscriptionView | null>(null);
+  const [usage, setUsage] = useState<UsageView | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [partial, setPartial] = useState(false);
 
   useEffect(() => {
     let cancel = false;
-    (async () => {
-      const [k, t, s, r] = await Promise.allSettled([
+    loadAvatarPhoto().then((value) => { if (!cancel) setPhoto(value); });
+    return () => { cancel = true; };
+  }, [user?.displayName]);
+
+  const load = useCallback(async (active: () => boolean = () => true) => {
+    setLoading(true);
+    const results = await Promise.allSettled([
         api<OnboardingState>('/onboarding'),
         api<TwinOverview>('/twin'),
         api<StrengthsWeaknesses>('/twin/strengths'),
-        api<ReviewStats>('/review/stats'),
+        api<SubscriptionView>('/subscription'),
+        api<UsageView>('/usage'),
       ]);
-      if (cancel) return;
-      if (k.status === 'fulfilled') setKyc(k.value);
-      if (t.status === 'fulfilled') setTwin(t.value);
-      if (s.status === 'fulfilled') setSw(s.value);
-      if (r.status === 'fulfilled') setStats(r.value);
-    })();
-    loadAvatarPhoto().then((p) => { if (!cancel) setPhoto(p); });
-    return () => { cancel = true; };
-  }, [user?.displayName]);
+    if (!active()) return;
+    const [kycResult, twinResult, strengthsResult, subscriptionResult, usageResult] = results;
+    if (kycResult.status === 'fulfilled') setKyc(kycResult.value);
+    if (twinResult.status === 'fulfilled') setTwin(twinResult.value);
+    if (strengthsResult.status === 'fulfilled') setSw(strengthsResult.value);
+    if (subscriptionResult.status === 'fulfilled') setSubscription(subscriptionResult.value);
+    if (usageResult.status === 'fulfilled') setUsage(usageResult.value);
+    setPartial(results.some((result) => result.status === 'rejected'));
+    setLoading(false);
+  }, []);
+
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    void load(() => active);
+    return () => { active = false; };
+  }, [load]));
 
   const answers = kyc?.answers ?? {};
   const identity = answers.identity ?? {};
@@ -105,11 +121,6 @@ export default function ProfileScreen() {
     (education?.category ? t(categoryLabel(education.category) as TranslationKey) : '—') +
     (education?.field ? ` — ${education.field}` : '');
 
-  // Desktop (≥1024): a real 2-column workspace — LEFT profile summary, RIGHT
-  // settings & configuration. Below that, both columns stack into one.
-  const twoCol = wide;
-  const colStyle: ViewStyle = twoCol ? { flex: 1, gap: 16, minWidth: 0 } : { gap: 16 };
-
   const photoHeader = (
     <View style={{ alignItems: 'center', gap: 6, marginTop: 6 }}>
       <ProfilePhoto photoUri={photo} avatarEmoji={identity.avatarEmoji} name={name} busy={busy} onPick={onPick} onChooseAvatar={onChooseAvatar} onRemove={onRemove} />
@@ -135,56 +146,93 @@ export default function ProfileScreen() {
     </Card>
   );
 
-  const cognitive = (
-    <CognitiveSummary strengths={strengths} retention={stats?.retention ?? twin?.summary.averageMastery ?? null} dailyMinutes={Math.max(10, Math.round(((stats?.due ?? 0) * 25) / 60) || 15)} />
-  );
-
-  const localeCard = (
-    <Card>
-      <LocalePicker />
-    </Card>
-  );
-
-  const teacherCard = (
-    <TeacherConfig tone={teacher.tone} explanations={teacher.explanations}
-      onTone={(v: NonNullable<KycTeacher['tone']>) => patch('teacher', { tone: v })}
-      onExplanations={(v: NonNullable<KycTeacher['explanations']>) => patch('teacher', { explanations: v })} />
-  );
-
-  const systemCard = (
-    <SystemConfig scheme={scheme} onScheme={setScheme} totalConcepts={twin?.summary.totalConcepts ?? 0} reviews={stats?.reviewsToday ?? 0}
-      onPrivacy={() => router.push('/privacy')} onMemory={() => router.push('/memory')} />
-  );
-
-  const accountCard = (
-    <Card>
-      <Button label={t('profile.manageSubscription')} variant="secondary" onPress={() => router.push('/subscription')} />
-      <View style={{ height: 8 }} />
-      <Button label={t('app.signOut')} variant="ghost" onPress={logout} />
-    </Card>
-  );
+  if (loading && !kyc && !subscription && !usage) {
+    return <SmartLoadingState title={t('state.loading')} />;
+  }
 
   return (
-    <ScrollView contentContainerStyle={[styles.container, { maxWidth: maxContentWidth }]}>
-      <View style={twoCol ? { flexDirection: 'row', gap: 20, alignItems: 'flex-start', width: '100%' } : { gap: 16 }}>
-        {/* LEFT — profile summary */}
-        <View style={colStyle}>
-          {photoHeader}
-          {kycCard}
-          {cognitive}
-        </View>
-        {/* RIGHT — settings & configuration */}
-        <View style={colStyle}>
-          {localeCard}
-          {teacherCard}
-          {systemCard}
-          {accountCard}
-        </View>
-      </View>
+    <ScrollView style={{ backgroundColor: c.background }}>
+      <Page width="content" style={{ paddingBottom: 48 }}>
+        <PageHeader title={t('profile.title')} description={t('profile.intro')} />
 
-      <Text style={{ color: c.textMuted, fontSize: 12, textAlign: 'center', marginTop: 4 }}>
-        {t('profile.footer')}
-      </Text>
+        {partial ? <SmartState state="partial" detail={t('profile.partial')} /> : null}
+
+        <ResponsiveSplit
+          secondaryWidth={400}
+          primary={(
+            <View style={{ gap: 24 }}>
+              <Section title={t('profile.section.myProfile')} description={t('profile.section.myProfileDetail')}>
+                <View style={{ gap: 16 }}>
+                  {photoHeader}
+                  {kycCard}
+                </View>
+              </Section>
+
+              <Section title={t('profile.section.personalization')} description={t('profile.section.personalizationDetail')}>
+                <View style={{ gap: 12 }}>
+                  <TeacherConfig
+                    tone={teacher.tone}
+                    explanations={teacher.explanations}
+                    onTone={(value: NonNullable<KycTeacher['tone']>) => patch('teacher', { tone: value })}
+                    onExplanations={(value: NonNullable<KycTeacher['explanations']>) => patch('teacher', { explanations: value })}
+                  />
+                  <BrainProfilePreview
+                    totalConcepts={twin?.summary.totalConcepts ?? null}
+                    strengths={strengths}
+                    onOpen={() => router.push('/brain')}
+                  />
+                </View>
+              </Section>
+            </View>
+          )}
+          secondary={(
+            <View style={{ gap: 24 }}>
+              <Section title={t('profile.section.languages')} description={t('profile.section.languagesDetail')}>
+                <View style={{ gap: 12 }}>
+                  <Card><LocalePicker /></Card>
+                  <LanguageExperienceCard
+                    nativeLanguage={languages.native}
+                    learningLanguage={languages.study}
+                    onOpen={() => router.push('/languages')}
+                  />
+                </View>
+              </Section>
+
+              <Section title={t('profile.section.billing')} description={t('profile.section.billingDetail')}>
+                <AccountUsageCard
+                  subscription={subscription}
+                  usage={usage}
+                  onSubscription={() => router.push('/subscription')}
+                  onUsage={() => router.push('/usage')}
+                />
+              </Section>
+
+              <Section title={t('profile.section.privacy')} description={t('profile.section.privacyDetail')}>
+                <DataPrivacyCard
+                  scheme={scheme}
+                  onScheme={setScheme}
+                  onPrivacy={() => router.push('/privacy')}
+                  onMemory={() => router.push('/memory')}
+                  onDocuments={() => router.push('/library')}
+                />
+              </Section>
+
+              <Section title={t('report.profileTitle')} description={t('report.profileDetail')}>
+                <Card style={{ gap: 10 }}>
+                  <Text style={{ color: c.textSecondary, fontSize: 13, lineHeight: 19 }}>
+                    {t('report.contextDetail')}
+                  </Text>
+                  <Button label={t('report.open')} variant="secondary" onPress={() => router.push('/report-problem')} />
+                </Card>
+              </Section>
+
+              <Button label={t('app.signOut')} variant="ghost" onPress={() => void logout()} />
+            </View>
+          )}
+        />
+
+        <Text style={{ color: c.textMuted, fontSize: 12, textAlign: 'center' }}>{t('profile.footer')}</Text>
+      </Page>
     </ScrollView>
   );
 }
@@ -200,7 +248,3 @@ function SummaryRow({ c, label, value }: { c: { textMuted: string; textPrimary: 
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { padding: 20, gap: 16, width: '100%', alignSelf: 'center', paddingBottom: 48 },
-});

@@ -1,13 +1,8 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import type {
-  LearningPath,
-  LearningPathItem,
-  LessonSummary,
-  MasteryLevel,
-  ProactiveBriefing,
-  SessionPlan,
+  ContextItem,
   TutorSessionDetail,
   TutorSessionSummary,
   VoiceTurnResponse,
@@ -18,16 +13,8 @@ import { createRecorder, RECORDING_SUPPORTED, type Recorder } from '../../lib/re
 import { useTokens } from '../../lib/design/theme';
 import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
-import { teacherRoleLabel } from '../../lib/teacher-role';
+import { saveTutorSessionDraft } from '../../lib/tutor/session-draft';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
-
-/** The teaching level a concept's session is pitched at (matches LessonService). */
-const LEVEL_KEY: Record<MasteryLevel, TranslationKey> = {
-  weak: 'level.beginner',
-  unknown: 'level.beginner',
-  developing: 'level.intermediate',
-  strong: 'level.advanced',
-};
 
 /**
  * The AI Teacher — a virtual classroom, not a chat box.
@@ -50,291 +37,231 @@ const TUTOR_MODES = new Set(['free', 'free_search', 'explain', 'discuss', 'oral_
  * teacher home.
  */
 export default function TutorEntry() {
-  const params = useLocalSearchParams<{ mode?: string | string[] }>();
+  const params = useLocalSearchParams<{
+    mode?: string | string[];
+    q?: string | string[];
+    conceptId?: string | string[];
+    conceptName?: string | string[];
+    docId?: string | string[];
+    documentId?: string | string[];
+    title?: string | string[];
+    goalId?: string | string[];
+    goalTitle?: string | string[];
+    examId?: string | string[];
+    examTitle?: string | string[];
+    languageProfileId?: string | string[];
+    languageName?: string | string[];
+    sourceSessionId?: string | string[];
+    workspaceId?: string | string[];
+    workspaceTitle?: string | string[];
+    researchSessionId?: string | string[];
+  }>();
   const mode = Array.isArray(params.mode) ? params.mode[0] : params.mode;
-  if (mode === 'free' || mode === 'free_search') return <FreeSearch />;
-  if (mode === 'deepsearch' || mode === 'deep_research') return <DeepResearch />;
+  const initialQuery = Array.isArray(params.q) ? params.q[0] : params.q;
+  const focusConceptId = Array.isArray(params.conceptId) ? params.conceptId[0] : params.conceptId;
+  const contexts = tutorContextsFromParams(params);
+  if (mode === 'free' || mode === 'free_search') return <FreeSearch initialQuery={initialQuery} initialContexts={contexts} />;
+  if (mode === 'deepsearch' || mode === 'deep_research') return <DeepResearch initialQuery={initialQuery} initialContexts={contexts} />;
   if (mode === 'oral_exercise') return <OralExercise />;
-  if (mode === 'explain') return <Explain />;
-  if (mode === 'discuss' || mode === 'chat_tutor') return <Discuss />;
+  if (mode === 'explain') return <Explain initialQuery={initialQuery} focusConceptId={focusConceptId} initialContexts={contexts} />;
+  if (mode === 'discuss' || mode === 'chat_tutor') return <Discuss initialQuery={initialQuery} initialContexts={contexts} />;
   if (mode === 'oral_exam') return <OralExam />;
   if (mode && !TUTOR_MODES.has(mode)) return <ModeError />;
   return <TeacherHome />;
 }
 
-function TeacherHome() {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  const { user } = useAuth();
-  const { t, locale } = useI18n();
-  const router = useRouter();
-  const [sessions, setSessions] = useState<TutorSessionSummary[] | null>(null);
-  const [path, setPath] = useState<LearningPath | null>(null);
-  const [lastLesson, setLastLesson] = useState<LessonSummary | null>(null);
-  const [coach, setCoach] = useState<ProactiveBriefing | null>(null);
-  const [title, setTitle] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(async () => {
-    const [sessionsRes, pathRes, lessonsRes, coachRes] = await Promise.allSettled([
-      api<TutorSessionSummary[]>('/tutor/sessions'),
-      api<LearningPath>('/twin/next'),
-      api<LessonSummary[]>('/lessons'),
-      api<ProactiveBriefing>('/coach/today'),
-    ]);
-    if (sessionsRes.status === 'fulfilled') setSessions(sessionsRes.value);
-    if (pathRes.status === 'fulfilled') setPath(pathRes.value);
-    if (lessonsRes.status === 'fulfilled') setLastLesson(lessonsRes.value[0] ?? null);
-    if (coachRes.status === 'fulfilled') setCoach(coachRes.value);
-    if (sessionsRes.status === 'rejected' && pathRes.status === 'rejected') {
-      setError((sessionsRes.reason as Error)?.message ?? 'Could not reach your teacher.');
-    }
-    setLoading(false);
-  }, []);
-
-  useFocusEffect(
-    useCallback(() => {
-      void load();
-    }, [load]),
-  );
-
-  const name = user?.displayName?.trim() || user?.email?.split('@')[0] || '';
-
-  // The teacher's plan, read from the twin: revise what's slipping first, then
-  // the next step forward.
-  const subject: LearningPathItem | null =
-    path?.items.find((i) => ['at_risk', 'in_progress', 'ready'].includes(i.status)) ?? null;
-  const isReview = subject?.status === 'at_risk';
-  const next: LearningPathItem | null =
-    path?.items.find(
-      (i) => ['ready', 'in_progress'].includes(i.status) && i.conceptId !== subject?.conceptId,
-    ) ?? null;
-  // Repair the weak concept before advancing (the twin's own pedagogy).
-  const lessonTarget = subject;
-
-  // Estimated time = the coach's time-boxed plan (real minutes), else a default.
-  const duration =
-    coach && coach.recommendations.length > 0
-      ? coach.recommendations.reduce((s, r) => s + r.minutes, 0)
-      : lessonTarget
-        ? 20
-        : 0;
-  const levelKey = lessonTarget ? LEVEL_KEY[lessonTarget.level] : null;
-  const objectiveKey: TranslationKey = isReview
-    ? 'aiteacher.objReview'
-    : 'aiteacher.objDiscover';
-
-  const startLesson = () => {
-    if (!lessonTarget) return;
-    router.push({
-      pathname: '/lesson/new',
-      params: { conceptId: lessonTarget.conceptId, title: lessonTarget.name },
+function tutorContextsFromParams(params: Record<string, string | string[] | undefined>): ContextItem[] {
+  const first = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] : value;
+  const now = new Date().toISOString();
+  const contexts: ContextItem[] = [];
+  const push = (kind: ContextItem['kind'], referenceId: string | undefined, label?: string) => {
+    if (!referenceId) return;
+    contexts.push({
+      id: `${kind}:${referenceId}`,
+      kind,
+      scope: kind === 'document' || kind === 'concept' ? 'active-object' : 'experience-session',
+      referenceId,
+      ...(label ? { label } : {}),
+      priority: kind === 'document' ? 90 : kind === 'concept' ? 80 : 60,
+      visibility: 'visible',
+      addedAt: now,
     });
   };
-
-  // Session Orchestrator (task 3.7): one tap starts the whole guided loop — the
-  // AI picks the target, builds the lesson, and drives it through to the recap.
-  const startSession = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const plan = await api<SessionPlan>('/sessions/start', {
-        method: 'POST',
-        body: lessonTarget?.conceptId ? { conceptId: lessonTarget.conceptId } : {},
-      });
-      router.push({
-        pathname: '/session/[id]',
-        params: {
-          id: plan.sessionId,
-          lessonId: plan.lessonId,
-          subject: plan.subject,
-          planMessage: plan.planMessage,
-          minutes: String(plan.estimatedMinutes),
-          scoreBefore: plan.learningScoreBefore == null ? '' : String(plan.learningScoreBefore),
-        },
-      });
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const startDiscussion = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const session = await api<TutorSessionSummary>('/tutor/sessions', {
-        method: 'POST',
-        body: { ...(title.trim() ? { title: title.trim() } : {}) },
-      });
-      setTitle('');
-      router.push(`/tutor/${session.id}`);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const focus = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const session = await api<TutorSessionDetail>('/tutor/sessions/focus', {
-        method: 'POST',
-      });
-      router.push(`/tutor/${session.id}`);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Sprint 7.2: resume the relationship — a conversation that remembers what we
-  // did recently and opens with a Socratic recall question.
-  const resume = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const session = await api<TutorSessionDetail>('/tutor/sessions/resume', {
-        method: 'POST',
-      });
-      router.push(`/tutor/${session.id}`);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (loading) return <Loading label={t('classroom.opening')} />;
-
-  return (
-    <ScrollView contentContainerStyle={styles.container}>
-      {error ? <ErrorBanner message={error} /> : null}
-
-      {/* The teacher speaks first — a virtual classroom, not a chat. */}
-      <View style={styles.stage}>
-        <View style={styles.avatarRow}>
-          <View style={styles.avatarBadge}>
-            <Text style={styles.teacherAvatar}>👨‍🏫</Text>
-          </View>
-          <View style={styles.flex}>
-            <Text style={styles.avatarKicker}>{t('header.aiTeacher')}</Text>
-            <Text style={styles.greeting}>
-              {t('home.greeting')} {name}.
-            </Text>
-          </View>
-        </View>
-
-        {/* Continuity — the learner never starts from zero. */}
-        {lastLesson ? (
-          <Text style={styles.line}>
-            {t('aiteacher.finishedLesson')}{' '}
-            <Text style={styles.subject}>{lastLesson.topic}</Text>.
-          </Text>
-        ) : null}
-
-        {subject ? (
-          <>
-            <Text style={styles.line}>
-              {isReview ? t('aiteacher.todayReview') : t('aiteacher.todayDiscover')}{' '}
-              <Text style={styles.subject}>{subject.name}</Text>
-              {isReview ? ` ${t('aiteacher.difficulties')}` : '.'}
-            </Text>
-            {next ? (
-              <Text style={styles.line}>
-                {t('aiteacher.thenNext')} <Text style={styles.subject}>{next.name}</Text>.
-              </Text>
-            ) : null}
-          </>
-        ) : (
-          <Text style={styles.line}>{t('aiteacher.empty')}</Text>
-        )}
-
-        {/* Today's session, at a glance — objective, time, level. */}
-        {lessonTarget ? (
-          <View style={styles.sessionCard}>
-            <Text style={styles.sessionHeader}>{t('aiteacher.sessionCard')}</Text>
-            <Text style={styles.sessionCourse}>{lessonTarget.name}</Text>
-            <SessionRow label={t('aiteacher.objective')} value={`${t(objectiveKey)} ${lessonTarget.name}`} />
-            <SessionRow label={t('aiteacher.duration')} value={`${duration} ${t('aiteacher.minutes')}`} />
-            {levelKey ? <SessionRow label={t('aiteacher.levelLabel')} value={t(levelKey)} /> : null}
-          </View>
-        ) : null}
-
-        <View style={styles.cta}>
-          {lessonTarget ? <Text style={styles.readyQ}>{t('aiteacher.readyQ')}</Text> : null}
-          {/* One tap = the whole integrated classroom, never leaving (task 5.3). */}
-          <Button label={t('daily.start')} onPress={() => router.push('/daily-session')} />
-          <Button variant="ghost" label={t('session.startGuided')} onPress={startSession} busy={busy} />
-          {lessonTarget ? (
-            <Button variant="ghost" label={t('aiteacher.start')} onPress={startLesson} />
-          ) : null}
-        </View>
-      </View>
-
-      {/* Free discussion — kept, but no longer the first thing you see. */}
-      <Card>
-        <Text style={styles.label}>{t('aiteacher.talkTitle')}</Text>
-        <TextInput
-          style={styles.input}
-          placeholder={t('aiteacher.topicPlaceholder')}
-          placeholderTextColor={c.textMuted}
-          value={title}
-          onChangeText={setTitle}
-          testID="session-title"
-        />
-        <Button label={t('aiteacher.talk')} onPress={startDiscussion} busy={busy} />
-        <View style={styles.spacer} />
-        <Button label={t('aiteacher.resume')} onPress={resume} busy={busy} />
-        <View style={styles.spacer} />
-        <Button variant="ghost" label={t('aiteacher.twinPick')} onPress={focus} busy={busy} />
-      </Card>
-
-      {/* History. */}
-      {sessions && sessions.length > 0 ? (
-        <View style={styles.history}>
-          <Text style={styles.label}>{t('aiteacher.recent')}</Text>
-          {sessions.map((s) => (
-            <Card key={s.id}>
-              <Text
-                style={styles.sessionTitle}
-                onPress={() => router.push(`/tutor/${s.id}`)}
-              >
-                {s.title ?? t('aiteacher.untitled')}
-              </Text>
-              <Text style={styles.sessionMeta}>
-                {s.role.kind !== 'general' ? `${s.role.emoji} ${teacherRoleLabel(s.role, locale)} · ` : ''}
-                {s.messageCount} {t('aiteacher.messages')}
-                {s.focusConceptName ? ` · ${t('aiteacher.focusedOn')} ${s.focusConceptName}` : ''}
-              </Text>
-              <Button
-                variant="ghost"
-                label={t('aiteacher.open')}
-                onPress={() => router.push(`/tutor/${s.id}`)}
-              />
-            </Card>
-          ))}
-        </View>
-      ) : null}
-    </ScrollView>
-  );
+  push('document', first(params.documentId) ?? first(params.docId), first(params.title));
+  push('concept', first(params.conceptId), first(params.conceptName));
+  push('goal', first(params.goalId), first(params.goalTitle));
+  push('exam', first(params.examId), first(params.examTitle));
+  push('language', first(params.languageProfileId), first(params.languageName));
+  push('revision', first(params.sourceSessionId));
+  push('workspace', first(params.workspaceId), first(params.workspaceTitle));
+  push('research', first(params.researchSessionId));
+  return contexts;
 }
 
-/** One labelled fact in the "Today's session" card. */
-function SessionRow({ label, value }: { label: string; value: string }) {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
+/** Lot 6 lobby: continuity first, one new-request focal point, then bounded
+ * history and the existing specialist modes as secondary doors. */
+function TeacherHome() {
+  const { colors: c, spacing, typography, radius } = useTokens();
+  const { t, locale } = useI18n();
+  const { user } = useAuth();
+  const router = useRouter();
+  const [sessions, setSessions] = useState<TutorSessionSummary[] | null>(null);
+  const [request, setRequest] = useState('');
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      setSessions(await api<TutorSessionSummary[]>('/tutor/sessions'));
+    } catch (loadError) {
+      setError((loadError as Error).message);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const start = async () => {
+    const content = request.trim();
+    if (!content) return;
+    setBusy(true);
+    setError(null);
+    let targetSessionId = pendingSessionId;
+    try {
+      if (!targetSessionId) {
+        const session = await api<TutorSessionSummary>('/tutor/sessions', {
+          method: 'POST',
+          body: {
+            title: content.slice(0, 120),
+            objective: content.slice(0, 500),
+            intent: 'free',
+            mode: 'conversation',
+            inputModality: 'text',
+          },
+        });
+        targetSessionId = session.id;
+        setPendingSessionId(targetSessionId);
+      }
+      await api(`/tutor/sessions/${targetSessionId}/messages`, {
+        method: 'POST',
+        body: { content },
+      });
+      setRequest('');
+      setPendingSessionId(null);
+      router.push(`/tutor/${targetSessionId}`);
+    } catch (startError) {
+      if (targetSessionId && user?.id) {
+        await saveTutorSessionDraft(user.id, targetSessionId, content).catch(() => undefined);
+      }
+      setError((startError as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!sessions && !error) return <Loading label={t('tutor6.lobby.loading')} />;
+
+  const list = sessions ?? [];
+  const resumable = list.find((session) => {
+    const status = session.experienceSession?.status;
+    return status === 'active' || status === 'paused';
+  }) ?? null;
+  const recent = list.filter((session) => session.id !== resumable?.id && session.experienceSession?.status !== 'completed').slice(0, 3);
+  const completed = list.filter((session) => session.experienceSession?.status === 'completed').slice(0, 3);
+
+  const historyCard = (session: TutorSessionSummary) => {
+    const context = session.experienceSession?.activeContexts.items.find((item) => item.visibility !== 'hidden');
+    return (
+      <Card key={session.id}>
+        <Text style={[typography.title, { color: c.textPrimary }]}>{session.title ?? t('aiteacher.untitled')}</Text>
+        <Text style={[typography.bodySmall, { color: c.textSecondary }]}>
+          {new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(new Date(session.updatedAt))}
+          {' · '}{session.messageCount} {t('aiteacher.messages')}
+          {session.subject ? ` · ${session.subject}` : ''}
+          {context?.label ? ` · ${context.label}` : ''}
+        </Text>
+        {session.experienceSession?.progress?.percent !== undefined ? (
+          <Text style={[typography.caption, { color: c.textMuted }]}>{session.experienceSession.progress.percent}%</Text>
+        ) : null}
+        <Button variant="ghost" label={t('tutor6.lobby.resume')} onPress={() => router.push(`/tutor/${session.id}`)} />
+      </Card>
+    );
+  };
+
   return (
-    <View style={styles.sessionRow}>
-      <Text style={styles.sessionRowLabel}>{label}</Text>
-      <Text style={styles.sessionRowValue}>{value}</Text>
-    </View>
+    <ScrollView style={{ flex: 1, backgroundColor: c.background }} contentContainerStyle={{ flexGrow: 1 }}>
+      <View style={{ padding: spacing.lg, gap: spacing.xl, width: '100%', maxWidth: 1120, alignSelf: 'center' }} testID="tutor-lobby">
+        <View style={{ gap: spacing.xs, maxWidth: 760 }}>
+          <Text style={[typography.label, { color: c.aiAccent }]}>{t('tutor6.lobby.eyebrow')}</Text>
+          <Text accessibilityRole="header" style={[typography.h1, { color: c.textPrimary }]}>{t('tutor6.lobby.title')}</Text>
+          <Text style={[typography.body, { color: c.textSecondary }]}>{t('tutor6.lobby.subtitle')}</Text>
+        </View>
+
+        {error ? (
+          <View style={{ gap: spacing.sm }}>
+            <ErrorBanner message={error} />
+            {pendingSessionId ? (
+              <Button variant="ghost" label={t('tutor6.lobby.openSaved')} onPress={() => router.push(`/tutor/${pendingSessionId}`)} />
+            ) : null}
+          </View>
+        ) : null}
+
+        {resumable ? (
+          <View style={{ gap: spacing.sm }}>
+            <Text style={[typography.h2, { color: c.textPrimary }]}>{t('tutor6.lobby.continueTitle')}</Text>
+            <Card style={{ borderColor: c.aiAccent, gap: spacing.sm }}>
+              <Text style={[typography.title, { color: c.textPrimary }]}>{resumable.title ?? t('aiteacher.untitled')}</Text>
+              <Text style={[typography.bodySmall, { color: c.textSecondary }]}>
+                {resumable.experienceSession?.currentStep?.label ?? t('tutor6.lobby.resumeDetail')}
+              </Text>
+              <Button label={t('tutor6.lobby.resume')} onPress={() => router.push(`/tutor/${resumable.id}`)} />
+            </Card>
+          </View>
+        ) : null}
+
+        <View style={{ gap: spacing.sm }}>
+          <Text style={[typography.h2, { color: c.textPrimary }]}>{t('tutor6.lobby.newTitle')}</Text>
+          <Card style={{ gap: spacing.sm }}>
+            <TextInput
+              value={request}
+              onChangeText={setRequest}
+              placeholder={t('tutor6.lobby.placeholder')}
+              placeholderTextColor={c.textMuted}
+              multiline
+              maxLength={4_000}
+              testID="tutor-new-request"
+              style={{ minHeight: 84, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.md, color: c.textPrimary, textAlignVertical: 'top' }}
+            />
+            <Button label={t('tutor6.lobby.start')} onPress={() => void start()} disabled={!request.trim()} busy={busy} />
+          </Card>
+        </View>
+
+        {recent.length > 0 ? (
+          <View style={{ gap: spacing.sm }}>
+            <Text style={[typography.h2, { color: c.textPrimary }]}>{t('tutor6.lobby.recent')}</Text>
+            {recent.map(historyCard)}
+          </View>
+        ) : null}
+
+        {completed.length > 0 ? (
+          <View style={{ gap: spacing.sm }}>
+            <Text style={[typography.h2, { color: c.textPrimary }]}>{t('tutor6.lobby.completed')}</Text>
+            {completed.map(historyCard)}
+          </View>
+        ) : null}
+
+        <View style={{ gap: spacing.sm }}>
+          <Text style={[typography.h2, { color: c.textPrimary }]}>{t('tutor6.lobby.modes')}</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+            <Button variant="ghost" label={t('tutor6.lobby.mode.explain')} onPress={() => router.push('/tutor?mode=explain')} />
+            <Button variant="ghost" label={t('tutor6.lobby.mode.discuss')} onPress={() => router.push('/tutor?mode=discuss')} />
+            <Button variant="ghost" label={t('tutor6.lobby.mode.oral')} onPress={() => router.push('/tutor?mode=oral_exercise')} />
+            <Button variant="ghost" label={t('tutor6.lobby.mode.deep')} onPress={() => router.push('/tutor?mode=deepsearch')} />
+          </View>
+        </View>
+      </View>
+    </ScrollView>
   );
 }
 
@@ -358,7 +285,7 @@ function BackToLearn() {
  * chat system, and no fabricated sources/plan — an honest `noteKey` states when
  * a richer capability still depends on the backend.
  */
-function QuestionWorkspace({ icon, kickerKey, titleKey, subtitleKey, placeholderKey, submitKey, framePrefixKey, noteKey }: {
+function QuestionWorkspace({ icon, kickerKey, titleKey, subtitleKey, placeholderKey, submitKey, framePrefixKey, noteKey, initialQuery = '', mode, intent, initialContexts = [] }: {
   icon: string;
   kickerKey: TranslationKey;
   titleKey: TranslationKey;
@@ -367,12 +294,16 @@ function QuestionWorkspace({ icon, kickerKey, titleKey, subtitleKey, placeholder
   submitKey: TranslationKey;
   framePrefixKey?: TranslationKey;
   noteKey?: TranslationKey;
+  initialQuery?: string;
+  mode: string;
+  intent: string;
+  initialContexts?: ContextItem[];
 }) {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState(initialQuery);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -382,7 +313,23 @@ function QuestionWorkspace({ icon, kickerKey, titleKey, subtitleKey, placeholder
     setBusy(true);
     setError(null);
     try {
-      const session = await api<TutorSessionSummary>('/tutor/sessions', { method: 'POST', body: {} });
+      const document = initialContexts.find((item) => item.kind === 'document' && item.referenceId);
+      const goal = initialContexts.find((item) => item.kind === 'goal' && item.referenceId);
+      const language = initialContexts.find((item) => item.kind === 'language' && item.referenceId);
+      const session = await api<TutorSessionSummary>('/tutor/sessions', {
+        method: 'POST',
+        body: {
+          title: question.slice(0, 120),
+          objective: question.slice(0, 500),
+          mode,
+          intent,
+          inputModality: 'text',
+          activeContexts: initialContexts,
+          ...(document?.referenceId ? { documentId: document.referenceId } : {}),
+          ...(goal?.referenceId ? { goalId: goal.referenceId } : {}),
+          ...(language?.referenceId ? { languageProfileId: language.referenceId } : {}),
+        },
+      });
       const content = framePrefixKey ? `${t(framePrefixKey)}\n\n${question}` : question;
       await api(`/tutor/sessions/${session.id}/messages`, { method: 'POST', body: { content } });
       router.push(`/tutor/${session.id}`);
@@ -419,7 +366,7 @@ function QuestionWorkspace({ icon, kickerKey, titleKey, subtitleKey, placeholder
 }
 
 /** 🔎 Free Search (mode=free) — spontaneous questions, distinct from the teacher. */
-function FreeSearch() {
+function FreeSearch({ initialQuery, initialContexts }: { initialQuery?: string; initialContexts?: ContextItem[] }) {
   return (
     <QuestionWorkspace
       icon="🔎"
@@ -428,12 +375,16 @@ function FreeSearch() {
       subtitleKey="learn.free.subtitle"
       placeholderKey="learn.free.placeholder"
       submitKey="learn.free.submit"
+      initialQuery={initialQuery}
+      initialContexts={initialContexts}
+      mode="free"
+      intent="free"
     />
   );
 }
 
 /** 🔬 Deep Research (mode=deepsearch) — a thorough, structured investigation. */
-function DeepResearch() {
+function DeepResearch({ initialQuery, initialContexts }: { initialQuery?: string; initialContexts?: ContextItem[] }) {
   return (
     <QuestionWorkspace
       icon="🔬"
@@ -444,13 +395,17 @@ function DeepResearch() {
       submitKey="learn.deep.submit"
       framePrefixKey="learn.deep.frame"
       noteKey="learn.deep.note"
+      initialQuery={initialQuery}
+      initialContexts={initialContexts}
+      mode="deepsearch"
+      intent="research"
     />
   );
 }
 
 /** 💬 Conversation (mode=discuss/chat_tutor) — a free pedagogical conversation
  *  with the teacher (who keeps the learner's context), distinct from Free Search. */
-function Discuss() {
+function Discuss({ initialQuery, initialContexts }: { initialQuery?: string; initialContexts?: ContextItem[] }) {
   return (
     <QuestionWorkspace
       icon="💬"
@@ -459,6 +414,10 @@ function Discuss() {
       subtitleKey="learn.discuss.subtitle"
       placeholderKey="learn.discuss.placeholder"
       submitKey="learn.discuss.submit"
+      initialQuery={initialQuery}
+      initialContexts={initialContexts}
+      mode="conversation"
+      intent="learn"
     />
   );
 }
@@ -470,12 +429,12 @@ const EXPLAIN_LEVELS: TranslationKey[] = ['learn.explain.lvlBeginner', 'learn.ex
  * (Beginner / Intermediate / Advanced) that frames the request so the teacher
  * explains at the right depth with examples and analogies. Reuses the tutor API.
  */
-function Explain() {
+function Explain({ initialQuery = '', focusConceptId, initialContexts = [] }: { initialQuery?: string; focusConceptId?: string; initialContexts?: ContextItem[] }) {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState(initialQuery);
   const [level, setLevel] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -486,7 +445,24 @@ function Explain() {
     setBusy(true);
     setError(null);
     try {
-      const s = await api<TutorSessionSummary>('/tutor/sessions', { method: 'POST', body: {} });
+      const s = await api<TutorSessionSummary>('/tutor/sessions', {
+        method: 'POST',
+        body: {
+          title: question.slice(0, 120),
+          objective: question.slice(0, 500),
+          intent: 'understand',
+          mode: 'explain',
+          inputModality: 'text',
+          activeContexts: initialContexts,
+          ...(focusConceptId ? { focusConceptId } : {}),
+          ...(initialContexts.find((item) => item.kind === 'document')?.referenceId
+            ? { documentId: initialContexts.find((item) => item.kind === 'document')?.referenceId }
+            : {}),
+          ...(initialContexts.find((item) => item.kind === 'goal')?.referenceId
+            ? { goalId: initialContexts.find((item) => item.kind === 'goal')?.referenceId }
+            : {}),
+        },
+      });
       const content = `${t('learn.explain.frame')} (${t(EXPLAIN_LEVELS[level])})\n\n${question}`;
       await api(`/tutor/sessions/${s.id}/messages`, { method: 'POST', body: { content } });
       router.push(`/tutor/${s.id}`);
@@ -564,7 +540,10 @@ function OralExercise() {
     let cancel = false;
     (async () => {
       try {
-        const s = await api<TutorSessionSummary>('/tutor/sessions', { method: 'POST', body: {} });
+        const s = await api<TutorSessionSummary>('/tutor/sessions', {
+          method: 'POST',
+          body: { objective: t('learn.oral.title'), intent: 'practice', mode: 'oral_exercise', inputModality: 'voice' },
+        });
         if (cancel) return;
         setSessionId(s.id);
         await api(`/tutor/sessions/${s.id}/messages`, { method: 'POST', body: { content: t('learn.oral.frame') } });
@@ -697,7 +676,10 @@ function OralExam() {
     setPhase('starting');
     setError(null);
     try {
-      const s = await api<TutorSessionSummary>('/tutor/sessions', { method: 'POST', body: {} });
+      const s = await api<TutorSessionSummary>('/tutor/sessions', {
+        method: 'POST',
+        body: { objective: t('learn.exam.title'), intent: 'practice', mode: 'oral_exam', inputModality: 'voice' },
+      });
       setSessionId(s.id);
       await api(`/tutor/sessions/${s.id}/messages`, { method: 'POST', body: { content: t('learn.exam.startFrame') } });
       await refresh(s.id);

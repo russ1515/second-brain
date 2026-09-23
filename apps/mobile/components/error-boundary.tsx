@@ -1,5 +1,8 @@
-import { ScrollView, View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { ScrollView } from 'react-native';
 import type { ErrorBoundaryProps } from 'expo-router';
+import { captureSafeClientError } from '../lib/client-diagnostics';
+import { createClientRequestId } from '../lib/request-id';
 import { ThemeProvider, useTokens } from '../lib/design/theme';
 import { I18nProvider, useI18n } from '../lib/i18n';
 import { Button, EmptyState } from './ds/core';
@@ -13,9 +16,17 @@ import { Button, EmptyState } from './ds/core';
  * tree, so it re-establishes ThemeProvider + I18nProvider itself to keep the
  * fallback theme-aware and translated.
  */
-function Fallback({ error, retry }: ErrorBoundaryProps) {
+function Fallback({ retry }: ErrorBoundaryProps) {
   const { colors: c, spacing } = useTokens();
   const { t } = useI18n();
+  // The id lives for this fallback instance, so React re-renders cannot create
+  // duplicate ErrorEvents. Do not send error.message, stack or component data.
+  const ingestId = useRef(createClientRequestId('boundary')).current;
+
+  useEffect(() => {
+    void captureSafeClientError({ ingestId, code: 'MOBILE_RENDER_ERROR' });
+  }, [ingestId]);
+
   return (
     <ScrollView
       style={{ backgroundColor: c.background }}
@@ -28,11 +39,6 @@ function Fallback({ error, retry }: ErrorBoundaryProps) {
       }}
     >
       <EmptyState icon="⚠️" title={t('error.title')} detail={t('error.detail')} />
-      {__DEV__ ? (
-        <View style={{ maxWidth: 520 }}>
-          <EmptyState icon="" title="" detail={error.message} />
-        </View>
-      ) : null}
       <Button label={t('app.tryAgain')} onPress={retry} icon="↻" />
     </ScrollView>
   );

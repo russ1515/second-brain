@@ -8,9 +8,16 @@ set -euo pipefail
 
 TAG="${1:?Usage: rollback.sh <previous-image-tag>   (e.g. a git SHA)}"
 COMPOSE="docker compose -f docker-compose.prod.yml"
+export API_IMAGE="${API_IMAGE_REPOSITORY:-second-brain-api}:$TAG"
 
-echo "Rolling the API back to image tag: $TAG"
-API_IMAGE="second-brain-api:$TAG" $COMPOSE up -d --no-deps api
+if ! docker image inspect "$API_IMAGE" >/dev/null 2>&1; then
+  echo "Rollback image is not available locally: $API_IMAGE" >&2
+  echo "Pull it from the configured registry before retrying." >&2
+  exit 1
+fi
+
+echo "Rolling the API back to image: $API_IMAGE"
+$COMPOSE up -d --no-deps --no-build api
 
 echo "Rolled back. If this release included a destructive migration, restore the"
 echo "matching DB backup explicitly:  scripts/restore.sh backups/<file>.sql.gz"

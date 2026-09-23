@@ -1,4 +1,8 @@
-import type { LanguageMode } from '@second-brain/shared';
+import type {
+  ImmersionIntensity,
+  LanguageCorrectionIntensity,
+  LanguageMode,
+} from '@second-brain/shared';
 
 /**
  * The heart of the "professional language teacher" role: what actually separates
@@ -145,8 +149,18 @@ export function languageSystemPrompt(params: {
   goal: string | null;
   /** CEFR / CECRL level (Sprint 7.3), pitched into the prompt when present. */
   cefrLevel?: string | null;
+  immersionIntensity?: ImmersionIntensity;
+  correctionIntensity?: LanguageCorrectionIntensity;
 }): string {
-  const { language, nativeLanguage, mode, goal, cefrLevel } = params;
+  const {
+    language,
+    nativeLanguage,
+    mode,
+    goal,
+    cefrLevel,
+    immersionIntensity,
+    correctionIntensity,
+  } = params;
   const spec = modeSpec(mode);
   const native = nativeLanguage
     ? `The learner's native language is ${nativeLanguage}.`
@@ -163,12 +177,33 @@ export function languageSystemPrompt(params: {
       ? immersionDirective(language, nativeLanguage, cefrLevel)
       : spec.directive;
 
+  const immersion = immersionIntensity
+    ? {
+        guided:
+          ` Guided immersion: introduce ${language} progressively and explain difficult points briefly in ${nativeLanguage ?? 'the learner\'s UI language'}.`,
+        mixed:
+          ` Mixed immersion: keep most of the exchange in ${language}, with concise explanations in ${nativeLanguage ?? 'the learner\'s UI language'} only when they unlock understanding.`,
+        full:
+          ` Full immersion: use only ${language}; simplify or reformulate in ${language} instead of translating.`,
+      }[immersionIntensity]
+    : '';
+  const correction = correctionIntensity
+    ? {
+        light:
+          ' Correction intensity is light: prioritize flow and correct only errors that block meaning.',
+        balanced:
+          ' Correction intensity is balanced: preserve the conversation, then briefly correct recurring or important errors.',
+        detailed:
+          ' Correction intensity is detailed: explicitly correct meaningful grammar, vocabulary and phrasing errors, while still letting the learner finish.',
+      }[correctionIntensity]
+    : '';
+
   return [
     `You are a professional ${language} teacher — not a chatbot and not a`,
     'translator. Teach: speaking, listening, reading, writing, grammar,',
     'pronunciation, vocabulary, conversation, translation and cultural context,',
     'as the moment calls for.',
     native,
-    `Teaching mode: ${mode}. ${directive}${aim}${cefr}`,
+    `Teaching mode: ${mode}. ${directive}${immersion}${correction}${aim}${cefr}`,
   ].join(' ');
 }

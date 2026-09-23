@@ -5,7 +5,8 @@ import type { LearningCategory, LearningStatus, ReviewRating, ReviewStats } from
  *
  * Pure helpers + copy for the revision hub. Everything maps the EXISTING FSRS
  * engine (ReviewStats, the /review queue, /cards/:id/review) into the UI — no
- * new scheduling logic. Copy is French (product voice), catalog precedent.
+ * new scheduling logic. Display copy is localized by the consuming components;
+ * these values remain fallbacks for isolated previews.
  */
 
 // ── Due categories (task 1) ──────────────────────────────────────────────────

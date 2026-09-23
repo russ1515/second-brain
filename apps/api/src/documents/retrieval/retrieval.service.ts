@@ -3,7 +3,7 @@ import type { RagScope, SearchResponse, SearchResultItem } from '@second-brain/s
 import { EmbeddingsService } from '../../embeddings/embeddings.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { QdrantService } from '../../qdrant/qdrant.service';
-import { CHUNK_COLLECTION } from '../ingestion/ingestion.service';
+import { DOCUMENT_CHUNKS_COLLECTION } from '../../qdrant/qdrant.constants';
 
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 50;
@@ -25,7 +25,21 @@ export class RetrievalService {
    */
   async resolveScope(userId: string, scope?: RagScope): Promise<string[] | null> {
     if (!scope) return null;
-    if (scope.documentId) return [scope.documentId];
+    if (scope.documentId) {
+      const owned = await this.prisma.document.findFirst({
+        where: { id: scope.documentId, userId, deletedAt: null },
+        select: { id: true },
+      });
+      return owned ? [owned.id] : [];
+    }
+    if (scope.documentIds?.length) {
+      const ids = [...new Set(scope.documentIds)].slice(0, 20);
+      const owned = await this.prisma.document.findMany({
+        where: { id: { in: ids }, userId, deletedAt: null },
+        select: { id: true },
+      });
+      return owned.map((document) => document.id);
+    }
     const where = scope.collectionId
       ? { userId, deletedAt: null, collectionId: scope.collectionId }
       : scope.subject
@@ -63,7 +77,7 @@ export class RetrievalService {
       must.push({ key: 'documentId', match: { any: options.documentIds } });
     }
 
-    const hits = await this.qdrant.search(CHUNK_COLLECTION, vector, {
+    const hits = await this.qdrant.search(DOCUMENT_CHUNKS_COLLECTION, vector, {
       limit,
       filter: { must },
       scoreThreshold: options.minScore,

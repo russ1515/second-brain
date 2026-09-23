@@ -11,7 +11,8 @@ import type {
 import { useTokens } from '../../lib/design/theme';
 import { Badge, Button, Card, Progress } from '../ds/core';
 import { AITeacherMessage } from '../ds/ai';
-import { STATUS_VISUAL, childLabel } from '../../lib/brain/graph';
+import { STATUS_VISUAL } from '../../lib/brain/graph';
+import { useI18n, type TranslationKey } from '../../lib/i18n';
 
 /**
  * Mon Cerveau panels (UI/UX Sprint 5). Presentational views over the existing
@@ -28,6 +29,7 @@ function SectionTitle({ children }: { children: ReactNode }) {
 // ── BrainOverview (2) ────────────────────────────────────────────────────────
 export function BrainOverview({ summary }: { summary: TwinOverview['summary'] }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const cell = (v: string, l: string) => (
     <View style={{ flex: 1, minWidth: 74, alignItems: 'center', gap: 2 }}>
       <Text style={{ color: c.textPrimary, fontSize: 22, fontWeight: '800' }}>{v}</Text>
@@ -36,12 +38,12 @@ export function BrainOverview({ summary }: { summary: TwinOverview['summary'] })
   );
   return (
     <Card>
-      <SectionTitle>Vue globale</SectionTitle>
+      <SectionTitle>{t('brain.panel.overview')}</SectionTitle>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-        {cell(`${summary.totalConcepts}`, 'concepts')}
-        {cell(`${summary.strongConcepts}`, 'maîtrisés')}
-        {cell(`${summary.weakConcepts}`, 'fragiles')}
-        {cell(summary.averageMastery == null ? '—' : `${Math.round(summary.averageMastery * 100)}%`, 'maîtrise moy.')}
+        {cell(`${summary.totalConcepts}`, t('brain.dash.concepts'))}
+        {cell(`${summary.strongConcepts}`, t('brain.panel.mastered'))}
+        {cell(`${summary.weakConcepts}`, t('brain.panel.fragile'))}
+        {cell(summary.averageMastery == null ? '—' : `${Math.round(summary.averageMastery * 100)}%`, t('brain.panel.average'))}
       </View>
     </Card>
   );
@@ -64,6 +66,7 @@ export function ConceptDetails({
   onExplore: (conceptId: string) => void;
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const v = STATUS_VISUAL[node.status];
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
   const prereqs = graph.edges
@@ -75,34 +78,29 @@ export function ConceptDetails({
     .map((e) => byId.get(e.sourceId === node.id ? e.targetId : e.sourceId))
     .filter((n): n is TwinGraphNode => !!n);
 
-  const fragility =
-    node.status === 'blocked' ? 'Prérequis insuffisamment maîtrisés.'
-    : node.status === 'at_risk' ? 'Ta maîtrise diminue — des cartes sont à revoir.'
-    : node.status === 'ready' ? 'Pas encore étudié — les prérequis sont prêts.'
-    : node.status === 'in_progress' ? 'En cours d’apprentissage.'
-    : 'Concept solidement maîtrisé.';
+  const statusLabel = t(STATUS_COPY[node.status]);
 
   return (
     <Card style={{ borderColor: c.aiAccent, gap: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Text style={{ fontSize: 18 }}>{v.icon}</Text>
         <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800', flex: 1 }}>{node.name}</Text>
-        <Badge label={childLabels ? childLabel(node.status) : v.label} tone={v.tone === 'muted' ? 'neutral' : (v.tone as 'success' | 'primary' | 'warning' | 'error')} />
+        <Badge label={statusLabel} tone={v.tone === 'muted' ? 'neutral' : (v.tone as 'success' | 'primary' | 'warning' | 'error')} />
       </View>
 
       <View style={{ gap: 4 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-          <Text style={{ color: c.textSecondary, fontSize: 13 }}>Maîtrise</Text>
+          <Text style={{ color: c.textSecondary, fontSize: 13 }}>{t('mastery.mastery')}</Text>
           <Text style={{ color: c.textMuted, fontSize: 13, fontWeight: '700' }}>{node.mastery == null ? '—' : `${Math.round(node.mastery * 100)} %`}</Text>
         </View>
         <Progress value={node.mastery ?? 0} tone={node.status === 'mastered' ? 'success' : node.status === 'at_risk' || node.status === 'blocked' ? 'ai' : 'primary'} />
       </View>
 
-      <Text style={{ color: c.textSecondary, fontSize: 13 }}>{fragility}</Text>
+      <Text style={{ color: c.textSecondary, fontSize: 13 }}>{statusLabel}</Text>
 
       {prereqs.length > 0 ? (
         <View style={{ gap: 4 }}>
-          <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>Prérequis</Text>
+          <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>{t('lib.u.prereqTitle')}</Text>
           {prereqs.map((p) => (
             <Pressable key={p.id} onPress={() => onExplore(p.id)}>
               <Text style={{ color: c.aiAccent, fontSize: 14 }}>→ {p.name}</Text>
@@ -113,7 +111,7 @@ export function ConceptDetails({
 
       {related.length > 0 ? (
         <View style={{ gap: 4 }}>
-          <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>Concepts liés</Text>
+          <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>{t('lib.integ.links')}</Text>
           {related.map((p) => (
             <Pressable key={p.id} onPress={() => onExplore(p.id)}>
               <Text style={{ color: c.textSecondary, fontSize: 14 }}>→ {p.name}</Text>
@@ -123,8 +121,8 @@ export function ConceptDetails({
       ) : null}
 
       <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-        <Button label="Apprendre" variant="ai" size="sm" onPress={onLearn} />
-        <Button label="Réviser" variant="secondary" size="sm" onPress={onReview} />
+        <Button label={t('learn.title')} variant="ai" size="sm" onPress={onLearn} />
+        <Button label={t('study.title')} variant="secondary" size="sm" onPress={onReview} />
       </View>
     </Card>
   );
@@ -133,12 +131,13 @@ export function ConceptDetails({
 // ── CognitiveProfile (5) — internal mastery indicators, not grades ───────────
 export function CognitiveProfile({ strengths }: { strengths: ConceptScore[] }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const shown = strengths.slice(0, 6);
   return (
     <Card>
-      <SectionTitle>Profil cognitif</SectionTitle>
+      <SectionTitle>{t('brain.panel.cognitive')}</SectionTitle>
       {shown.length === 0 ? (
-        <Text style={{ color: c.textMuted, fontSize: 14 }}>Pas encore assez de données pour dessiner ton profil.</Text>
+        <Text style={{ color: c.textMuted, fontSize: 14 }}>{t('brain.panel.cognitiveEmpty')}</Text>
       ) : (
         <View style={{ gap: 10 }}>
           {shown.map((s) => (
@@ -150,7 +149,7 @@ export function CognitiveProfile({ strengths }: { strengths: ConceptScore[] }) {
               <Progress value={s.mastery} tone={s.mastery >= 0.8 ? 'success' : 'primary'} />
             </View>
           ))}
-          <Text style={{ color: c.textMuted, fontSize: 12 }}>Des indicateurs internes de maîtrise, pas des notes scolaires.</Text>
+          <Text style={{ color: c.textMuted, fontSize: 12 }}>{t('brain.panel.indicators')}</Text>
         </View>
       )}
     </Card>
@@ -160,14 +159,15 @@ export function CognitiveProfile({ strengths }: { strengths: ConceptScore[] }) {
 // ── LearningDNA (6) ──────────────────────────────────────────────────────────
 export function LearningDNA({ dna }: { dna: LearningDna }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   return (
     <Card style={{ gap: 10 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <SectionTitle>🧬 Learning DNA</SectionTitle>
-        <Badge label={`maturité ${Math.round(dna.maturity)}%`} tone="ai" />
+        <SectionTitle>🧬 {t('brain.dna')}</SectionTitle>
+        <Badge label={`${t('brain.panel.maturity')} ${Math.round(dna.maturity)}%`} tone="ai" />
       </View>
       {dna.traits.length === 0 ? (
-        <Text style={{ color: c.textMuted, fontSize: 14 }}>Ton ADN d’apprentissage se dessine au fil de tes sessions.</Text>
+        <Text style={{ color: c.textMuted, fontSize: 14 }}>{t('brain.panel.dnaEmpty')}</Text>
       ) : (
         <View style={{ gap: 10 }}>
           {dna.traits.slice(0, 5).map((tr) => (
@@ -179,7 +179,7 @@ export function LearningDNA({ dna }: { dna: LearningDna }) {
               <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 17 }}>{tr.summary}</Text>
             </View>
           ))}
-          <Text style={{ color: c.textMuted, fontSize: 12 }}>Des observations qui évoluent, pas un diagnostic.</Text>
+          <Text style={{ color: c.textMuted, fontSize: 12 }}>{t('brain.panel.dnaNote')}</Text>
         </View>
       )}
     </Card>
@@ -189,6 +189,7 @@ export function LearningDNA({ dna }: { dna: LearningDna }) {
 // ── MemoryOverview (7) ───────────────────────────────────────────────────────
 export function MemoryOverview({ summary, due }: { summary: TwinOverview['summary']; due: number }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const cell = (v: number, l: string) => (
     <View style={{ flex: 1, minWidth: 74, alignItems: 'center', gap: 2 }}>
       <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800' }}>{v}</Text>
@@ -197,14 +198,14 @@ export function MemoryOverview({ summary, due }: { summary: TwinOverview['summar
   );
   return (
     <Card>
-      <SectionTitle>🧠 Mémoire</SectionTitle>
+      <SectionTitle>🧠 {t('brain.memory')}</SectionTitle>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-        {cell(summary.totalConcepts, 'étudiés')}
-        {cell(summary.strongConcepts, 'maîtrisés')}
-        {cell(summary.weakConcepts, 'fragiles')}
-        {cell(due, 'à réviser')}
+        {cell(summary.totalConcepts, t('brain.panel.studied'))}
+        {cell(summary.strongConcepts, t('brain.panel.mastered'))}
+        {cell(summary.weakConcepts, t('brain.panel.fragile'))}
+        {cell(due, t('brain.panel.toReview'))}
       </View>
-      <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 8 }}>Second Brain surveille automatiquement l’évolution de tes connaissances.</Text>
+      <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 8 }}>{t('brain.panel.memoryNote')}</Text>
     </Card>
   );
 }
@@ -212,16 +213,17 @@ export function MemoryOverview({ summary, due }: { summary: TwinOverview['summar
 // ── Weaknesses (8) + Strengths (9) ───────────────────────────────────────────
 export function WeaknessesPanel({ weaknesses, onReview }: { weaknesses: ConceptScore[]; onReview: () => void }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const shown = weaknesses.slice(0, 4);
   if (shown.length === 0) return null;
   return (
     <Card style={{ borderColor: c.warning, gap: 8 }}>
-      <Text style={{ color: c.warning, fontSize: 13, fontWeight: '800' }}>⚠️ Ce qui nécessite ton attention</Text>
+      <Text style={{ color: c.warning, fontSize: 13, fontWeight: '800' }}>⚠️ {t('brain.panel.attention')}</Text>
       {shown.map((w) => (
         <Text key={w.conceptId} style={{ color: c.textPrimary, fontSize: 15 }}>→ {w.name}</Text>
       ))}
       <View style={{ alignSelf: 'flex-start', marginTop: 4 }}>
-        <Button label="Réviser maintenant" onPress={onReview} />
+        <Button label={t('brain.panel.reviewNow')} onPress={onReview} />
       </View>
     </Card>
   );
@@ -229,11 +231,12 @@ export function WeaknessesPanel({ weaknesses, onReview }: { weaknesses: ConceptS
 
 export function StrengthsPanel({ strengths }: { strengths: ConceptScore[] }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const shown = strengths.slice(0, 6);
   if (shown.length === 0) return null;
   return (
     <Card style={{ gap: 8 }}>
-      <Text style={{ color: c.success, fontSize: 13, fontWeight: '800' }}>⭐ Tes forces</Text>
+      <Text style={{ color: c.success, fontSize: 13, fontWeight: '800' }}>⭐ {t('brain.strengths')}</Text>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         {shown.map((s) => (
           <Badge key={s.conceptId} label={s.name} tone="success" />
@@ -246,17 +249,18 @@ export function StrengthsPanel({ strengths }: { strengths: ConceptScore[] }) {
 // ── BrainRecommendations (12) — the AI teacher interprets the brain ──────────
 export function BrainRecommendations({ weaknesses, onStart }: { weaknesses: ConceptScore[]; onStart: () => void }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   if (weaknesses.length === 0) return null;
-  const names = weaknesses.slice(0, 2).map((w) => w.name).join(' et ');
+  const names = weaknesses.slice(0, 2).map((w) => w.name).join(', ');
   return (
     <Card style={{ borderColor: c.aiAccent, gap: 10 }}>
-      <Text style={{ color: c.aiAccent, fontSize: 12, fontWeight: '800' }}>👨‍🏫 TON PROFESSEUR</Text>
+      <Text style={{ color: c.aiAccent, fontSize: 12, fontWeight: '800' }}>👨‍🏫 {t('ai.professor').toUpperCase()}</Text>
       <AITeacherMessage
-        text={`J’ai remarqué que ${names} restent fragiles. Je te propose de les consolider avant de poursuivre.`}
+        text={t('rec.consolidate').replace('{s}', names)}
         posture="supportive"
       />
       <View style={{ alignSelf: 'flex-start' }}>
-        <Button label="Commencer" variant="ai" onPress={onStart} />
+        <Button label={t('briefing.start')} variant="ai" onPress={onStart} />
       </View>
     </Card>
   );
@@ -265,14 +269,23 @@ export function BrainRecommendations({ weaknesses, onStart }: { weaknesses: Conc
 // ── Empty state (13) ─────────────────────────────────────────────────────────
 export function EmptyBrain({ onStart }: { onStart: () => void }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   return (
     <Card style={{ alignItems: 'center', gap: 12, paddingVertical: 40 }}>
       <Text style={{ fontSize: 44 }}>🧠</Text>
-      <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>Ton cerveau numérique commence ici.</Text>
+      <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>{t('brain.title')}</Text>
       <Text style={{ color: c.textSecondary, fontSize: 15, textAlign: 'center', lineHeight: 22, maxWidth: 360 }}>
-        Au fur et à mesure que tu apprends, Second Brain construira automatiquement ta carte de connaissances.
+        {t('graph.empty')}
       </Text>
-      <Button label="Commencer à apprendre" variant="ai" onPress={onStart} />
+      <Button label={t('auth.start')} variant="ai" onPress={onStart} />
     </Card>
   );
 }
+
+const STATUS_COPY: Record<TwinGraphNode['status'], TranslationKey> = {
+  mastered: 'graph.s.mastered',
+  in_progress: 'graph.s.in_progress',
+  ready: 'graph.s.ready',
+  at_risk: 'graph.s.at_risk',
+  blocked: 'graph.s.blocked',
+};

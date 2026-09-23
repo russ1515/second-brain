@@ -48,7 +48,7 @@ export class QdrantService {
     await this.client.createCollection(name, {
       vectors: { size: dimensions, distance: 'Cosine' },
     });
-    this.logger.log(`Created Qdrant collection "${name}" (dim=${dimensions}).`);
+    this.logger.log('Qdrant collection created.');
   }
 
   /** Upsert points, waiting for the write to be applied. */
@@ -64,6 +64,18 @@ export class QdrantService {
     await this.client.delete(name, {
       wait: true,
       filter: { must: [{ key: 'documentId', match: { value: documentId } }] },
+    });
+  }
+
+  /** Delete every point owned by a user (GDPR right to erasure). */
+  async deleteByUser(name: string, userId: string): Promise<void> {
+    const { exists } = await this.client.collectionExists(name);
+    if (!exists) {
+      return;
+    }
+    await this.client.delete(name, {
+      wait: true,
+      filter: { must: [{ key: 'userId', match: { value: userId } }] },
     });
   }
 

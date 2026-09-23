@@ -128,11 +128,11 @@ export class WritingService {
           { role: 'system', content: WRITING_PERSONA },
           { role: 'user', content: user },
         ],
-        { temperature: 0.3 },
+        { temperature: 0.3, operation: 'grading' },
       );
       raw = result.text;
     } catch (error) {
-      this.logger.error(`Writing review failed: ${(error as Error).message}`);
+      this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'The writing coach is temporarily unavailable. Please try again shortly.',
       );

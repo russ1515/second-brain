@@ -23,6 +23,7 @@ import { toCardView } from '../flashcards/card.mapper';
 import { ConceptService } from '../concepts/concept.service';
 import { MasteryService } from '../concepts/mastery.service';
 import { RevisionEngineService } from '../revision/revision-engine.service';
+import { localeDirective, resolveLocale } from '../common/learning-locale';
 import type { GenerateLessonDto } from './dto/generate-lesson.dto';
 
 const CONTEXT_LIMIT = 5;
@@ -110,11 +111,14 @@ export class LessonService {
     // "Difficulty auto-adapts — mastery down → simplify; mastery up → increase
     // complexity." An explicit level always wins; this only fills the gap.
     const level = dto.level ?? (await this.levelFromMastery(userId, conceptId));
+    const localeInstruction =
+      internal.directive ??
+      (!dto.language ? localeDirective(await resolveLocale(this.prisma, userId)) : undefined);
     const raw = await this.generateLesson(
       topic,
       context,
       { ...dto, level },
-      internal.directive,
+      localeInstruction,
     );
 
     const lesson = await this.prisma.lesson.create({
@@ -158,7 +162,7 @@ export class LessonService {
     if (conceptId) {
       await this.concepts
         .linkDocument(userId, conceptId, doc.id)
-        .catch((e) => this.logger.warn(`link doc→concept failed: ${e.message}`));
+        .catch((e) => this.logger.warn('Learning operation failed.'));
     }
 
     // Register the lesson itself for spaced repetition — a course is a
@@ -303,11 +307,7 @@ export class LessonService {
         limit: CONTEXT_LIMIT,
       }));
     } catch (error) {
-      this.logger.warn(
-        `Grounding retrieval failed; generating an ungrounded lesson: ${
-          (error as Error).message
-        }`,
-      );
+      this.logger.warn('Learning operation failed.');
       return '';
     }
     return results
@@ -338,11 +338,11 @@ export class LessonService {
               (context ? `\n\nGround it in my notes where relevant:\n${context}` : ''),
           },
         ],
-        { temperature: 0.4 },
+        { temperature: 0.4, operation: 'lesson' },
       );
       text = result.text;
     } catch (error) {
-      this.logger.error(`Lesson LLM call failed: ${(error as Error).message}`);
+      this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'The teacher is temporarily unavailable. Please try again shortly.',
       );
@@ -461,9 +461,7 @@ export class LessonService {
       }
       return result.created;
     } catch (error) {
-      this.logger.warn(
-        `Flashcard generation for lesson failed: ${(error as Error).message}`,
-      );
+      this.logger.warn('Learning operation failed.');
       return 0;
     }
   }

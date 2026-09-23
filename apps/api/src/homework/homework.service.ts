@@ -14,6 +14,7 @@ import type {
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
+import { localeDirective, resolveLocale } from '../common/learning-locale';
 import { MasteryService } from '../concepts/mastery.service';
 import { RetrievalService } from '../documents/retrieval/retrieval.service';
 import { AssessmentService, type MarkContext } from '../lessons/assessment.service';
@@ -129,7 +130,7 @@ export class HomeworkService {
 
     const languageLine = lesson.language
       ? ` Write the homework in ${lesson.language}.`
-      : '';
+      : ` ${localeDirective(await resolveLocale(this.prisma, userId))}`;
 
     let raw: string;
     try {
@@ -144,11 +145,11 @@ export class HomeworkService {
               `${levelLine}${notesBlock}`,
           },
         ],
-        { temperature: 0.5 },
+        { temperature: 0.5, operation: 'homework' },
       );
       raw = result.text;
     } catch (error) {
-      this.logger.error(`Homework LLM call failed: ${(error as Error).message}`);
+      this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'The homework engine is temporarily unavailable. Please try again shortly.',
       );
@@ -187,9 +188,7 @@ export class HomeworkService {
         .join('\n\n');
     } catch (error) {
       // Grounding is an enhancement, never a precondition.
-      this.logger.warn(
-        `Homework grounding failed; generating ungrounded: ${(error as Error).message}`,
-      );
+      this.logger.warn('Learning operation failed.');
       return '';
     }
   }

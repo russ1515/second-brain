@@ -25,12 +25,44 @@ export class EntitlementsService {
 
   async forUser(userId: string): Promise<EntitlementsView> {
     const sub = await this.subscriptions.resolveForUser(userId);
-    const plan = await this.prisma.plan.findUnique({ where: { id: sub.planId } });
+    const account = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { accountStatus: true } });
+    const paidStillEntitled =
+      sub.plan.slug !== 'free' &&
+      (sub.status === 'active' || sub.status === 'trialing' ||
+        (sub.status === 'canceled' && !!sub.currentPeriodEnd && sub.currentPeriodEnd > new Date()));
+    const basePlan = paidStillEntitled || sub.plan.slug === 'free'
+      ? await this.prisma.plan.findUnique({ where: { id: sub.planId } })
+      : await this.prisma.plan.findUnique({ where: { slug: 'free' } });
+    const overrides = await this.prisma.entitlementOverride.findMany({
+      where: { userId, revokedAt: null, startsAt: { lte: new Date() }, OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }] },
+      orderBy: { startsAt: 'desc' },
+    });
+    // An admin plan override is an entitlement source, not a paid
+    // Subscription: it never writes provider fields or invents a payment.  The
+    // date predicate above makes beta/exception expiry automatic.
+    const planOverride = overrides.find((override) =>
+      override.kind === 'plan' &&
+      typeof override.value === 'string' &&
+      (override.value === 'pro' || override.value === 'pro_max'),
+    );
+    const plan = planOverride
+      ? await this.prisma.plan.findUnique({ where: { slug: planOverride.value as 'pro' | 'pro_max' } })
+      : basePlan;
+    const quotas = { ...((plan?.quotas ?? {}) as Record<string, number>) };
+    const features = { ...((plan?.features ?? {}) as Record<string, boolean>) };
+    for (const override of overrides) {
+      if (override.kind === 'quota' && typeof override.value === 'number') quotas[override.key] = override.value;
+      if (override.kind === 'feature' && typeof override.value === 'boolean') features[override.key] = override.value;
+    }
+    if (account.accountStatus !== 'active') {
+      for (const key of Object.keys(features)) features[key] = false;
+      for (const key of Object.keys(quotas)) quotas[key] = 0;
+    }
     return {
-      planSlug: sub.plan.slug as PlanSlug,
+      planSlug: (plan?.slug ?? 'free') as PlanSlug,
       status: sub.status as SubscriptionStatus,
-      quotas: ((plan?.quotas ?? {}) as Record<string, number>) ?? {},
-      features: ((plan?.features ?? {}) as Record<string, boolean>) ?? {},
+      quotas,
+      features,
     };
   }
 

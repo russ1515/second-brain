@@ -22,3 +22,5 @@ allowBuilds:
   prisma: true
   # argon2 ships a native addon; its postinstall fetches/builds the prebuilt binary.
   argon2: true
+  '@google/genai': false
+  protobufjs: false

@@ -17,7 +17,12 @@
     },
     "web": {
       "bundler": "metro",
-      "output": "single"
+      "output": "single",
+      "name": "Second Brain — Learn with one personal intelligence",
+      "shortName": "Second Brain",
+      "lang": "en",
+      "description": "Capture what matters, understand it with your personal AI professor, practise it, review it and turn it into lasting knowledge.",
+      "themeColor": "#0B1020"
     },
     "plugins": ["expo-router"]
   }

@@ -59,6 +59,7 @@ export class DocumentController {
   ): Promise<SearchResponse> {
     const documentIds = await this.retrieval.resolveScope(user.userId, {
       documentId: dto.documentId,
+      documentIds: dto.documentIds,
       collectionId: dto.collectionId,
       subject: dto.subject,
     });
@@ -81,6 +82,7 @@ export class DocumentController {
       limit: dto.limit,
       minScore: dto.minScore,
       documentId: dto.documentId,
+      documentIds: dto.documentIds,
       collectionId: dto.collectionId,
       subject: dto.subject,
     });

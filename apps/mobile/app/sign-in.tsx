@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Animated, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '../lib/auth-context';
 import { api } from '../lib/client';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { useTokens } from '../lib/design/theme';
 import { useResponsive } from '../lib/responsive';
+import { safeReturnPath } from '../lib/navigation';
 import {
   AuthButton,
   AuthField,
@@ -34,14 +35,17 @@ const EXPIRY_SECONDS = 300;
 export default function SignInScreen() {
   const { login, register, verifyTwoFactor } = useAuth();
   const { t } = useI18n();
-  const { colors: c, spacing } = useTokens();
+  const { colors: c, spacing, reducedMotion } = useTokens();
   const { width } = useResponsive();
   const router = useRouter();
+  const { returnTo, mode: requestedMode } = useLocalSearchParams<{ returnTo?: string | string[]; mode?: string | string[] }>();
+  const destination = safeReturnPath(returnTo);
+  const requestedModeValue = Array.isArray(requestedMode) ? requestedMode[0] : requestedMode;
   const split = width >= 768; // desktop/tablet: brand + form side by side
   const fmt = (k: TranslationKey, vars: Record<string, string | number> = {}) =>
     Object.entries(vars).reduce((s, [key, v]) => s.replace(`{${key}}`, String(v)), t(k));
 
-  const [mode, setMode] = useState<Mode>('register');
+  const [mode, setMode] = useState<Mode>(requestedModeValue === 'login' ? 'login' : 'register');
   const [step, setStep] = useState<Step>('credentials');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -56,12 +60,23 @@ export default function SignInScreen() {
   const [cooldown, setCooldown] = useState(0);
   const [expired, setExpired] = useState(false);
 
-  // Short fade/slide on mode/step change (respects reduced motion via short dur).
+  useEffect(() => {
+    if (requestedModeValue === 'login' || requestedModeValue === 'register') {
+      setMode(requestedModeValue);
+      setStep('credentials');
+    }
+  }, [requestedModeValue]);
+
+  // Short fade/slide on mode/step change; fully static when reduced motion is requested.
   const anim = useRef(new Animated.Value(1)).current;
   useEffect(() => {
+    if (reducedMotion) {
+      anim.setValue(1);
+      return;
+    }
     anim.setValue(0);
     Animated.timing(anim, { toValue: 1, duration: 220, useNativeDriver: Platform.OS !== 'web' }).start();
-  }, [mode, step, anim]);
+  }, [mode, step, anim, reducedMotion]);
   const animStyle = { opacity: anim, transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) }] };
 
   useEffect(() => {
@@ -89,7 +104,7 @@ export default function SignInScreen() {
       } else {
         const res = await login(email.trim(), password);
         if (res.status === '2fa') { setChallengeToken(res.challengeToken); setStep('twofactor'); }
-        else router.replace('/');
+        else router.replace(destination);
       }
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
@@ -99,7 +114,7 @@ export default function SignInScreen() {
     setBusy(true); clear();
     try {
       await api('/auth/verify-otp', { method: 'POST', body: { code: otp } });
-      router.replace('/');
+      router.replace(destination);
     } catch (e) {
       setError((e as Error).message || t('auth.otpError'));
     } finally { setBusy(false); }
@@ -112,7 +127,7 @@ export default function SignInScreen() {
 
   const verify2fa = async () => {
     setBusy(true); clear();
-    try { await verifyTwoFactor(challengeToken, otp.trim()); router.replace('/'); }
+    try { await verifyTwoFactor(challengeToken, otp.trim()); router.replace(destination); }
     catch (e) { setError((e as Error).message || t('auth.otpError')); }
     finally { setBusy(false); }
   };

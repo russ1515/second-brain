@@ -6,6 +6,9 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { randomUUID } from 'node:crypto';
+import type { Request, Response, NextFunction } from 'express';
+import { RequestContextService } from './common/request-context.service';
 
 async function bootstrap(): Promise<void> {
   // `rawBody: true` keeps the untouched request body available (req.rawBody) so
@@ -17,7 +20,29 @@ async function bootstrap(): Promise<void> {
 
   // Security & hardening
   app.use(helmet());
-  app.enableCors();
+  const config = app.get(ConfigService);
+  const configuredOrigins = config.get<string[]>('api.corsOrigins', []);
+  const nodeEnv = config.get<string>('nodeEnv', 'development');
+  app.enableCors({
+    credentials: true,
+    origin(origin, callback) {
+      // Native Expo requests have no browser Origin header. Localhost is allowed
+      // only outside production; every deployed browser origin is explicit.
+      const localDevelopment = nodeEnv !== 'production' && !!origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+      if (!origin || configuredOrigins.includes(origin) || localDevelopment) callback(null, true);
+      else callback(new Error('Origin is not allowed by CORS policy.'));
+    },
+    allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Request-Id'],
+    exposedHeaders: ['X-Request-Id'],
+  });
+  const requestContext = app.get(RequestContextService);
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const incoming = req.header('x-request-id');
+    const requestId = incoming && /^[A-Za-z0-9._:-]{8,128}$/.test(incoming) ? incoming : randomUUID();
+    req.headers['x-request-id'] = requestId;
+    res.setHeader('x-request-id', requestId);
+    requestContext.run(requestId, next);
+  });
   app.enableShutdownHooks();
 
   // Global input validation
@@ -31,7 +56,6 @@ async function bootstrap(): Promise<void> {
 
   app.setGlobalPrefix('api');
 
-  const config = app.get(ConfigService);
   const port = config.getOrThrow<number>('api.port');
 
   await app.listen(port);

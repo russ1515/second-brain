@@ -26,6 +26,11 @@ import type {
   LanguageSkillResponse,
   PronunciationAssessment,
   PronunciationCoaching,
+  RlleCanDoCapability,
+  RlleCourseView,
+  RlleMissionTurnResponse,
+  RlleSessionResponse,
+  RlleWorldMissionTemplate,
   StartConversationResponse,
 } from '@second-brain/shared';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -48,6 +53,14 @@ import { GenerateDialogueDto } from './dto/generate-dialogue.dto';
 import { CorrectEssayDto } from './dto/correct-essay.dto';
 import { LanguageSkillsService } from './language-skills.service';
 import { LanguageSkillDto, ConjugationDto } from './dto/language-skill.dto';
+import { RealLifeLanguageService } from './real-life-language.service';
+import { StartRlleCourseDto } from './dto/start-rlle-course.dto';
+import { StartRlleLessonDto } from './dto/start-rlle-lesson.dto';
+import { AdvanceRlleLessonDto } from './dto/advance-rlle-lesson.dto';
+import { StartRlleMissionDto } from './dto/start-rlle-mission.dto';
+import { RlleMissionTurnDto } from './dto/rlle-mission-turn.dto';
+import { RecordRlleEvidenceDto } from './dto/record-rlle-evidence.dto';
+import { UpdateRlleCoursePreferencesDto } from './dto/update-rlle-course-preferences.dto';
 
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // 10 MB
 
@@ -62,6 +75,7 @@ export class LanguageController {
     private readonly writing: LanguageWritingService,
     private readonly skills: LanguageSkillsService,
     private readonly lessons: LessonService,
+    private readonly rlle: RealLifeLanguageService,
   ) {}
 
   @Post()
@@ -102,6 +116,126 @@ export class LanguageController {
     @Param('id') id: string,
   ): Promise<void> {
     await this.languages.remove(user.userId, id);
+  }
+
+  /** Structured CEFR curriculum and its measured, resumable learner state. */
+  @Get(':id/course')
+  course(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<RlleCourseView> {
+    return this.rlle.course(user.userId, id);
+  }
+
+  @Post(':id/course/start')
+  @HttpCode(HttpStatus.CREATED)
+  courseStart(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: StartRlleCourseDto,
+  ): Promise<RlleSessionResponse> {
+    return this.rlle.startCourse(user.userId, id, dto);
+  }
+
+  @Patch(':id/course/preferences')
+  coursePreferences(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateRlleCoursePreferencesDto,
+  ): Promise<RlleCourseView> {
+    return this.rlle.updatePreferences(user.userId, id, dto);
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post(':id/course/lessons/start')
+  @HttpCode(HttpStatus.CREATED)
+  courseLessonStart(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: StartRlleLessonDto,
+  ): Promise<RlleSessionResponse> {
+    return this.rlle.startLesson(user.userId, id, dto);
+  }
+
+  @Post(':id/course/advance')
+  @HttpCode(HttpStatus.OK)
+  courseAdvance(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: AdvanceRlleLessonDto,
+  ): Promise<RlleCourseView> {
+    return this.rlle.advanceLesson(
+      user.userId,
+      id,
+      dto.experienceSessionId,
+      dto.lessonId,
+      dto.completedStage,
+    );
+  }
+
+  @Get(':id/missions')
+  worldMissions(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<{
+    goalDomain: RlleCourseView['goalDomain'];
+    items: Array<RlleWorldMissionTemplate & {
+      available: boolean;
+      priority: 'core' | 'goal';
+      attempt: RlleCourseView['currentMission'];
+    }>;
+  }> {
+    return this.rlle.missions(user.userId, id);
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post(':id/missions/:missionId/start')
+  @HttpCode(HttpStatus.CREATED)
+  worldMissionStart(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('missionId') missionId: string,
+    @Body() dto: StartRlleMissionDto,
+  ): Promise<RlleSessionResponse> {
+    return this.rlle.startMission(user.userId, id, missionId, dto);
+  }
+
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post(':id/missions/:missionId/turn')
+  @HttpCode(HttpStatus.OK)
+  worldMissionTurn(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('missionId') missionId: string,
+    @Body() dto: RlleMissionTurnDto,
+  ): Promise<RlleMissionTurnResponse> {
+    return this.rlle.missionTurn(
+      user.userId,
+      id,
+      missionId,
+      dto.experienceSessionId,
+      dto.message,
+      dto.viaVoice,
+    );
+  }
+
+  /** Client declarations alone can never validate a Can-Do. */
+  @Post(':id/evidence')
+  @HttpCode(HttpStatus.OK)
+  recordEvidence(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: RecordRlleEvidenceDto,
+  ): Promise<RlleCourseView> {
+    return this.rlle.recordEvidence(user.userId, id, dto);
+  }
+
+  @Get(':id/can-do')
+  canDoMap(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<RlleCanDoCapability[]> {
+    return this.rlle.canDo(user.userId, id);
   }
 
   /** Mine vocabulary into this language's FSRS deck. */
@@ -158,7 +292,7 @@ export class LanguageController {
     @Param('id') id: string,
     @Body() dto: StartConversationDto,
   ): Promise<StartConversationResponse> {
-    const session = await this.conversation.start(user.userId, id, dto.scenario);
+    const session = await this.conversation.start(user.userId, id, dto);
     return { session };
   }
 

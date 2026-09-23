@@ -1,221 +1,142 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
-import type {
-  ExamView,
-  LearningCategory,
-  LearningPath,
-  LearningPredictionView,
-  OnboardingState,
-  ReviewStats,
-} from '@second-brain/shared';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import type { ContextItem, ReviewHomeView } from '@second-brain/shared';
 import { api } from '../../lib/client';
 import { useAuth } from '../../lib/auth-context';
 import { useI18n } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
-import { Skeleton } from '../../components/ds/core';
-import {
-  dueBreakdown,
-  estimateMinutes,
-  priorityOf,
-  retentionOf,
-  reviewPersona,
-  todayWhy,
-  type Priority,
-  type RetentionState,
-} from '../../lib/review/catalog';
-import {
-  AutoExtractCard,
-  DueCounter,
-  ExamRiskAlert,
-  ForgettingCurve,
-  QuickLaunch,
-  ReviewStatsStrip,
-  SessionComplete,
-} from '../../components/review/components';
-import {
-  ConceptsToConsolidate,
-  EmptyReview,
-  RetentionMap,
-  RevisionPlanner,
-  TodayBriefing,
-  WatchList,
-} from '../../components/review/advanced';
+import { loadReviewHomeCache, saveReviewHomeCache } from '../../lib/review-cache';
+import { Alert, Button, Card } from '../../components/ds/core';
+import { SmartErrorState, SmartLoadingState } from '../../components/ds/states';
+import { ContextBar } from '../../components/context/context-bar';
+import { DailyReviewPlanView, PriorityExplanation, ReviewQueuePreview, TodayReview } from '../../components/review/experience';
 
-/**
- * 📅 Réviser — the FSRS revision workspace (UI/UX Sprint 6, full spec).
- *
- * Five zones: Aujourd'hui (personalised briefing + the teacher's why), Concepts
- * à consolider, Smart Cards (launch), Progression de rétention (memory map +
- * watch list + forgetting curve + exam risk), and Planning des prochaines
- * révisions. Reads the EXISTING FSRS (/review/stats) + twin (/twin/next) +
- * prediction (/foresight) engines and adapts to the KYC persona — no scheduling
- * logic here. Honest states: first-use build, urgent, and an un-guilty "tout est
- * à jour".
- */
+type RouteParams = {
+  conceptId?: string | string[];
+  documentId?: string | string[];
+  goalId?: string | string[];
+  examId?: string | string[];
+  sourceSessionId?: string | string[];
+};
+
+/** Réviser answers one question: what should memory consolidate now? */
 export default function StudyScreen() {
   const { user } = useAuth();
   const { t } = useI18n();
   const router = useRouter();
-  const { colors: c } = useTokens();
+  const params = useLocalSearchParams<RouteParams>();
+  const { colors: c, spacing, typography } = useTokens();
   const { width, maxContentWidth } = useResponsive();
-  const wide = width >= 1024;
-
-  const [stats, setStats] = useState<ReviewStats | null>(null);
-  const [foresight, setForesight] = useState<LearningPredictionView | null>(null);
-  const [path, setPath] = useState<LearningPath | null>(null);
-  const [exams, setExams] = useState<ExamView[]>([]);
-  const [category, setCategory] = useState<LearningCategory | undefined>(undefined);
+  const wide = width >= 960;
+  const [home, setHome] = useState<ReviewHomeView | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [staleAt, setStaleAt] = useState<string | null>(null);
+  const [size, setSize] = useState<5 | 10 | 'all'>(10);
+
+  const context = useMemo(() => ({
+    conceptId: first(params.conceptId),
+    documentId: first(params.documentId),
+    goalId: first(params.goalId),
+    examId: first(params.examId),
+    sourceSessionId: first(params.sourceSessionId),
+  }), [params.conceptId, params.documentId, params.examId, params.goalId, params.sourceSessionId]);
+  const query = useMemo(() => queryString(context), [context]);
 
   const load = useCallback(async () => {
-    const [s, f, p, e, k] = await Promise.allSettled([
-      api<ReviewStats>('/review/stats'),
-      api<LearningPredictionView>('/foresight'),
-      api<LearningPath>('/twin/next'),
-      api<ExamView[]>('/exams'),
-      api<OnboardingState>('/onboarding'),
-    ]);
-    if (s.status === 'fulfilled') setStats(s.value);
-    if (f.status === 'fulfilled') setForesight(f.value);
-    if (p.status === 'fulfilled') setPath(p.value);
-    if (e.status === 'fulfilled') setExams(e.value);
-    if (k.status === 'fulfilled') setCategory(k.value.answers.education?.category ?? undefined);
-    setLoading(false);
-  }, []);
+    if (!user) return;
+    setError(null);
+    const cached = await loadReviewHomeCache(user.id, query);
+    if (cached) {
+      setHome(cached.value);
+      setStaleAt(cached.savedAt);
+      setLoading(false);
+    }
+    try {
+      const fresh = await api<ReviewHomeView>(`/review/home${query ? `?${query}` : ''}`);
+      setHome(fresh);
+      setStaleAt(null);
+      await saveReviewHomeCache(user.id, query, fresh);
+    } catch (cause) {
+      setError((cause as Error).message);
+      if (cached) {
+        setHome(cached.value);
+        setStaleAt(cached.savedAt);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [query, user]);
 
-  useFocusEffect(useCallback(() => { if (user) void load(); }, [user, load]));
+  useFocusEffect(useCallback(() => { void load(); }, [load]));
 
-  const persona = reviewPersona(category ?? null);
-  const name = user?.displayName?.trim().split(' ')[0] || '';
-  const forgettingRisk = foresight?.predictions.find((p) => p.kind === 'forgetting') ?? null;
-  const launch = (mode: 'flash' | 'full') => router.push({ pathname: '/revision', params: { mode } });
-  const items = path?.items ?? [];
+  const start = () => router.push({ pathname: '/revision', params: compactParams({ ...context, size: String(size) }) });
+  const contextItems = home ? toContextItems(home) : [];
 
-  if (loading) return <StudySkeleton maxWidth={maxContentWidth} />;
+  if (loading && !home) return <SmartLoadingState title={t('review9.loading')} detail={t('review9.loadingDetail')} />;
+  if (!home) return <ScrollView contentContainerStyle={[styles.container, { maxWidth: maxContentWidth }]}><SmartErrorState detail={error ?? undefined} retryable onRetry={() => void load()} /></ScrollView>;
 
-  const counts = stats ? dueBreakdown(stats) : { critical: 0, regular: 0, fresh: 0 };
-  const hasCards = !!stats && stats.due + stats.new + stats.learning + stats.review + stats.relearning + stats.reviewsToday > 0;
-  const allCaughtUp = !!stats && stats.due === 0 && hasCards;
-
-  // First-use empty build (task 9): no FSRS cards and no twin concepts yet.
-  if (!hasCards && items.length === 0) {
-    return (
-      <ScrollView contentContainerStyle={[styles.container, { maxWidth: maxContentWidth }]}>
-        <Header intro={persona.intro} />
-        <EmptyReview onStart={() => router.push('/learn')} />
-      </ScrollView>
-    );
-  }
-
-  // Derived twin data for the zones.
-  const consolidate = items
-    .filter((i) => i.status === 'at_risk' || i.status === 'blocked' || (i.mastery != null && i.mastery < 0.65))
-    .map((i) => ({ id: i.conceptId, name: i.name, priority: priorityOf(i.status, i.mastery) }));
-  const retentionCounts = items.reduce(
-    (acc, i) => { acc[retentionOf(i.status, i.dueCount)] += 1; return acc; },
-    { solid: 0, progressing: 0, fragile: 0, urgent: 0 } as Record<RetentionState, number>,
+  const primary = (
+    <View style={{ gap: spacing.md }}>
+      {home.resumableSession ? (
+        <Card style={{ gap: spacing.sm, borderColor: c.aiAccent }} testID="review-resume">
+          <Text accessibilityRole="header" style={[typography.title, { color: c.textPrimary }]}>{t('review9.resume')}</Text>
+          <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{home.resumableSession.title ?? t('review9.resumeDetail')}</Text>
+          {home.resumableSession.progress?.total !== undefined ? <Text style={[typography.caption, { color: c.textMuted }]}>{t('review9.resumeProgress').replace('{done}', String(home.resumableSession.progress.completed)).replace('{total}', String(home.resumableSession.progress.total))}</Text> : null}
+          <Button label={t('review9.resumeAction')} onPress={() => router.push({ pathname: '/revision', params: { sessionId: home.resumableSession!.id } })} />
+        </Card>
+      ) : null}
+      <TodayReview home={home} selectedSize={size} onSize={setSize} onStart={start} />
+      <PriorityExplanation item={home.priorityItems[0]} dueCount={home.dueCount} />
+      {home.dueCount === 0 ? <Button label={t('review9.continuePath')} variant="secondary" onPress={() => router.push('/learn')} /> : null}
+    </View>
   );
-  const watch = items
-    .filter((i) => i.status === 'at_risk')
-    .slice(0, 4)
-    .map((i) => ({ id: i.conceptId, name: i.name, when: 'demain', minutes: estimateMinutes(Math.max(3, i.dueCount || 3)) }));
-  const todayPlan = items.filter((i) => i.dueCount > 0).map((i) => ({ id: i.conceptId, name: i.name, priority: priorityOf(i.status, i.mastery) as Priority }));
-  const tomorrowPlan = items.filter((i) => i.status === 'in_progress' || i.status === 'at_risk').map((i) => ({ id: i.conceptId, name: i.name, priority: priorityOf(i.status, i.mastery) as Priority }));
-  const keyDates = exams.filter((e) => e.daysUntil >= 0).sort((a, b) => a.daysUntil - b.daysUntil).slice(0, 4)
-    .map((e) => ({ id: e.id, label: e.subject, when: e.daysUntil === 0 ? 'aujourd’hui' : `dans ${e.daysUntil} j` }));
-
-  // LEFT — the "do it now" action zones; RIGHT — retention analytics + planning.
-  const actionZones = (
-    <>
-      {/* ZONE 1 — Aujourd'hui, OR an un-guilty "all caught up" */}
-      {allCaughtUp ? (
-        <SessionComplete reviewed={stats!.reviewsToday} onDone={() => router.push('/learn')} />
-      ) : (
-        <TodayBriefing
-          name={name}
-          counts={counts}
-          minutes={estimateMinutes(stats?.due ?? 0)}
-          why={todayWhy(stats!)}
-          onStart={() => launch('full')}
-        />
-      )}
-
-      {/* ZONE 2 — Concepts à consolider */}
-      <ConceptsToConsolidate concepts={consolidate} onReview={() => router.push('/revision')} />
-
-      {/* ZONE 3 — Smart Cards (launch + breakdown) */}
-      <View style={{ gap: 10 }}>
-        <SectionLabel>{t('study.section.cards')}</SectionLabel>
-        <QuickLaunch due={stats?.due ?? 0} onLaunch={(o) => launch(o.key)} />
-        <DueCounter counts={counts} onPick={() => router.push('/revision')} />
-        <ReviewStatsStrip reviewsToday={stats?.reviewsToday ?? 0} retention={stats?.retention ?? null} />
-      </View>
-    </>
-  );
-
-  const analyticsZones = (
-    <>
-      {/* ZONE 4 — Progression de rétention */}
-      <View style={{ gap: 10 }}>
-        <RetentionMap counts={retentionCounts} />
-        <WatchList items={watch} onReview={() => router.push('/revision')} />
-        {persona.analytic || forgettingRisk ? <ForgettingCurve retention={stats?.retention ?? null} /> : null}
-        {forgettingRisk ? <ExamRiskAlert risk={forgettingRisk} onReview={() => router.push('/revision')} /> : null}
-      </View>
-
-      {/* ZONE 5 — Planning des prochaines révisions */}
-      <RevisionPlanner today={todayPlan} tomorrow={tomorrowPlan} keyDates={keyDates} />
-
-      <AutoExtractCard onExtract={() => router.push('/library')} />
-    </>
+  const secondary = (
+    <View style={{ gap: spacing.md }}>
+      <ReviewQueuePreview items={home.priorityItems} />
+      <DailyReviewPlanView plan={home.plan} />
+      <Card style={{ gap: spacing.xs }}>
+        <Text accessibilityRole="header" style={[typography.title, { color: c.textPrimary }]}>{t('review9.history')}</Text>
+        <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('review9.reviewsToday').replace('{count}', String(home.stats.reviewsToday))}</Text>
+      </Card>
+    </View>
   );
 
   return (
     <ScrollView contentContainerStyle={[styles.container, { maxWidth: maxContentWidth }]}>
-      <Header intro={persona.intro} />
-
-      {wide ? (
-        <View style={{ flexDirection: 'row', gap: 20, alignItems: 'flex-start' }}>
-          <View style={{ flex: 1, gap: 16, minWidth: 0 }}>{actionZones}</View>
-          <View style={{ flex: 1, gap: 16, minWidth: 0 }}>{analyticsZones}</View>
-        </View>
-      ) : (
-        <View style={{ gap: 16 }}>
-          {actionZones}
-          {analyticsZones}
-        </View>
-      )}
-
-      <Text style={{ color: c.textMuted, fontSize: 12, textAlign: 'center', marginTop: 4 }}>{persona.encourage}</Text>
-    </ScrollView>
-  );
-
-  function Header({ intro }: { intro: string }) {
-    return (
-      <View style={{ gap: 4 }}>
-        <Text style={{ color: c.textPrimary, fontSize: 30, fontWeight: '800' }}>📅 Réviser</Text>
-        <Text style={{ color: c.textSecondary, fontSize: 15, lineHeight: 22 }}>{intro}</Text>
+      <View style={{ gap: spacing.xs }}>
+        <Text accessibilityRole="header" style={[typography.h1, { color: c.textPrimary }]}>{t('review9.title')}</Text>
+        <Text style={[typography.body, { color: c.textSecondary, maxWidth: 720 }]}>{t('review9.intro')}</Text>
       </View>
-    );
-  }
-  function SectionLabel({ children }: { children: string }) {
-    return <Text style={{ color: c.textMuted, fontSize: 12, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase' }}>{children}</Text>;
-  }
-}
-
-function StudySkeleton({ maxWidth }: { maxWidth: number }) {
-  return (
-    <ScrollView contentContainerStyle={[styles.container, { maxWidth }]}>
-      <Skeleton height={40} width="50%" />
-      <Skeleton height={150} />
-      <Skeleton height={110} />
-      <Skeleton height={140} />
+      <ContextBar items={contextItems} />
+      {staleAt ? <Alert tone="warning" title={t('review9.offline')} detail={t('review9.stale').replace('{date}', new Date(staleAt).toLocaleString())} /> : null}
+      {home.partial ? <Alert tone="warning" title={t('review9.partial')} detail={t('review9.partialDetail')} /> : null}
+      {error && !staleAt ? <Alert tone="warning" title={t('state.error')} detail={error} /> : null}
+      {wide ? <View style={{ flexDirection: 'row', gap: spacing.lg, alignItems: 'flex-start' }}><View style={{ flex: 1.25, minWidth: 0 }}>{primary}</View><View style={{ flex: 0.75, minWidth: 300 }}>{secondary}</View></View> : <View style={{ gap: spacing.md }}>{primary}{secondary}</View>}
     </ScrollView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { padding: 20, gap: 16, width: '100%', alignSelf: 'center', paddingBottom: 48 },
-});
+function first(value?: string | string[]): string | undefined { return Array.isArray(value) ? value[0] : value; }
+
+function queryString(values: Record<string, string | undefined>): string {
+  return Object.entries(values).filter((entry): entry is [string, string] => !!entry[1]).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('&');
+}
+
+function compactParams(values: Record<string, string | undefined>): Record<string, string> {
+  return Object.fromEntries(Object.entries(values).filter((entry): entry is [string, string] => !!entry[1]));
+}
+
+function toContextItems(home: ReviewHomeView): ContextItem[] {
+  const addedAt = home.generatedAt;
+  return [
+    ...(home.context.concept ? [{ id: `concept-${home.context.concept.id}`, kind: 'concept' as const, scope: 'active-object' as const, referenceId: home.context.concept.id, label: home.context.concept.name, priority: 90, visibility: 'visible' as const, addedAt }] : []),
+    ...(home.context.document ? [{ id: `document-${home.context.document.documentId}`, kind: 'document' as const, scope: 'active-object' as const, referenceId: home.context.document.documentId, label: home.context.document.title, priority: 80, visibility: 'visible' as const, addedAt }] : []),
+    ...(home.context.exam ? [{ id: `exam-${home.context.exam.id}`, kind: 'exam' as const, scope: 'experience-session' as const, referenceId: home.context.exam.id, label: home.context.exam.subject, priority: 60, visibility: 'visible' as const, addedAt }] : []),
+    ...(home.context.goal ? [{ id: `goal-${home.context.goal.id}`, kind: 'goal' as const, scope: 'experience-session' as const, referenceId: home.context.goal.id, label: home.context.goal.title, priority: 50, visibility: 'summary' as const, addedAt }] : []),
+  ];
+}
+
+const styles = StyleSheet.create({ container: { padding: 20, gap: 16, width: '100%', alignSelf: 'center', paddingBottom: 56 } });

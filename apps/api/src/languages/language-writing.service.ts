@@ -108,11 +108,11 @@ export class LanguageWritingService {
           { role: 'system', content: system },
           { role: 'user', content: user },
         ],
-        { temperature: 0.4 },
+        { temperature: 0.4, operation: 'language-grading' },
       );
       return result.text;
     } catch (error) {
-      this.logger.error(`Language writing LLM failed: ${(error as Error).message}`);
+      this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'The teacher is temporarily unavailable. Please try again shortly.',
       );

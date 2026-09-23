@@ -1,4 +1,9 @@
 import { useWindowDimensions } from 'react-native';
+import {
+  resolveResponsiveLayout,
+  responsiveColumnBasis,
+  type ResponsiveLayout,
+} from '@second-brain/shared';
 
 /**
  * Responsive layout (Sprint 10.2 — Mobile Optimization).
@@ -8,38 +13,14 @@ import { useWindowDimensions } from 'react-native';
  * either orientation) and the web (up to 4, wider canvas). Everything derives
  * from the live window dimensions, so it reacts to rotation instantly.
  */
-export interface Responsive {
-  width: number;
-  height: number;
-  isLandscape: boolean;
-  /** Short side ≥ 600dp — the usual phone/tablet divide. */
-  isTablet: boolean;
-  /** Grid columns for feature/card grids at this size. */
-  columns: number;
-  /** Max content width so text lines don't stretch on wide screens. */
-  maxContentWidth: number;
-}
+export interface Responsive extends ResponsiveLayout {}
 
 export function useResponsive(): Responsive {
   const { width, height } = useWindowDimensions();
-  const isLandscape = width > height;
-  const isTablet = Math.min(width, height) >= 600;
-
-  // More usable width → more columns. Landscape earns one extra on phones.
-  let columns: number;
-  if (width >= 1000) columns = 4;
-  else if (width >= 700) columns = 3;
-  else if (isLandscape && width >= 560) columns = 3;
-  else columns = 2;
-
-  const maxContentWidth = width >= 1440 ? 1360 : width >= 1200 ? 1280 : isTablet ? 960 : 720;
-
-  return { width, height, isLandscape, isTablet, columns, maxContentWidth };
+  return resolveResponsiveLayout(width, height);
 }
 
 /** Flex basis (%) for one cell in an `n`-column wrap grid, accounting for gaps. */
 export function columnBasis(columns: number): `${number}%` {
-  // Leave a little slack so `gap` doesn't push a row to wrap early.
-  const pct = Math.floor((100 - (columns - 1) * 2) / columns);
-  return `${pct}%`;
+  return responsiveColumnBasis(columns);
 }

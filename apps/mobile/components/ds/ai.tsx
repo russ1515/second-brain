@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTokens } from '../../lib/design/theme';
+import { useI18n } from '../../lib/i18n';
 
 /**
  * AI Design Language (UI/UX Sprint 1, tasks UI-1.7 & UI-1.8).
@@ -18,10 +19,11 @@ export type Posture = 'supportive' | 'challenging' | 'examiner';
 
 export function usePostureStyle(posture: Posture) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const map = {
-    supportive: { color: c.success, soft: c.successSoft, icon: '🟢', label: 'Bienveillant' },
-    challenging: { color: c.warning, soft: c.warningSoft, icon: '🟡', label: 'Exigeant' },
-    examiner: { color: c.error, soft: c.errorSoft, icon: '🔴', label: 'Examinateur' },
+    supportive: { color: c.success, soft: c.successSoft, icon: '🟢', label: t('ai.posture.supportive') },
+    challenging: { color: c.warning, soft: c.warningSoft, icon: '🟡', label: t('ai.posture.challenging') },
+    examiner: { color: c.error, soft: c.errorSoft, icon: '🔴', label: t('ai.posture.examiner') },
   } as const;
   return map[posture];
 }
@@ -75,8 +77,9 @@ function AIFrame({
 // ── AI Recommendation — "I analysed your progress; here's what we'll do" ──────
 export function AIRecommendation({ title, body, action }: { title: string; body?: string; action?: ReactNode }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   return (
-    <AIFrame icon="🤖" kicker="Recommandation IA" accent={c.aiAccent} soft={c.aiAccentSoft} action={action}>
+    <AIFrame icon="🤖" kicker={t('ai.recommendation')} accent={c.aiAccent} soft={c.aiAccentSoft} action={action}>
       <Text style={{ color: c.textPrimary, fontSize: 16, fontWeight: '700' }}>{title}</Text>
       {body ? <Text style={{ color: c.textSecondary, fontSize: 15, lineHeight: 22 }}>{body}</Text> : null}
     </AIFrame>
@@ -86,8 +89,9 @@ export function AIRecommendation({ title, body, action }: { title: string; body?
 // ── AI Insight — something the AI detected ───────────────────────────────────
 export function AIInsight({ text }: { text: string }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   return (
-    <AIFrame icon="💡" kicker="Analyse IA" accent={c.info} soft={c.infoSoft}>
+    <AIFrame icon="💡" kicker={t('ai.insight')} accent={c.info} soft={c.infoSoft}>
       <Text style={{ color: c.textPrimary, fontSize: 15, lineHeight: 22 }}>{text}</Text>
     </AIFrame>
   );
@@ -96,8 +100,9 @@ export function AIInsight({ text }: { text: string }) {
 // ── AI Explanation — pedagogical explanation ─────────────────────────────────
 export function AIExplanation({ text }: { text: string }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   return (
-    <AIFrame icon="📘" kicker="Explication" accent={c.primary} soft={c.aiAccentSoft}>
+    <AIFrame icon="📘" kicker={t('ai.explanation')} accent={c.primary} soft={c.aiAccentSoft}>
       <Text style={{ color: c.textPrimary, fontSize: 15, lineHeight: 23 }}>{text}</Text>
     </AIFrame>
   );
@@ -106,8 +111,9 @@ export function AIExplanation({ text }: { text: string }) {
 // ── AI Warning — a detected difficulty ───────────────────────────────────────
 export function AIWarning({ text }: { text: string }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   return (
-    <AIFrame icon="⚠︎" kicker="Difficulté détectée" accent={c.warning} soft={c.warningSoft}>
+    <AIFrame icon="⚠︎" kicker={t('ai.warning')} accent={c.warning} soft={c.warningSoft}>
       <Text style={{ color: c.textPrimary, fontSize: 15, lineHeight: 22 }}>{text}</Text>
     </AIFrame>
   );
@@ -116,9 +122,10 @@ export function AIWarning({ text }: { text: string }) {
 // ── AI Progress — an AI-generated read on progress ───────────────────────────
 export function AIProgress({ label, value }: { label: string; value: number }) {
   const { colors: c, radius } = useTokens();
+  const { t } = useI18n();
   const pct = Math.max(0, Math.min(100, value));
   return (
-    <AIFrame icon="📈" kicker="Progression" accent={c.aiAccent} soft={c.aiAccentSoft}>
+    <AIFrame icon="📈" kicker={t('ai.progress')} accent={c.aiAccent} soft={c.aiAccentSoft}>
       <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '600' }}>{label}</Text>
       <View style={{ height: 8, borderRadius: radius.full, backgroundColor: c.surfaceSunken, overflow: 'hidden' }}>
         <View style={{ height: 8, width: `${pct}%`, backgroundColor: c.aiAccent, borderRadius: radius.full }} />
@@ -130,6 +137,7 @@ export function AIProgress({ label, value }: { label: string; value: number }) {
 // ── AI Teacher Message — the Professor speaking, in a given posture ───────────
 export function AITeacherMessage({ text, posture = 'supportive' }: { text: string; posture?: Posture }) {
   const { colors: c, radius, spacing } = useTokens();
+  const { t } = useI18n();
   const p = usePostureStyle(posture);
   return (
     <View style={{ backgroundColor: c.surface, borderWidth: 1, borderColor: c.borderSubtle, borderRadius: radius.md, borderLeftWidth: 3, borderLeftColor: p.color, padding: spacing.md, gap: 8 }}>
@@ -138,7 +146,7 @@ export function AITeacherMessage({ text, posture = 'supportive' }: { text: strin
           <View style={{ width: 26, height: 26, borderRadius: radius.full, backgroundColor: c.aiAccentSoft, alignItems: 'center', justifyContent: 'center' }}>
             <Text style={{ fontSize: 14 }}>👨‍🏫</Text>
           </View>
-          <Text style={{ color: c.aiAccent, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8 }}>Professeur IA</Text>
+          <Text style={{ color: c.aiAccent, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8 }}>{t('ai.professor')}</Text>
         </View>
         <PostureBadge posture={posture} />
       </View>

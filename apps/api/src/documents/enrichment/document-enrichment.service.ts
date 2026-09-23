@@ -76,17 +76,15 @@ export class DocumentEnrichmentService {
               doc.content.slice(0, MAX_CONTENT_CHARS),
           },
         ],
-        { temperature: 0.2 },
+        { temperature: 0.2, operation: 'document-metadata' },
       );
       enrichment = this.parse(result.text);
-    } catch (error) {
-      this.logger.warn(
-        `Enrichment LLM call failed for ${documentId}: ${(error as Error).message}`,
-      );
+    } catch {
+      this.logger.warn('Document enrichment operation failed.');
       return;
     }
     if (!enrichment) {
-      this.logger.warn(`Enrichment returned nothing usable for ${documentId}.`);
+      this.logger.warn('Document enrichment returned no usable result.');
       return;
     }
 
@@ -95,10 +93,8 @@ export class DocumentEnrichmentService {
         where: { id: documentId },
         data: { ...enrichment, enrichedAt: new Date() },
       })
-      .catch((error) => {
-        this.logger.warn(
-          `Could not persist enrichment for ${documentId}: ${(error as Error).message}`,
-        );
+      .catch(() => {
+        this.logger.warn('Could not persist document enrichment.');
       });
   }
 

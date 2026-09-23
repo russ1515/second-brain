@@ -232,7 +232,7 @@ export function ProactiveState({
           ))}
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
             <Button label={t('h.recs.act')} size="sm" onPress={() => onAct(it.id)} />
-            <Button label="✕" variant="ghost" size="sm" onPress={() => onDismiss(it.id)} accessibilityLabel="Dismiss" />
+            <Button label="✕" variant="ghost" size="sm" onPress={() => onDismiss(it.id)} accessibilityLabel={t('app.dismiss')} />
           </View>
         </Card>
       ))}

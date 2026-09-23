@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma, type Invoice } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type {
   BillingInterval,
   CheckoutResponse,
@@ -58,11 +59,20 @@ export class BillingService {
       planName: plan.name,
       interval,
     });
+    const sub = await this.subscriptions.resolveForUser(userId);
+    if (sub.plan.slug === 'free') {
+      await this.prisma.subscription.update({ where: { userId }, data: { status: 'payment_pending' } });
+    }
     return { provider: provider.name, url: result.url, sessionId: result.sessionId };
   }
 
   /** Complete a FAKE checkout in dev (stands in for the provider callback). */
   async devConfirm(userId: string, sessionId: string): Promise<void> {
+    if (!this.registry.fakeAllowed) {
+      throw new BadRequestException(
+        'Fake checkout confirmation is disabled in production.',
+      );
+    }
     const event = this.registry.fake.activation(sessionId);
     if (event.userId !== userId) {
       throw new BadRequestException('This checkout session belongs to another user.');
@@ -77,7 +87,7 @@ export class BillingService {
     signature: string | undefined,
   ): Promise<void> {
     const event = await this.registry.get(provider).parseWebhook(rawBody, signature);
-    if (event) await this.applyEvent(provider, event);
+    if (event) await this.applyEvent(provider, event, createHash('sha256').update(rawBody).digest('hex'));
   }
 
   /** Verify a mobile purchase (Apple/Google) and apply it. */
@@ -108,7 +118,10 @@ export class BillingService {
         data: { cancelAtPeriodEnd: true },
       });
     } else {
-      await this.downgradeToFree(userId);
+      throw new BadRequestException({
+        code: 'BUSINESS_DECISION_REQUIRED',
+        message: 'Immediate paid-plan cancellation needs an explicit refund/proration policy.',
+      });
     }
   }
 
@@ -125,34 +138,55 @@ export class BillingService {
   private async applyEvent(
     provider: PaymentProviderName,
     event: NormalizedBillingEvent,
+    payloadHash?: string,
   ): Promise<void> {
-    // Idempotency: record the event first; a duplicate (re-delivery) is ignored.
-    try {
-      await this.prisma.webhookEvent.create({
-        data: { provider, eventId: event.eventId, type: event.type },
-      });
-    } catch (e) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        this.logger.debug(`Duplicate event ${provider}/${event.eventId} ignored.`);
-        return;
-      }
-      throw e;
+    const registry = await this.prisma.webhookEvent.upsert({
+      where: { provider_eventId: { provider, eventId: event.eventId } },
+      create: { provider, eventId: event.eventId, type: event.type, payloadHash, status: 'received' },
+      update: {},
+    });
+    if (registry.status === 'processed') {
+      this.logger.debug('Duplicate webhook event ignored.');
+      return;
     }
+    if (registry.payloadHash && payloadHash && registry.payloadHash !== payloadHash) {
+      throw new BadRequestException('Webhook event id was reused with a different payload.');
+    }
+    const claimed = await this.prisma.webhookEvent.updateMany({
+      where: { id: registry.id, status: { in: ['received', 'failed'] } },
+      data: { status: 'processing', attemptCount: { increment: 1 }, lastError: null },
+    });
+    // Another delivery already owns this event. It will either commit processed
+    // or mark failed, in which case a later provider retry may claim it again.
+    if (claimed.count === 0) return;
 
-    await this.subscriptions.resolveForUser(event.userId); // ensure a row exists
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        let existing = await tx.subscription.findUnique({ where: { userId: event.userId } });
+        if (!existing) {
+          const free = await tx.plan.findUniqueOrThrow({ where: { slug: 'free' } });
+          existing = await tx.subscription.create({ data: { userId: event.userId, planId: free.id, status: 'free', planVersion: free.configurationVersion } });
+        }
 
-    switch (event.type) {
+        const outOfOrder = !!(
+          existing.currentPeriodStart && event.currentPeriodStart &&
+          event.currentPeriodStart.getTime() < existing.currentPeriodStart.getTime()
+        );
+
+        if (!outOfOrder) switch (event.type) {
       case 'subscription_activated':
       case 'subscription_renewed':
       case 'subscription_updated': {
         const plan = event.planSlug
-          ? await this.plans.bySlug(event.planSlug)
+          ? await tx.plan.findUnique({ where: { slug: event.planSlug } })
           : null;
-        await this.prisma.subscription.update({
+        if (!plan && event.planSlug) throw new BadRequestException(`Unknown plan "${event.planSlug}" in verified event.`);
+        await tx.subscription.update({
           where: { userId: event.userId },
           data: {
             ...(plan ? { planId: plan.id } : {}),
             status: 'active',
+            ...(plan ? { planVersion: plan.configurationVersion } : {}),
             provider,
             interval: event.interval ?? undefined,
             providerCustomerId: event.providerCustomerId ?? undefined,
@@ -162,15 +196,17 @@ export class BillingService {
             cancelAtPeriodEnd: false,
           },
         });
-        await this.recordPaymentAndInvoice(provider, event);
+        if (event.amount !== undefined && event.currency) {
+          await this.recordPaymentAndInvoice(tx, provider, event);
+        }
         break;
       }
       case 'payment_failed':
-        await this.prisma.subscription.update({
+        await tx.subscription.update({
           where: { userId: event.userId },
-          data: { status: 'past_due' },
+          data: { status: 'payment_failed' },
         });
-        await this.prisma.payment.create({
+        await tx.payment.create({
           data: {
             userId: event.userId,
             provider,
@@ -182,29 +218,53 @@ export class BillingService {
         });
         break;
       case 'subscription_canceled':
-        await this.downgradeToFree(event.userId);
+        const sub = await tx.subscription.findUniqueOrThrow({ where: { userId: event.userId } });
+        if (sub.currentPeriodEnd && sub.currentPeriodEnd > new Date()) {
+          await tx.subscription.update({ where: { userId: event.userId }, data: { status: 'canceled', cancelAtPeriodEnd: true } });
+        } else {
+          await this.downgradeToFree(event.userId, tx);
+        }
         break;
+        }
+        await tx.auditLog.create({
+          data: {
+            action: outOfOrder ? 'billing.webhook.ignored_out_of_order' : `billing.webhook.${event.type}`,
+            targetType: 'User',
+            targetId: event.userId,
+            result: outOfOrder ? 'ignored' : 'success',
+            metadata: { provider, eventId: event.eventId, type: event.type },
+          },
+        });
+        await tx.webhookEvent.update({ where: { id: registry.id }, data: { status: 'processed', processedAt: new Date() } });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (error) {
+      await this.prisma.webhookEvent.update({
+        where: { id: registry.id },
+        data: { status: 'failed', lastError: error instanceof Error ? error.message.slice(0, 500) : 'Unknown processing error' },
+      }).catch(() => undefined);
+      throw error;
     }
   }
 
   private async recordPaymentAndInvoice(
+    tx: Prisma.TransactionClient,
     provider: PaymentProviderName,
     event: NormalizedBillingEvent,
   ): Promise<void> {
     const amount = event.amount ?? 0;
     const currency = event.currency ?? 'usd';
-    await this.prisma.payment.create({
+    await tx.payment.create({
       data: {
         userId: event.userId,
         provider,
-        providerRef: event.providerSubscriptionId,
+        providerRef: event.eventId,
         amount,
         currency,
         status: 'succeeded',
         purpose: event.type === 'subscription_renewed' ? 'renewal' : 'subscription',
       },
     });
-    await this.prisma.invoice.create({
+    await tx.invoice.create({
       data: {
         userId: event.userId,
         number: `INV-${new Date().getFullYear()}-${randomUUID().slice(0, 8).toUpperCase()}`,
@@ -218,14 +278,15 @@ export class BillingService {
     });
   }
 
-  private async downgradeToFree(userId: string): Promise<void> {
-    const free = await this.plans.bySlug('free');
+  private async downgradeToFree(userId: string, tx: Prisma.TransactionClient = this.prisma): Promise<void> {
+    const free = await tx.plan.findUnique({ where: { slug: 'free' } });
     if (!free) return;
-    await this.prisma.subscription.update({
+    await tx.subscription.update({
       where: { userId },
       data: {
         planId: free.id,
-        status: 'active',
+        status: 'free',
+        planVersion: free.configurationVersion,
         interval: null,
         provider: null,
         providerSubscriptionId: null,

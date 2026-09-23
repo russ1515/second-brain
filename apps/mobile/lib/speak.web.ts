@@ -1,4 +1,5 @@
-import { synthesize } from './speak';
+import { synthesize } from './speech-api';
+import { tr } from './i18n';
 
 export { synthesize };
 
@@ -36,13 +37,13 @@ export async function speak(text: string, language?: string): Promise<void> {
     };
     audio.onerror = () => {
       if (current === audio) current = null;
-      reject(new Error('Could not play your teacher’s voice.'));
+      reject(new Error(tr('voice.error.playback')));
     };
     audio.play().catch((e) => {
       // Browsers block autoplay until the user has interacted; every caller
       // here is behind a tap, so surface anything else honestly.
       if (current === audio) current = null;
-      reject(e instanceof Error ? e : new Error('Playback was blocked.'));
+      reject(e instanceof Error ? e : new Error(tr('voice.error.blocked')));
     });
   });
 }

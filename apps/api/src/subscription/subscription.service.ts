@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -38,15 +39,25 @@ export class SubscriptionService {
       // The catalog seeds on boot; this only fires if seeding hasn't run.
       throw new NotFoundException('Plan catalog is not initialised yet.');
     }
-    return this.prisma.subscription.create({
-      data: { userId, planId: free.id, status: 'active' },
+    // Several dashboard endpoints resolve entitlements in parallel for a new
+    // account. An upsert makes first-use provisioning atomic instead of racing
+    // two create() calls against the unique userId constraint.
+    return this.prisma.subscription.upsert({
+      where: { userId },
+      create: { userId, planId: free.id, status: 'free', planVersion: free.configurationVersion },
+      update: {},
       include: { plan: { select: { slug: true, name: true } } },
     });
   }
 
-  /** Switch a user's plan. No payment gate at this stage (that belongs to the
-   *  Payments task); this just repoints the subscription and marks it active. */
+  /** The direct client route is only allowed to return to Free. Paid plans are
+   *  activated exclusively by BillingService after a verified provider event. */
   async setPlan(userId: string, slug: PlanSlug): Promise<SubscriptionWithPlan> {
+    if (slug !== DEFAULT_PLAN_SLUG) {
+      throw new ForbiddenException(
+        'Paid plans can only be activated through verified billing checkout.',
+      );
+    }
     const plan = await this.plans.bySlug(slug);
     if (!plan || !plan.isActive) {
       throw new NotFoundException(`Unknown plan "${slug}".`);
@@ -54,7 +65,16 @@ export class SubscriptionService {
     await this.resolveForUser(userId); // ensure a row exists
     return this.prisma.subscription.update({
       where: { userId },
-      data: { planId: plan.id, status: 'active', cancelAtPeriodEnd: false },
+      data: {
+        planId: plan.id,
+        status: 'free',
+        planVersion: plan.configurationVersion,
+        cancelAtPeriodEnd: false,
+        // A paid entitlement is never replaced mid-cycle by a fresh Free cycle.
+        // The billing workflow schedules paid cancellation at period end.
+        provider: null,
+        providerSubscriptionId: null,
+      },
       include: { plan: { select: { slug: true, name: true } } },
     });
   }

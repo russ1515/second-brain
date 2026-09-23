@@ -1,4 +1,5 @@
 import {
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -9,6 +10,7 @@ import {
 import type {
   LessonView,
   SynthesisResult,
+  TutorMessageView,
   VoiceTurnResponse,
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
@@ -67,12 +69,32 @@ export class VoiceService {
     const transcript = await this.transcribe(audio, options.language);
 
     // The same grounded, twin-steered flow a typed message takes.
-    const { message } = await this.tutor.sendMessage(
-      userId,
-      sessionId,
-      transcript.text,
-      { viaVoice: true },
-    );
+    let message: TutorMessageView;
+    try {
+      ({ message } = await this.tutor.sendMessage(
+        userId,
+        sessionId,
+        transcript.text,
+        { viaVoice: true },
+      ));
+    } catch (error) {
+      // Speech was successfully recognised: never make the learner record it
+      // again just because the response provider or quota gate failed.
+      await this.tutor
+        .preserveVoiceTranscript(userId, sessionId, transcript.text)
+        .catch(() => undefined);
+      if (error instanceof HttpException) {
+        const response = error.getResponse();
+        const payload = typeof response === 'object' && response !== null
+          ? response
+          : { message: response };
+        throw new HttpException(
+          { ...payload, transcript: transcript.text, code: 'voice_turn_incomplete' },
+          error.getStatus(),
+        );
+      }
+      throw error;
+    }
 
     // Written-first: the spoken turn must leave written material behind.
     const lesson =
@@ -104,9 +126,9 @@ export class VoiceService {
       result = await this.speech.transcribe(audio.buffer, {
         mimeType: audio.mimetype || 'application/octet-stream',
         language,
-      });
+      }, 'TUTOR_VOICE');
     } catch (error) {
-      this.logger.error(`Transcription failed: ${(error as Error).message}`);
+      this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'Could not transcribe that audio. Please try again shortly.',
       );
@@ -129,9 +151,7 @@ export class VoiceService {
     try {
       return await this.lessons.generate(userId, { tutorSessionId: sessionId });
     } catch (error) {
-      this.logger.warn(
-        `Written package for voice turn failed: ${(error as Error).message}`,
-      );
+      this.logger.warn('Learning operation failed.');
       return null;
     }
   }
@@ -141,10 +161,10 @@ export class VoiceService {
     language?: string,
   ): Promise<SynthesisResult | undefined> {
     try {
-      return await this.speech.synthesize(text, { language });
+      return await this.speech.synthesize(text, { language }, 'TUTOR_VOICE');
     } catch (error) {
       // The written turn stands on its own; audio is an enhancement.
-      this.logger.warn(`Speech synthesis failed: ${(error as Error).message}`);
+      this.logger.warn('Learning operation failed.');
       return undefined;
     }
   }

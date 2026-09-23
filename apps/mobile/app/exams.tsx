@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import type { CreateExamRequest, ExamPriority, ExamView } from '@second-brain/shared';
 import { api } from '../lib/client';
 import { useTokens } from '../lib/design/theme';
@@ -30,6 +31,7 @@ export default function ExamsScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t, locale } = useI18n();
+  const router = useRouter();
   const [exams, setExams] = useState<ExamView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [subject, setSubject] = useState('');
@@ -143,6 +145,7 @@ export default function ExamsScreen() {
                 </View>
               )}
             </View>
+            <Button variant="ghost" label={t('review9.examReview')} onPress={() => router.push({ pathname: '/revision', params: { examId: e.id } })} />
             <Pressable onPress={() => remove(e.id)} accessibilityRole="button" style={styles.removeWrap} hitSlop={6}>
               <Text style={styles.remove}>✕</Text>
             </Pressable>
@@ -173,7 +176,7 @@ function daysLabel(days: number, t: (k: TranslationKey) => string): string {
   return `${t('exams.in')} ${days} ${t('exams.days')}`;
 }
 function formatDate(date: string, locale: string): string {
-  return new Date(`${date}T12:00:00`).toLocaleDateString(locale === 'fr' ? 'fr-FR' : 'en-US', {
+  return new Date(`${date}T12:00:00`).toLocaleDateString(locale, {
     weekday: 'short', day: 'numeric', month: 'short',
   });
 }

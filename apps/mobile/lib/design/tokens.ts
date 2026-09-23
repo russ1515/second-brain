@@ -148,8 +148,8 @@ export interface TypeStyle {
   letterSpacing: number;
 }
 export type TypeName =
-  | 'display' | 'h1' | 'h2' | 'h3' | 'title'
-  | 'bodyLarge' | 'body' | 'bodySmall' | 'caption' | 'label';
+  | 'display' | 'h1' | 'h2' | 'h3' | 'headline' | 'title'
+  | 'bodyLarge' | 'body' | 'bodySmall' | 'caption' | 'label' | 'overline';
 
 /** Style-only map — directly spreadable into a Text style. */
 export const typography: Record<TypeName, TypeStyle> = {
@@ -157,12 +157,14 @@ export const typography: Record<TypeName, TypeStyle> = {
   h1: { fontSize: 30, fontWeight: '700', lineHeight: 36, letterSpacing: -0.3 },
   h2: { fontSize: 24, fontWeight: '700', lineHeight: 30, letterSpacing: -0.2 },
   h3: { fontSize: 19, fontWeight: '700', lineHeight: 25, letterSpacing: -0.1 },
+  headline: { fontSize: 19, fontWeight: '700', lineHeight: 25, letterSpacing: -0.1 },
   title: { fontSize: 16, fontWeight: '600', lineHeight: 22, letterSpacing: 0 },
   bodyLarge: { fontSize: 17, fontWeight: '400', lineHeight: 26, letterSpacing: 0 },
   body: { fontSize: 15, fontWeight: '400', lineHeight: 22, letterSpacing: 0 },
   bodySmall: { fontSize: 13, fontWeight: '400', lineHeight: 19, letterSpacing: 0 },
   caption: { fontSize: 12, fontWeight: '500', lineHeight: 16, letterSpacing: 0.2 },
   label: { fontSize: 11, fontWeight: '700', lineHeight: 14, letterSpacing: 0.8 },
+  overline: { fontSize: 11, fontWeight: '700', lineHeight: 14, letterSpacing: 0.8 },
 };
 
 /** When to use each level (kept separate so `typography` stays style-only). */
@@ -171,12 +173,14 @@ export const typographyUsage: Record<TypeName, string> = {
   h1: 'Screen title',
   h2: 'Section title',
   h3: 'Sub-section / card title',
+  headline: 'Document or panel headline (compatibility alias for h3)',
   title: 'List item / control title',
   bodyLarge: 'Lead paragraph, AI messages',
   body: 'Default paragraph text',
   bodySmall: 'Secondary text, help',
   caption: 'Meta, timestamps',
   label: 'Uppercase section labels',
+  overline: 'Uppercase section labels (compatibility alias for label)',
 };
 
 // ── spacing — one 4-based scale; components use only these ────────────────────

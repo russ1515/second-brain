@@ -5,6 +5,7 @@ import { useTokens } from '../../lib/design/theme';
 import { Badge, Button, Card, Input, Progress, SegmentedControl, Switch } from '../ds/core';
 import { Sheet } from '../ds/overlays';
 import { PostureBadge, type Posture } from '../ds/ai';
+import { useI18n, type TranslationKey } from '../../lib/i18n';
 
 /**
  * Profil & KYC components (UI/UX Sprint 7). Reusable views for the learner's
@@ -35,6 +36,7 @@ export function ProfilePhoto({
   onRemove: () => void;
 }) {
   const { colors: c, radius } = useTokens();
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const initials = (name ?? '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('');
 
@@ -43,7 +45,7 @@ export function ProfilePhoto({
       <View>
         <View style={{ width: 96, height: 96, borderRadius: 999, backgroundColor: c.aiAccentSoft, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderWidth: 2, borderColor: c.aiAccent }}>
           {photoUri ? (
-            <Image source={{ uri: photoUri }} style={{ width: '100%', height: '100%' }} accessibilityLabel="Photo de profil" />
+            <Image source={{ uri: photoUri }} style={{ width: '100%', height: '100%' }} accessibilityLabel={t('profile.card.photo')} />
           ) : (
             <Text style={{ fontSize: avatarEmoji ? 44 : 34, color: c.aiAccent, fontWeight: '800' }}>{avatarEmoji || initials || '👤'}</Text>
           )}
@@ -52,18 +54,18 @@ export function ProfilePhoto({
         <Pressable
           onPress={() => setOpen(true)}
           accessibilityRole="button"
-          accessibilityLabel="Modifier la photo"
+          accessibilityLabel={t('profile.card.editPhoto')}
           style={{ position: 'absolute', right: -2, bottom: -2, width: 34, height: 34, borderRadius: 999, backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: c.background }}
         >
           <Text style={{ fontSize: 16 }}>📷</Text>
         </Pressable>
       </View>
 
-      <Sheet visible={open} onClose={() => setOpen(false)} title="Photo de profil">
-        <PhotoRow icon="📷" label="Prendre une photo" onPress={() => { setOpen(false); onPick('camera'); }} disabled={busy} />
-        <PhotoRow icon="🖼️" label="Choisir depuis la galerie" onPress={() => { setOpen(false); onPick('gallery'); }} disabled={busy} />
+      <Sheet visible={open} onClose={() => setOpen(false)} title={t('profile.card.photo')}>
+        <PhotoRow icon="📷" label={t('profile.card.takePhoto')} onPress={() => { setOpen(false); onPick('camera'); }} disabled={busy} />
+        <PhotoRow icon="🖼️" label={t('profile.card.gallery')} onPress={() => { setOpen(false); onPick('gallery'); }} disabled={busy} />
         <View style={{ gap: 8, marginTop: 4 }}>
-          <Text style={{ color: c.textMuted, fontSize: 12, fontWeight: '700', textTransform: 'uppercase' }}>Ou un avatar</Text>
+          <Text style={{ color: c.textMuted, fontSize: 12, fontWeight: '700', textTransform: 'uppercase' }}>{t('profile.card.avatar')}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {AVATAR_EMOJIS.map((e) => (
               <Pressable key={e} onPress={() => { setOpen(false); onChooseAvatar(e); }} accessibilityRole="button" accessibilityLabel={`Avatar ${e}`}
@@ -75,7 +77,7 @@ export function ProfilePhoto({
         </View>
         {(photoUri || avatarEmoji) ? (
           <View style={{ marginTop: 8 }}>
-            <PhotoRow icon="🗑️" label="Supprimer la photo" danger onPress={() => { setOpen(false); onRemove(); }} />
+            <PhotoRow icon="🗑️" label={t('profile.card.removePhoto')} danger onPress={() => { setOpen(false); onRemove(); }} />
           </View>
         ) : null}
       </Sheet>
@@ -114,16 +116,16 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 // ── 2. Identity & journey ────────────────────────────────────────────────────
-const CATEGORY_LABEL: Record<LearningCategory, string> = {
-  kindergarten: 'Enfant',
-  primary: 'Enfant',
-  secondary: 'Élève',
-  highschool: 'Élève',
-  university: 'Étudiant',
-  research: 'Chercheur',
-  professional: 'Adulte',
-  language: 'Apprenant de langue',
-  personal: 'Adulte',
+const CATEGORY_LABEL: Record<LearningCategory, TranslationKey> = {
+  kindergarten: 'profile.card.cat.child',
+  primary: 'profile.card.cat.child',
+  secondary: 'profile.card.cat.student',
+  highschool: 'profile.card.cat.student',
+  university: 'profile.card.cat.student',
+  research: 'profile.card.cat.researcher',
+  professional: 'profile.card.cat.adult',
+  language: 'profile.card.cat.language',
+  personal: 'profile.card.cat.adult',
 };
 export function IdentityCard({
   name,
@@ -140,15 +142,16 @@ export function IdentityCard({
   institution?: string;
   onEditName: (v: string) => void;
 }) {
+  const { t } = useI18n();
   return (
-    <ProfileSection title="Identité & parcours">
-      <Field label="Nom"><Input placeholder="Ton nom" value={name} onChangeText={onEditName} /></Field>
-      <Field label="Catégorie d’apprenant">
-        <Badge label={category ? CATEGORY_LABEL[category] : '—'} tone="ai" />
+    <ProfileSection title={t('profile.card.identity')}>
+      <Field label={t('profile.card.name')}><Input placeholder={t('profile.card.namePh')} value={name} onChangeText={onEditName} /></Field>
+      <Field label={t('profile.card.category')}>
+        <Badge label={category ? t(CATEGORY_LABEL[category]) : '—'} tone="ai" />
       </Field>
-      {field ? <Field label="Cursus / domaine"><ValueText>{field}</ValueText></Field> : null}
-      {level ? <Field label="Niveau"><ValueText>{level}</ValueText></Field> : null}
-      {institution ? <Field label="Établissement"><ValueText>{institution}</ValueText></Field> : null}
+      {field ? <Field label={t('profile.card.curriculum')}><ValueText>{field}</ValueText></Field> : null}
+      {level ? <Field label={t('profile.card.level')}><ValueText>{level}</ValueText></Field> : null}
+      {institution ? <Field label={t('profile.card.institution')}><ValueText>{institution}</ValueText></Field> : null}
     </ProfileSection>
   );
 }
@@ -170,31 +173,32 @@ export function LanguagesCard({
   onToggleMobility: (v: boolean) => void;
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const foreign = !!native && !!study && native !== study;
   return (
-    <ProfileSection title="Langues">
+    <ProfileSection title={t('profile.languages')}>
       <View style={{ flexDirection: 'row', gap: 12 }}>
-        <Field label="Langue maternelle"><Badge label={native || '—'} tone="neutral" /></Field>
-        <Field label="Langue d’étude"><Badge label={study || '—'} tone="primary" /></Field>
+        <Field label={t('profile.card.nativeLanguage')}><Badge label={native || '—'} tone="neutral" /></Field>
+        <Field label={t('profile.card.studyLanguage')}><Badge label={study || '—'} tone="primary" /></Field>
       </View>
       <View style={{ borderTopWidth: 1, borderTopColor: c.borderSubtle, paddingTop: 12, gap: 8 }}>
-        <Switch value={mobility} onChange={onToggleMobility} label="Mobilité internationale" />
+        <Switch value={mobility} onChange={onToggleMobility} label={t('profile.card.mobility')} />
         <Text style={{ color: c.textMuted, fontSize: 12, lineHeight: 18 }}>
           {foreign
-            ? 'Tu étudies dans une langue différente de ta langue maternelle : le soutien linguistique automatique et l’immersion contextuelle sont activés.'
-            : 'Active-le si tu étudies dans une autre langue que ta langue maternelle.'}
+            ? t('profile.card.mobilityOn')
+            : t('profile.card.mobilityOff')}
         </Text>
-        {mobility && foreign ? <Badge label="🌍 Soutien linguistique activé" tone="success" /> : null}
+        {mobility && foreign ? <Badge label={t('profile.card.languageSupport')} tone="success" /> : null}
       </View>
     </ProfileSection>
   );
 }
 
 // ── 4. AI teacher configuration ──────────────────────────────────────────────
-const POSTURES: { key: NonNullable<KycTeacher['tone']>; posture: Posture; label: string }[] = [
-  { key: 'supportive', posture: 'supportive', label: '🟢 Bienveillante' },
-  { key: 'balanced', posture: 'supportive', label: '🟡 Exigeante' },
-  { key: 'demanding', posture: 'examiner', label: '🔴 Sévère / Examinateur' },
+const POSTURES: { key: NonNullable<KycTeacher['tone']>; posture: Posture; label: TranslationKey }[] = [
+  { key: 'supportive', posture: 'supportive', label: 'profile.card.toneSupportive' },
+  { key: 'balanced', posture: 'challenging', label: 'profile.card.toneBalanced' },
+  { key: 'demanding', posture: 'examiner', label: 'profile.card.toneDemanding' },
 ];
 export function TeacherConfig({
   tone,
@@ -208,28 +212,29 @@ export function TeacherConfig({
   onExplanations: (v: NonNullable<KycTeacher['explanations']>) => void;
 }) {
   const { colors: c, radius } = useTokens();
+  const { t } = useI18n();
   return (
-    <ProfileSection title="Professeur IA">
-      <Field label="Posture">
+    <ProfileSection title={t('profile.card.aiTeacher')}>
+      <Field label={t('profile.card.posture')}>
         <View style={{ gap: 8 }}>
           {POSTURES.map((p) => {
             const on = p.key === tone;
             return (
               <Pressable key={p.key} onPress={() => onTone(p.key)} accessibilityRole="radio" accessibilityState={{ selected: on }}
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1.5, borderColor: on ? c.aiAccent : c.border, backgroundColor: on ? c.aiAccentSoft : c.surface, borderRadius: radius.md, padding: 12 }}>
-                <Text style={{ color: on ? c.aiAccent : c.textPrimary, fontSize: 15, fontWeight: '700', flex: 1 }}>{p.label}</Text>
+                <Text style={{ color: on ? c.aiAccent : c.textPrimary, fontSize: 15, fontWeight: '700', flex: 1 }}>{t(p.label)}</Text>
                 <PostureBadge posture={p.posture} />
               </Pressable>
             );
           })}
         </View>
       </Field>
-      <Field label="Explications">
+      <Field label={t('profile.card.explanations')}>
         <SegmentedControl
           options={['short', 'balanced', 'detailed'] as const}
           value={explanations ?? 'balanced'}
           onChange={onExplanations}
-          labelFor={(v) => (v === 'short' ? 'Courtes' : v === 'balanced' ? 'Équilibrées' : 'Détaillées')}
+          labelFor={(v) => t(v === 'short' ? 'profile.card.explShort' : v === 'balanced' ? 'profile.card.explBalanced' : 'profile.card.explDetailed')}
         />
       </Field>
     </ProfileSection>
@@ -247,23 +252,24 @@ export function CognitiveSummary({
   dailyMinutes: number;
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   return (
-    <ProfileSection title="Profil cognitif (Digital Twin)">
-      <Field label="Tes forces">
+    <ProfileSection title={t('profile.card.cognitive')}>
+      <Field label={t('profile.card.strengths')}>
         {strengths.length === 0 ? (
-          <Text style={{ color: c.textMuted, fontSize: 14 }}>Elles apparaîtront au fil de ton apprentissage.</Text>
+          <Text style={{ color: c.textMuted, fontSize: 14 }}>{t('profile.card.strengthsEmpty')}</Text>
         ) : (
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {strengths.slice(0, 6).map((s) => <Badge key={s} label={s} tone="success" />)}
           </View>
         )}
       </Field>
-      <Field label="Rétention cible">
+      <Field label={t('profile.card.targetRetention')}>
         <Progress value={retention ?? 0.9} tone="ai" />
-        <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 4 }}>{retention == null ? 'objectif 90 %' : `${Math.round(retention * 100)} % actuel · objectif 90 %`}</Text>
+        <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 4 }}>{retention == null ? t('profile.card.target90') : `${Math.round(retention * 100)} % ${t('profile.card.retentionCurrent')}`}</Text>
       </Field>
-      <Field label="Rythme quotidien">
-        <Badge label={`~${dailyMinutes} min / jour`} tone="ai" />
+      <Field label={t('profile.card.dailyPace')}>
+        <Badge label={`~${dailyMinutes} ${t('profile.card.minDay')}`} tone="ai" />
       </Field>
     </ProfileSection>
   );
@@ -286,6 +292,7 @@ export function SystemConfig({
   onMemory: () => void;
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const stat = (v: string, l: string) => (
     <View style={{ flex: 1, alignItems: 'center', gap: 2 }}>
       <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: '800' }}>{v}</Text>
@@ -293,25 +300,25 @@ export function SystemConfig({
     </View>
   );
   return (
-    <ProfileSection title="Système & données">
-      <Field label="Thème">
+    <ProfileSection title={t('profile.card.systemData')}>
+      <Field label={t('profile.card.theme')}>
         <SegmentedControl
           options={['light', 'dark', 'system'] as const}
           value={scheme}
           onChange={onScheme}
-          labelFor={(v) => (v === 'light' ? '☀︎ Clair' : v === 'dark' ? '☾ Sombre' : '⚙︎ Système')}
+          labelFor={(v) => t(v === 'light' ? 'profile.card.light' : v === 'dark' ? 'profile.card.dark' : 'profile.card.system')}
         />
       </Field>
-      <Field label="Statistiques">
+      <Field label={t('profile.card.statistics')}>
         <View style={{ flexDirection: 'row' }}>
-          {stat(`${totalConcepts}`, 'concepts')}
-          {stat(`${reviews}`, 'révisions')}
+          {stat(`${totalConcepts}`, t('profile.card.concepts'))}
+          {stat(`${reviews}`, t('profile.card.reviews'))}
         </View>
       </Field>
-      <Field label="Confidentialité & mémoire">
+      <Field label={t('profile.card.privacyMemory')}>
         <View style={{ gap: 8 }}>
-          <Button label="🔒 Confidentialité & données" variant="secondary" onPress={onPrivacy} />
-          <Button label="🧠 Gérer la mémoire vectorielle" variant="secondary" onPress={onMemory} />
+          <Button label={t('profile.card.privacyData')} variant="secondary" onPress={onPrivacy} />
+          <Button label={t('profile.card.vectorMemory')} variant="secondary" onPress={onMemory} />
         </View>
       </Field>
     </ProfileSection>

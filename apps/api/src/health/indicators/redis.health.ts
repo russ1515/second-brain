@@ -9,11 +9,9 @@ export class RedisHealthIndicator {
   async check(): Promise<{ status: HealthState; message?: string }> {
     try {
       const pong = await this.redis.ping();
-      return pong === 'PONG'
-        ? { status: 'up' }
-        : { status: 'down', message: `Unexpected PING reply: ${pong}` };
-    } catch (error) {
-      return { status: 'down', message: (error as Error).message };
+      return pong === 'PONG' ? { status: 'up' } : { status: 'down' };
+    } catch {
+      return { status: 'down' };
     }
   }
 }

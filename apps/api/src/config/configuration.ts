@@ -1,8 +1,19 @@
+import { resolveUXFeatureFlags } from '@second-brain/shared';
+
 /** Typed application configuration, assembled from validated environment variables. */
 export default () => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
   api: {
     port: parseInt(process.env.API_PORT ?? '3000', 10),
+    corsOrigins: (process.env.CORS_ALLOWED_ORIGINS ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  },
+  admin: {
+    environment: process.env.ADMIN_ENVIRONMENT ?? process.env.NODE_ENV ?? 'development',
+    stepUpTtl: parseInt(process.env.ADMIN_STEP_UP_TTL ?? '600', 10),
+    sessionMaxTtl: parseInt(process.env.ADMIN_SESSION_MAX_TTL ?? '28800', 10),
   },
   database: {
     url: process.env.DATABASE_URL as string,
@@ -85,4 +96,16 @@ export default () => ({
     // Base URL used to build links inside emails (e.g. the verification link).
     url: process.env.APP_URL ?? 'http://localhost:3000',
   },
+  // UX rollout flags are operational switches, distinct from plan entitlements.
+  // Every flag defaults off so Lot 0 does not switch the current experience.
+  features: resolveUXFeatureFlags({
+    newAppShell: process.env.FEATURE_NEW_APP_SHELL,
+    experienceSessions: process.env.FEATURE_EXPERIENCE_SESSIONS,
+    universalComposer: process.env.FEATURE_UNIVERSAL_COMPOSER,
+    newHomeNBA: process.env.FEATURE_NEW_HOME_NBA,
+    newBrain: process.env.FEATURE_NEW_BRAIN,
+    documentIntelligence: process.env.FEATURE_DOCUMENT_INTELLIGENCE,
+    newTutorExperience: process.env.FEATURE_NEW_TUTOR_EXPERIENCE,
+    newLanding: process.env.FEATURE_NEW_LANDING,
+  }),
 });

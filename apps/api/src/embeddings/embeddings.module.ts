@@ -5,6 +5,7 @@ import type { EmbeddingsProvider } from './embeddings-provider.interface';
 import { GeminiEmbeddingsProvider } from './providers/gemini-embeddings.provider';
 import { FakeEmbeddingsProvider } from './providers/fake-embeddings.provider';
 import { EmbeddingsService } from './embeddings.service';
+import { UsageModule } from '../usage/usage.module';
 
 /**
  * Binds the embeddings provider selected by EMBEDDINGS_PROVIDER. This factory is
@@ -37,6 +38,7 @@ const embeddingsProviderFactory: Provider = {
 
 @Global()
 @Module({
+  imports: [UsageModule],
   providers: [embeddingsProviderFactory, EmbeddingsService],
   exports: [EmbeddingsService],
 })

@@ -19,6 +19,8 @@ export interface UsageItem {
   used: number;
   /** Plan limit; null means unlimited / not capped. */
   limit: number | null;
+  /** Counter reset time; null for live gauges or when no reset is known. */
+  resetAt: string | null;
 }
 
 export interface UsageView {

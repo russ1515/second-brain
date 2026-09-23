@@ -11,6 +11,8 @@ export interface JwtAccessPayload {
   sub: string;
   email: string;
   purpose: typeof ACCESS_PURPOSE;
+  sessionId: string;
+  mfaVerifiedAt?: number;
 }
 
 /** Claims in the short-lived token issued after the password step when 2FA is on. */
@@ -23,6 +25,8 @@ export interface TwoFactorChallengePayload {
 export interface AuthenticatedUser {
   userId: string;
   email: string;
+  sessionId: string;
+  mfaVerifiedAt: Date | null;
 }
 
 /** Request metadata captured when a session (refresh token) is minted. */

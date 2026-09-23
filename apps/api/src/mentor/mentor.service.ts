@@ -9,6 +9,7 @@ import type {
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
+import { localeDirective, resolveLocale } from '../common/learning-locale';
 import { SessionService } from '../flashcards/session.service';
 import { LearningPathService } from '../concepts/learning-path.service';
 // Pure helpers; importing them creates no module dependency.
@@ -132,19 +133,20 @@ export class MentorService {
       `Concepts mastered: ${stats.conceptsMastered}. At risk: ${stats.atRiskConcepts}.`,
       `Lessons completed: ${stats.lessonsCompleted}. Exercises answered correctly: ${stats.exercisesCorrect}.`,
     ].join('\n');
+    const locale = await resolveLocale(this.prisma, userId);
 
     let text: string;
     try {
       const result = await this.llm.generate(
         [
-          { role: 'system', content: MENTOR_SYSTEM },
+          { role: 'system', content: `${MENTOR_SYSTEM} ${localeDirective(locale)}` },
           { role: 'user', content: `My numbers:\n${facts}` },
         ],
-        { temperature: 0.4 },
+        { temperature: 0.4, operation: 'mentor' },
       );
       text = result.text;
-    } catch (error) {
-      this.logger.error(`Mentor LLM call failed: ${(error as Error).message}`);
+    } catch {
+      this.logger.error('Mentor generation failed.');
       throw new ServiceUnavailableException(
         'The mentor is temporarily unavailable. Please try again shortly.',
       );

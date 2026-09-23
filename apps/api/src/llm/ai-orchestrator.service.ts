@@ -69,7 +69,7 @@ export class AiOrchestratorService {
       throw new Error(`Unknown strategy "${strategy}".`);
     }
     this.strategy = strategy;
-    this.logger.log(`orchestration strategy → ${strategy}`);
+    this.logger.log('AI orchestration strategy updated.');
     return this.strategy;
   }
 

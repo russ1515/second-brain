@@ -16,7 +16,13 @@ import {
 } from '@second-brain/shared';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ApiError, api } from './client';
-import { clearSession, loadSession, saveSession } from './storage';
+import {
+  clearSession,
+  loadCachedAuthUser,
+  loadSession,
+  saveCachedAuthUser,
+  saveSession,
+} from './storage';
 
 /** Sync the UI's Learning Locale to the backend so deterministic AI content
  *  (coach, predictions, insights…) is generated in the learner's language.
@@ -108,6 +114,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const me = await api<AuthUser>('/auth/me');
         if (!cancelled) {
           setUser(me);
+          void saveCachedAuthUser(me);
           setOffline(false);
           void syncLocale();
           void refreshOnboarding();
@@ -123,6 +130,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } else if (!cancelled) {
           // Session kept, API unreachable — say so instead of pretending they
           // are signed out and dumping them on the login screen.
+          setUser(await loadCachedAuthUser());
           setOffline(true);
         }
       } finally {
@@ -140,6 +148,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshToken: res.tokens.refreshToken,
     });
     setUser(res.user);
+    await saveCachedAuthUser(res.user);
     void syncLocale();
   }, []);
 

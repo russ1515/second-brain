@@ -57,8 +57,8 @@ export class RevisionEngineService {
   ): Promise<void> {
     try {
       await this.register(userId, { kind, refId, title });
-    } catch (e) {
-      this.logger.warn(`track(${kind}) failed: ${(e as Error).message}`);
+    } catch {
+      this.logger.warn('Revision activity tracking failed.');
     }
   }
 
@@ -79,8 +79,8 @@ export class RevisionEngineService {
         update: {},
       });
       await this.review(userId, item.id, input);
-    } catch (e) {
-      this.logger.warn(`gradeActivity(${kind}) failed: ${(e as Error).message}`);
+    } catch {
+      this.logger.warn('Revision activity grading failed.');
     }
   }
 
@@ -167,10 +167,11 @@ export class RevisionEngineService {
   }
 
   /** Only the items due now, most urgent first. */
-  async due(userId: string): Promise<ReviewableView[]> {
+  async due(userId: string, limit?: number): Promise<ReviewableView[]> {
     const now = new Date();
     const items = await this.prisma.reviewable.findMany({
       where: { userId, due: { lte: now } },
+      ...(limit === undefined ? {} : { take: Math.min(Math.max(limit, 1), 200) }),
     });
     return items
       .map((i) => this.toView(i, now))

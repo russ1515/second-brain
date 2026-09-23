@@ -67,10 +67,11 @@ export class ScanService {
       // Transcription, not invention: keep it as deterministic as the model allows.
       const result = await this.llm.readImages(images, DOCUMENT_INTELLIGENCE_PROMPT, {
         temperature: 0,
+        operation: 'vision',
       });
       text = result.text.trim();
-    } catch (error) {
-      this.logger.error(`Scan failed: ${(error as Error).message}`);
+    } catch {
+      this.logger.error('Document scan failed.');
       throw new ServiceUnavailableException(
         'Could not read that image. Please try again shortly.',
       );

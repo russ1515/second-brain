@@ -16,4 +16,14 @@ export class ExtractVocabularyDto implements ExtractVocabularyRequest {
   @Min(1)
   @Max(40)
   count?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  experienceSessionId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  sourcePhrase?: string;
 }

@@ -64,7 +64,7 @@ export class StripePaymentProvider implements PaymentProvider {
       body,
     });
     if (!res.ok) {
-      this.logger.error(`Stripe checkout failed: ${res.status} ${await res.text()}`);
+      this.logger.error('Stripe checkout failed.');
       throw new ServiceUnavailableException('Could not start Stripe checkout.');
     }
     const session = (await res.json()) as { id: string; url: string };
@@ -113,20 +113,19 @@ export class StripePaymentProvider implements PaymentProvider {
 
   /** Verify Stripe's `t=…,v1=…` signature scheme with HMAC-SHA256. */
   private verifySignature(payload: string, header: string): boolean {
-    const parts = Object.fromEntries(
-      header.split(',').map((kv) => kv.split('=') as [string, string]),
-    );
-    const timestamp = parts.t;
-    const expected = parts.v1;
-    if (!timestamp || !expected) return false;
+    const parts = header.split(',').map((kv) => kv.split('=', 2) as [string, string]);
+    const timestamp = parts.find(([key]) => key === 't')?.[1];
+    const signatures = parts.filter(([key]) => key === 'v1').map(([, value]) => value);
+    if (!timestamp || signatures.length === 0) return false;
+    const seconds = Number(timestamp);
+    if (!Number.isFinite(seconds) || Math.abs(Date.now() / 1000 - seconds) > 300) return false;
     const signed = createHmac('sha256', this.webhookSecret as string)
       .update(`${timestamp}.${payload}`)
       .digest('hex');
-    try {
-      return timingSafeEqual(Buffer.from(signed), Buffer.from(expected));
-    } catch {
-      return false;
-    }
+    return signatures.some((expected) => {
+      try { return timingSafeEqual(Buffer.from(signed), Buffer.from(expected)); }
+      catch { return false; }
+    });
   }
 
   private normalize(event: {
@@ -135,7 +134,8 @@ export class StripePaymentProvider implements PaymentProvider {
     data: { object: Record<string, unknown> };
   }): NormalizedBillingEvent | null {
     const obj = event.data.object;
-    const metadata = (obj.metadata ?? {}) as Record<string, string>;
+    const subscriptionDetails = (obj.subscription_details ?? {}) as Record<string, unknown>;
+    const metadata = ((obj.metadata ?? subscriptionDetails.metadata) ?? {}) as Record<string, string>;
     const userId = metadata.userId ?? (obj.client_reference_id as string);
     if (!userId) return null;
     const base = {
@@ -145,10 +145,16 @@ export class StripePaymentProvider implements PaymentProvider {
       interval: metadata.interval as NormalizedBillingEvent['interval'],
       providerCustomerId: obj.customer as string | undefined,
       providerSubscriptionId: obj.subscription as string | undefined,
+      currentPeriodStart: this.fromUnix(obj.period_start),
+      currentPeriodEnd: this.fromUnix(obj.period_end),
+      amount: typeof obj.amount_paid === 'number' ? obj.amount_paid : typeof obj.amount_total === 'number' ? obj.amount_total : undefined,
+      currency: typeof obj.currency === 'string' ? obj.currency : undefined,
     };
     switch (event.type) {
       case 'checkout.session.completed':
-        return { ...base, type: 'subscription_activated' };
+        return obj.payment_status === 'paid'
+          ? { ...base, type: 'subscription_activated' }
+          : null;
       case 'invoice.paid':
         return { ...base, type: 'subscription_renewed' };
       case 'customer.subscription.updated':
@@ -160,5 +166,9 @@ export class StripePaymentProvider implements PaymentProvider {
       default:
         return null;
     }
+  }
+
+  private fromUnix(value: unknown): Date | undefined {
+    return typeof value === 'number' && Number.isFinite(value) ? new Date(value * 1000) : undefined;
   }
 }

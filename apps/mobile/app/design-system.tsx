@@ -38,6 +38,7 @@ import {
 import {
   BilingualText,
   LanguageBadge,
+  LanguageSelector,
   NativeLanguage,
   PronunciationIndicator,
   StudyLanguage,
@@ -47,6 +48,10 @@ import {
 import { Avatar, Checkbox, RadioGroup, Select, Tabs } from '../components/ds/controls';
 import { Dialog, Drawer, Sheet, Toast, Tooltip } from '../components/ds/overlays';
 import { SpaceNav, type SpaceKey } from '../components/ds/navigation';
+import { PageHeader, ResponsiveGrid, ResponsiveSplit } from '../components/ds/layout';
+import { SourceCitation } from '../components/ds/sources';
+import { SmartEmptyState, SmartErrorState, SmartLoadingState } from '../components/ds/states';
+import { UsageMeter } from '../components/ds/usage';
 import { OnboardingPlayground } from '../components/onboarding/playground';
 import { LearnPlayground } from '../components/learn/playground';
 import { BrainPlayground } from '../components/brain/playground';
@@ -82,6 +87,7 @@ export default function DesignSystemScreen() {
   const [drawer, setDrawer] = useState(false);
   const [toast, setToast] = useState(false);
   const [nav, setNav] = useState<SpaceKey>('home');
+  const [language, setLanguage] = useState<string | null>('fr');
 
   return (
     <ScrollView style={{ backgroundColor: c.background }} contentContainerStyle={styles.container}>
@@ -272,6 +278,33 @@ export default function DesignSystemScreen() {
         <Card>
           <EmptyState icon="🗂️" title="Nothing here yet" detail="Content will appear once you start." />
         </Card>
+        <View style={{ gap: 10, marginTop: 12 }}>
+          <SmartLoadingState title="Reading the document…" detail="No percentage is shown because the backend has not supplied one." compact />
+          <SmartErrorState title="The document could not be opened" detail="Your work is preserved." retryable onRetry={() => {}} compact />
+          <Card><SmartEmptyState icon="🧠" title="Your Brain will grow here" detail="Import or learn something to create the first connection." /></Card>
+        </View>
+      </Section>
+
+      <Section title="Responsive layouts" subtitle="Composition changes by available space; the shell remains a separate concern." c={c}>
+        <PageHeader title="A coherent workspace" description="Page header, responsive grid and split panes share one layout model." action={<Button label="Primary action" size="sm" onPress={() => {}} />} />
+        <ResponsiveGrid maxColumns={3}>
+          <Card><Text style={[typeTokens.body, { color: c.textPrimary }]}>Intent</Text></Card>
+          <Card><Text style={[typeTokens.body, { color: c.textPrimary }]}>Context</Text></Card>
+          <Card><Text style={[typeTokens.body, { color: c.textPrimary }]}>Result</Text></Card>
+        </ResponsiveGrid>
+        <ResponsiveSplit
+          primary={<Card><Text style={[typeTokens.body, { color: c.textPrimary }]}>Primary work area</Text></Card>}
+          secondary={<Card><Text style={[typeTokens.body, { color: c.textSecondary }]}>Context rail</Text></Card>}
+        />
+      </Section>
+
+      <Section title="Sources & usage" subtitle="Shared citation and quota vocabulary." c={c}>
+        <View style={styles.row}>
+          <SourceCitation title="Cours-Réseaux.pdf · page 12" kind="document" index={1} />
+          <SourceCitation title="External research source" kind="web" provider="Web" index={2} onPress={() => {}} />
+        </View>
+        <UsageMeter label="AI questions" used={80} limit={100} unit="count" remainingLabel="Remaining" />
+        <UsageMeter label="Documents" used={12} limit={null} unit="count" unlimitedLabel="Unlimited" />
       </Section>
 
       {/* AI Design Language ⭐ */}
@@ -335,6 +368,7 @@ export default function DesignSystemScreen() {
 
       {/* Language components */}
       <Section title="Language components" subtitle="Hold 25+ languages without breaking layout." c={c}>
+        <LanguageSelector mode="learning" value={language} onChange={setLanguage} recentCodes={['es', 'en']} />
         <View style={[styles.row, { marginBottom: 12 }]}>
           <LanguageBadge code="fr" />
           <LanguageBadge code="en" />

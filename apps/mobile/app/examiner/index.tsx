@@ -1,6 +1,6 @@
 import { useCallback, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import {
   ASSESSMENT_TYPES,
   type AssessmentSummary,
@@ -30,9 +30,12 @@ export default function ExaminerScreen() {
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const router = useRouter();
+  const params = useLocalSearchParams<{ type?: string; topic?: string }>();
   const [items, setItems] = useState<AssessmentSummary[] | null>(null);
-  const [type, setType] = useState<AssessmentType>('mcq');
-  const [topic, setTopic] = useState('');
+  const [type, setType] = useState<AssessmentType>(
+    ASSESSMENT_TYPES.includes(params.type as AssessmentType) ? params.type as AssessmentType : 'mcq',
+  );
+  const [topic, setTopic] = useState(params.topic ?? '');
   const [difficulty, setDifficulty] =
     useState<(typeof DIFFICULTIES)[number]>('intermediate');
   const [error, setError] = useState<string | null>(null);

@@ -11,6 +11,8 @@ import { MailService } from '../mail/mail.service';
  * Binds the notification transport selected by NOTIFY_TRANSPORT. This factory is
  * the ONLY place that knows about concrete channels. `log` prints to the console;
  * `mail` composes the existing mail seam (so it inherits MAIL_TRANSPORT).
+ * `smtp` is kept as a backwards-compatible alias for `mail`: older local
+ * environments used the concrete mail transport name in NOTIFY_TRANSPORT.
  *
  * A future `expo-push` case would need device tokens, which the app does not
  * store yet — that is a model change, not a seam change, and nothing outside
@@ -25,6 +27,7 @@ const notifierFactory: Provider = {
       case 'log':
         return new LogNotifier();
       case 'mail':
+      case 'smtp':
         return new MailNotifier(mail);
       default:
         throw new Error(

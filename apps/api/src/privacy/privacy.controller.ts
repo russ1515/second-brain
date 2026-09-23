@@ -42,8 +42,8 @@ export class PrivacyController {
     return this.privacy.setConsent(user.userId, dto.key, dto.granted);
   }
 
-  /** Irreversible: re-enter the password, then everything the user owns is
-   *  cascade-deleted. */
+  /** Irreversible: re-enter the password, then external vectors and relational
+   *  data owned by the user are deleted. */
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('delete')
   @HttpCode(HttpStatus.NO_CONTENT)

@@ -11,6 +11,7 @@ import type {
   TwinGraph,
   TwinGraphNode,
 } from '@second-brain/shared';
+import { classifyLearningStatus } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { MasteryService, STRONG_MASTERY } from './mastery.service';
 
@@ -171,15 +172,12 @@ export class LearningPathService {
   }
 
   private classify(m: ConceptMastery, hasUnmetPrereqs: boolean): LearningStatus {
-    if (this.isMastered(m)) {
-      return 'mastered';
-    }
-    if (m.reviewedCount > 0) {
-      // Already being learned: needs review if decayed or has due cards.
-      return m.dueCount > 0 || (m.mastery ?? 0) < 0.5 ? 'at_risk' : 'in_progress';
-    }
-    // Not started yet.
-    return hasUnmetPrereqs ? 'blocked' : 'ready';
+    return classifyLearningStatus({
+      mastery: m.mastery,
+      reviewedCount: m.reviewedCount,
+      dueCount: m.dueCount,
+      hasUnmetPrerequisites: hasUnmetPrereqs,
+    });
   }
 
   private isMastered(m: ConceptMastery | undefined): boolean {

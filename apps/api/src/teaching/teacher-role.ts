@@ -34,22 +34,23 @@ export const LANGUAGES: LanguageEntry[] = [
   { canonical: 'Hindi', emoji: '🇮🇳', aliases: ['hindi'] },
 ];
 
-/** Nicer icons for common academic subjects; everything else gets the default. */
-const SUBJECT_EMOJI: { match: RegExp; emoji: string }[] = [
-  { match: /\b(math|maths|mathematics|mathématiques|algebra|geometry|calculus)\b/i, emoji: '🧮' },
-  { match: /\b(biolog|life science)/i, emoji: '🧬' },
-  { match: /\b(physic)/i, emoji: '⚛️' },
-  { match: /\b(chemi|chimie)/i, emoji: '🧪' },
-  { match: /\b(histor|histoire)/i, emoji: '📜' },
-  { match: /\b(geograph|géographie|geographie)/i, emoji: '🗺️' },
-  { match: /\b(econom)/i, emoji: '📈' },
-  { match: /\b(philosoph)/i, emoji: '🤔' },
-  { match: /\b(literatur|littérature|litterature)/i, emoji: '📖' },
-  { match: /\b(comput|programming|coding|informatique)/i, emoji: '💻' },
-  { match: /\b(law|droit)\b/i, emoji: '⚖️' },
-  { match: /\b(medic|médecine|medecine|anatomy)/i, emoji: '🩺' },
-  { match: /\b(music|musique)/i, emoji: '🎵' },
-  { match: /\b(art|drawing|painting)\b/i, emoji: '🎨' },
+/** Deterministic subject catalogue. It prevents a separate LLM classification
+ * request on the first tutor turn while keeping the specialist-role behaviour. */
+const SUBJECTS: { canonical: string; match: RegExp; emoji: string }[] = [
+  { canonical: 'Mathematics', match: /\b(math|maths|mathematics|mathématiques|mathematiques|algebra|algèbre|algebre|geometry|géométrie|geometrie|calculus)\b/i, emoji: '🧮' },
+  { canonical: 'Biology', match: /\b(biolog|life science|sciences? de la vie)/i, emoji: '🧬' },
+  { canonical: 'Physics', match: /\b(physic|physique)/i, emoji: '⚛️' },
+  { canonical: 'Chemistry', match: /\b(chemi|chimie)/i, emoji: '🧪' },
+  { canonical: 'History', match: /\b(histor|histoire)/i, emoji: '📜' },
+  { canonical: 'Geography', match: /\b(geograph|géographie|geographie)/i, emoji: '🗺️' },
+  { canonical: 'Economics', match: /\b(econom|économie)/i, emoji: '📈' },
+  { canonical: 'Philosophy', match: /\b(philosoph)/i, emoji: '🤔' },
+  { canonical: 'Literature', match: /\b(literatur|littérature|litterature)/i, emoji: '📖' },
+  { canonical: 'Computer science', match: /\b(comput|programming|coding|informatique|javascript|typescript|python|algorithm)/i, emoji: '💻' },
+  { canonical: 'Law', match: /\b(law|droit)\b/i, emoji: '⚖️' },
+  { canonical: 'Medicine', match: /\b(medic|médecine|medecine|anatomy|anatomie)/i, emoji: '🩺' },
+  { canonical: 'Music', match: /\b(music|musique)/i, emoji: '🎵' },
+  { canonical: 'Art', match: /\b(art|drawing|painting|dessin|peinture)\b/i, emoji: '🎨' },
 ];
 
 const DEFAULT_SUBJECT_EMOJI = '📘';
@@ -72,7 +73,15 @@ function escapeRegExp(s: string): string {
 }
 
 function subjectEmoji(subject: string): string {
-  return SUBJECT_EMOJI.find((s) => s.match.test(subject))?.emoji ?? DEFAULT_SUBJECT_EMOJI;
+  return SUBJECTS.find((s) => s.match.test(subject))?.emoji ?? DEFAULT_SUBJECT_EMOJI;
+}
+
+/** Infer a concise tutor subject locally. Languages and common academic fields
+ * are recognized; ambiguous prose stays general instead of spending AI quota. */
+export function inferTeacherSubject(text: string): string | null {
+  const language = detectLanguage(text);
+  if (language) return language.canonical;
+  return SUBJECTS.find((subject) => subject.match.test(text))?.canonical ?? null;
 }
 
 /** The specialist persona line appended to the base teacher prompt. */

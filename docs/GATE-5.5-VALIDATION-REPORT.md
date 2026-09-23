@@ -1,0 +1,190 @@
+# SECOND BRAIN ADMIN — GATE 5.5 VALIDATION REPORT
+
+**Date:** 17 September 2026
+**Scope:** Sprint 5 final integration and E2E validation only. No Sprint 6 work was started.
+
+## 1. Environment
+
+The worktree was already substantially dirty before this Gate. That state was preserved. The Gate changed only the existing Sprint 5 PostgreSQL integration suite and added this report; it did not reset, deploy, restart, or alter a production service.
+
+The dedicated non-production PostgreSQL container observed during this Gate was:
+
+```text
+sb-sprint4-pg  Up 26 hours (healthy)  127.0.0.1:15434->5432/tcp
+```
+
+No production database, provider account, quota, plan, routing rule, Docker lifecycle, or application pool setting was changed.
+
+## 2. P1001 Root Cause
+
+**Status: NOT CONFIRMED — environment failure suspected, application failure not demonstrated.**
+
+Evidence collected across the Sprint 5 and Gate 5.5 attempts:
+
+- a prior real Prisma targeted run connected and passed its redaction/health checks (2/2);
+- the subsequent concurrency run failed in `prisma.$connect()` with `P1001`, before fixtures, ingestion requests, Bug Group updates, or a business transaction began;
+- the observed database activity did not show blocked sessions;
+- the container is currently reported healthy and its port is published, but current `docker exec`, host TCP, and Prisma-status attempts stall in the Windows runner without returning an application error;
+- the fresh `prisma migrate status` attempt was therefore interrupted without a result. No migration action was taken.
+
+This is compatible with intermittent Windows/Docker Desktop/runner reachability or command-lifecycle instability. It is not proof of a SQL deadlock, Prisma pool defect, Error Event race, or application defect. The Gate did not lower concurrency, increase business timeouts, restart Docker, or change the pool simply to make a test pass.
+
+## 3. PostgreSQL Stability
+
+**Status: NOT VERIFIED.** The container health is positive, but an internal `pg_isready` command and a bounded host/Prisma validation could not complete reliably through the current runner. A healthy container alone does not prove the host-to-container path required by Prisma.
+
+Required reproducible sequence once the runner is responsive:
+
+1. verify container status and published port;
+2. run `pg_isready` inside the dedicated test container;
+3. run a bounded TCP probe to `127.0.0.1:15434`;
+4. obtain the test-container credential only in process memory, run `prisma migrate status`, then run the PostgreSQL suite;
+5. if `P1001` recurs, collect only grouped connection state and sanitized container lifecycle/error counts.
+
+## 4. Migration Status
+
+**Last verified real status: PASS (pre-Gate).** Prisma previously found **59 migrations** and reported the dedicated test schema up to date.
+
+The two Sprint 5 migrations remain present:
+
+- `20260917090000_sprint5_diagnostics_control_center`
+- `20260917100000_sprint5_report_observed_request`
+
+**Fresh Gate status: NOT VERIFIED** because the read-only Prisma command did not return. There is no observed divergence and no destructive correction was attempted.
+
+## 5. 20-Concurrent-Ingestion Result
+
+**Status: NOT VERIFIED.** The reusable PostgreSQL test is real, not synthetic: it uses `PrismaClient`, sends 20 simultaneous same-fingerprint Error Events, and asserts one Bug Group, 20 occurrences, exactly five affected fixture users, no lost event, no duplicate group, and retry idempotency. It cannot be honestly marked PASS until the dedicated database path is stable and that test completes.
+
+## 6. Fingerprint Concurrency
+
+**Status: NOT VERIFIED.** The same PostgreSQL suite covers same-fingerprint grouping, unique ingest IDs, SQL uniqueness constraints, affected-user membership, and counters. It was not runnable during this Gate because the failure occurs before the test setup reaches application code.
+
+## 7. Backpressure Result
+
+**Status: PARTIAL.** The bounded ingestion/backpressure implementation remains in place. The prior `P1001` occurs before an ingest transaction, so it is not evidence that backpressure loses events, changes counters, deadlocks, or masks an error. Those runtime properties remain **NOT VERIFIED** until the 20-event PostgreSQL scenario completes repeatedly.
+
+## 8. Raw Events vs Bug Aggregates
+
+**Status: NOT VERIFIED.** The PostgreSQL suite contains direct assertions for raw Error Events, `occurrenceCount`, `affectedUsersCount`, membership, first/last seen semantics, and uniqueness. No fresh full run could be completed.
+
+## 9. Report Correlation
+
+**Status: PARTIAL — implementation and static regression coverage verified; E2E PostgreSQL execution pending.**
+
+The Gate found a coverage gap, not a changed product behavior. `UserReportService` already constrains observed-request matching to the same user, environment and correlation time window; when a safe route is supplied, it also applies exact route equality.
+
+Two PostgreSQL regressions were added to [sprint5-postgres.integration.test.cjs](../apps/api/test/sprint5-postgres.integration.test.cjs):
+
+- same user/request ID but `/learn` event and `/tutor` report remains `independent` / `unconfirmed`, with no persisted Bug Group link;
+- same user/request ID/route but an event aged 31 minutes remains `independent` / `unconfirmed`, with no persisted Bug Group link.
+
+`node --check apps/api/test/sprint5-postgres.integration.test.cjs` passed. The database execution of these cases is pending a stable test connection.
+
+## 10. Redaction
+
+**Status: PARTIAL.** A prior direct PostgreSQL targeted run passed redaction and health checks (2/2). The full Gate suite has explicit persisted-field sentinels for passwords, authorization headers, JWTs, refresh tokens, OTP/TOTP material, API keys, SMTP-like secrets, email, IP, stack and raw context. It was not re-executed during this Gate because the database setup path is unstable.
+
+No secret was printed while collecting the Gate evidence. No claim is made for Admin HTTP responses, Audit Log rows, or process logs until the full runtime suite and HTTP/browser path can complete.
+
+## 11. Bug Workflow
+
+**Status: NOT VERIFIED.** The real PostgreSQL suite covers human-only transitions from `NEW` through `RESOLVED`, invalid-transition refusal, historical evidence, and meaningful reopening. It did not execute in this Gate.
+
+## 12. Regression / Reopen
+
+**Status: NOT VERIFIED.** Reopening after a significant new occurrence is covered in the same unexecuted PostgreSQL workflow suite.
+
+## 13. Incident Linking
+
+**Status: NOT VERIFIED.** Existing PostgreSQL coverage creates linked bugs/incidents and checks relations, status, timeline and audit evidence; it could not be run against the dedicated database.
+
+## 14. Support Case
+
+**Status: NOT VERIFIED.** The PostgreSQL suite covers User Report → Support Case → Bug/Incident link with privacy boundaries. Runtime validation is blocked by the same database connection condition.
+
+## 15. Rule-Based Diagnostic
+
+**Status: NOT VERIFIED.** The suite has deterministic provider-timeout fixtures and verifies a rule-based diagnosis without a provider call or fabricated `CONFIRMED` cause. It has not completed on real PostgreSQL in this Gate.
+
+## 16. AI Diagnostic E2E
+
+**Status: NOT VERIFIED.** No real provider test execution was available. No provider usage, `ADMIN_DIAGNOSTIC` attribution, ledger entry, or cost-center attribution is claimed.
+
+## 17. Prompt Injection
+
+**Status: PARTIAL.** The implemented model treats User Reports as untrusted data and correlation regressions do not elevate report prose into a confirmed cause. The malicious-report runtime test remains pending the PostgreSQL/API path; it is not marked PASS.
+
+## 18. Admin Browser
+
+**Status: NOT VERIFIED.** The browser controller had no attached tabs. Creating the local Admin login tab at `http://127.0.0.1:8083/login` timed out waiting for the browser webview to attach. The earlier historical login page render followed by `Failed to fetch` before MFA remains the only browser evidence.
+
+## 19. MFA
+
+**Status: NOT VERIFIED.** Because Admin → API connectivity and browser control are unavailable, invalid TOTP, valid TOTP, recovery, session expiry, logout, and Control Center access were not simulated or claimed.
+
+## 20. RBAC
+
+**Status: NOT VERIFIED.** The HTTP suite contains guarded test coverage for normal-user `403`, SUPPORT sensitive-detail restrictions, TECH_OPS technical access with redaction, diagnostic safety and step-up. It requires a loopback API plus dedicated test credentials and did not run. Browser RBAC is likewise not verified.
+
+## 21. Responsive
+
+**Status: NOT VERIFIED.** No browser session could attach, so 1440/1024/768 validation was not performed.
+
+## 22. i18n / Themes
+
+**Status: NOT VERIFIED.** No browser session could attach, so FR/EN and light/dark critical-path validation was not performed.
+
+## 23. Sprint 4 Open Conditions
+
+All inherited conditions remain open exactly as before:
+
+- real staging provider responses;
+- Qdrant E2E confirmation and outstanding cost adjustments;
+- Cost Center browser validation.
+
+None has been converted to PASS.
+
+## 24. Corrections Made
+
+No application behavior was modified and no new feature was added.
+
+The only Gate correction is regression coverage for two evidence-boundary cases in observed-request correlation: supplied-route mismatch and a report outside the 30-minute correlation window. It protects against falsely merging a report into a Bug Group when the available facts do not support it.
+
+## 25. Regression Results
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Shared tests | **PASS** | `pnpm --filter @second-brain/shared test`: 58/58 passed, 0 failed |
+| Sprint 5 PostgreSQL suite | **NOT VERIFIED** | controlled test DB connection setup stalls before it can be safely run |
+| Sprint 5 HTTP suite | **NOT VERIFIED** | loopback API and test credentials/browser prerequisites unavailable |
+| API tests | **NOT VERIFIED** | `prisma generate` stalled before build/test files began; controlled interruption, exit 1 |
+| Sprint 1–4 suites | **Not rerun in this Gate** | no new behavior change; prior outcomes are preserved but not re-certified here |
+
+## 26. Typecheck
+
+**NOT VERIFIED as a complete Gate run.** `pnpm typecheck` completed shared and Admin checks, then API/Mobile did not return a final result in the current runner. The command was interrupted rather than recorded as a pass.
+
+## 27. Builds
+
+| Build | Gate 5.5 status |
+| --- | --- |
+| API | **NOT VERIFIED** — the API regression stalled at `prisma generate` before the build/tests began |
+| Admin Web | **NOT VERIFIED** — `expo export --platform web --output-dir dist` produced no further progress for about 60 seconds and was interrupted; no compiler error was produced |
+| Mobile Web | **NOT VERIFIED** — `expo export --platform web` produced no further progress for about 150 seconds and was interrupted; no compiler error was produced |
+
+The previously documented Sprint 5 API/Admin/Mobile build successes remain historical evidence only; they are not substituted for a fresh Gate result.
+
+## 28. Remaining Conditions
+
+1. Restore reproducible host → Docker PostgreSQL test connectivity and execute `migrate status`, then run the 20-event PostgreSQL suite repeatedly.
+2. Run the loopback API HTTP suite with a dedicated TOTP-enrolled Admin, normal user, and role-specific fixtures; never display credentials or secrets.
+3. Restore browser-webview control and validate Admin login/MFA/RBAC/critical action step-up, responsive layouts, themes and FR/EN manually or through approved browser automation.
+4. Re-run the complete typecheck, API tests, API/Admin/Mobile builds and historical Sprint suites with explicit exit results.
+5. Preserve the open Sprint 4 staging-provider, Qdrant E2E and Cost Center browser conditions until real proof is collected.
+
+## 29. Sprint 6 Readiness
+
+# SPRINT 6 NOT READY
+
+Critical PostgreSQL concurrency, Admin browser/MFA/RBAC, loopback HTTP, and current full regression evidence are not yet available. The Gate stops here; Sprint 6 must not begin without explicit user validation.

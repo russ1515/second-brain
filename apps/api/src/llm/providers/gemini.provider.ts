@@ -58,10 +58,16 @@ export class GeminiProvider implements LLMProvider {
       },
     });
 
+    const usage = result.response.usageMetadata;
     return {
       text: result.response.text(),
       provider: this.name,
       model,
+      usage: {
+        inputTokens: usage?.promptTokenCount,
+        outputTokens: usage?.candidatesTokenCount,
+        cachedTokens: usage?.cachedContentTokenCount,
+      },
     };
   }
 
@@ -93,6 +99,10 @@ export class GeminiProvider implements LLMProvider {
       },
     });
 
-    return { text: result.response.text(), provider: this.name, model };
+    const usage = result.response.usageMetadata;
+    return {
+      text: result.response.text(), provider: this.name, model,
+      usage: { inputTokens: usage?.promptTokenCount, outputTokens: usage?.candidatesTokenCount, cachedTokens: usage?.cachedContentTokenCount },
+    };
   }
 }

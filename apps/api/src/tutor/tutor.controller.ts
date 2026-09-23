@@ -99,6 +99,7 @@ export class TutorController {
   ): Promise<SendTutorMessageResponse> {
     return this.tutor.sendMessage(user.userId, id, dto.content, {
       pace: dto.pace,
+      viaVoice: dto.viaVoice,
     });
   }
 

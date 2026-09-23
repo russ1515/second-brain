@@ -16,6 +16,8 @@ import type {
   LibraryDocumentDetail,
   LibraryFacets,
   LibraryFilter,
+  LibraryPage,
+  LibrarySort,
 } from '@second-brain/shared';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAccessGuard } from '../../auth/guards/jwt-access.guard';
@@ -67,6 +69,35 @@ export class LibraryController {
   @Get('collections')
   collections(@CurrentUser() user: AuthenticatedUser): Promise<Collection[]> {
     return this.library.listCollections(user.userId);
+  }
+
+  /** Cursor-paged library projection for large libraries. The legacy array
+   * endpoint remains intact for existing consumers. */
+  @Get('paged')
+  paged(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('filter') filter?: string,
+    @Query('subject') subject?: string,
+    @Query('language') language?: string,
+    @Query('collectionId') collectionId?: string,
+    @Query('q') q?: string,
+    @Query('sort') sort?: string,
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+  ): Promise<LibraryPage> {
+    return this.library.listPaged(
+      user.userId,
+      {
+        filter: this.toFilter(filter),
+        subject,
+        language,
+        collectionId,
+        q,
+      },
+      this.toSort(sort),
+      limit ? Number.parseInt(limit, 10) : undefined,
+      cursor,
+    );
   }
 
   /** One document with full text + metadata (detail view). */
@@ -138,5 +169,9 @@ export class LibraryController {
     return FILTERS.includes(value as LibraryFilter)
       ? (value as LibraryFilter)
       : 'all';
+  }
+
+  private toSort(value?: string): LibrarySort {
+    return value === 'oldest' || value === 'title' ? value : 'newest';
   }
 }

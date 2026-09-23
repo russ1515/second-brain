@@ -12,6 +12,8 @@ import type {
   LibraryDocumentDetail,
   LibraryFacets,
   LibraryFilter,
+  LibraryPage,
+  LibrarySort,
 } from '@second-brain/shared';
 import { PrismaService } from '../../prisma/prisma.service';
 import { IngestionService } from '../ingestion/ingestion.service';
@@ -63,6 +65,43 @@ export class LibraryService {
     return docs.map((doc) =>
       this.toLibraryDocument(doc, conceptsByDoc.get(doc.id) ?? [], collectionNames),
     );
+  }
+
+  /** One bounded page for the primary Library experience. Cursor pagination
+   * keeps payloads predictable; concepts and collection names are hydrated only
+   * for the returned page. */
+  async listPaged(
+    userId: string,
+    query: LibraryQuery,
+    sort: LibrarySort = 'newest',
+    limit = 24,
+    cursor?: string,
+  ): Promise<LibraryPage> {
+    if ((query.filter ?? 'all') === 'shared') return { items: [], nextCursor: null };
+    const take = Math.min(Math.max(Math.trunc(limit) || 24, 1), 50);
+    const orderBy: Prisma.DocumentOrderByWithRelationInput[] = sort === 'title'
+      ? [{ title: 'asc' }, { id: 'asc' }]
+      : [{ createdAt: sort === 'oldest' ? 'asc' : 'desc' }, { id: sort === 'oldest' ? 'asc' : 'desc' }];
+    const rows = await this.prisma.document.findMany({
+      where: this.whereFor(userId, query.filter ?? 'all', query),
+      orderBy,
+      take: take + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+    const hasMore = rows.length > take;
+    const page = hasMore ? rows.slice(0, take) : rows;
+    const [conceptsByDoc, collectionNames] = await Promise.all([
+      this.conceptsFor(page.map((document) => document.id)),
+      this.collectionNames(userId),
+    ]);
+    return {
+      items: page.map((document) => this.toLibraryDocument(
+        document,
+        conceptsByDoc.get(document.id) ?? [],
+        collectionNames,
+      )),
+      nextCursor: hasMore ? page[page.length - 1].id : null,
+    };
   }
 
   /** One document with its full text + all derived metadata (detail view). */

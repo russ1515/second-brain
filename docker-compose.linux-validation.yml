@@ -1,0 +1,51 @@
+# Dedicated Linux-in-Docker validation topology for Sprint 5.
+#
+# Use scripts/start-linux-pg-validation.ps1. It generates a unique Compose
+# project, run-specific database and test-only credential in memory, then waits
+# for PostgreSQL health before it starts the runner. Do not reuse a prior project.
+#
+# This file deliberately publishes no host ports. Do not use it with a
+# production or shared database. Do not use docker-compose.prod.yml for this gate.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${SB_LINUX_VALIDATION_POSTGRES_USER:-secondbrain_validation}
+      POSTGRES_PASSWORD: ${SB_LINUX_VALIDATION_POSTGRES_PASSWORD:?set an URL-safe staging/test password in .env.linux-validation}
+      POSTGRES_DB: ${SB_LINUX_VALIDATION_POSTGRES_DB:?set a run-specific validation database name}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    networks:
+      - validation
+    # The validation database is intentionally ephemeral. Evidence remains
+    # inspectable while this project is running, but no reusable DB volume exists.
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.linux-validation
+    environment:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://${SB_LINUX_VALIDATION_POSTGRES_USER:-secondbrain_validation}:${SB_LINUX_VALIDATION_POSTGRES_PASSWORD:?set an URL-safe staging/test password in .env.linux-validation}@postgres:5432/${SB_LINUX_VALIDATION_POSTGRES_DB:-second_brain_sprint5_test}?schema=public
+      SPRINT5_VALIDATION_REPEATS: ${SPRINT5_VALIDATION_REPEATS:-3}
+      SB_LINUX_VALIDATION_FRESH_DATABASE: ${SB_LINUX_VALIDATION_FRESH_DATABASE:?explicitly confirm that this is a fresh validation database}
+      SB_LINUX_VALIDATION_RUN_ID: ${SB_LINUX_VALIDATION_RUN_ID:?set a unique validation run id}
+      SB_LINUX_VALIDATION_COMPOSE_MARKER: ${SB_LINUX_VALIDATION_COMPOSE_MARKER:?set the Linux validation Compose marker}
+      SB_LINUX_VALIDATION_POSTGRES_DB: ${SB_LINUX_VALIDATION_POSTGRES_DB:?set a run-specific validation database name}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - validation
+
+networks:
+  validation:
+    internal: true

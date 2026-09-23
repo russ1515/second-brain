@@ -45,9 +45,7 @@ export class JourneyScheduler {
   async hourly(): Promise<void> {
     const result = await this.tick(new Date());
     if (result.matched > 0) {
-      this.logger.log(
-        `Journey tick: ${result.matched} learner(s) in a slot, ${result.sent} nudge(s) sent.`,
-      );
+      this.logger.log('Journey scheduled tick completed.');
     }
   }
 
@@ -77,11 +75,9 @@ export class JourneyScheduler {
         matched++;
         try {
           if (await this.nudge(user.id, timezone, now, slot)) sent++;
-        } catch (error) {
+        } catch {
           // One learner's failure must not stop the sweep.
-          this.logger.error(
-            `Journey tick failed for ${user.id}: ${(error as Error).message}`,
-          );
+          this.logger.error('Journey tick failed for one learner.');
         }
       }
 
@@ -124,10 +120,8 @@ export class JourneyScheduler {
       return streak.studiedToday
         ? `${streak.current}-day streak — today is already in the bag.`
         : `${streak.current}-day streak on the line — don't break it today.`;
-    } catch (error) {
-      this.logger.warn(
-        `Streak line failed for ${userId}: ${(error as Error).message}`,
-      );
+    } catch {
+      this.logger.warn('Streak line calculation failed.');
       return undefined;
     }
   }

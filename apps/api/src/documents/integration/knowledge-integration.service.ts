@@ -71,7 +71,7 @@ export class KnowledgeIntegrationService {
               `EXISTING concepts: ${existing.map((c) => c.name).join(', ')}`,
           },
         ],
-        { temperature: 0.2 },
+        { temperature: 0.2, operation: 'knowledge-linking' },
       );
 
       const idByName = new Map<string, string>();
@@ -99,13 +99,11 @@ export class KnowledgeIntegrationService {
         if (ok) created++;
       }
       if (created > 0) {
-        this.logger.log(`Integrated document ${documentId}: +${created} cross-link(s).`);
+        this.logger.log('Cross-document integration completed.');
       }
       return created;
-    } catch (error) {
-      this.logger.warn(
-        `Cross-document linking skipped for ${documentId}: ${(error as Error).message}`,
-      );
+    } catch {
+      this.logger.warn('Cross-document linking was skipped.');
       return 0;
     }
   }

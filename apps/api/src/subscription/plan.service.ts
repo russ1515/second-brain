@@ -19,9 +19,8 @@ export class PlanService implements OnModuleInit {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Seed/refresh the catalog. Upserts by slug so it is safe to run every boot:
-   *  new plans are created, existing names/tiers are corrected, and quotas or
-   *  features set elsewhere are left untouched (only created on first insert). */
+  /** Create missing catalog rows only. Existing commercial configuration is
+   *  immutable at boot and can only change through versioned admin workflows. */
   async onModuleInit(): Promise<void> {
     for (const seed of PLAN_SEED) {
       await this.prisma.plan.upsert({
@@ -32,23 +31,33 @@ export class PlanService implements OnModuleInit {
           tier: seed.tier,
           audience: seed.audience,
           quotas: seed.quotas,
+          priceMonthly: seed.priceMonthly,
+          priceYearly: seed.priceYearly,
+          currency: seed.currency,
+          publicV1: seed.publicV1,
+          fallbackRatio: seed.fallbackRatio,
+          versions: {
+            create: {
+              version: 1,
+              priceMonthly: seed.priceMonthly,
+              priceYearly: seed.priceYearly,
+              currency: seed.currency,
+              quotas: seed.quotas,
+              features: {},
+              fallbackRatio: seed.fallbackRatio,
+              reason: 'Initial catalog seed',
+            },
+          },
         },
-        // Quotas are example limits (Sprint 8.3): refreshed each boot for now.
-        // When admin editing of quotas exists, drop `quotas` from this update.
-        update: {
-          name: seed.name,
-          tier: seed.tier,
-          audience: seed.audience,
-          quotas: seed.quotas,
-        },
+        update: {},
       });
     }
-    this.logger.log(`Plan catalog seeded (${PLAN_SEED.length} plans).`);
+    this.logger.log('Plan catalog initialization completed.');
   }
 
-  async list(): Promise<PlanView[]> {
+  async list(publicOnly = true): Promise<PlanView[]> {
     const plans = await this.prisma.plan.findMany({
-      where: { isActive: true },
+      where: { isActive: true, ...(publicOnly ? { publicV1: true } : {}) },
       orderBy: { tier: 'asc' },
     });
     return plans.map((p) => this.toView(p));

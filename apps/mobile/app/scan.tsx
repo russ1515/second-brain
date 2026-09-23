@@ -4,6 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import type { DocumentDetail } from '@second-brain/shared';
 import { apiUpload } from '../lib/client';
+import { appendPickedDocument, type PickedDocument } from '../lib/document-import';
 import { useTokens } from '../lib/design/theme';
 import type { ColorScale } from '../lib/design/tokens';
 import { useI18n } from '../lib/i18n';
@@ -72,9 +73,10 @@ export default function ScanScreen() {
     try {
       const form = new FormData();
       for (const page of pages) {
-        // On web the picker gives a blob: URI; the API needs the actual bytes.
-        const blob = await (await fetch(page.uri)).blob();
-        form.append('images', blob, page.name);
+        await appendPickedDocument(form, 'images', {
+          ...page,
+          size: null,
+        } as PickedDocument);
       }
       if (title.trim()) form.append('title', title.trim());
       const doc = await apiUpload<DocumentDetail>('/documents/scan', form);
@@ -102,7 +104,7 @@ export default function ScanScreen() {
           {done.content}
         </Text>
         <Button label={t('scan.scanAnother')} onPress={() => setDone(null)} />
-        <Button variant="ghost" label={t('common.backToday')} onPress={() => router.replace('/')} />
+        <Button variant="ghost" label={t('scan.openDocument')} onPress={() => router.replace(`/library/${done.id}`)} />
       </ScrollView>
     );
   }

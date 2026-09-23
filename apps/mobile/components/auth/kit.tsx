@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Modal, Platform, Pressable, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
 import { SUPPORTED_LANGUAGES } from '@second-brain/shared';
 import { useI18n } from '../../lib/i18n';
 import { useTheme, useTokens } from '../../lib/design/theme';
@@ -95,30 +95,40 @@ export function ThemeToggle() {
 const LANGS = Object.values(SUPPORTED_LANGUAGES);
 export function LangPill() {
   const { colors: c, radius, spacing } = useTokens();
-  const { locale, setLocale } = useI18n();
+  const { locale, setLocale, t } = useI18n();
   const [open, setOpen] = useState(false);
   const current = LANGS.find((l) => l.code === locale) ?? LANGS[0];
   return (
     <>
-      <Pressable onPress={() => setOpen(true)} accessibilityRole="button" accessibilityLabel={current.name}
+      <Pressable onPress={() => setOpen(true)} accessibilityRole="button" accessibilityLabel={current.name} accessibilityState={{ expanded: open }} aria-expanded={open}
         style={{ flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.full, paddingVertical: 6, paddingHorizontal: 12, minHeight: 36 }}>
         <Text style={{ fontSize: 14 }}>{current.flag}</Text>
         <Text style={{ color: c.textSecondary, fontSize: 13, fontWeight: '700' }}>{current.code.toUpperCase()}</Text>
         <Text style={{ color: c.textMuted, fontSize: 11 }}>▾</Text>
       </Pressable>
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <Pressable style={{ flex: 1, backgroundColor: c.overlay, justifyContent: 'center', padding: 24 }} onPress={() => setOpen(false)}>
-          <Pressable style={{ backgroundColor: c.surfaceElevated, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, overflow: 'hidden', maxHeight: 420, alignSelf: 'center', width: '100%', maxWidth: 360 }} onPress={() => {}}>
-            {LANGS.map((l) => (
-              <Pressable key={l.code} onPress={() => { setLocale(l.code); setOpen(false); }}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 10, padding: spacing.md, borderTopWidth: 1, borderTopColor: c.borderSubtle, backgroundColor: l.code === locale ? c.surfaceSunken : 'transparent' }}>
-                <Text style={{ fontSize: 16 }}>{l.flag}</Text>
-                <Text style={{ color: c.textPrimary, fontSize: 15, flex: 1 }}>{l.name}</Text>
-                {l.code === locale ? <Text style={{ color: c.primary }}>✓</Text> : null}
-              </Pressable>
-            ))}
-          </Pressable>
-        </Pressable>
+        <View style={{ flex: 1, backgroundColor: c.overlay, justifyContent: 'center', padding: 24 }}>
+          <Pressable onPress={() => setOpen(false)} accessibilityRole="button" accessibilityLabel={t('app.dismiss')} style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 0 }} />
+          <View accessibilityViewIsModal style={{ position: 'relative', zIndex: 1, backgroundColor: c.surfaceElevated, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, overflow: 'hidden', maxHeight: 420, alignSelf: 'center', width: '100%', maxWidth: 360 }}>
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
+              {LANGS.map((l) => (
+                <Pressable
+                  key={l.code}
+                  onPress={() => { setLocale(l.code); setOpen(false); }}
+                  accessibilityRole="button"
+                  accessibilityLabel={l.name}
+                  accessibilityState={{ selected: l.code === locale }}
+                  aria-selected={l.code === locale}
+                  style={{ minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10, padding: spacing.md, borderTopWidth: 1, borderTopColor: c.borderSubtle, backgroundColor: l.code === locale ? c.surfaceSunken : 'transparent' }}
+                >
+                  <Text accessible={false} style={{ fontSize: 16 }}>{l.flag}</Text>
+                  <Text style={{ color: c.textPrimary, fontSize: 15, flex: 1 }}>{l.name}</Text>
+                  {l.code === locale ? <Text accessible={false} style={{ color: c.primary }}>✓</Text> : null}
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
       </Modal>
     </>
   );
