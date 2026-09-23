@@ -71,7 +71,11 @@ async function loginAdmin(email) {
 async function loginLearner() {
   const login = await api('/auth/login', { method: 'POST', body: { email: learner.email, password } });
   assert.equal(login.status, 200);
-  assert.equal(login.body?.twoFactorRequired, false);
+  assert.equal(login.body?.twoFactorRequired, undefined);
+  assert.equal(login.body?.challengeToken, undefined);
+  assert.ok(login.body?.user);
+  assert.equal(typeof login.body?.tokens?.accessToken, 'string');
+  assert.ok(login.body.tokens.accessToken.length > 0);
   return login.body.tokens.accessToken;
 }
 
