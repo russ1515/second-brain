@@ -1,15 +1,12 @@
-import { Redirect, Stack, usePathname } from 'expo-router';
+import { Redirect, Stack, usePathname, useRootNavigationState } from 'expo-router';
 import { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { ScrollView, StyleSheet } from 'react-native';
 import { routeMetadataFor } from '@second-brain/shared';
 import { AuthProvider, useAuth } from '../lib/auth-context';
 import { I18nProvider, useI18n } from '../lib/i18n';
 import '../lib/locales'; // registers every generated UI dictionary (es/de/it/pt/hi/…)
 import { QueryProvider } from '../lib/query';
 import { ThemeProvider, useTokens } from '../lib/design/theme';
-import { Button, Empty } from '../components/ui';
-import { SmartLoadingState } from '../components/ds/states';
 import { RouteShellBoundary, SidebarProvider } from '../components/nav/app-shell';
 import { newAppShellEnabledForPath } from '../lib/navigation';
 import { setSafeCurrentRoute } from '../lib/client-diagnostics';
@@ -39,9 +36,10 @@ function Navigator() {
   const { t } = useI18n();
   const { colors: c } = useTokens();
   const pathname = usePathname();
+  const rootNavigationState = useRootNavigationState();
   const metadata = routeMetadataFor(pathname);
   const shellEnabled = newAppShellEnabledForPath(pathname);
-  const { user, loading, offline, onboarded, retry, logout } = useAuth();
+  const { user, loading, onboarded } = useAuth();
 
   // Keeps only a normalized route name for safe client diagnostics. It never
   // stores query values or dynamic resource identifiers.
@@ -49,31 +47,27 @@ function Navigator() {
     setSafeCurrentRoute(pathname);
   }, [pathname]);
 
-  if (shellEnabled && metadata?.requiresAuth && loading) {
-    return <SmartLoadingState title={t('classroom.opening')} />;
-  }
-
-  // A stored session remains intact while the API is unreachable. This guard
-  // now also protects direct links outside the five-tab navigator.
-  const routeCanUseCache = pathname === '/library' || pathname === '/brain';
-  if (shellEnabled && metadata?.requiresAuth && offline && !routeCanUseCache) {
-    return (
-      <ScrollView style={{ backgroundColor: c.background }} contentContainerStyle={styles.offline}>
-        <Empty title={t('classroom.offlineTitle')} detail={t('classroom.offlineDetail')} />
-        <Button label={t('app.tryAgain')} onPress={retry} />
-        <Button variant="ghost" label={t('app.signOut')} onPress={logout} />
-      </ScrollView>
-    );
-  }
-
-  if (shellEnabled && metadata?.requiresAuth && !user) {
-    return <Redirect href={{ pathname: '/sign-in', params: { returnTo: pathname } }} />;
-  }
-
+  // The root navigator must always mount before any redirect.
+  // Expo Router throws if navigation happens before the Root Stack exists.
   const userExperience = metadata?.category === 'USER' || metadata?.category === 'LEGACY';
-  if (shellEnabled && user && userExperience && onboarded === false && metadata?.path !== '/onboarding') {
-    return <Redirect href={{ pathname: '/onboarding', params: { returnTo: pathname } }} />;
-  }
+  const navigationReady = Boolean(rootNavigationState?.key);
+
+  const redirectToSignIn =
+    navigationReady &&
+    !loading &&
+    shellEnabled &&
+    Boolean(metadata?.requiresAuth) &&
+    !user;
+
+  const redirectToOnboarding =
+    navigationReady &&
+    !loading &&
+    shellEnabled &&
+    Boolean(user) &&
+    userExperience &&
+    onboarded === false &&
+    metadata?.path !== '/onboarding';
+
 
   return (
     <SidebarProvider>
@@ -135,18 +129,14 @@ function Navigator() {
           <Stack.Screen name="report-problem" options={{ title: t('report.title') }} />
         </Stack>
       </RouteShellBoundary>
+
+      {redirectToSignIn ? (
+        <Redirect href={{ pathname: '/sign-in', params: { returnTo: pathname } }} />
+      ) : null}
+
+      {redirectToOnboarding ? (
+        <Redirect href={{ pathname: '/onboarding', params: { returnTo: pathname } }} />
+      ) : null}
     </SidebarProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  offline: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    padding: 20,
-    gap: 12,
-    maxWidth: 720,
-    width: '100%',
-    alignSelf: 'center',
-  },
-});
