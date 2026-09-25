@@ -1,0 +1,20 @@
+# Merged only with the out-of-repository P1 Compose file by
+# run-openai-provider-gate.sh. It changes a disposable `docker compose run api`
+# container, never the long-running echo/fake API service.
+services:
+  api:
+    environment:
+      LLM_PROVIDER: openai
+      LLM_MODEL: ${LLM_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # This server-only mode is read by LlmService only for an OpenAI Tutor
+      # request. It disables retries and caps output in the one-off container.
+      OPENAI_PROVIDER_GATE_MODE: single-bounded
+      OPENAI_PROVIDER_GATE_MAX_OUTPUT_TOKENS: ${OPENAI_PROVIDER_GATE_MAX_OUTPUT_TOKENS:-32}
+      # The real-provider LLM gate does not enable embeddings.
+      EMBEDDINGS_PROVIDER: fake
+    volumes:
+      - type: bind
+        source: ${P1_REPO}/scripts/openai-provider-gate-client.cjs
+        target: /p1/openai-provider-gate-client.cjs
+        read_only: true
