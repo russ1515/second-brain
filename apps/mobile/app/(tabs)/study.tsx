@@ -75,8 +75,23 @@ export default function StudyScreen() {
   const start = () => router.push({ pathname: '/revision', params: compactParams({ ...context, size: String(size) }) });
   const contextItems = home ? toContextItems(home) : [];
 
-  if (loading && !home) return <SmartLoadingState title={t('review9.loading')} detail={t('review9.loadingDetail')} />;
-  if (!home) return <ScrollView contentContainerStyle={[styles.container, { maxWidth: maxContentWidth }]}><SmartErrorState detail={error ?? undefined} retryable onRetry={() => void load()} /></ScrollView>;
+  if (loading && !home) {
+    return (
+      <View style={[styles.screen, { backgroundColor: c.background }]}>
+        <SmartLoadingState title={t('review9.loading')} detail={t('review9.loadingDetail')} />
+      </View>
+    );
+  }
+  if (!home) {
+    return (
+      <ScrollView
+        style={[styles.screen, { backgroundColor: c.background }]}
+        contentContainerStyle={[styles.container, styles.stateContainer, { maxWidth: maxContentWidth }]}
+      >
+        <SmartErrorState detail={error ?? undefined} retryable onRetry={() => void load()} />
+      </ScrollView>
+    );
+  }
 
   const primary = (
     <View style={{ gap: spacing.md }}>
@@ -105,7 +120,10 @@ export default function StudyScreen() {
   );
 
   return (
-    <ScrollView contentContainerStyle={[styles.container, { maxWidth: maxContentWidth }]}>
+    <ScrollView
+      style={[styles.screen, { backgroundColor: c.background }]}
+      contentContainerStyle={[styles.container, { maxWidth: maxContentWidth }]}
+    >
       <View style={{ gap: spacing.xs }}>
         <Text accessibilityRole="header" style={[typography.h1, { color: c.textPrimary }]}>{t('review9.title')}</Text>
         <Text style={[typography.body, { color: c.textSecondary, maxWidth: 720 }]}>{t('review9.intro')}</Text>
@@ -139,4 +157,8 @@ function toContextItems(home: ReviewHomeView): ContextItem[] {
   ];
 }
 
-const styles = StyleSheet.create({ container: { padding: 20, gap: 16, width: '100%', alignSelf: 'center', paddingBottom: 56 } });
+const styles = StyleSheet.create({
+  screen: { flex: 1 },
+  container: { padding: 20, gap: 16, width: '100%', alignSelf: 'center', paddingBottom: 56 },
+  stateContainer: { flexGrow: 1 },
+});
