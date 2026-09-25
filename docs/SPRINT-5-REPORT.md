@@ -232,3 +232,36 @@ Le worktree était déjà fortement modifié/non nettoyé avant Sprint 5. Aucun 
 ## STOP
 
 Sprint 5 s’arrête après ce rapport. Sprint 6 ne doit pas commencer sans validation humaine explicite et levée des conditions ci-dessus.
+
+## OVH P1 VALIDATION ADDENDUM — 25 September 2026
+
+**Scope and rule.** This is an evidence update from dedicated non-production OVH staging. It closes only the earlier runtime conditions listed here; every Sprint 5 item not named below retains its previous status. No user report, provider output, unknown cost, or absent dataset has been reclassified by assumption.
+
+### Runtime conditions now verified
+
+| Area | Status | Verified boundary |
+| --- | --- | --- |
+| Real PostgreSQL / concurrency | **PASS** | 59 migrations and schema status passed; three Sprint 5 PostgreSQL runs were retained, with a final 10/10 including 20 simultaneous ingestions, idempotency, persistence/redaction, correlation, and Bug/Incident/Support/Diagnostics evidence. |
+| HTTP/security | **PASS** | Sprint 5 HTTP completed 3/3 against staging; authentication/authorization, normal learner Admin `403`, MFA/step-up, workflow permissions, and safe response/log assertions were exercised. |
+| Admin browser workflows | **PASS for the stated P1 roles and flows** | SUPER_ADMIN, TECH_OPS, SUPPORT, and FINANCE browser flows completed with retained MFA/RBAC/step-up evidence; Cost Center preserves `UNKNOWN`, `NOT_INSTRUMENTED`, and `INSUFFICIENT_DATA` as literal states. |
+| Responsive/i18n/accessibility | **PASS for the explicit quality-run scope** | `/dashboard`, `/bugs`, `/incidents`, `/support`, and `/costs` were checked at the recorded viewports, with keyboard focus, EN/FR persistence, and automated WCAG A/AA checks. Other routes, devices, locales, and assistive-technology combinations remain `NOT_VERIFIED`. |
+| Qdrant document/vector lifecycle | **PASS — bounded scope** | Real document → vector presence → owner retrieval → cross-user isolation → purge was exercised in Qdrant. The embedding provider was fake, so real embeddings/provider cost/instrumentation are not claimed. |
+| Real provider / provider ledger / price evidence | **NOT_VERIFIED** | No external provider credential or attributable real provider call was used; `UNKNOWN`, `NOT_INSTRUMENTED`, and insufficient data are not converted to zero or PASS. |
+
+### Corrected defects validated by the later evidence
+
+- The Linux lockfile/native-module build path was repaired and the runner completed under frozen install; this validates the runner topology, not a relaxation of the lockfile gate.
+- The Bug Center `count()` pagination defect was corrected; the final real PostgreSQL workflow evidence completed 10/10.
+- The scoped browser audit found invalid Dashboard progress-bar semantics, non-focusable horizontal Cost Center tables, and insufficient light-theme contrast in diagnostic/Cost Center surfaces. The correction uses actual progress-bar range attributes, focusable horizontal tables, and AA-compliant palette values; `admin-browser-quality-full-20260925-quality-full-r5.json` verifies the result without changing authorization, MFA, quota, provider, or business logic.
+
+### Evidence and retained limits
+
+All evidence is retained in the run-specific OVH P1 staging evidence directory; it contains the final PostgreSQL run, HTTP runs, Qdrant lifecycle run, role-specific browser runs, Cost Center result, and browser-quality run. Reports contain no credentials, tokens, TOTP material, or provider keys.
+
+**Still open:** real provider responses and attributable provider instrumentation/pricing; any product surface outside the explicit browser-quality scope; and intentionally deferred capabilities already labelled `NOT_INSTRUMENTED`/`NOT_AVAILABLE` elsewhere in this report.
+
+## UPDATED SPRINT 6 READINESS
+
+# SPRINT 6 NOT READY
+
+The OVH Linux/PostgreSQL and P1 HTTP/Admin conditions above are closed. Real-provider/instrumentation evidence is still required before Sprint 6; fake embeddings and unknown pricing are not substitutes.

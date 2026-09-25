@@ -188,3 +188,36 @@ The previously documented Sprint 5 API/Admin/Mobile build successes remain histo
 # SPRINT 6 NOT READY
 
 Critical PostgreSQL concurrency, Admin browser/MFA/RBAC, loopback HTTP, and current full regression evidence are not yet available. The Gate stops here; Sprint 6 must not begin without explicit user validation.
+
+## OVH P1 ADDENDUM — 25 September 2026
+
+**Scope.** This addendum records later evidence from the dedicated, non-production OVH staging environment. It preserves the historical Windows findings above. For the validations named below, this section supersedes the earlier `NOT VERIFIED` result; no untested condition is upgraded by implication.
+
+### Closed Gate 5.5 conditions
+
+| Validation | Status | Verified evidence |
+| --- | --- | --- |
+| Linux runner and isolated PostgreSQL | **PASS** | The Linux runner build completed; PostgreSQL and runner became healthy. |
+| Prisma migrations | **PASS** | 59 migrations were present and `prisma migrate status` reported the schema up to date. |
+| Sprint 5 PostgreSQL validation | **PASS** | Three retained real PostgreSQL runs completed; final run `20260923144224-423eb555` was 10/10, including 20 simultaneous ingestions, retry idempotency, redaction/persistence, report correlation, telemetry retry idempotency, support/report relationships, and Bug/Incident/Support/Diagnostics workflow evidence. |
+| HTTP/security P1 | **PASS** | The retained Sprint 5 HTTP suite completed 3/3 against staging, including authorization, role boundaries, MFA/step-up paths, privacy sentinels, and normal-learner Admin denial. |
+| Cost Center HTTP | **PASS** | The retained Cost Center HTTP validation completed 1/1. |
+| Admin browser MFA/RBAC/step-up | **PASS for the stated P1 flows** | SUPER_ADMIN invalid/valid TOTP, logout/session invalidation, learner suspend/reactivate; TECH_OPS Bug triage and deterministic `rule_based` diagnostic after MFA step-up (`admin-browser-techops-diagnostics-20260925-techops-diagnostics-r3.json`) plus Incident transition; SUPPORT cases, untrusted/redacted treatment and sensitive denial; and FINANCE Cost Center state display were exercised. |
+| Admin quality routes | **PASS for the stated P1 route/viewport scope** | `admin-browser-quality-full-20260925-quality-full-r5.json` passed on `/dashboard`, `/bugs`, `/incidents`, `/support`, and `/costs` at recorded desktop/tablet/mobile viewports, keyboard focus checks, EN/FR persistence, automated WCAG A/AA checks, and the three Dashboard progress-bar range semantics. This is not a claim for routes or assistive technologies outside that explicit scope. |
+| Qdrant document lifecycle | **PASS — bounded scope** | `qdrant-document-e2e-20260925031227-qdrant.json` verifies real staging document creation, vector presence in Qdrant, owner retrieval, cross-user isolation, and purge after deletion. The configured embedding provider was fake; this is not evidence of an external embedding provider, provider pricing, or provider usage instrumentation. |
+
+Retained evidence is under the run-specific OVH P1 staging evidence directory, including `sprint5-http-retest-20260923T205504Z.tap`, the role-specific Admin browser results, Cost Center browser result, Qdrant document E2E result, and browser-quality result. No credential, token, TOTP seed, or provider key is recorded in this report.
+
+**Image provenance.** The final P1 Admin container was rebuilt from the reviewed isolated build context containing the accessibility delta and was validated before replacement. The OVH repository commit recorded by the browser evidence remains the prior staging SHA until the local patch commits are transferred; no production image or production service was changed.
+
+### Conditions still open
+
+- **Real providers / provider instrumentation: NOT_VERIFIED.** No new staging provider credential was used and no attributable external provider call, provider ledger record, or real provider price observation was established.
+- Any Admin route, device, locale, screen-reader combination, or accessibility behavior outside the explicit quality-run scope remains **NOT_VERIFIED** rather than implied PASS.
+- The fake-embedding Qdrant validation does not close the real-provider condition.
+
+## Sprint 6 readiness (updated)
+
+# SPRINT 6 NOT READY
+
+The former Linux/PostgreSQL, HTTP/security, Cost Center HTTP, and stated P1 Admin-browser blockers are closed. Sprint 6 remains blocked until real provider/instrumentation validation is performed with a new staging-only credential and attributable evidence; no value is inferred as zero or PASS without that evidence.

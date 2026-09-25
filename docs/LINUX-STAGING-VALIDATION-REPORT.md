@@ -91,3 +91,26 @@ The staging project is intentionally not cleaned up automatically. Any cleanup m
 ## Stop
 
 No Sprint 6 work has started. No production deployment occurred. This gate stops here pending an environment change and explicit follow-up.
+
+## OVH P1 ADDENDUM — 25 September 2026
+
+**Supersession notice.** The preceding Docker-Hub/bootstrap failure describes the earlier Windows topology only. The results below are from a later dedicated non-production Ubuntu OVH staging runner and supersede that earlier `NOT VERIFIED` outcome only where expressly listed.
+
+| Linux staging validation | Status | Verified evidence |
+| --- | --- | --- |
+| Runner build and dependency install | **PASS** | The Linux runner build completed with the frozen lockfile; the native Argon2 install completed. |
+| PostgreSQL isolation and health | **PASS** | Isolated PostgreSQL and runner were healthy; no production database was used. |
+| Migration status | **PASS** | All 59 migrations were found and Prisma reported the isolated schema up to date. |
+| Sprint 5 PostgreSQL gate | **PASS** | Three real PostgreSQL executions were retained; the final execution `20260923144224-423eb555` was 10/10, including the 20-concurrent-ingestion assertion and the Bug/Incident/Support/Diagnostics workflow. |
+| API/Shared regression | **PASS** | `final-api-shared-regression-r3-20260925.json` records Shared build/tests (58/58), API build/tests (108/108), and relevant typechecks in retained Linux evidence. |
+| Admin build validation | **PASS** | The staging Admin image build completed its Web export; the evaluated image also passed `pnpm --filter @second-brain/admin typecheck` with network disabled. |
+| Qdrant document/vector lifecycle | **PASS — bounded scope** | Real Qdrant vector persistence, owner retrieval, cross-user isolation, and purge were exercised using the staging fake embedding provider. |
+| External provider/instrumentation | **NOT_VERIFIED** | No real external provider credential or billable/provider-attributed call was used. |
+
+The P1 HTTP/Admin validations use the same non-production OVH staging environment and have separate retained evidence: HTTP/security 3/3, Cost Center HTTP 1/1, role-specific browser MFA/RBAC/step-up flows, and `admin-browser-quality-full-20260925-quality-full-r5.json`. These are not substituted for a real-provider validation.
+
+### Remaining condition
+
+# SPRINT 6 NOT READY
+
+The Linux/PostgreSQL gate is closed. A real external-provider/instrumentation run with new staging-only credentials and attributable ledger/cost evidence remains required. The Qdrant result above is real for Qdrant transport and lifecycle, but not for a real embedding provider.
