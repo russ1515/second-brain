@@ -221,3 +221,7 @@ Retained evidence is under the run-specific OVH P1 staging evidence directory, i
 # SPRINT 6 NOT READY
 
 The former Linux/PostgreSQL, HTTP/security, Cost Center HTTP, and stated P1 Admin-browser blockers are closed. Sprint 6 remains blocked until real provider/instrumentation validation is performed with a new staging-only credential and attributable evidence; no value is inferred as zero or PASS without that evidence.
+
+## Browser-quality evidence supersession — 25 September 2026
+
+This section supersedes the earlier five-route Browser-quality row and its corresponding route/device wording above. `admin-browser-quality-full-20260925-quality-all-r4.json` is **PASS** for all 15 protected navigation sections at four recorded viewports: 90 layout samples, 60 keyboard-focus samples, EN/FR persistence, zero automated WCAG A/AA violations, and three verified Dashboard progress-bar ranges. Role-specific evidence still covers the dynamic User and Bug details. Manual screen-reader/assistive-technology validation remains **NOT_VERIFIED**; automated Axe and keyboard evidence does not imply a human assistive-technology review.

@@ -265,3 +265,7 @@ All evidence is retained in the run-specific OVH P1 staging evidence directory; 
 # SPRINT 6 NOT READY
 
 The OVH Linux/PostgreSQL and P1 HTTP/Admin conditions above are closed. Real-provider/instrumentation evidence is still required before Sprint 6; fake embeddings and unknown pricing are not substitutes.
+
+## Browser-quality evidence supersession — 25 September 2026
+
+This supersedes the earlier five-route responsive/i18n/accessibility row and scoped-browser defect note. `admin-browser-quality-full-20260925-quality-all-r4.json` is **PASS** for all 15 protected navigation sections at four viewports: 90 layout samples, 60 keyboard-focus samples, EN/FR persistence, zero automated WCAG A/AA violations, and verified Dashboard progress-bar ranges. The audit also closed low-contrast generic-section text and User Directory radios missing the required Web `aria-checked` state. Role-specific browser evidence covers dynamic User and Bug details. Manual screen-reader/assistive-technology validation remains `NOT_VERIFIED`.

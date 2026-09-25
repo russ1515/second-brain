@@ -114,3 +114,7 @@ The P1 HTTP/Admin validations use the same non-production OVH staging environmen
 # SPRINT 6 NOT READY
 
 The Linux/PostgreSQL gate is closed. A real external-provider/instrumentation run with new staging-only credentials and attributable ledger/cost evidence remains required. The Qdrant result above is real for Qdrant transport and lifecycle, but not for a real embedding provider.
+
+### Browser-quality evidence supersession — 25 September 2026
+
+The earlier five-route browser-quality reference is superseded by `admin-browser-quality-full-20260925-quality-all-r4.json`: all 15 protected navigation sections passed at four viewports with 90 layout samples, 60 keyboard-focus samples, EN/FR persistence, and zero automated WCAG A/AA violations. Dynamic User and Bug details retain their role-specific evidence. Manual screen-reader/assistive-technology validation remains `NOT_VERIFIED`.
