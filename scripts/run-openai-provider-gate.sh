@@ -71,9 +71,8 @@ case "$LLM_MODEL" in
   *$'\n'*|*$'\r'*) refuse "OPENAI_MODEL_INVALID" ;;
 esac
 
-case "$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || true)" in
-  ''|HEAD) refuse "STAGING_SOURCE_BRANCH_INVALID" ;;
-esac
+git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 || refuse "STAGING_SOURCE_REPOSITORY_INVALID"
+[ -z "$(git -C "$REPO" status --porcelain)" ] || refuse "STAGING_SOURCE_WORKTREE_DIRTY"
 SOURCE_SHA="$(git -C "$REPO" rev-parse HEAD)"
 
 cleanup() {
