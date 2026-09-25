@@ -75,7 +75,7 @@ function makeTheme(dark: boolean): Theme {
       primary: '#60a5fa', primarySoft: '#172554', warning: '#fbbf24', warningSoft: '#422006', danger: '#f87171', dangerSoft: '#450a0a', success: '#34d399', successSoft: '#052e2b',
     }
     : {
-      dark, page: '#f1f5f9', surface: '#ffffff', surfaceMuted: '#f8fafc', border: '#dbe4ee', text: '#0f172a', muted: '#64748b',
+      dark, page: '#f1f5f9', surface: '#ffffff', surfaceMuted: '#f8fafc', border: '#dbe4ee', text: '#0f172a', muted: '#475569',
       primary: '#2563eb', primarySoft: '#dbeafe', warning: '#b45309', warningSoft: '#fef3c7', danger: '#dc2626', dangerSoft: '#fee2e2', success: '#047857', successSoft: '#d1fae5',
     };
 }
