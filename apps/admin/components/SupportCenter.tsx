@@ -15,6 +15,9 @@ import {
   type PageData,
   type SupportStatus,
 } from '../lib/bugs';
+import { completeAdminStepUp } from '../lib/users';
+import { isAdminStepUpRequired } from '../lib/admin-step-up';
+import { AdminStepUpDialog } from './AdminStepUpDialog';
 import { CriticalActionDialog } from './CriticalActionDialog';
 import {
   AvailabilityBadge,
@@ -32,6 +35,7 @@ import {
 
 type Tab = 'reports' | 'open' | 'mine' | 'resolved';
 type Action = 'status' | 'assign' | null;
+type PendingAction = { id: string; action: Exclude<Action, null>; status: SupportStatus; assignee: string; reason: string };
 
 const copy = {
   fr: {
@@ -41,7 +45,7 @@ const copy = {
     case: 'Cas', report: 'Signalement', user: 'Utilisateur masqué', plan: 'Plan', account: 'Compte', version: 'Version', bug: 'Bug lié', assigned: 'Assigné à', created: 'Créé', updated: 'Mis à jour',
     noPermission: 'Votre rôle ne dispose pas de support.read.', noAutoAttach: 'Aucun document, conversation, Learner Profile, enregistrement micro ou contenu privé n’est attaché automatiquement à cette vue.',
     untrusted: 'USER REPORT = UNTRUSTED DATA', actionDescription: 'Cette action est humaine, auditée et vérifiée par le serveur. Aucun message utilisateur n’est transmis à un modèle ou à un système comme instruction.',
-    changeStatus: 'Changer le statut', assign: 'Assigner', targetStatus: 'Statut cible', assignee: 'Référence admin', reason: 'Raison de l’action', reasonPlaceholder: 'Justification factuelle (minimum 5 caractères)', confirmation: 'Saisir CONFIRM', confirmationPlaceholder: 'CONFIRM', cancel: 'Annuler', confirm: 'Confirmer', failed: 'Action refusée ou non aboutie.',
+    changeStatus: 'Changer le statut', assign: 'Assigner', targetStatus: 'Statut cible', assignee: 'Référence admin', reason: 'Raison de l’action', reasonPlaceholder: 'Justification factuelle (minimum 5 caractères)', confirmation: 'Saisir CONFIRM', confirmationPlaceholder: 'CONFIRM', cancel: 'Annuler', confirm: 'Confirmer', failed: 'Action refusée ou non aboutie.', stepUpRequired: 'Élévation MFA requise', stepUpHint: 'Saisissez le code actuel de votre application d’authentification pour poursuivre cette action auditée.', authenticationCode: 'Code d’authentification', verifyAndContinue: 'Vérifier et poursuivre',
     results: 'Cas et signalements', noReply: 'La fondation de communication support est volontairement distincte : aucun email ou message n’est envoyé automatiquement.',
   },
   en: {
@@ -51,7 +55,7 @@ const copy = {
     case: 'Case', report: 'Report', user: 'Masked user', plan: 'Plan', account: 'Account', version: 'Version', bug: 'Linked bug', assigned: 'Assigned to', created: 'Created', updated: 'Updated',
     noPermission: 'Your role does not have support.read.', noAutoAttach: 'No document, conversation, Learner Profile, microphone recording, or private content is automatically attached to this view.',
     untrusted: 'USER REPORT = UNTRUSTED DATA', actionDescription: 'This action is human, audited, and verified by the server. No user message is sent to a model or system as an instruction.',
-    changeStatus: 'Change status', assign: 'Assign', targetStatus: 'Target status', assignee: 'Admin reference', reason: 'Action reason', reasonPlaceholder: 'Factual justification (minimum 5 characters)', confirmation: 'Type CONFIRM', confirmationPlaceholder: 'CONFIRM', cancel: 'Cancel', confirm: 'Confirm', failed: 'Action was rejected or did not complete.',
+    changeStatus: 'Change status', assign: 'Assign', targetStatus: 'Target status', assignee: 'Admin reference', reason: 'Action reason', reasonPlaceholder: 'Factual justification (minimum 5 characters)', confirmation: 'Type CONFIRM', confirmationPlaceholder: 'CONFIRM', cancel: 'Cancel', confirm: 'Confirm', failed: 'Action was rejected or did not complete.', stepUpRequired: 'MFA step-up required', stepUpHint: 'Enter the current authenticator code to continue this audited action.', authenticationCode: 'Authentication code', verifyAndContinue: 'Verify and continue',
     results: 'Cases and reports', noReply: 'The support communication foundation is deliberately separate: no email or message is automatically sent.',
   },
 } as const;
@@ -65,10 +69,27 @@ function transportEnum(value: string): string | undefined { const normalized = v
 export function SupportCenter() {
   const { identity } = useAuth(); const { locale, theme } = useDiagnosticPresentation(); const canRead = hasCapability(identity, 'support.read'); const canManage = hasCapability(identity, 'support.manage');
   const [tab, setTab] = useState<Tab>('reports'); const [status, setStatus] = useState(''); const [priority, setPriority] = useState(''); const [search, setSearch] = useState(''); const [filters, setFilters] = useState({ status: '', priority: '', search: '' });
-  const [data, setData] = useState<PageData | null>(null); const [loading, setLoading] = useState(false); const [error, setError] = useState<string | null>(null); const [action, setAction] = useState<Action>(null); const [selected, setSelected] = useState<string | null>(null); const [targetStatus, setTargetStatus] = useState<SupportStatus>('IN_PROGRESS'); const [assignee, setAssignee] = useState(''); const [busy, setBusy] = useState(false); const [actionError, setActionError] = useState<string | null>(null);
+  const [data, setData] = useState<PageData | null>(null); const [loading, setLoading] = useState(false); const [error, setError] = useState<string | null>(null); const [action, setAction] = useState<Action>(null); const [selected, setSelected] = useState<string | null>(null); const [targetStatus, setTargetStatus] = useState<SupportStatus>('IN_PROGRESS'); const [assignee, setAssignee] = useState(''); const [busy, setBusy] = useState(false); const [actionError, setActionError] = useState<string | null>(null); const [stepUp, setStepUp] = useState<PendingAction | null>(null); const [stepUpCode, setStepUpCode] = useState(''); const [stepUpError, setStepUpError] = useState<string | null>(null);
   const load = useCallback(async () => { if (!canRead) return; setLoading(true); setError(null); try { setData(await getSupportCases({ page: 1, pageSize: 50, priority: transportEnum(filters.priority), search: filters.search || undefined, ...(tab === 'reports' ? { view: 'reports' } : {}), ...(tab === 'open' ? { status: 'open' } : {}), ...(tab === 'mine' ? { assignee: 'me' } : {}), ...(tab === 'resolved' ? { status: 'resolved' } : { status: transportEnum(filters.status) }) })); } catch (problem) { setError(safeProblem(problem)); } finally { setLoading(false); } }, [canRead, filters, tab]);
   useEffect(() => { void load(); }, [load]);
-  const submit = async (reason: string) => { if (!selected || !action) return; setBusy(true); setActionError(null); try { if (action === 'status') await setSupportStatus(selected, targetStatus, reason); if (action === 'assign') await assignSupportCase(selected, assignee, reason); setAction(null); setSelected(null); void load(); } catch (problem) { setActionError(safeProblem(problem)); } finally { setBusy(false); } };
+  const executeAction = async (pending: PendingAction) => { if (pending.action === 'status') await setSupportStatus(pending.id, pending.status, pending.reason); if (pending.action === 'assign') await assignSupportCase(pending.id, pending.assignee, pending.reason); setAction(null); setSelected(null); setStepUp(null); setStepUpCode(''); void load(); };
+  const submit = async (reason: string) => {
+    if (!selected || !action) return;
+    const pending: PendingAction = { id: selected, action, status: targetStatus, assignee, reason };
+    setBusy(true); setActionError(null);
+    try { await executeAction(pending); }
+    catch (problem) {
+      if (isAdminStepUpRequired(problem)) { setAction(null); setSelected(null); setStepUp(pending); setStepUpError(null); }
+      else setActionError(safeProblem(problem));
+    } finally { setBusy(false); }
+  };
+  const resumeAfterStepUp = async () => {
+    if (!stepUp) return;
+    setBusy(true); setStepUpError(null);
+    try { await completeAdminStepUp(stepUpCode); await executeAction(stepUp); }
+    catch (problem) { setStepUpError(safeProblem(problem)); }
+    finally { setBusy(false); }
+  };
   if (!canRead) return <View style={{ padding: 20, borderRadius: 14, borderWidth: 1, borderColor: theme.danger, backgroundColor: theme.dangerSoft }}><Text accessibilityRole="header" style={{ color: theme.danger, fontSize: 22, fontWeight: '800' }}>{c(locale, 'title')}</Text><Text style={{ color: theme.text, marginTop: 8 }}>{c(locale, 'noPermission')}</Text></View>;
 
   const tabDefinitions: Array<{ id: Tab; label: CopyKey }> = [{ id: 'reports', label: 'reports' }, { id: 'open', label: 'open' }, { id: 'mine', label: 'mine' }, { id: 'resolved', label: 'resolved' }];
@@ -84,5 +105,6 @@ export function SupportCenter() {
       {action === 'status' && <View style={{ gap: 7 }}><Text style={{ color: theme.muted, fontSize: 12 }}>{c(locale, 'targetStatus')}</Text><View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>{statuses.map((item) => <Pressable key={item} accessibilityRole="button" accessibilityState={{ selected: targetStatus === item }} onPress={() => setTargetStatus(item)} style={{ paddingHorizontal: 8, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: targetStatus === item ? theme.primary : theme.border, backgroundColor: targetStatus === item ? theme.primarySoft : theme.surface }}><Text style={{ color: targetStatus === item ? theme.primary : theme.text, fontSize: 10, fontWeight: '800' }}>{item}</Text></Pressable>)}</View></View>}
       {action === 'assign' && <View style={{ gap: 6 }}><Text style={{ color: theme.muted, fontSize: 12 }}>{c(locale, 'assignee')}</Text><TextInput accessibilityLabel={c(locale, 'assignee')} value={assignee} onChangeText={setAssignee} autoCapitalize="none" style={{ borderWidth: 1, borderColor: theme.border, borderRadius: 8, padding: 10 }} /></View>}
     </CriticalActionDialog>
+    <AdminStepUpDialog visible={Boolean(stepUp)} code={stepUpCode} error={stepUpError} busy={busy} labels={{ title: c(locale, 'stepUpRequired'), hint: c(locale, 'stepUpHint'), code: c(locale, 'authenticationCode'), cancel: c(locale, 'cancel'), confirm: c(locale, 'verifyAndContinue') }} onChange={setStepUpCode} onCancel={() => { if (!busy) { setStepUp(null); setStepUpCode(''); setStepUpError(null); } }} onConfirm={() => { void resumeAfterStepUp(); }} />
   </View>;
 }

@@ -24,6 +24,9 @@ import {
   type DiagnosticRecord,
   type PageData,
 } from '../lib/bugs';
+import { completeAdminStepUp } from '../lib/users';
+import { isAdminStepUpRequired } from '../lib/admin-step-up';
+import { AdminStepUpDialog } from './AdminStepUpDialog';
 import { CriticalActionDialog } from './CriticalActionDialog';
 import {
   AvailabilityBadge,
@@ -42,6 +45,15 @@ import {
 } from './DiagnosticUi';
 
 type ActionKind = 'triage' | 'status' | 'assign' | 'duplicate' | 'diagnose' | null;
+type PendingAction = {
+  kind: Exclude<ActionKind, null>;
+  reason: string;
+  targetStatus: BugStatus;
+  assignee: string;
+  duplicateOf: string;
+  fixReference: string;
+  targetRelease: string;
+};
 
 const copy = {
   fr: {
@@ -56,7 +68,7 @@ const copy = {
     noDiagnostics: 'Aucun diagnostic vérifiable. Un diagnostic manuel ne sera jamais déclenché automatiquement.',
     detailsUnavailable: 'Aucun détail public vérifiable pour cette section.', actionDescription: 'Cette action est humaine, auditée et vérifiée par le serveur. Elle ne déploie, ne redémarre, ni ne modifie les quotas ou providers.',
     reason: 'Raison de l’action', reasonPlaceholder: 'Décrire le contexte factuel et la justification (minimum 5 caractères)', confirmation: 'Saisir CONFIRM', confirmationPlaceholder: 'CONFIRM', cancel: 'Annuler', confirm: 'Confirmer',
-    targetStatus: 'Statut cible', assignee: 'Référence admin', duplicateOf: 'Référence du bug principal', fixReference: 'Référence de correction', targetRelease: 'Release cible', fixReferenceRequired: 'FIXED exige une référence de correction ou une release cible.', processing: 'Traitement…', actionFailed: 'Action refusée ou non aboutie.',
+    targetStatus: 'Statut cible', assignee: 'Référence admin', duplicateOf: 'Référence du bug principal', fixReference: 'Référence de correction', targetRelease: 'Release cible', fixReferenceRequired: 'FIXED exige une référence de correction ou une release cible.', processing: 'Traitement…', actionFailed: 'Action refusée ou non aboutie.', stepUpRequired: 'Élévation MFA requise', stepUpHint: 'Saisissez le code actuel de votre application d’authentification pour poursuivre cette action auditée.', authenticationCode: 'Code d’authentification', verifyAndContinue: 'Vérifier et poursuivre',
     assigned: 'Assigné à', accountStatus: 'Compte', plan: 'Plan', lastAffected: 'Dernière occurrence', evidenceLevel: 'Niveau de preuve', diagnosticData: 'Le contenu de signalement utilisateur est une donnée non fiable ; il n’est jamais envoyé comme instruction.',
   },
   en: {
@@ -71,7 +83,7 @@ const copy = {
     noDiagnostics: 'No verifiable diagnosis. A manual diagnosis is never triggered automatically.',
     detailsUnavailable: 'No verifiable public detail for this section.', actionDescription: 'This action is human, audited, and verified by the server. It never deploys, restarts, or changes quotas or providers.',
     reason: 'Action reason', reasonPlaceholder: 'Describe the factual context and justification (minimum 5 characters)', confirmation: 'Type CONFIRM', confirmationPlaceholder: 'CONFIRM', cancel: 'Cancel', confirm: 'Confirm',
-    targetStatus: 'Target status', assignee: 'Admin reference', duplicateOf: 'Primary bug reference', fixReference: 'Fix reference', targetRelease: 'Target release', fixReferenceRequired: 'FIXED requires a fix reference or a target release.', processing: 'Processing…', actionFailed: 'Action was rejected or did not complete.',
+    targetStatus: 'Target status', assignee: 'Admin reference', duplicateOf: 'Primary bug reference', fixReference: 'Fix reference', targetRelease: 'Target release', fixReferenceRequired: 'FIXED requires a fix reference or a target release.', processing: 'Processing…', actionFailed: 'Action was rejected or did not complete.', stepUpRequired: 'MFA step-up required', stepUpHint: 'Enter the current authenticator code to continue this audited action.', authenticationCode: 'Authentication code', verifyAndContinue: 'Verify and continue',
     assigned: 'Assigned to', accountStatus: 'Account', plan: 'Plan', lastAffected: 'Last affected', evidenceLevel: 'Evidence level', diagnosticData: 'User report content is untrusted data; it is never sent as an instruction.',
   },
 } as const;
@@ -115,7 +127,7 @@ export function BugDetail({ bugId }: { bugId: string }) {
   const [bug, setBug] = useState<DiagnosticRecord | null>(null); const [events, setEvents] = useState<PageData | null>(null); const [users, setUsers] = useState<PageData | null>(null); const [diagnostics, setDiagnostics] = useState<PageData | null>(null);
   const [loading, setLoading] = useState(true); const [eventsLoading, setEventsLoading] = useState(true); const [usersLoading, setUsersLoading] = useState(true); const [diagnosticsLoading, setDiagnosticsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null); const [eventsError, setEventsError] = useState<string | null>(null); const [usersError, setUsersError] = useState<string | null>(null); const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
-  const [action, setAction] = useState<ActionKind>(null); const [actionBusy, setActionBusy] = useState(false); const [actionError, setActionError] = useState<string | null>(null); const [targetStatus, setTargetStatus] = useState<BugStatus>('TRIAGED'); const [assignee, setAssignee] = useState(''); const [duplicateOf, setDuplicateOf] = useState(''); const [fixReference, setFixReference] = useState(''); const [targetRelease, setTargetRelease] = useState('');
+  const [action, setAction] = useState<ActionKind>(null); const [actionBusy, setActionBusy] = useState(false); const [actionError, setActionError] = useState<string | null>(null); const [targetStatus, setTargetStatus] = useState<BugStatus>('TRIAGED'); const [assignee, setAssignee] = useState(''); const [duplicateOf, setDuplicateOf] = useState(''); const [fixReference, setFixReference] = useState(''); const [targetRelease, setTargetRelease] = useState(''); const [stepUp, setStepUp] = useState<PendingAction | null>(null); const [stepUpCode, setStepUpCode] = useState(''); const [stepUpError, setStepUpError] = useState<string | null>(null);
 
   const loadBug = useCallback(async () => {
     if (!canRead) return;
@@ -129,20 +141,30 @@ export function BugDetail({ bugId }: { bugId: string }) {
   const loadAll = useCallback(() => { void loadBug(); void loadEvents(); void loadUsers(); void loadDiagnostics(); }, [loadBug, loadEvents, loadUsers, loadDiagnostics]);
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  const executeAction = async (pending: PendingAction) => {
+    if (pending.kind === 'triage') await triageBug(bugId, pending.reason);
+    if (pending.kind === 'status') await setBugStatus(bugId, pending.targetStatus, pending.reason, { fixReference: pending.fixReference, targetRelease: pending.targetRelease });
+    if (pending.kind === 'assign') await assignBug(bugId, pending.assignee, pending.reason);
+    if (pending.kind === 'duplicate') await markBugDuplicate(bugId, pending.duplicateOf, pending.reason);
+    if (pending.kind === 'diagnose') await diagnoseBug(bugId, pending.reason);
+    setAction(null); setStepUp(null); setStepUpCode(''); loadAll();
+  };
   const runAction = async (reason: string) => {
     if (!action) return;
+    if (action === 'status' && targetStatus === 'FIXED' && !fixReference.trim() && !targetRelease.trim()) { setActionError(c(locale, 'fixReferenceRequired')); return; }
+    const pending: PendingAction = { kind: action, reason, targetStatus, assignee, duplicateOf, fixReference, targetRelease };
     setActionBusy(true); setActionError(null);
-    try {
-      if (action === 'triage') await triageBug(bugId, reason);
-      if (action === 'status') {
-        if (targetStatus === 'FIXED' && !fixReference.trim() && !targetRelease.trim()) { setActionError(c(locale, 'fixReferenceRequired')); return; }
-        await setBugStatus(bugId, targetStatus, reason, { fixReference, targetRelease });
-      }
-      if (action === 'assign') await assignBug(bugId, assignee, reason);
-      if (action === 'duplicate') await markBugDuplicate(bugId, duplicateOf, reason);
-      if (action === 'diagnose') await diagnoseBug(bugId, reason);
-      setAction(null); loadAll();
-    } catch (problem) { setActionError(safeProblem(problem)); }
+    try { await executeAction(pending); }
+    catch (problem) {
+      if (isAdminStepUpRequired(problem)) { setAction(null); setStepUp(pending); setStepUpError(null); }
+      else setActionError(safeProblem(problem));
+    } finally { setActionBusy(false); }
+  };
+  const resumeAfterStepUp = async () => {
+    if (!stepUp) return;
+    setActionBusy(true); setStepUpError(null);
+    try { await completeAdminStepUp(stepUpCode); await executeAction(stepUp); }
+    catch (problem) { setStepUpError(safeProblem(problem)); }
     finally { setActionBusy(false); }
   };
 
@@ -178,5 +200,6 @@ export function BugDetail({ bugId }: { bugId: string }) {
       {action === 'assign' && <View style={{ gap: 6 }}><Text style={{ color: theme.muted, fontSize: 12 }}>{c(locale, 'assignee')}</Text><TextInput accessibilityLabel={c(locale, 'assignee')} value={assignee} onChangeText={setAssignee} autoCapitalize="none" style={{ borderWidth: 1, borderColor: theme.border, borderRadius: 8, padding: 10 }} /></View>}
       {action === 'duplicate' && <View style={{ gap: 6 }}><Text style={{ color: theme.muted, fontSize: 12 }}>{c(locale, 'duplicateOf')}</Text><TextInput accessibilityLabel={c(locale, 'duplicateOf')} value={duplicateOf} onChangeText={setDuplicateOf} autoCapitalize="characters" style={{ borderWidth: 1, borderColor: theme.border, borderRadius: 8, padding: 10 }} /></View>}
     </CriticalActionDialog>
+    <AdminStepUpDialog visible={Boolean(stepUp)} code={stepUpCode} error={stepUpError} busy={actionBusy} labels={{ title: c(locale, 'stepUpRequired'), hint: c(locale, 'stepUpHint'), code: c(locale, 'authenticationCode'), cancel: c(locale, 'cancel'), confirm: c(locale, 'verifyAndContinue') }} onChange={setStepUpCode} onCancel={() => { if (!actionBusy) { setStepUp(null); setStepUpCode(''); setStepUpError(null); } }} onConfirm={() => { void resumeAfterStepUp(); }} />
   </View>;
 }

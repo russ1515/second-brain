@@ -15,6 +15,9 @@ import {
   type IncidentStatus,
   type PageData,
 } from '../lib/bugs';
+import { completeAdminStepUp } from '../lib/users';
+import { isAdminStepUpRequired } from '../lib/admin-step-up';
+import { AdminStepUpDialog } from './AdminStepUpDialog';
 import { CriticalActionDialog } from './CriticalActionDialog';
 import {
   AvailabilityBadge,
@@ -39,7 +42,7 @@ const copy = {
     incident: 'Incident', impact: 'Impact observé', affected: 'Utilisateurs affectés', bugs: 'Bugs liés', detected: 'Détecté', updated: 'Dernière mise à jour', timeline: 'Chronologie', owner: 'Responsable',
     noPermission: 'Votre rôle ne dispose pas de incidents.read.', noManage: 'Votre rôle ne peut pas modifier un incident.',
     noAuto: 'Aucune création, atténuation, réparation, redémarrage ou déploiement automatique n’est disponible ici.', changeStatus: 'Changer le statut', targetStatus: 'Statut cible', actionDescription: 'Cette transition est humaine, auditée et vérifiée par le serveur. Elle ne modifie aucun service automatiquement.',
-    reason: 'Raison de la transition', reasonPlaceholder: 'Justification factuelle (minimum 5 caractères)', confirmation: 'Saisir CONFIRM', confirmationPlaceholder: 'CONFIRM', cancel: 'Annuler', confirm: 'Confirmer', failed: 'Transition refusée ou non aboutie.',
+    reason: 'Raison de la transition', reasonPlaceholder: 'Justification factuelle (minimum 5 caractères)', confirmation: 'Saisir CONFIRM', confirmationPlaceholder: 'CONFIRM', cancel: 'Annuler', confirm: 'Confirmer', failed: 'Transition refusée ou non aboutie.', stepUpRequired: 'Élévation MFA requise', stepUpHint: 'Saisissez le code actuel de votre application d’authentification pour poursuivre cette action auditée.', authenticationCode: 'Code d’authentification', verifyAndContinue: 'Vérifier et poursuivre',
     results: 'Incidents', evidence: 'OBSERVED / CORRELATED',
   },
   en: {
@@ -48,7 +51,7 @@ const copy = {
     incident: 'Incident', impact: 'Observed impact', affected: 'Affected users', bugs: 'Linked bugs', detected: 'Detected', updated: 'Last update', timeline: 'Timeline', owner: 'Owner',
     noPermission: 'Your role does not have incidents.read.', noManage: 'Your role cannot modify an incident.',
     noAuto: 'No automatic creation, mitigation, repair, restart, or deployment is available here.', changeStatus: 'Change status', targetStatus: 'Target status', actionDescription: 'This transition is human, audited, and verified by the server. It changes no service automatically.',
-    reason: 'Transition reason', reasonPlaceholder: 'Factual justification (minimum 5 characters)', confirmation: 'Type CONFIRM', confirmationPlaceholder: 'CONFIRM', cancel: 'Cancel', confirm: 'Confirm', failed: 'Transition was rejected or did not complete.',
+    reason: 'Transition reason', reasonPlaceholder: 'Factual justification (minimum 5 characters)', confirmation: 'Type CONFIRM', confirmationPlaceholder: 'CONFIRM', cancel: 'Cancel', confirm: 'Confirm', failed: 'Transition was rejected or did not complete.', stepUpRequired: 'MFA step-up required', stepUpHint: 'Enter the current authenticator code to continue this audited action.', authenticationCode: 'Authentication code', verifyAndContinue: 'Verify and continue',
     results: 'Incidents', evidence: 'OBSERVED / CORRELATED',
   },
 } as const;
@@ -64,10 +67,27 @@ function transportEnum(value: string): string | undefined { const normalized = v
 export function IncidentCenter() {
   const { identity } = useAuth(); const { locale, theme } = useDiagnosticPresentation(); const canRead = hasCapability(identity, 'incidents.read'); const canManage = hasCapability(identity, 'incidents.manage');
   const [draft, setDraft] = useState<Filters>(initial); const [filters, setFilters] = useState<Filters>(initial); const [data, setData] = useState<PageData | null>(null); const [loading, setLoading] = useState(false); const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null); const [targetStatus, setTargetStatus] = useState<IncidentStatus>('IDENTIFIED'); const [actionBusy, setActionBusy] = useState(false); const [actionError, setActionError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null); const [targetStatus, setTargetStatus] = useState<IncidentStatus>('IDENTIFIED'); const [actionBusy, setActionBusy] = useState(false); const [actionError, setActionError] = useState<string | null>(null); const [stepUp, setStepUp] = useState<{ id: string; status: IncidentStatus; reason: string } | null>(null); const [stepUpCode, setStepUpCode] = useState(''); const [stepUpError, setStepUpError] = useState<string | null>(null);
   const load = useCallback(async () => { if (!canRead) return; setLoading(true); setError(null); try { setData(await getIncidents({ page: 1, pageSize: 50, severity: transportEnum(filters.severity), status: transportEnum(filters.status), source: transportEnum(filters.source), search: filters.search || undefined })); } catch (problem) { setError(safeProblem(problem)); } finally { setLoading(false); } }, [canRead, filters]);
   useEffect(() => { void load(); }, [load]);
-  const submitStatus = async (reason: string) => { if (!selected) return; setActionBusy(true); setActionError(null); try { await setIncidentStatus(selected, targetStatus, reason); setSelected(null); void load(); } catch (problem) { setActionError(safeProblem(problem)); } finally { setActionBusy(false); } };
+  const executeStatus = async (pending: { id: string; status: IncidentStatus; reason: string }) => { await setIncidentStatus(pending.id, pending.status, pending.reason); setSelected(null); setStepUp(null); setStepUpCode(''); void load(); };
+  const submitStatus = async (reason: string) => {
+    if (!selected) return;
+    const pending = { id: selected, status: targetStatus, reason };
+    setActionBusy(true); setActionError(null);
+    try { await executeStatus(pending); }
+    catch (problem) {
+      if (isAdminStepUpRequired(problem)) { setSelected(null); setStepUp(pending); setStepUpError(null); }
+      else setActionError(safeProblem(problem));
+    } finally { setActionBusy(false); }
+  };
+  const resumeAfterStepUp = async () => {
+    if (!stepUp) return;
+    setActionBusy(true); setStepUpError(null);
+    try { await completeAdminStepUp(stepUpCode); await executeStatus(stepUp); }
+    catch (problem) { setStepUpError(safeProblem(problem)); }
+    finally { setActionBusy(false); }
+  };
 
   if (!canRead) return <View style={{ padding: 20, borderRadius: 14, borderWidth: 1, borderColor: theme.danger, backgroundColor: theme.dangerSoft }}><Text accessibilityRole="header" style={{ color: theme.danger, fontSize: 22, fontWeight: '800' }}>{c(locale, 'title')}</Text><Text style={{ color: theme.text, marginTop: 8 }}>{c(locale, 'noPermission')}</Text></View>;
   return <View style={{ gap: 16, paddingBottom: 28 }}>
@@ -80,5 +100,6 @@ export function IncidentCenter() {
     <CriticalActionDialog visible={selected !== null} title={c(locale, 'changeStatus')} production={adminEnvironment === 'PRODUCTION'} onCancel={() => { if (!actionBusy) setSelected(null); }} onConfirm={(reason) => { void submitStatus(reason); }} busy={actionBusy} error={actionError ? `${c(locale, 'failed')} ${actionError}` : null} copy={{ description: c(locale, 'actionDescription'), reason: c(locale, 'reason'), reasonPlaceholder: c(locale, 'reasonPlaceholder'), confirmation: c(locale, 'confirmation'), confirmationPlaceholder: c(locale, 'confirmationPlaceholder'), cancel: c(locale, 'cancel'), confirm: c(locale, 'confirm') }}>
       <View style={{ gap: 7 }}><Text style={{ color: theme.muted, fontSize: 12 }}>{c(locale, 'targetStatus')}</Text><View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>{statuses.map((status) => <Pressable key={status} accessibilityRole="button" accessibilityState={{ selected: targetStatus === status }} onPress={() => setTargetStatus(status)} style={{ paddingHorizontal: 9, paddingVertical: 7, borderRadius: 7, borderWidth: 1, borderColor: targetStatus === status ? theme.primary : theme.border, backgroundColor: targetStatus === status ? theme.primarySoft : theme.surface }}><Text style={{ color: targetStatus === status ? theme.primary : theme.text, fontSize: 10, fontWeight: '800' }}>{status}</Text></Pressable>)}</View></View>
     </CriticalActionDialog>
+    <AdminStepUpDialog visible={Boolean(stepUp)} code={stepUpCode} error={stepUpError} busy={actionBusy} labels={{ title: c(locale, 'stepUpRequired'), hint: c(locale, 'stepUpHint'), code: c(locale, 'authenticationCode'), cancel: c(locale, 'cancel'), confirm: c(locale, 'verifyAndContinue') }} onChange={setStepUpCode} onCancel={() => { if (!actionBusy) { setStepUp(null); setStepUpCode(''); setStepUpError(null); } }} onConfirm={() => { void resumeAfterStepUp(); }} />
   </View>;
 }
