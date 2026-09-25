@@ -33,6 +33,11 @@ export interface ProviderUsageMeasurement {
   otherUnits?: number | null;
   /** PROVIDER = returned by provider; OBSERVED = transparent, bounded estimate. */
   measurementSource?: MeasurementSource;
+  /**
+   * A stable reason that a returned provider usage shape cannot be fully priced
+   * by the current immutable catalog. It must force UNKNOWN, never a $0 total.
+   */
+  unpricedUsageReason?: string | null;
   metadata?: SafeMetadata;
 }
 
@@ -402,6 +407,7 @@ export class ProviderMeteringService {
       measurementSource: raw.measurementSource === 'OBSERVED' ? 'OBSERVED' : 'PROVIDER',
       model: cleanIdentifier(raw.model) ?? fallbackModel,
       providerRequestId: cleanIdentifier(raw.providerRequestId),
+      unpricedUsageReason: cleanIdentifier(raw.unpricedUsageReason),
       metadata: raw.metadata,
     };
     for (const field of UNIT_FIELDS) {
@@ -419,6 +425,18 @@ export class ProviderMeteringService {
     at: Date,
   ): Promise<CostCalculation> {
     const priced = await this.pricedUnits(provider, measurement, at);
+    if (measurement.unpricedUsageReason) {
+      return {
+        costStatus: 'UNKNOWN', originalAmount: null,
+        originalCurrency: priced.pricing?.currency ?? null,
+        referenceAmountUsd: null, pricingVersionId: priced.pricing?.id ?? null,
+        pricingVersion: priced.pricing?.version ?? null,
+        pricingSnapshot: {
+          ...priced.snapshot,
+          measurementConstraint: measurement.unpricedUsageReason,
+        },
+      };
+    }
     if (priced.units.length === 0) {
       return { costStatus: 'NOT_INSTRUMENTED', originalAmount: null, originalCurrency: null, referenceAmountUsd: null, pricingVersionId: priced.pricing?.id ?? null, pricingVersion: priced.pricing?.version ?? null, pricingSnapshot: priced.snapshot };
     }

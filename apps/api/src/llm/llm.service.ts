@@ -1,4 +1,5 @@
 import { Injectable, Optional, ServiceUnavailableException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import type {
   LLMGenerateOptions,
@@ -10,7 +11,13 @@ import type { LLMProvider } from './llm-provider.interface';
 import { AiOrchestratorService } from './ai-orchestrator.service';
 import { MetricsService } from '../monitoring/metrics.service';
 import { ProviderMeteringService, type ProviderAttemptRunner } from '../usage/provider-metering.service';
+import type { ProviderUsageMeasurement } from '../usage/provider-metering.service';
 import type { QuotaResource } from '@prisma/client';
+
+interface OpenAiProviderGateConfiguration {
+  enabled?: boolean;
+  maxOutputTokens?: number;
+}
 
 /**
  * The single entry point business code uses to talk to an LLM.
@@ -31,6 +38,7 @@ export class LlmService {
     private readonly orchestrator: AiOrchestratorService,
     private readonly metrics: MetricsService,
     @Optional() private readonly metering?: ProviderMeteringService,
+    @Optional() private readonly config?: ConfigService,
   ) {}
 
   get activeProvider(): string {
@@ -47,7 +55,7 @@ export class LlmService {
     options?: LLMGenerateOptions,
   ): Promise<LLMGenerateResult> {
     const provider = this.orchestrator.pickProvider();
-    const bounded = this.boundedOptions(options, false);
+    const bounded = this.boundedOptions(options, false, provider.name);
     const key = this.requestKey(provider, messages, bounded);
     const operation = bounded.operation ?? 'general';
     return this.deduplicate(key, () => this.metering?.executeWithAttempts(
@@ -71,7 +79,7 @@ export class LlmService {
       throw new Error(`LLM provider "${provider.name}" cannot read images.`);
     }
     const call = provider.readImages;
-    const bounded = this.boundedOptions(options, true);
+    const bounded = this.boundedOptions(options, true, provider.name);
     const key = this.requestKey(provider, [{ role: 'user', content: prompt }], bounded, images);
     const operation = bounded.operation ?? 'vision';
     return this.deduplicate(key, () => this.metering?.executeWithAttempts(
@@ -96,7 +104,7 @@ export class LlmService {
     attempts?: ProviderAttemptRunner,
   ): Promise<LLMGenerateResult> {
     this.assertCircuitClosed(provider.name);
-    const policy = this.policy(operation);
+    const policy = this.policy(operation, provider.name);
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= policy.retries; attempt += 1) {
@@ -128,9 +136,10 @@ export class LlmService {
   private boundedOptions(
     options: LLMGenerateOptions | undefined,
     vision: boolean,
+    provider?: string,
   ): LLMGenerateOptions {
     const operation = options?.operation ?? (vision ? 'vision' : 'general');
-    const cap = this.policy(operation).maxOutputTokens;
+    const cap = this.policy(operation, provider).maxOutputTokens;
     return {
       ...options,
       operation,
@@ -138,12 +147,18 @@ export class LlmService {
     };
   }
 
-  private policy(operation: string): {
+  private policy(operation: string, provider?: string): {
     timeoutMs: number;
     retries: number;
     backoffMs: number;
     maxOutputTokens: number;
   } {
+    const gate = this.openAiProviderGate();
+    if (provider === 'openai' && operation === 'tutor' && gate.enabled) {
+      // Applied only in a disposable staging gate container. It makes the
+      // learner Tutor route a hard one-attempt, small-output validation path.
+      return { timeoutMs: 30_000, retries: 0, backoffMs: 0, maxOutputTokens: gate.maxOutputTokens };
+    }
     if (operation === 'classification') {
       return { timeoutMs: 8_000, retries: 0, backoffMs: 250, maxOutputTokens: 96 };
     }
@@ -315,18 +330,18 @@ export class LlmService {
     return `LLM_${operation.toUpperCase().replace(/[^A-Z0-9]+/g, '_').slice(0, 80)}`;
   }
 
-  private llmMeasurement(result: unknown): {
-    model?: string;
-    inputTokens?: number;
-    cachedInputTokens?: number;
-    outputTokens?: number;
-  } {
-    const measured = result as LLMGenerateResult;
+  private llmMeasurement(result: unknown): ProviderUsageMeasurement {
+    return normalizeLlmMeasurement(result);
+  }
+
+  private openAiProviderGate(): Required<OpenAiProviderGateConfiguration> {
+    const configured = this.config?.get<OpenAiProviderGateConfiguration>(
+      'llm.openAiProviderGate',
+    );
+    const value = configured?.maxOutputTokens ?? 32;
     return {
-      model: measured?.model,
-      inputTokens: measured?.usage?.inputTokens,
-      cachedInputTokens: measured?.usage?.cachedTokens,
-      outputTokens: measured?.usage?.outputTokens,
+      enabled: configured?.enabled === true,
+      maxOutputTokens: Number.isSafeInteger(value) ? Math.min(128, Math.max(1, value)) : 32,
     };
   }
 
@@ -346,6 +361,39 @@ export class LlmService {
       throw err;
     }
   }
+}
+
+/**
+ * Maps the provider-neutral result contract onto independently-priced ledger
+ * units. Responses output units include reasoning units, so reasoning remains
+ * evidence metadata rather than a second billable line item.
+ */
+export function normalizeLlmMeasurement(result: unknown): ProviderUsageMeasurement {
+  const measured = result as LLMGenerateResult | undefined;
+  const usage = measured?.usage;
+  const metadata: Record<string, number> = {};
+  if (isNonNegativeInteger(usage?.totalTokens)) {
+    metadata.providerUsageTotalUnits = usage.totalTokens;
+  }
+  if (isNonNegativeInteger(usage?.cacheWriteTokens)) {
+    metadata.openaiCacheWriteUnits = usage.cacheWriteTokens;
+  }
+  if (isNonNegativeInteger(usage?.reasoningTokens)) {
+    metadata.openaiReasoningUnits = usage.reasoningTokens;
+  }
+  return {
+    providerRequestId: measured?.providerRequestId,
+    model: measured?.model,
+    inputTokens: usage?.inputTokens,
+    cachedInputTokens: usage?.cachedTokens,
+    outputTokens: usage?.outputTokens,
+    unpricedUsageReason: usage?.unpricedUsageReason,
+    ...(Object.keys(metadata).length ? { metadata } : {}),
+  };
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 class LlmTimeoutError extends Error {

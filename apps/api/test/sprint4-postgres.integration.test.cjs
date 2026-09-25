@@ -11,6 +11,8 @@ const { ProviderMeteringService } = require('../dist/usage/provider-metering.ser
 const { RequestContextService } = require('../dist/common/request-context.service.js');
 const { AdminAuditService } = require('../dist/admin/admin-audit.service.js');
 const { CostCenterService } = require('../dist/admin/costs/cost-center.service.js');
+const { OpenAIProvider } = require('../dist/llm/providers/openai.provider.js');
+const { LlmService } = require('../dist/llm/llm.service.js');
 
 const databaseUrl = process.env.DATABASE_URL ?? '';
 if (!/(?:test|staging|sprint)/i.test(databaseUrl) || /(?:^|[._/-])(prod|production)(?:[._/?-]|$)/i.test(databaseUrl)) {
@@ -22,13 +24,20 @@ const plans = new PlanService(prisma);
 const subscriptions = new SubscriptionService(prisma, plans);
 const quotas = new QuotaService(prisma, subscriptions);
 const requestContext = new RequestContextService();
-const metering = new ProviderMeteringService(requestContext, prisma, subscriptions, quotas);
+const metering = new ProviderMeteringService(
+  requestContext,
+  prisma,
+  subscriptions,
+  quotas,
+  { ingest: async () => undefined },
+);
 const costs = new CostCenterService(prisma, new AdminAuditService(prisma));
 
 const runId = `sprint4-${process.pid}-${Date.now()}`;
 const provider = `${runId}-provider`;
 const aggregateProvider = `${runId}-aggregate`;
 const unknownProvider = `${runId}-unknown`;
+const openAiFixtureModel = `${runId}-openai-responses-model`;
 const fixtureUsers = [];
 let paidUser;
 
@@ -126,6 +135,9 @@ test.after(async () => {
     }
     await prisma.providerUsage.deleteMany({ where: { internalOperationId: { startsWith: runId } } });
     await prisma.providerPricingVersion.deleteMany({ where: { provider: { startsWith: runId } } });
+    await prisma.providerPricingVersion.deleteMany({
+      where: { provider: 'openai', model: openAiFixtureModel },
+    });
     if (fixtureUsers.length) {
       await prisma.usageLedger.deleteMany({ where: { userId: { in: fixtureUsers } } });
       await prisma.quotaReservation.deleteMany({ where: { userId: { in: fixtureUsers } } });
@@ -197,6 +209,109 @@ test('versioned Decimal pricing snapshots input, cached input and output tokens 
   const pricing = await costs.pricing(costQuery(provider));
   assert.equal(pricing.data.dataStatus, 'AVAILABLE');
   assert.deepEqual(pricing.data.items.map((item) => item.version).sort(), ['v1', 'v2']);
+});
+
+test('mocked OpenAI Responses flow retains one correlation through the immutable ledger and Cost Center', async () => {
+  await createPricing({
+    provider: 'openai',
+    model: openAiFixtureModel,
+    version: `${runId}-openai-v1`,
+    inputTokenPrice: '0.000001',
+    cachedInputTokenPrice: '0.0000002',
+    outputTokenPrice: '0.000002',
+    sourceReference: 'fixture://openai-responses-pricing',
+  });
+  let call = 0;
+  const openai = new OpenAIProvider('test-key', openAiFixtureModel, async () => {
+    call += 1;
+    const cacheWriteTokens = call === 2 ? 5 : 0;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: `${runId}-openai-provider-request-${call}`,
+        model: openAiFixtureModel,
+        output: [{
+          type: 'message', role: 'assistant',
+          content: [{ type: 'output_text', text: 'fixture response' }],
+        }],
+        usage: {
+          input_tokens: 100,
+          input_tokens_details: { cached_tokens: 20, cache_write_tokens: cacheWriteTokens },
+          output_tokens: 10,
+          output_tokens_details: { reasoning_tokens: 4 },
+          total_tokens: 110,
+        },
+      }),
+    };
+  });
+  const llm = new LlmService(
+    { pickProvider: () => openai, supportsVision: false },
+    { recordAiCall: () => undefined, captureError: () => undefined },
+    metering,
+  );
+
+  const correlationId = `${runId}:openai-correlation`;
+  const result = await inRequest(correlationId, paidUser.id, () => llm.generate([
+    { role: 'system', content: 'Fixture system instruction.' },
+    { role: 'user', content: 'Fixture learner question.' },
+  ], { operation: 'tutor', maxOutputTokens: 12 }));
+  assert.equal(result.provider, 'openai');
+  assert.equal(result.model, openAiFixtureModel);
+  assert.equal(result.usage.inputTokens, 80);
+  assert.equal(result.usage.cachedTokens, 20);
+  assert.equal(result.usage.outputTokens, 10);
+  assert.equal(result.usage.totalTokens, 110);
+
+  const operation = await prisma.providerUsageOperation.findFirstOrThrow({
+    where: { requestId: correlationId },
+    include: { attempts: { orderBy: { attemptNumber: 'asc' } } },
+  });
+  const [attempt] = operation.attempts;
+  assert.equal(operation.userId, paidUser.id);
+  assert.equal(operation.planSlug, 'pro');
+  assert.equal(operation.feature, 'TUTOR_TEXT');
+  assert.equal(operation.resource, 'AI_TEXT');
+  assert.equal(operation.requestId, correlationId);
+  assert.equal(attempt.provider, 'openai');
+  assert.equal(attempt.model, openAiFixtureModel);
+  assert.equal(attempt.providerRequestId, `${runId}-openai-provider-request-1`);
+  assert.equal(attempt.inputTokens, 80);
+  assert.equal(attempt.cachedInputTokens, 20);
+  assert.equal(attempt.outputTokens, 10);
+  assert.equal(attempt.reasoningTokens, null, 'Responses output already includes reasoning');
+  assert.equal(attempt.costStatus, 'MEASURED');
+  assert.equal(attempt.referenceAmountUsd.toFixed(12), '0.000104000000');
+  assert.equal(attempt.pricingSnapshot.pricingVersion, `${runId}-openai-v1`);
+  assert.equal(attempt.metadata.providerUsageTotalUnits, 110);
+  assert.equal(attempt.metadata.openaiReasoningUnits, 4);
+
+  const unknownCorrelationId = `${runId}:openai-cache-write-correlation`;
+  await inRequest(unknownCorrelationId, paidUser.id, () => llm.generate([
+    { role: 'user', content: 'Second fixture learner question.' },
+  ], { operation: 'tutor', maxOutputTokens: 12 }));
+  const cacheWriteOperation = await prisma.providerUsageOperation.findFirstOrThrow({
+    where: { requestId: unknownCorrelationId },
+    include: { attempts: true },
+  });
+  const [cacheWriteAttempt] = cacheWriteOperation.attempts;
+  assert.equal(cacheWriteAttempt.costStatus, 'UNKNOWN');
+  assert.equal(cacheWriteAttempt.originalAmount, null);
+  assert.equal(cacheWriteAttempt.referenceAmountUsd, null);
+  assert.equal(cacheWriteAttempt.metadata.openaiCacheWriteUnits, 5);
+  assert.equal(cacheWriteAttempt.pricingSnapshot.measurementConstraint, 'OPENAI_CACHE_WRITE_UNPRICED');
+
+  const models = await costs.models({ ...costQuery('openai'), model: openAiFixtureModel });
+  const row = models.data.items.find((item) => item.provider === 'openai' && item.modelName === openAiFixtureModel);
+  assert.ok(row);
+  assert.equal(row.providerCalls, 2);
+  assert.equal(row.inputTokens, 155);
+  assert.equal(row.cachedInputTokens, 40);
+  assert.equal(row.outputTokens, 20);
+  assert.equal(row.cost.costStatus, 'UNKNOWN');
+  assert.equal(row.cost.knownUsd, null);
+  assert.equal(row.cost.knownSubtotalUsd, '0.000104000000');
+  assert.equal(row.cost.unknownAttempts, 1);
 });
 
 test('unknown provider price remains visible as UNKNOWN and never becomes a zero-dollar total', async () => {

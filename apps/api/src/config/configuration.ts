@@ -30,6 +30,16 @@ export default () => ({
     provider: process.env.LLM_PROVIDER ?? 'gemini',
     model: process.env.LLM_MODEL ?? 'gemini-flash-latest',
     geminiApiKey: process.env.GEMINI_API_KEY,
+    openaiApiKey: process.env.OPENAI_API_KEY,
+    // This is intentionally off unless a temporary, isolated provider-gate
+    // container opts in. It bounds one staging validation call; it is not a
+    // product routing control and never enables a provider by itself.
+    openAiProviderGate: {
+      enabled: process.env.OPENAI_PROVIDER_GATE_MODE === 'single-bounded',
+      maxOutputTokens: parseProviderGateMaxOutputTokens(
+        process.env.OPENAI_PROVIDER_GATE_MAX_OUTPUT_TOKENS,
+      ),
+    },
   },
   embeddings: {
     // 'gemini' calls the Google API; 'fake' produces deterministic local vectors.
@@ -109,3 +119,9 @@ export default () => ({
     newLanding: process.env.FEATURE_NEW_LANDING,
   }),
 });
+
+function parseProviderGateMaxOutputTokens(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? '32', 10);
+  if (!Number.isSafeInteger(parsed)) return 32;
+  return Math.min(128, Math.max(1, parsed));
+}

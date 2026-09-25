@@ -8,7 +8,6 @@ import type {
 } from '@second-brain/shared';
 import { LLM_PROVIDER } from './llm.constants';
 import type { LLMProvider } from './llm-provider.interface';
-import { EchoProvider } from './providers/echo.provider';
 import { MetricsService } from '../monitoring/metrics.service';
 
 const STRATEGIES: AiStrategy[] = ['quality', 'cost', 'speed', 'balanced'];
@@ -42,17 +41,17 @@ export class AiOrchestratorService {
 
   constructor(
     @Inject(LLM_PROVIDER) private readonly primary: LLMProvider,
-    private readonly echo: EchoProvider,
     config: ConfigService,
     private readonly metrics: MetricsService,
   ) {
-    const geminiModel = config.get<string>('llm.model') ?? 'gemini';
+    const configuredModel = config.get<string>('llm.model') ?? 'MODEL_NOT_CONFIGURED';
     this.instances.set(this.primary.name, this.primary);
-    this.instances.set(this.echo.name, this.echo);
 
     this.catalog = [
-      { name: 'gemini', family: 'Google Gemini', model: geminiModel, costTier: 2, speedTier: 3, qualityTier: 2, vision: true, keyEnv: 'GEMINI_API_KEY', hasAdapter: true },
-      { name: 'openai', family: 'OpenAI', model: 'gpt-4o', costTier: 3, speedTier: 2, qualityTier: 3, vision: true, keyEnv: 'OPENAI_API_KEY', hasAdapter: false },
+      { name: 'gemini', family: 'Google Gemini', model: this.primary.name === 'gemini' ? configuredModel : 'MODEL_NOT_CONFIGURED', costTier: 2, speedTier: 3, qualityTier: 2, vision: true, keyEnv: 'GEMINI_API_KEY', hasAdapter: true },
+      // The initial Responses seam is text-only. Do not advertise vision until
+      // readImages is implemented and independently validated.
+      { name: 'openai', family: 'OpenAI', model: this.primary.name === 'openai' ? configuredModel : 'MODEL_NOT_CONFIGURED', costTier: 3, speedTier: 2, qualityTier: 3, vision: false, keyEnv: 'OPENAI_API_KEY', hasAdapter: true },
       { name: 'claude', family: 'Anthropic Claude', model: 'claude-3.5-sonnet', costTier: 3, speedTier: 2, qualityTier: 3, vision: true, keyEnv: 'ANTHROPIC_API_KEY', hasAdapter: false },
       { name: 'mistral', family: 'Mistral', model: 'mistral-large', costTier: 1, speedTier: 3, qualityTier: 2, vision: false, keyEnv: 'MISTRAL_API_KEY', hasAdapter: false },
       { name: 'ollama', family: 'Local (Ollama)', model: 'llama3', costTier: 1, speedTier: 1, qualityTier: 1, vision: false, hasAdapter: false },
@@ -77,7 +76,10 @@ export class AiOrchestratorService {
    *  the routing decision so the monitoring layer sees which model was chosen. */
   pickProvider(opts?: { needsVision?: boolean }): LLMProvider {
     const name = this.selectFor(this.strategy, opts?.needsVision ?? false);
-    const instance = this.instances.get(name) ?? this.primary;
+    const instance = this.instances.get(name);
+    if (!instance) {
+      throw new Error(`Selected LLM provider "${name}" has no executable adapter.`);
+    }
     return instance;
   }
 

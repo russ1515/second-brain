@@ -4,6 +4,7 @@ import { LLM_PROVIDER } from './llm.constants';
 import type { LLMProvider } from './llm-provider.interface';
 import { GeminiProvider } from './providers/gemini.provider';
 import { EchoProvider } from './providers/echo.provider';
+import { OpenAIProvider } from './providers/openai.provider';
 import { AiOrchestratorService } from './ai-orchestrator.service';
 import { AiOrchestratorController } from './ai-orchestrator.controller';
 import { AdminGuard } from '../admin/admin.guard';
@@ -36,6 +37,11 @@ const llmProviderFactory: Provider = {
         // like Gemini; otherwise a safe staging boot fails before telemetry
         // can be exercised.
         return new EchoProvider();
+      case 'openai':
+        return new OpenAIProvider(
+          config.get<string>('llm.openaiApiKey') ?? '',
+          model,
+        );
       default:
         throw new Error(
           `LLM provider "${provider}" is not wired yet. ` +

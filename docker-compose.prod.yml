@@ -77,6 +77,7 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
       LLM_MODEL: ${LLM_MODEL:-gemini-flash-latest}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-gemini}
       EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-gemini-embedding-001}
       SPEECH_PROVIDER: ${SPEECH_PROVIDER:-gemini}

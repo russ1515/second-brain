@@ -65,6 +65,19 @@ class EnvironmentVariables {
   @IsString()
   GEMINI_API_KEY?: string;
 
+  @IsOptional()
+  @IsString()
+  OPENAI_API_KEY?: string;
+
+  /** Isolated, one-call staging validation only; never enables OpenAI itself. */
+  @IsOptional()
+  @IsString()
+  OPENAI_PROVIDER_GATE_MODE?: string;
+
+  @IsOptional()
+  @IsInt()
+  OPENAI_PROVIDER_GATE_MAX_OUTPUT_TOKENS?: number;
+
   // ── Auth (Phase 1) ──
   @IsString()
   JWT_ACCESS_SECRET!: string;
