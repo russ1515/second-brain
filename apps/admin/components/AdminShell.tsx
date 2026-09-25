@@ -42,6 +42,6 @@ export function AdminShell({ children }: PropsWithChildren) {
       </View>
       <ScrollView contentContainerStyle={{ padding: width < 768 ? 14 : 24, maxWidth: 1600, width: '100%', alignSelf: 'center' }}>{children}</ScrollView>
     </View>
-    {compact && drawer && <Pressable accessibilityRole="button" accessibilityLabel={t(locale, 'closeNavigation')} onPress={() => setDrawer(false)} style={{ position: 'absolute', inset: 0, backgroundColor: '#0005', zIndex: 10 }} />}
+    {compact && drawer && <Pressable accessibilityRole="button" accessibilityLabel={t(locale, 'closeNavigation')} onPress={() => setDrawer(false)} style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 280, backgroundColor: '#0005', zIndex: 10 }} />}
   </View>;
 }
