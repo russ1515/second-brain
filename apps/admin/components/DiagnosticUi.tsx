@@ -47,7 +47,7 @@ export function d(locale: DiagnosticLocale, key: DiagnosticCopyKey): string { re
 export function diagnosticTheme(dark: boolean): DiagnosticTheme {
   return dark
     ? { surface: '#111827', mutedSurface: '#172033', border: '#263244', text: '#f1f5f9', muted: '#94a3b8', primary: '#60a5fa', primarySoft: '#172554', danger: '#f87171', dangerSoft: '#450a0a', warning: '#fbbf24', warningSoft: '#422006', success: '#34d399', successSoft: '#052e2b' }
-    : { surface: '#ffffff', mutedSurface: '#f8fafc', border: '#dbe4ee', text: '#0f172a', muted: '#64748b', primary: '#2563eb', primarySoft: '#dbeafe', danger: '#dc2626', dangerSoft: '#fee2e2', warning: '#b45309', warningSoft: '#fef3c7', success: '#047857', successSoft: '#d1fae5' };
+    : { surface: '#ffffff', mutedSurface: '#f8fafc', border: '#dbe4ee', text: '#0f172a', muted: '#475569', primary: '#1d4ed8', primarySoft: '#dbeafe', danger: '#b91c1c', dangerSoft: '#fee2e2', warning: '#92400e', warningSoft: '#fef3c7', success: '#065f46', successSoft: '#d1fae5' };
 }
 
 export function useDiagnosticPresentation(): { locale: DiagnosticLocale; theme: DiagnosticTheme } {

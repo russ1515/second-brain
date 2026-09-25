@@ -93,7 +93,7 @@ function c(locale: 'fr' | 'en', key: CopyKey): string { return copy[locale][key]
 function themeFor(dark: boolean): Theme {
   return dark
     ? { surface: '#111827', surfaceMuted: '#172033', border: '#263244', text: '#f1f5f9', muted: '#94a3b8', primary: '#60a5fa', primarySoft: '#172554', success: '#34d399', successSoft: '#052e2b', warning: '#fbbf24', warningSoft: '#422006', danger: '#f87171', dangerSoft: '#450a0a' }
-    : { surface: '#ffffff', surfaceMuted: '#f8fafc', border: '#dbe4ee', text: '#0f172a', muted: '#64748b', primary: '#2563eb', primarySoft: '#dbeafe', success: '#047857', successSoft: '#d1fae5', warning: '#b45309', warningSoft: '#fef3c7', danger: '#dc2626', dangerSoft: '#fee2e2' };
+    : { surface: '#ffffff', surfaceMuted: '#f8fafc', border: '#dbe4ee', text: '#0f172a', muted: '#475569', primary: '#1d4ed8', primarySoft: '#dbeafe', success: '#065f46', successSoft: '#d1fae5', warning: '#92400e', warningSoft: '#fef3c7', danger: '#b91c1c', dangerSoft: '#fee2e2' };
 }
 
 function record(value: unknown): CostRecord | undefined {
@@ -342,7 +342,7 @@ function rowCost(row: CostRecord, parent?: CostRecord): CostMetric {
 function BreakdownTable({ title, section, loading, kind, locale, theme, onRetry }: { title: string; section: CostSection | undefined; loading: boolean; kind: BreakdownKind; locale: 'fr' | 'en'; theme: Theme; onRetry: () => void }) {
   const root = sectionRecord(section); const rows = sectionRows(section);
   return <Panel title={title} section={section} loading={loading} locale={locale} theme={theme} onRetry={onRetry}>
-    {rows.length === 0 ? <EmptyData locale={locale} theme={theme} status={costStatus(root) ?? 'INSUFFICIENT_DATA'} /> : <ScrollView horizontal showsHorizontalScrollIndicator>
+    {rows.length === 0 ? <EmptyData locale={locale} theme={theme} status={costStatus(root) ?? 'INSUFFICIENT_DATA'} /> : <ScrollView horizontal showsHorizontalScrollIndicator focusable>
       <View style={{ minWidth: 625, width: '100%' }}>
         <TableHeader locale={locale} theme={theme} labels={[c(locale, 'label'), c(locale, 'cost'), c(locale, 'dataStatus'), c(locale, 'calls'), c(locale, 'units')]} />
         {rows.map((row, index) => {
@@ -375,7 +375,7 @@ function EnginePanel({ title, section, loading, locale, theme, onRetry }: { titl
       <MetricCard title={c(locale, 'cost')} value={formatMoney(locale, cost)} status={cost.status} locale={locale} theme={theme} />
       <MetricCard title={c(locale, 'calls')} value={formatNumber(locale, calls)} status={numeric(calls) === undefined ? 'NOT_INSTRUMENTED' : 'MEASURED'} locale={locale} theme={theme} />
     </View>
-    {rows.length === 0 ? <EmptyData locale={locale} theme={theme} status={costStatus(root) ?? 'INSUFFICIENT_DATA'} /> : <ScrollView horizontal showsHorizontalScrollIndicator>
+    {rows.length === 0 ? <EmptyData locale={locale} theme={theme} status={costStatus(root) ?? 'INSUFFICIENT_DATA'} /> : <ScrollView horizontal showsHorizontalScrollIndicator focusable>
       <View style={{ minWidth: 540, width: '100%' }}><TableHeader locale={locale} theme={theme} labels={[c(locale, 'engine'), c(locale, 'cost'), c(locale, 'dataStatus'), c(locale, 'units')]} />
         {rows.map((row, index) => { const rowMetric = rowCost(row, root); return <TableRow key={`${index}-${rowLabel(row, 'feature')}`} theme={theme} values={[rowLabel(row, 'feature'), formatMoney(locale, rowMetric), displayStatus(locale, costStatus(row) ?? rowMetric.status), formatNumber(locale, pick(row, ['units', 'totalUnits', 'tokens', 'pages', 'seconds', 'count']))]} />; })}
       </View>
@@ -400,7 +400,7 @@ function LanguagePanel({ section, loading, locale, theme, onRetry }: { section: 
 function Anomalies({ section, loading, locale, theme, onRetry }: { section: CostSection | undefined; loading: boolean; locale: 'fr' | 'en'; theme: Theme; onRetry: () => void }) {
   const rows = sectionRows(section);
   return <Panel title={c(locale, 'anomalies')} section={section} loading={loading} locale={locale} theme={theme} onRetry={onRetry}>
-    {rows.length === 0 ? <EmptyData locale={locale} theme={theme} /> : <ScrollView horizontal showsHorizontalScrollIndicator><View style={{ minWidth: 620, width: '100%' }}>
+    {rows.length === 0 ? <EmptyData locale={locale} theme={theme} /> : <ScrollView horizontal showsHorizontalScrollIndicator focusable><View style={{ minWidth: 620, width: '100%' }}>
       <TableHeader locale={locale} theme={theme} labels={[c(locale, 'severity'), c(locale, 'signal'), c(locale, 'shownAs'), c(locale, 'observedAt'), c(locale, 'dataStatus')]} />
       {rows.map((row, index) => <TableRow key={`${text(pick(row, ['id', 'type', 'signal'])) ?? 'signal'}-${index}`} theme={theme} values={[text(pick(row, ['severity', 'level'])) ?? '—', text(pick(row, ['type', 'signal', 'code'])) ?? '—', text(pick(row, ['message', 'description', 'label', 'count'])) ?? '—', formatDate(locale, pick(row, ['observedAt', 'createdAt', 'detectedAt', 'at'])), displayStatus(locale, costStatus(row))]} />)}
     </View></ScrollView>}
@@ -410,7 +410,7 @@ function Anomalies({ section, loading, locale, theme, onRetry }: { section: Cost
 function Instrumentation({ section, loading, locale, theme, onRetry }: { section: CostSection | undefined; loading: boolean; locale: 'fr' | 'en'; theme: Theme; onRetry: () => void }) {
   const root = sectionRecord(section); const rows = sectionRows(section, ['items', 'rows', 'coverage', 'features', 'sources']);
   return <Panel title={c(locale, 'instrumentation')} section={section} loading={loading} locale={locale} theme={theme} onRetry={onRetry}>
-    {rows.length === 0 ? <EmptyData locale={locale} theme={theme} status={costStatus(root) ?? 'NOT_INSTRUMENTED'} /> : <ScrollView horizontal showsHorizontalScrollIndicator><View style={{ minWidth: 650, width: '100%' }}>
+    {rows.length === 0 ? <EmptyData locale={locale} theme={theme} status={costStatus(root) ?? 'NOT_INSTRUMENTED'} /> : <ScrollView horizontal showsHorizontalScrollIndicator focusable><View style={{ minWidth: 650, width: '100%' }}>
       <TableHeader locale={locale} theme={theme} labels={[c(locale, 'source'), c(locale, 'coverage'), c(locale, 'dataStatus'), c(locale, 'lastObserved'), c(locale, 'shownAs')]} />
       {rows.map((row, index) => <TableRow key={`${text(pick(row, ['source', 'feature', 'engine', 'id'])) ?? 'source'}-${index}`} theme={theme} values={[text(pick(row, ['source', 'feature', 'engine', 'provider', 'id'])) ?? '—', formatPercent(locale, pick(row, ['coverage', 'coveragePercent', 'instrumentedPercent'])), displayStatus(locale, costStatus(row)), formatDate(locale, pick(row, ['lastObservedAt', 'updatedAt', 'observedAt'])), text(pick(row, ['reason', 'missing', 'message', 'note'])) ?? '—']} />)}
     </View></ScrollView>}
@@ -448,7 +448,7 @@ function Pricing({ section, loading, locale, theme, onRetry }: { section: CostSe
   const root = sectionRecord(section); const rows = catalogRates(sectionRows(section, ['items', 'rows', 'prices', 'entries', 'catalog']));
   return <Panel title={c(locale, 'pricing')} section={section} loading={loading} locale={locale} theme={theme} onRetry={onRetry} minHeight={220}>
     <Text style={{ color: theme.warning, fontSize: 11, fontWeight: '800', marginBottom: 10 }}>{c(locale, 'pricingReadOnly')}</Text>
-    {rows.length === 0 ? <EmptyData locale={locale} theme={theme} status={costStatus(root) ?? 'NOT_INSTRUMENTED'} /> : <ScrollView horizontal showsHorizontalScrollIndicator><View style={{ minWidth: 730, width: '100%' }}>
+    {rows.length === 0 ? <EmptyData locale={locale} theme={theme} status={costStatus(root) ?? 'NOT_INSTRUMENTED'} /> : <ScrollView horizontal showsHorizontalScrollIndicator focusable><View style={{ minWidth: 730, width: '100%' }}>
       <TableHeader locale={locale} theme={theme} labels={[c(locale, 'provider'), c(locale, 'model'), c(locale, 'unit'), c(locale, 'price'), c(locale, 'version'), c(locale, 'effectiveFrom')]} />
       {rows.map((row, index) => <View key={`${text(pick(row, ['id', 'provider', 'model'])) ?? 'price'}-${index}`} style={{ flexDirection: 'row', gap: 9, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.border }}>
         <Text style={{ flex: 1, minWidth: 112, color: theme.text, fontSize: 12 }}>{text(pick(row, ['provider', 'providerName'])) ?? '—'}</Text>
