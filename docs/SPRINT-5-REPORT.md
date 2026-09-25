@@ -269,3 +269,19 @@ The OVH Linux/PostgreSQL and P1 HTTP/Admin conditions above are closed. Real-pro
 ## Browser-quality evidence supersession — 25 September 2026
 
 This supersedes the earlier five-route responsive/i18n/accessibility row and scoped-browser defect note. `admin-browser-quality-full-20260925-quality-all-r4.json` is **PASS** for all 15 protected navigation sections at four viewports: 90 layout samples, 60 keyboard-focus samples, EN/FR persistence, zero automated WCAG A/AA violations, and verified Dashboard progress-bar ranges. The audit also closed low-contrast generic-section text and User Directory radios missing the required Web `aria-checked` state. Role-specific browser evidence covers dynamic User and Bug details. Manual screen-reader/assistive-technology validation remains `NOT_VERIFIED`.
+
+## OFFICIAL STAGING RECONCILIATION AND PROVIDER-GATE ADDENDUM — 25 September 2026
+
+The official staging branch was advanced by fast-forward to `d013b70c8f47db1bb57e84a8df64a1c4c6f1a2b4`, retaining `2d95ed8`, `a73dc66`, `df2929a`, `b45b28a`, all prerequisite P1 Admin fixes, the mobile root-navigation correction, and the separate staging study-screen correction. OVH pulled that source with `--ff-only`; the checkout stayed clean and the 59 migration representation remained intact.
+
+The Admin image was rebuilt directly from this official checkout using its frozen dependency path, passed isolated Admin typecheck, and was the only service recreated. `20260925-source-d013-r3` passed the role-specific browser suite and all-route quality audit. The Support workflow uses a deliberately consumable `open` case; after the controlled existing fixture regeneration, `admin-browser-support-stepup-20260925-source-d013-support-r4.json` passed. The retained `r2` artifacts are not gate evidence because their test harness had an incorrect direct API base path. A disposable Linux proof container also passed frozen Mobile installation, Shared build, Mobile typecheck, and Mobile Web export (exit code `0`).
+
+**Provider/instrumentation remains NOT_VERIFIED.** The live staging configuration is intentionally `echo`/`fake`, contains no real Gemini credential, and read-only inspection found no effective Gemini pricing row with sourced input/output rates. A restricted, out-of-Git empty secret location was prepared, but no credential was added and no external request occurred. Consequently there is no attributable provider/model/token/cost/correlation record, no Cost Center real-provider aggregate, and no real embedding→Qdrant proof. Existing Qdrant lifecycle proof remains valid only for its fake-embedding boundary.
+
+The last gate requires a new staging-only credential entered directly on the VPS, plus an exact-model, active Finance/MFA-created pricing version with an official source reference. The bounded LLM call may then be evaluated as **MEASURED** only when provider-returned tokens and that immutable pricing snapshot both exist. The Gemini embeddings adapter records observed units rather than provider token usage, so a real embedding path is **ESTIMATED** (or **UNKNOWN** without pricing), never zero or falsely measured.
+
+## UPDATED SPRINT 6 READINESS — SOURCE-RECONCILED
+
+# SPRINT 6 NOT READY
+
+All validated Linux/PostgreSQL, HTTP/security, and explicit Admin/browser conditions remain PASS. The final real-provider/instrumentation/pricing evidence is absent, so Sprint 6 remains prohibited.

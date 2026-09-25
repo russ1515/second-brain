@@ -225,3 +225,23 @@ The former Linux/PostgreSQL, HTTP/security, Cost Center HTTP, and stated P1 Admi
 ## Browser-quality evidence supersession — 25 September 2026
 
 This section supersedes the earlier five-route Browser-quality row and its corresponding route/device wording above. `admin-browser-quality-full-20260925-quality-all-r4.json` is **PASS** for all 15 protected navigation sections at four recorded viewports: 90 layout samples, 60 keyboard-focus samples, EN/FR persistence, zero automated WCAG A/AA violations, and three verified Dashboard progress-bar ranges. Role-specific evidence still covers the dynamic User and Bug details. Manual screen-reader/assistive-technology validation remains **NOT_VERIFIED**; automated Axe and keyboard evidence does not imply a human assistive-technology review.
+
+## Official staging-source reconciliation — 25 September 2026
+
+The official `codex/staging-ovh-2026-09-23` ref was advanced by an ordinary fast-forward from `899e42c` to `d013b70c8f47db1bb57e84a8df64a1c4c6f1a2b4`; no force-push, reset, migration, or production action occurred. The reconciliation retains the requested commits `2d95ed8`, `a73dc66`, `df2929a`, and `b45b28a`, their prerequisite P1 Admin fixes, the mobile root-navigation correction, and the separate staging study-screen correction `9b1823c`.
+
+The clean OVH checkout then performed `pull --ff-only` to `d013b70`; all 59 Prisma migrations remained present. The Admin image was rebuilt from that checkout with the frozen lockfile, passed a network-isolated Admin typecheck, and only the Admin container was recreated successfully. The previous image remains tagged as a rollback artifact.
+
+The source-provenance browser run `20260925-source-d013-r3` passed SUPER_ADMIN login/wrong-TOTP rejection/correct-TOTP acceptance/logout invalidation/step-up suspend-reactivate, TECH_OPS triage and deterministic rule-based diagnostics, Incident transition, FINANCE Cost Center literal-state display, EN/FR, and the full protected-route quality audit. The Support fixture is intentionally consumable by its transition test; after controlled fixture regeneration, `admin-browser-support-stepup-20260925-source-d013-support-r4.json` passed its untrusted/redacted/sensitive-denial and step-up retry checks. The earlier `r2` files are retained as invalid harness evidence only: that runner omitted `/api` from a direct test endpoint and is not used for a Gate result. The mobile frozen-install, Shared build, Mobile typecheck, and Mobile Web export proof container exited `0` on the same staging SHA.
+
+### Provider/instrumentation readiness — still open
+
+This is **NOT_VERIFIED**, not a failure disguised as zero cost. The live P1 API is configured with the non-billable `echo` LLM and `fake` embeddings; no Gemini key is present. Read-only staging catalog inspection found no Gemini pricing version with an effective, sourced text-rate pair. A blank out-of-repository staging-only secret file was prepared with owner-only permissions for a future credential, but no credential, provider call, quota reset, pricing insertion, or provider configuration change was made.
+
+Before this last Gate can pass, a human must supply a new staging-only Gemini credential directly on the VPS and create an active, source-referenced Finance pricing version for the exact approved model through the protected Finance/MFA workflow. Only then may one short authenticated learner operation be made, with durable operation/attempt/user/plan/quota/provider/model/token/cost evidence and Cost Center aggregation. A real Gemini embedding → Qdrant → owner-scoped retrieval is separately possible, but its current adapter exposes observed embedding units rather than provider token usage; its status must remain **ESTIMATED** (or **UNKNOWN** without pricing), never falsely **MEASURED**.
+
+## Sprint 6 readiness (source-reconciled)
+
+# SPRINT 6 NOT READY
+
+All reconciled source, Linux/PostgreSQL, HTTP/security, and stated P1 Admin/browser evidence is retained. The sole remaining required blocker is real-provider attribution and pricing evidence; no Sprint 6 work may begin until that bounded validation actually passes.

@@ -118,3 +118,15 @@ The Linux/PostgreSQL gate is closed. A real external-provider/instrumentation ru
 ### Browser-quality evidence supersession — 25 September 2026
 
 The earlier five-route browser-quality reference is superseded by `admin-browser-quality-full-20260925-quality-all-r4.json`: all 15 protected navigation sections passed at four viewports with 90 layout samples, 60 keyboard-focus samples, EN/FR persistence, and zero automated WCAG A/AA violations. Dynamic User and Bug details retain their role-specific evidence. Manual screen-reader/assistive-technology validation remains `NOT_VERIFIED`.
+
+## Official source provenance and remaining provider gate — 25 September 2026
+
+The dedicated OVH checkout was fast-forwarded cleanly to `d013b70c8f47db1bb57e84a8df64a1c4c6f1a2b4`, preserving the named Admin accessibility/report commits, their prerequisite fixes, and the separate staging mobile correction. The checkout remained clean and still represented 59 migrations. A no-cache Admin image rebuild from that exact checkout passed the frozen install/build path and a network-isolated Admin typecheck; only the Admin service was recreated and reached healthy status. Its prior image is retained as a rollback tag.
+
+`20260925-source-d013-r3` is the valid post-transfer browser evidence: all role-specific Admin flows, Cost Center literal states, EN/FR, and the all-route quality audit passed. The consumable Support transition fixture was regenerated through its existing controlled P1 fixture process; `admin-browser-support-stepup-20260925-source-d013-support-r4.json` passed. An earlier `r2` browser runner is retained but excluded from evaluation because it omitted `/api` in a direct harness endpoint. A fresh Linux proof container completed frozen Mobile installation, Shared build, Mobile typecheck, and Mobile Web export with exit code `0`.
+
+The remaining provider condition is **NOT_VERIFIED**. Staging currently uses `echo` for LLM and `fake` for embeddings; no real Gemini credential is installed and no active, source-referenced Gemini pricing entry exists. The prepared secret location is outside Git and owner-only, but it is intentionally empty. Therefore no real provider call, provider token measurement, priced cost, or external embedding result is claimed. This report continues to require a human-provisioned staging credential and Finance/MFA-approved exact-model pricing before the bounded provider and optional real-embedding Qdrant runs can begin.
+
+# SPRINT 6 NOT READY
+
+The Linux/PostgreSQL and reconciled HTTP/Admin source validations are PASS within their explicit evidence scope. Real-provider/instrumentation attribution remains the required final blocker.
