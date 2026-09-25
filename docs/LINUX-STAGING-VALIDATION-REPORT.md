@@ -130,3 +130,35 @@ The remaining provider condition is **NOT_VERIFIED**. Staging currently uses `ec
 # SPRINT 6 NOT READY
 
 The Linux/PostgreSQL and reconciled HTTP/Admin source validations are PASS within their explicit evidence scope. Real-provider/instrumentation attribution remains the required final blocker.
+
+## OpenAI provider preparation evidence — 25 September 2026
+
+This later source-preparation run did not use an OpenAI key or external network
+provider. The persistent P1 API was left on `echo`/`fake` and was not recreated.
+The following Linux checks were performed against the reviewed preparation
+source:
+
+This supersedes only the earlier Gemini-specific proposed provider wording;
+the remaining evidence requirement is unchanged and the prepared path is
+OpenAI.
+
+| Check | Status | Boundary |
+| --- | --- | --- |
+| Frozen source build | **PASS** | pnpm 11.13.1, Shared build, Prisma generation, and API build completed in Linux. |
+| OpenAI adapter tests | **PASS — mock** | 4/4 network-disabled tests verify safe Responses serialization, normalization, explicit routing, and the one-attempt cap. |
+| API regression | **PASS** | 108/108 standard API tests passed in a network-disabled Linux container with the required Admin/Mobile source inputs mounted read-only. |
+| Shared regression | **PASS** | 58/58 network-disabled Shared tests passed; Shared/API TypeScript checks passed. |
+| PostgreSQL ledger/Cost Center mock | **PASS — mock provider only** | 7/7 deterministic pricing tests passed against P1 PostgreSQL, including immutable attribution and `UNKNOWN` for unpriced cache-write units. |
+| No-key harness refusal | **PASS** | The future VPS harness stopped before build or provider access and wrote a sanitized `NOT_VERIFIED` evidence record with owner-only permissions. |
+| Real provider / real embedding | **NOT_VERIFIED** | Neither a key nor a billable call was authorized; embeddings remain fake. |
+
+The harness is deliberately disposable: it uses a container without a published
+port, a no-retry Tutor policy, and a bounded output. It cannot change the
+long-running Echo API. A future real call still requires explicit user
+authorization, a VPS-only staging credential, and an active exact-model price
+version created via the Finance MFA/step-up workflow.
+
+# SPRINT 6 NOT READY
+
+The real provider/instrumentation condition remains open. No Sprint 6 work has
+started.

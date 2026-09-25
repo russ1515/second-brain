@@ -285,3 +285,39 @@ The last gate requires a new staging-only credential entered directly on the VPS
 # SPRINT 6 NOT READY
 
 All validated Linux/PostgreSQL, HTTP/security, and explicit Admin/browser conditions remain PASS. The final real-provider/instrumentation/pricing evidence is absent, so Sprint 6 remains prohibited.
+
+## OPENAI PROVIDER PREPARATION ADDENDUM — 25 September 2026
+
+**Preparation only; no external provider claim.** The reviewed staging source
+now has a server-side OpenAI Responses adapter and a disposable, one-attempt
+provider gate. Persistent staging remains `LLM_PROVIDER=echo` and
+`EMBEDDINGS_PROVIDER=fake`.
+
+This supersedes only the earlier Gemini-specific provider proposal in this
+historical report. The Gate remains open until provider-attributed,
+source-priced evidence is actually collected; the prepared provider is OpenAI.
+
+| Item | Status | Actual verification |
+| --- | --- | --- |
+| Adapter/configuration and explicit Echo rollback | **PASS** | OpenAI is registered only when selected; no routing path silently returns an Echo result for an OpenAI failure. Echo remains a deliberate configuration rollback. |
+| Responses usage normalization | **PASS — mock boundary** | 4/4 network-disabled tests verified ordinary input/cached/output separation, no reasoning double count, and `UNKNOWN` rather than zero for unpriced cache-write units. |
+| Correlation → ledger → Cost Center | **PASS — deterministic provider mock** | P1 PostgreSQL pricing suite: 7/7, including request correlation and attributed immutable ledger/Cost Center evidence. |
+| Relevant Linux regression | **PASS** | Frozen source build, API 108/108, Shared 58/58, and Shared/API TypeScript checks all passed without external network access. |
+| Future bounded runtime harness | **PASS — readiness only** | Syntax checks passed; the no-key run refused before any provider request and retained sanitized `NOT_VERIFIED` evidence. The temporary container has no published port, no Tutor retry, and a bounded output. |
+| Real provider tokens, pricing, and cost | **NOT_VERIFIED** | No credential, active exact-model pricing version, or external call was authorized. |
+| Real OpenAI embedding/Qdrant/provider cost | **NOT_VERIFIED** | The configured embedding provider remains fake; existing Qdrant lifecycle evidence is not a real-provider proof. |
+| OpenAI Professor UI | **NOT_VERIFIED** | No user-interface provider call was made or inferred from the backend preparation. |
+
+The future credential is confined to the existing owner-only out-of-Git VPS
+file. It was neither read nor committed. After the user explicitly authorizes
+the test, exactly one bounded API Tutor request may be made only after the
+approved exact model has an active, official-source-backed Finance pricing
+version. A separate authorization is still required before persistent staging
+activation and restart verification.
+
+## UPDATED SPRINT 6 READINESS — PROVIDER PREPARATION
+
+# SPRINT 6 NOT READY
+
+The remaining real-provider/instrumentation gate is intentionally still open.
+No Sprint 6 work has started.

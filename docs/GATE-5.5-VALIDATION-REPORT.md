@@ -245,3 +245,63 @@ Before this last Gate can pass, a human must supply a new staging-only Gemini cr
 # SPRINT 6 NOT READY
 
 All reconciled source, Linux/PostgreSQL, HTTP/security, and stated P1 Admin/browser evidence is retained. The sole remaining required blocker is real-provider attribution and pricing evidence; no Sprint 6 work may begin until that bounded validation actually passes.
+
+## OpenAI provider preparation addendum — 25 September 2026
+
+**Scope.** This is source and staging-harness preparation only. The persistent
+P1 service remains `LLM_PROVIDER=echo` with `EMBEDDINGS_PROVIDER=fake`. No
+OpenAI credential, external request, price insertion, service recreation, or
+persistent provider activation occurred during this work.
+
+This supersedes only the earlier **Gemini-specific proposed provider path** in
+this historical report. The remaining requirement is provider-attributed,
+source-priced evidence; the prepared future path is OpenAI, not Gemini.
+
+| Preparation boundary | Status | Evidence |
+| --- | --- | --- |
+| OpenAI Responses adapter and server-only configuration | **PASS** | The reviewed source adds the adapter, validates an optional server key, maps only the temporary gate container to `openai`, and sends `store: false`. No browser configuration or image-layer secret is introduced. |
+| Explicit Echo rollback / no implicit substitution | **PASS** | OpenAI is selected only when configured; cost/speed routing cannot silently select Echo while OpenAI is active. A failed OpenAI request remains a provider failure rather than a fabricated Echo Professor reply. Setting `LLM_PROVIDER=echo` remains the explicit rollback. |
+| Usage normalization | **PASS — mocked provider boundary** | Four network-disabled adapter tests passed. Ordinary input excludes cached/cache-write units; output reasoning is not double priced; a positive unpriced cache-write count yields `UNKNOWN`, never `$0`. |
+| Correlation, immutable ledger, and Cost Center mock | **PASS — PostgreSQL-backed mock boundary** | The deterministic OpenAI Responses flow passed in the real isolated P1 PostgreSQL topology (7/7 Sprint 4 cost tests): request correlation, user/subscription/plan/feature/resource/provider/model attribution, pricing snapshot, ledger amount, and Cost Center aggregation were retained. |
+| Bounded real-provider harness | **PASS — readiness only** | The VPS-only script passed shell and client syntax checks. With no key, it stopped before image creation or a provider request and retained a sanitized `NOT_VERIFIED` evidence record. Its disposable API has no published port, disables Tutor retries, and caps output at 128 tokens (32 by default). |
+| Secret boundary | **PASS — empty boundary verified** | The out-of-Git provider file and parent directory are owner-only (`0600` / `0700`). Its content was not read, printed, committed, copied into an image, or exposed to the Admin/User frontend. |
+| Real OpenAI/provider pricing/cost | **NOT_VERIFIED** | No authorized credential, exact active price version, or external call exists yet. No measured provider cost is inferred. |
+| Real OpenAI embeddings → Qdrant → retrieval | **NOT_VERIFIED** | Embeddings intentionally remain `fake`; this preparation adds no OpenAI embedding adapter or real embedding claim. |
+| Professor user-interface flow with OpenAI | **NOT_VERIFIED** | The one-off future API path is prepared, but no user-interface call has been authorized or performed. |
+
+### Reproducible non-provider regressions
+
+- Linux source build with pnpm `11.13.1`, frozen lockfile, Shared build,
+  Prisma generation, and API build: **PASS**.
+- Network-disabled OpenAI adapter tests: **4/4 PASS**.
+- Network-disabled standard API regression files, after mounting their
+  read-only Admin/Mobile source inputs: **108/108 PASS**.
+- Network-disabled Shared tests: **58/58 PASS**; Shared and API TypeScript
+  checks also passed.
+- The PostgreSQL cost/ledger suite above ran against the retained isolated P1
+  services without any external provider connection. Existing P1 containers,
+  database evidence, Qdrant evidence, and backups were not cleaned.
+
+The no-key refusal evidence is retained at the run-specific P1 evidence path
+`openai-provider-gate-20260925T171600Z-7caa75dc.json`. It contains only the
+gate state and a safe failure code, never a credential, token, prompt, reply,
+or provider request identifier.
+
+### Required future authorization, not yet performed
+
+After the user explicitly signals **« clé et modèle prêts »**, a new
+staging-only key and the approved exact model must be entered directly in the
+owner-only VPS file. An active exact-model USD price version with an official
+source must also be created through the protected Finance MFA/step-up workflow.
+Only then may the one bounded, no-retry Tutor request run. Persistent P1
+activation requires a separate explicit authorization after that evidence has
+passed; it must then be verified after restart through the active orchestrator
+state. Echo remains the explicit rollback throughout.
+
+## SPRINT 6 READINESS — OpenAI preparation update
+
+# SPRINT 6 NOT READY
+
+Preparation and deterministic instrumentation evidence do not replace a real
+provider call with provider-returned usage and an immutable, source-backed
+price snapshot. No Sprint 6 work has started.
