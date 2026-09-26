@@ -35,7 +35,13 @@ FROM nginx:1.27-alpine
 COPY deploy/nginx/p1-user.conf /etc/nginx/nginx.conf
 COPY --from=build /workspace/apps/mobile/dist /usr/share/nginx/html
 
-RUN nginx -t
+# Git worktrees used for private releases may be created under a restrictive
+# umask. Expo can preserve that mode on generated files, so normalize the
+# static tree explicitly instead of letting Nginx return 403 for unreadable
+# assets. No file in this image contains a runtime secret.
+RUN find /usr/share/nginx/html -type d -exec chmod 0755 {} + \
+ && find /usr/share/nginx/html -type f -exec chmod 0644 {} + \
+ && nginx -t
 
 EXPOSE 8082
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 \

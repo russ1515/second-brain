@@ -35,3 +35,9 @@ test('P1 User build preserves same-origin API routing', () => {
   assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:3106;/);
   assert.match(nginx, /add_header Cache-Control "no-store" always;/);
 });
+
+test('P1 User image normalizes static permissions before Nginx serves them', () => {
+  assert.match(dockerfile, /find \/usr\/share\/nginx\/html -type d -exec chmod 0755 \{\} \+/);
+  assert.match(dockerfile, /find \/usr\/share\/nginx\/html -type f -exec chmod 0644 \{\} \+/);
+  assert.match(dockerfile, /&& nginx -t/);
+});
