@@ -365,6 +365,7 @@ export class AdminController {
   @Post('users/:id/staging-quota-cap/:capId/revoke')
   @RequireAdminCapabilities('quotas.adjust')
   @UseGuards(AdminStepUpGuard)
+  @HttpCode(HttpStatus.OK)
   revokeStagingQuotaCap(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id') id: string,

@@ -269,6 +269,14 @@ test('staging quota cap requires active private beta access, stays within it, an
   assert.equal(securityRows[1].type, 'STAGING_QUOTA_CAP_REVOKED');
 });
 
+test('staging quota-cap revocation is an OK mutation, not a resource creation', () => {
+  const controller = fs.readFileSync(path.join(__dirname, '../src/admin/admin.controller.ts'), 'utf8');
+  assert.match(
+    controller,
+    /@Post\('users\/:id\/staging-quota-cap\/:capId\/revoke'\)\s*@RequireAdminCapabilities\('quotas\.adjust'\)\s*@UseGuards\(AdminStepUpGuard\)\s*@HttpCode\(HttpStatus\.OK\)\s*revokeStagingQuotaCap/s,
+  );
+});
+
 test('Audit V2 recursively redacts secrets', async () => {
   let written;
   const audit = new AdminAuditService({ auditLog: { create: async ({ data }) => { written = data; return data; } } });
