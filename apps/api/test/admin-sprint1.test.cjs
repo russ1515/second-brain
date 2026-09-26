@@ -11,6 +11,7 @@ const { JwtAccessStrategy } = require('../dist/auth/strategies/jwt-access.strate
 const { QuotaService } = require('../dist/usage/quota.service.js');
 const { ProviderMeteringService } = require('../dist/usage/provider-metering.service.js');
 const { AdminAuditService } = require('../dist/admin/admin-audit.service.js');
+const { UserAdminService } = require('../dist/admin/users/user-admin.service.js');
 const { ForbiddenException } = require('@nestjs/common');
 
 function executionContext(request = {}) {
@@ -88,7 +89,7 @@ test('JWT validation rejects revoked sessions and persisted suspension', async (
   await assert.rejects(() => strategy.validate({ sub: 'u1', email: 'x', purpose: 'access', sessionId: 's1' }));
 });
 
-function quotaHarness(primaryLimit = 10, fallbackLimit = 5) {
+function quotaHarness(primaryLimit = 10, fallbackLimit = 5, capRows = []) {
   const cycle = { id: 'c1', userId: 'u1', planSlug: 'pro', planVersion: 1, startsAt: new Date('2026-09-01'), endsAt: new Date('2026-10-01'), status: 'ACTIVE', createdAt: new Date() };
   const account = { id: 'a1', cycleId: 'c1', resource: 'AI_TEXT', primaryLimit, fallbackLimit, primaryUsed: 0, fallbackUsed: 0, state: 'PRIMARY', version: 0, updatedAt: new Date() };
   const reservations = new Map();
@@ -117,6 +118,7 @@ function quotaHarness(primaryLimit = 10, fallbackLimit = 5) {
       updateMany: async ({ where, data }) => { const row = reservations.get(where.id); if (!row || row.status !== where.status) return { count: 0 }; Object.assign(row, data); return { count: 1 }; },
     },
     usageLedger: { create: async () => ({}) },
+    entitlementOverride: { findMany: async () => capRows },
   };
   const prisma = {
     ...tx,
@@ -142,6 +144,20 @@ test('quota concurrency: PRIMARY then FALLBACK then hard stop, never over limit'
   assert.equal(account.fallbackUsed, 5);
   assert.equal(account.state, 'BLOCKED');
   assert.ok(account.primaryUsed >= 0 && account.fallbackUsed >= 0);
+});
+
+test('private staging cap is a total AI_TEXT hard stop: no fallback or over-allocation', async () => {
+  const capRows = [{ value: 3, endsAt: new Date(Date.now() + 60_000) }];
+  const { service, account, reservations } = quotaHarness(10, 5, capRows);
+  const attempts = await Promise.allSettled(Array.from({ length: 10 }, (_, i) => service.reserve({
+    userId: 'u1', resource: 'AI_TEXT', feature: 'tutor', units: 1, idempotencyKey: `cap-${i}`,
+  })));
+  assert.equal(attempts.filter((item) => item.status === 'fulfilled').length, 3);
+  assert.equal(attempts.filter((item) => item.status === 'rejected' && item.reason?.response?.code === 'QUOTA_EXHAUSTED').length, 7);
+  assert.equal(account.primaryUsed, 3);
+  assert.equal(account.fallbackUsed, 0);
+  assert.equal(account.state, 'BLOCKED');
+  assert.equal([...reservations.values()].filter((row) => row.id.startsWith('r')).length / 2, 3);
 });
 
 test('quota idempotency and provider failure release exact units', async () => {
@@ -173,6 +189,84 @@ test('quota hard stop occurs before provider invocation', async () => {
   const meter = new ProviderMeteringService(context, {}, {}, { reserve: async () => { throw new ForbiddenException({ code: 'QUOTA_EXHAUSTED' }); } });
   await assert.rejects(() => meter.execute({ provider: 'gemini', feature: 'tutor', resource: 'AI_TEXT', units: 1 }, async () => { providerCalls += 1; }));
   assert.equal(providerCalls, 0);
+});
+
+test('staging quota cap requires active private beta access, stays within it, and is auditable', async () => {
+  const auditRows = [];
+  const securityRows = [];
+  const caps = [];
+  const betaEndsAt = new Date(Date.now() + 60 * 60_000);
+  const tx = {
+    entitlementOverride: {
+      findFirst: async ({ where }) => {
+        if (where.kind === 'feature') return { endsAt: betaEndsAt };
+        return caps.find((cap) => cap.id === where.id && cap.revokedAt === null) ?? null;
+      },
+      findMany: async () => caps.filter((cap) => cap.revokedAt === null && cap.endsAt > new Date()),
+      updateMany: async ({ where, data }) => {
+        for (const cap of caps.filter((row) => where.id.in.includes(row.id))) Object.assign(cap, data);
+        return { count: 1 };
+      },
+      create: async ({ data }) => {
+        const row = { id: `cap-${caps.length + 1}`, ...data, revokedAt: null, revokedById: null };
+        caps.push(row);
+        return row;
+      },
+      update: async ({ where, data }) => {
+        const row = caps.find((cap) => cap.id === where.id);
+        Object.assign(row, data);
+        return row;
+      },
+    },
+    auditLog: { create: async ({ data }) => { auditRows.push(data); return data; } },
+    securityEvent: { create: async ({ data }) => { securityRows.push(data); return data; } },
+  };
+  const prisma = {
+    user: { findUnique: async () => ({ id: 'learner-1' }) },
+    $transaction: async (callback) => callback(tx),
+  };
+  const audit = {
+    auditData: (_context, data) => data,
+    securityData: (_context, type, userId, metadata, severity) => ({ type, userId, metadata, severity }),
+  };
+  const service = new UserAdminService(
+    prisma,
+    {},
+    audit,
+    { quota: async () => 10 },
+  );
+  const identity = { userId: 'finance-1', capabilities: ['quotas.adjust'] };
+  const context = { actorId: 'finance-1' };
+  const created = await service.createStagingQuotaCap('learner-1', identity, {
+    resource: 'AI_TEXT', limit: 3, expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(), reason: 'bounded private staging validation',
+  }, context);
+  assert.equal(created.limit, 3);
+  assert.equal(caps.length, 1);
+  assert.equal(auditRows[0].action, 'quota.staging_cap.create');
+  assert.equal(securityRows[0].type, 'STAGING_QUOTA_CAP_CREATED');
+  await assert.rejects(
+    () => service.createStagingQuotaCap('learner-1', identity, {
+      resource: 'AI_TEXT', limit: 11, expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(), reason: 'must not exceed allowance',
+    }, context),
+    (error) => error.response.code === 'STAGING_QUOTA_CAP_MUST_NOT_INCREASE_ALLOWANCE',
+  );
+  await assert.rejects(
+    () => service.createStagingQuotaCap('learner-1', identity, {
+      resource: 'AI_TEXT', limit: 2, expiresAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(), reason: 'must not outlast beta access',
+    }, context),
+    (error) => error.response.code === 'STAGING_QUOTA_CAP_EXPIRY_EXCEEDS_BETA_ACCESS',
+  );
+  await assert.rejects(
+    () => service.createStagingQuotaCap('learner-1', identity, {
+      resource: 'AI_TEXT', limit: 4, expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(), reason: 'must not widen',
+    }, context),
+    (error) => error.response.code === 'STAGING_QUOTA_CAP_CAN_ONLY_RESTRICT',
+  );
+  const revoked = await service.revokeStagingQuotaCap('learner-1', created.id, identity, 'end bounded validation', context);
+  assert.equal(revoked.revoked, true);
+  assert.ok(caps[0].revokedAt);
+  assert.equal(auditRows[1].action, 'quota.staging_cap.revoke');
+  assert.equal(securityRows[1].type, 'STAGING_QUOTA_CAP_REVOKED');
 });
 
 test('Audit V2 recursively redacts secrets', async () => {

@@ -25,6 +25,8 @@ export interface TwoFactorChallengePayload {
 export interface AuthenticatedUser {
   userId: string;
   email: string;
+  /** Freshly read from the database by the JWT strategy, never trusted from JWT claims. */
+  emailVerified: boolean;
   sessionId: string;
   mfaVerifiedAt: Date | null;
 }

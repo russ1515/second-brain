@@ -9,6 +9,14 @@ const RESOURCE_QUOTA_KEY: Partial<Record<QuotaResource, string>> = {
   AI_TEXT: 'ai_questions',
   VOICE_SECONDS: 'voice_minutes',
 };
+/**
+ * A private-staging cap is deliberately an entitlement record rather than a
+ * plan or quota-account mutation.  It is a restrictive overlay only: the
+ * durable quota account continues to describe the subscribed plan/cycle.
+ */
+export const STAGING_QUOTA_CAP_KIND = 'staging_quota_cap';
+export const STAGING_QUOTA_CAP_RESOURCE: QuotaResource = 'AI_TEXT';
+export const STAGING_QUOTA_CAP_KEY = 'ai_questions';
 export const QUOTA_WARNING_THRESHOLDS = [50, 70, 85, 95, 100] as const;
 const SERIALIZABLE_RETRY_LIMIT = 12;
 // A burst of legitimate requests can temporarily queue for a Prisma interactive
@@ -136,8 +144,11 @@ export class QuotaService {
 
       const nextPrimaryUsed = account.primaryUsed - primaryCredit;
       const nextFallbackUsed = account.fallbackUsed - fallbackCredit;
-      const primaryAvailable = account.primaryLimit === null || nextPrimaryUsed < account.primaryLimit;
-      const fallbackAvailable = nextFallbackUsed < account.fallbackLimit;
+      const cap = await this.activeStagingQuotaCap(tx, input.userId, input.resource, now);
+      const primaryAvailable = cap === null
+        ? account.primaryLimit === null || nextPrimaryUsed < account.primaryLimit
+        : nextPrimaryUsed + nextFallbackUsed < cap;
+      const fallbackAvailable = cap === null && nextFallbackUsed < account.fallbackLimit;
       const nextState: QuotaState = primaryAvailable ? 'PRIMARY' : fallbackAvailable ? 'FALLBACK' : 'BLOCKED';
       const updated = await tx.quotaAccount.update({
         where: { id: account.id },
@@ -201,8 +212,22 @@ export class QuotaService {
       return await this.prisma.$transaction(async (tx) => {
         let primaryUnits = 0;
         let fallbackUnits = 0;
+        const cap = await this.activeStagingQuotaCap(tx, input.userId, input.resource);
 
-        if (account.primaryLimit === null) {
+        if (cap !== null) {
+          // A staging cap is a total cap, not merely a smaller PRIMARY bucket.
+          // Existing fallback use therefore counts against it and no new
+          // fallback allocation is possible while the cap is active.
+          const current = await tx.quotaAccount.findUniqueOrThrow({ where: { id: account.id } });
+          const primary = await tx.quotaAccount.updateMany({
+            where: {
+              id: account.id,
+              primaryUsed: { lte: cap - current.fallbackUsed - input.units },
+            },
+            data: { primaryUsed: { increment: input.units }, state: 'PRIMARY', version: { increment: 1 } },
+          });
+          if (primary.count === 1) primaryUnits = input.units;
+        } else if (account.primaryLimit === null) {
           await tx.quotaAccount.update({ where: { id: account.id }, data: { primaryUsed: { increment: input.units }, version: { increment: 1 } } });
           primaryUnits = input.units;
         } else {
@@ -223,14 +248,14 @@ export class QuotaService {
 
         if (primaryUnits + fallbackUnits !== input.units) {
           const current = await tx.quotaAccount.findUniqueOrThrow({ where: { id: account.id } });
-          throw this.exhausted(current, cycle.endsAt, input.feature);
+          throw this.exhausted(current, cycle.endsAt, input.feature, cap);
         }
 
         // The successful allocation is the only operation allowed to advance
         // quota state.  A rejected concurrent attempt must remain read-only:
         // writing BLOCKED after a rejected transaction both churns the same row
         // and can race with the request consuming the final unit.
-        await this.recalculateState(tx, account.id);
+        await this.recalculateState(tx, account.id, input.userId, input.resource);
 
         const reservation = await tx.quotaReservation.create({
           data: {
@@ -273,7 +298,7 @@ export class QuotaService {
       let releaseFallback = release - releasePrimary;
       if (releasePrimary) await tx.quotaAccount.updateMany({ where: { id: existing.accountId, primaryUsed: { gte: releasePrimary } }, data: { primaryUsed: { decrement: releasePrimary }, version: { increment: 1 } } });
       if (releaseFallback) await tx.quotaAccount.updateMany({ where: { id: existing.accountId, fallbackUsed: { gte: releaseFallback } }, data: { fallbackUsed: { decrement: releaseFallback }, version: { increment: 1 } } });
-      if (release) await this.recalculateState(tx, existing.accountId);
+      if (release) await this.recalculateState(tx, existing.accountId, existing.userId, existing.resource);
       await tx.usageLedger.create({
         data: { reservationId, userId: existing.userId, cycleId: existing.cycleId, resource: existing.resource, event: 'FINALIZE', primaryDelta: -releasePrimary, fallbackDelta: -releaseFallback, actualUnits: actual, idempotencyKey: `${existing.userId}:${existing.idempotencyKey}:finalize` },
       });
@@ -289,7 +314,7 @@ export class QuotaService {
       if (changed.count === 0) return tx.quotaReservation.findUniqueOrThrow({ where: { id: reservationId } });
       if (existing.primaryUnits) await tx.quotaAccount.updateMany({ where: { id: existing.accountId, primaryUsed: { gte: existing.primaryUnits } }, data: { primaryUsed: { decrement: existing.primaryUnits }, version: { increment: 1 } } });
       if (existing.fallbackUnits) await tx.quotaAccount.updateMany({ where: { id: existing.accountId, fallbackUsed: { gte: existing.fallbackUnits } }, data: { fallbackUsed: { decrement: existing.fallbackUnits }, version: { increment: 1 } } });
-      await this.recalculateState(tx, existing.accountId);
+      await this.recalculateState(tx, existing.accountId, existing.userId, existing.resource);
       await tx.usageLedger.create({ data: { reservationId, userId: existing.userId, cycleId: existing.cycleId, resource: existing.resource, event: 'RELEASE', primaryDelta: -existing.primaryUnits, fallbackDelta: -existing.fallbackUnits, reason, idempotencyKey: `${existing.userId}:${existing.idempotencyKey}:release` } });
       return tx.quotaReservation.findUniqueOrThrow({ where: { id: reservationId } });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -356,23 +381,65 @@ export class QuotaService {
     });
   }
 
-  private exhausted(account: QuotaAccount, resetAt: Date, feature: string): ForbiddenException {
+  private exhausted(account: QuotaAccount, resetAt: Date, feature: string, cap: number | null = null): ForbiddenException {
     return new ForbiddenException({
       code: 'QUOTA_EXHAUSTED', error: 'quota_exceeded', resource: account.resource,
-      feature, state: 'BLOCKED', primary: { used: account.primaryUsed, limit: account.primaryLimit },
-      fallback: { used: account.fallbackUsed, limit: account.fallbackLimit },
+      feature, state: 'BLOCKED', primary: { used: account.primaryUsed, limit: cap === null ? account.primaryLimit : cap },
+      fallback: { used: account.fallbackUsed, limit: cap === null ? account.fallbackLimit : 0 },
+      ...(cap === null ? {} : { cap }),
       resetAt: resetAt.toISOString(), retryable: false,
     });
   }
 
-  private async recalculateState(tx: Prisma.TransactionClient, accountId: string): Promise<void> {
+  private async recalculateState(
+    tx: Prisma.TransactionClient,
+    accountId: string,
+    userId?: string,
+    resource?: QuotaResource,
+  ): Promise<void> {
     const account = await tx.quotaAccount.findUniqueOrThrow({ where: { id: accountId } });
-    const primaryAvailable = account.primaryLimit === null || account.primaryUsed < account.primaryLimit;
-    const fallbackAvailable = account.fallbackUsed < account.fallbackLimit;
+    const cap = userId && resource ? await this.activeStagingQuotaCap(tx, userId, resource) : null;
+    const primaryAvailable = cap === null
+      ? account.primaryLimit === null || account.primaryUsed < account.primaryLimit
+      : account.primaryUsed + account.fallbackUsed < cap;
+    const fallbackAvailable = cap === null && account.fallbackUsed < account.fallbackLimit;
     await tx.quotaAccount.update({
       where: { id: accountId },
       data: { state: primaryAvailable ? 'PRIMARY' : fallbackAvailable ? 'FALLBACK' : 'BLOCKED', version: { increment: 1 } },
     });
+  }
+
+  /**
+   * Compatibility test doubles from earlier sprints omit entitlementOverride;
+   * a real Prisma transaction always exposes it.  The production path treats
+   * malformed active cap rows as a hard stop before a provider can be called.
+   */
+  private async activeStagingQuotaCap(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    resource: QuotaResource,
+    now = new Date(),
+  ): Promise<number | null> {
+    if (resource !== STAGING_QUOTA_CAP_RESOURCE) return null;
+    const client = tx as unknown as PrismaService;
+    if (!client.entitlementOverride) return null;
+    const rows = await client.entitlementOverride.findMany({
+      where: {
+        userId,
+        kind: STAGING_QUOTA_CAP_KIND,
+        key: STAGING_QUOTA_CAP_KEY,
+        revokedAt: null,
+        startsAt: { lte: now },
+        OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+      },
+      select: { value: true, endsAt: true },
+    });
+    if (rows.length === 0) return null;
+    const limits = rows.map((row) => row.value);
+    if (rows.some((row) => row.endsAt === null) || limits.some((value) => typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)) {
+      throw new ForbiddenException({ code: 'QUOTA_CAP_INVALID', resource, retryable: false });
+    }
+    return Math.min(...(limits as number[]));
   }
 
   private isRetryableConflict(error: unknown): boolean {

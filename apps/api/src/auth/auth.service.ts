@@ -19,6 +19,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ARGON2_OPTIONS } from './argon2.options';
 import { EmailVerificationService } from './email-verification.service';
 import { EmailOtpService } from './email-otp.service';
+import { PrivateBetaAccessService } from './private-beta-access.service';
 import type { LoginDto } from './dto/login.dto';
 import type { RegisterDto } from './dto/register.dto';
 import {
@@ -40,11 +41,15 @@ export class AuthService {
     private readonly config: ConfigService,
     private readonly emailVerification: EmailVerificationService,
     private readonly emailOtp: EmailOtpService,
+    private readonly privateBeta: PrivateBetaAccessService,
   ) {}
 
   /** Create a new user (+ profile) and issue an initial token pair. */
   async register(dto: RegisterDto, ctx: SessionContext = {}): Promise<AuthResponse> {
     const email = this.normalizeEmail(dto.email);
+    // Fail before password hashing, email issuance, user creation or session
+    // creation when the private staging registration allowlist is active.
+    this.privateBeta.assertRegistrationAllowed(email);
     const passwordHash = await argon2.hash(dto.password, ARGON2_OPTIONS);
 
     let user: User;
@@ -148,8 +153,18 @@ export class AuthService {
 
     try {
       this.assertAccountActive(user);
+      await this.privateBeta.assertNormalAccess(user.id, user.emailVerified);
     } catch (error) {
       if (this.isPotentialAdmin(user)) await this.recordAdminAuthEvent(user.id, 'ADMIN_LOGIN_FAILED_ACCOUNT_STATE', ctx, 'denied');
+      // A beta denial must not reveal that a valid password was supplied.
+      if (
+        error instanceof UnauthorizedException &&
+        typeof error.getResponse() === 'object' &&
+        error.getResponse() !== null &&
+        (error.getResponse() as { code?: unknown }).code === 'PRIVATE_BETA_ACCESS_REQUIRED'
+      ) {
+        throw invalid;
+      }
       throw error;
     }
 
@@ -174,6 +189,7 @@ export class AuthService {
     mfaVerified = false,
   ): Promise<AuthResponse> {
     this.assertAccountActive(user);
+    await this.privateBeta.assertNormalAccess(user.id, user.emailVerified);
     const tokens = await this.issueTokens(user, ctx, mfaVerified);
     return { user: this.toAuthUser(user, displayName), tokens };
   }
@@ -273,6 +289,12 @@ export class AuthService {
     }
 
     this.assertAccountActive(session.user);
+    try {
+      await this.privateBeta.assertNormalAccess(session.user.id, session.user.emailVerified);
+    } catch {
+      // Do not reveal private-beta state through the refresh credential.
+      throw invalid;
+    }
 
     return this.rotate(session.id, session.user, ctx, session.mfaVerifiedAt);
   }

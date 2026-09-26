@@ -22,6 +22,7 @@ import { AuthService } from './auth.service';
 import { EmailVerificationService } from './email-verification.service';
 import { TwoFactorService } from './two-factor.service';
 import { CurrentUser } from './decorators/current-user.decorator';
+import { AllowPendingVerification } from './decorators/allow-pending-verification.decorator';
 import { LoginDto } from './dto/login.dto';
 import { LogoutDto } from './dto/logout.dto';
 import { RefreshDto } from './dto/refresh.dto';
@@ -109,6 +110,7 @@ export class AuthController {
   // Re-sends the verification email (as a fresh 6-digit OTP) for the
   // authenticated, still-unverified user.
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @AllowPendingVerification()
   @UseGuards(JwtAccessGuard)
   @Post('resend-verification')
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -123,6 +125,7 @@ export class AuthController {
   // Confirms the authenticated user's email with the 6-digit OTP mailed at
   // registration/resend. Rate-limited against guessing.
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @AllowPendingVerification()
   @UseGuards(JwtAccessGuard)
   @Post('verify-otp')
   @HttpCode(HttpStatus.OK)

@@ -25,6 +25,7 @@ import type {
 import { AdminRole } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
+import { PrivateBetaAccessService } from '../auth/private-beta-access.service';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { AdminGuard } from './admin.guard';
 import { CapabilityGuard } from './capability.guard';
@@ -51,8 +52,13 @@ import {
   PlanOverrideDto,
   ProfileReviewDto,
   QuotaAdjustmentDto,
+  StagingQuotaCapDto,
   UserDirectoryQueryDto,
 } from './dto/user-admin.dto';
+import {
+  GrantPrivateBetaAccessDto,
+  RevokePrivateBetaAccessDto,
+} from './dto/private-beta-access.dto';
 
 /** Platform back office (Sprint 8.5). Superadmin-only — JwtAccessGuard then
  *  AdminGuard on every route. */
@@ -63,6 +69,7 @@ export class AdminController {
     private readonly admin: AdminService,
     private readonly analytics: AnalyticsService,
     private readonly usersDirectory: UserAdminService,
+    private readonly privateBeta: PrivateBetaAccessService,
   ) {}
 
   @Get('session')
@@ -300,6 +307,35 @@ export class AdminController {
     return this.usersDirectory.betaAccess(id, req.adminIdentity as AdminIdentity, dto, this.auditContext(actor, req));
   }
 
+  /** A private-beta grant is independent of the legacy plan-beta endpoint:
+   * it never changes a plan, price, subscription or quota. */
+  @Post('users/:id/private-beta-access')
+  @RequireAdminCapabilities('security.manage')
+  @UseGuards(AdminStepUpGuard)
+  @HttpCode(HttpStatus.CREATED)
+  grantPrivateBetaAccess(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: GrantPrivateBetaAccessDto,
+    @Req() req: AdminHttpRequest,
+  ) {
+    return this.privateBeta.grant(id, dto, this.auditContext(actor, req));
+  }
+
+  @Post('users/:id/private-beta-access/:grantId/revoke')
+  @RequireAdminCapabilities('security.manage')
+  @UseGuards(AdminStepUpGuard)
+  @HttpCode(HttpStatus.OK)
+  revokePrivateBetaAccess(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('grantId') grantId: string,
+    @Body() dto: RevokePrivateBetaAccessDto,
+    @Req() req: AdminHttpRequest,
+  ) {
+    return this.privateBeta.revoke(id, grantId, dto.reason, this.auditContext(actor, req));
+  }
+
   @Post('users/:id/quota-adjustment')
   @RequireAdminCapabilities('quotas.adjust')
   @UseGuards(AdminStepUpGuard)
@@ -311,6 +347,38 @@ export class AdminController {
     @Req() req: AdminHttpRequest,
   ) {
     return this.usersDirectory.quotaAdjustment(id, req.adminIdentity as AdminIdentity, dto, this.auditContext(actor, req));
+  }
+
+  @Post('users/:id/staging-quota-cap')
+  @RequireAdminCapabilities('quotas.adjust')
+  @UseGuards(AdminStepUpGuard)
+  @HttpCode(HttpStatus.CREATED)
+  createStagingQuotaCap(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: StagingQuotaCapDto,
+    @Req() req: AdminHttpRequest,
+  ) {
+    return this.usersDirectory.createStagingQuotaCap(id, req.adminIdentity as AdminIdentity, dto, this.auditContext(actor, req));
+  }
+
+  @Post('users/:id/staging-quota-cap/:capId/revoke')
+  @RequireAdminCapabilities('quotas.adjust')
+  @UseGuards(AdminStepUpGuard)
+  revokeStagingQuotaCap(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('capId') capId: string,
+    @Body() dto: AdminReasonDto,
+    @Req() req: AdminHttpRequest,
+  ) {
+    return this.usersDirectory.revokeStagingQuotaCap(
+      id,
+      capId,
+      req.adminIdentity as AdminIdentity,
+      dto.reason,
+      this.auditContext(actor, req),
+    );
   }
 
   @Post('users/:id/roles')

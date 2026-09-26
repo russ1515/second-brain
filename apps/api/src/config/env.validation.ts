@@ -1,5 +1,6 @@
 import { plainToInstance } from 'class-transformer';
 import {
+  IsIn,
   IsEnum,
   IsInt,
   IsOptional,
@@ -46,6 +47,16 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   ADMIN_BOOTSTRAP_ENABLED?: string;
+
+  /** Opt-in, fail-closed private-beta access gate. */
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  PRIVATE_BETA_ENFORCED?: string;
+
+  /** Private, pre-registration allowlist; never put this in source control. */
+  @IsOptional()
+  @IsString()
+  PRIVATE_BETA_REGISTRATION_EMAILS?: string;
 
   @IsOptional()
   @IsInt()
@@ -112,7 +123,7 @@ class EnvironmentVariables {
   MAIL_PORT?: number;
 
   @IsOptional()
-  @IsString()
+  @IsIn(['true', 'false'])
   MAIL_SECURE?: string;
 
   @IsOptional()

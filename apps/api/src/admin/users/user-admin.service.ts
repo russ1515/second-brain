@@ -7,7 +7,13 @@ import {
 } from '@nestjs/common';
 import { Prisma, type QuotaResource, type QuotaState } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { QuotaService } from '../../usage/quota.service';
+import {
+  QuotaService,
+  STAGING_QUOTA_CAP_KEY,
+  STAGING_QUOTA_CAP_KIND,
+  STAGING_QUOTA_CAP_RESOURCE,
+} from '../../usage/quota.service';
+import { EntitlementsService } from '../../subscription/entitlements.service';
 import { AdminAuditService, type AuditContext } from '../admin-audit.service';
 import type { AdminCapability, AdminIdentity } from '../admin-rbac';
 import {
@@ -17,6 +23,7 @@ import {
   type LearnerProfileQueryDto,
   type PlanOverrideDto,
   type QuotaAdjustmentDto,
+  type StagingQuotaCapDto,
   type UserDirectoryQueryDto,
 } from '../dto/user-admin.dto';
 
@@ -27,6 +34,8 @@ const QUOTA_RESOURCES: readonly QuotaResource[] = [
 const DURABLY_INSTRUMENTED_RESOURCES = new Set<QuotaResource>([
   'AI_TEXT', 'VOICE_SECONDS', 'OCR_PAGES', 'EMBEDDING_UNITS', 'ACADEMIC_AI',
 ]);
+const PRIVATE_BETA_ACCESS_KIND = 'feature';
+const PRIVATE_BETA_ACCESS_KEY = 'private_beta_access';
 const SECRET_LIKE_TEXT = /(?:\b(?:password|passcode|secret|api[ _-]?key|access[ _-]?token|refresh[ _-]?token|totp|one[ _-]?time[ _-]?password|\botp\b|recovery[ _-]?code|\bcvv\b|card[ _-]?number)\b|\bBearer\s+[A-Za-z0-9._~+\/-]+=*|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b|\b(?:sk|pk|whsec|rk|pi|ch|sub|cus|in|evt|cs|pm|seti)_[A-Za-z0-9_]{8,}\b|\b(?:\d[ -]?){13,19}\b|\bhttps?:\/\/[^\s<>{}"']+|\b[A-Za-z0-9_-]{32,}\b)/i;
 
 type Section<T> =
@@ -45,6 +54,7 @@ export class UserAdminService {
     private readonly prisma: PrismaService,
     private readonly quota: QuotaService,
     private readonly audit: AdminAuditService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   async list(identity: AdminIdentity, query: UserDirectoryQueryDto, context?: AuditContext) {
@@ -725,6 +735,180 @@ export class UserAdminService {
       },
     });
     return { ...credit, source: 'ADMIN_CREDIT' };
+  }
+
+  /**
+   * Create a bounded private-staging restriction for the one server-metered
+   * learner unit.  It is intentionally neither a plan override nor a credit:
+   * the cap can only reduce the user's effective allowance.
+   */
+  async createStagingQuotaCap(
+    userId: string,
+    identity: AdminIdentity,
+    dto: StagingQuotaCapDto,
+    context: AuditContext,
+  ) {
+    this.require(identity, 'quotas.adjust');
+    this.assertSafeAdministrativeText(dto.reason);
+    await this.requireUser(userId);
+    if (dto.resource !== STAGING_QUOTA_CAP_RESOURCE) {
+      throw new BadRequestException({ code: 'STAGING_QUOTA_CAP_RESOURCE_INVALID' });
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(dto.expiresAt);
+    if (Number.isNaN(expiresAt.getTime()) || expiresAt <= now) {
+      throw new BadRequestException({ code: 'STAGING_QUOTA_CAP_EXPIRY_INVALID' });
+    }
+    const effectiveLimit = await this.entitlements.quota(userId, STAGING_QUOTA_CAP_KEY);
+    if (effectiveLimit !== null && dto.limit > effectiveLimit) {
+      throw new ConflictException({ code: 'STAGING_QUOTA_CAP_MUST_NOT_INCREASE_ALLOWANCE' });
+    }
+
+    const cap = await this.serializable(async (tx) => {
+      const betaAccess = await tx.entitlementOverride.findFirst({
+        where: {
+          userId,
+          kind: PRIVATE_BETA_ACCESS_KIND,
+          key: PRIVATE_BETA_ACCESS_KEY,
+          value: { equals: true },
+          revokedAt: null,
+          startsAt: { lte: now },
+          endsAt: { gt: now },
+        },
+        orderBy: { endsAt: 'desc' },
+        select: { endsAt: true },
+      });
+      if (!betaAccess?.endsAt) {
+        throw new ConflictException({ code: 'PRIVATE_BETA_ACCESS_REQUIRED' });
+      }
+      if (expiresAt > betaAccess.endsAt) {
+        throw new ConflictException({ code: 'STAGING_QUOTA_CAP_EXPIRY_EXCEEDS_BETA_ACCESS' });
+      }
+
+      const activeCaps = await tx.entitlementOverride.findMany({
+        where: {
+          userId,
+          kind: STAGING_QUOTA_CAP_KIND,
+          key: STAGING_QUOTA_CAP_KEY,
+          revokedAt: null,
+          startsAt: { lte: now },
+          endsAt: { gt: now },
+        },
+        select: { id: true, value: true },
+      });
+      const limits = activeCaps.map((row) => row.value);
+      if (limits.some((value) => typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)) {
+        throw new ConflictException({ code: 'STAGING_QUOTA_CAP_INVALID' });
+      }
+      const activeLimit = limits.length ? Math.min(...(limits as number[])) : null;
+      if (activeLimit !== null && dto.limit > activeLimit) {
+        throw new ConflictException({ code: 'STAGING_QUOTA_CAP_CAN_ONLY_RESTRICT' });
+      }
+
+      // Keep superseded caps as auditable history.  Equal/lower replacements
+      // never introduce a more generous effective allowance.
+      if (activeCaps.length) {
+        await tx.entitlementOverride.updateMany({
+          where: { id: { in: activeCaps.map((row) => row.id) } },
+          data: { endsAt: now },
+        });
+      }
+      const row = await tx.entitlementOverride.create({
+        data: {
+          userId,
+          kind: STAGING_QUOTA_CAP_KIND,
+          key: STAGING_QUOTA_CAP_KEY,
+          value: dto.limit,
+          reason: dto.reason.trim(),
+          grantedById: context.actorId ?? identity.userId,
+          startsAt: now,
+          endsAt: expiresAt,
+        },
+      });
+      await tx.auditLog.create({ data: this.audit.auditData(context, {
+        action: 'quota.staging_cap.create',
+        targetType: 'EntitlementOverride',
+        targetId: row.id,
+        reason: dto.reason.trim(),
+        after: {
+          userId,
+          source: 'STAGING_QUOTA_CAP',
+          resource: STAGING_QUOTA_CAP_RESOURCE,
+          limit: dto.limit,
+          startsAt: now.toISOString(),
+          expiresAt: expiresAt.toISOString(),
+        },
+      }) });
+      await tx.securityEvent.create({ data: this.audit.securityData(
+        context,
+        'STAGING_QUOTA_CAP_CREATED',
+        userId,
+        { capId: row.id, resource: STAGING_QUOTA_CAP_RESOURCE, limit: dto.limit, expiresAt: expiresAt.toISOString() },
+        'high',
+      ) });
+      return row;
+    });
+    return {
+      id: cap.id,
+      source: 'STAGING_QUOTA_CAP',
+      resource: STAGING_QUOTA_CAP_RESOURCE,
+      limit: dto.limit,
+      startsAt: cap.startsAt.toISOString(),
+      expiresAt: cap.endsAt?.toISOString() ?? null,
+    };
+  }
+
+  async revokeStagingQuotaCap(
+    userId: string,
+    capId: string,
+    identity: AdminIdentity,
+    reason: string,
+    context: AuditContext,
+  ) {
+    this.require(identity, 'quotas.adjust');
+    this.assertSafeAdministrativeText(reason);
+    await this.requireUser(userId);
+    const now = new Date();
+    return this.serializable(async (tx) => {
+      const cap = await tx.entitlementOverride.findFirst({
+        where: {
+          id: capId,
+          userId,
+          kind: STAGING_QUOTA_CAP_KIND,
+          key: STAGING_QUOTA_CAP_KEY,
+          revokedAt: null,
+        },
+        select: { id: true, value: true, startsAt: true, endsAt: true },
+      });
+      if (!cap) throw new NotFoundException({ code: 'STAGING_QUOTA_CAP_NOT_FOUND' });
+      await tx.entitlementOverride.update({
+        where: { id: cap.id },
+        data: { revokedAt: now, revokedById: context.actorId ?? identity.userId },
+      });
+      await tx.auditLog.create({ data: this.audit.auditData(context, {
+        action: 'quota.staging_cap.revoke',
+        targetType: 'EntitlementOverride',
+        targetId: cap.id,
+        reason: reason.trim(),
+        before: {
+          userId,
+          source: 'STAGING_QUOTA_CAP',
+          resource: STAGING_QUOTA_CAP_RESOURCE,
+          limit: typeof cap.value === 'number' ? cap.value : 'INVALID',
+          startsAt: cap.startsAt.toISOString(),
+          expiresAt: iso(cap.endsAt),
+        },
+      }) });
+      await tx.securityEvent.create({ data: this.audit.securityData(
+        context,
+        'STAGING_QUOTA_CAP_REVOKED',
+        userId,
+        { capId: cap.id, resource: STAGING_QUOTA_CAP_RESOURCE },
+        'high',
+      ) });
+      return { revoked: true, id: cap.id };
+    });
   }
 
   async revokeSession(userId: string, sessionId: string, identity: AdminIdentity, reason: string, context: AuditContext) {

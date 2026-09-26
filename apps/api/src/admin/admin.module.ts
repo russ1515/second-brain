@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { SubscriptionModule } from '../subscription/subscription.module';
 import { UsageModule } from '../usage/usage.module';
+import { AuthModule } from '../auth/auth.module';
 import { AdminController } from './admin.controller';
 import { ReportsController } from './reports.controller';
 import { AdminService } from './admin.service';
@@ -21,7 +22,7 @@ import { SafeTelemetryModule } from '../diagnostics/safe-telemetry.module';
  *  the user-facing report endpoint. Reuses the Subscription engine to change a
  *  user's plan. Prisma is @Global. */
 @Module({
-  imports: [SubscriptionModule, UsageModule, SafeTelemetryModule],
+  imports: [AuthModule, SubscriptionModule, UsageModule, SafeTelemetryModule],
   controllers: [AdminController, ReportsController, DashboardController, CostCenterController],
   providers: [AdminService, AnalyticsService, DashboardService, UserAdminService, CostCenterService, AdminGuard, AdminIdentityService, CapabilityGuard, AdminStepUpGuard, AdminAuditService],
   exports: [AdminService, AdminAuditService, AdminIdentityService, AdminGuard, CapabilityGuard, AdminStepUpGuard],

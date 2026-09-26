@@ -125,13 +125,14 @@ export class TwoFactorService {
       await this.auth.recordAdminAuthEvent(user.id, 'ADMIN_LOGIN_FAILED_MFA', ctx, 'failed');
       throw new UnauthorizedException('Invalid authentication code.');
     }
-    await this.auth.recordAdminAuthEvent(user.id, 'ADMIN_LOGIN_SUCCESS', ctx);
-    return this.auth.issueLoginResponse(
+    const response = await this.auth.issueLoginResponse(
       user,
       user.profile?.displayName ?? null,
       ctx,
       true,
     );
+    await this.auth.recordAdminAuthEvent(user.id, 'ADMIN_LOGIN_SUCCESS', ctx);
+    return response;
   }
 
   /** Refresh the session's MFA timestamp for critical admin actions. */

@@ -143,6 +143,29 @@ export class QuotaAdjustmentDto {
   cycleId?: string;
 }
 
+/**
+ * A private-staging cap can only make a user's existing AI_TEXT allowance
+ * smaller.  It is not a plan change, credit, or general quota editor.
+ */
+export class StagingQuotaCapDto {
+  @IsIn(['AI_TEXT'])
+  resource!: 'AI_TEXT';
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(1_000_000_000)
+  limit!: number;
+
+  @IsDateString()
+  expiresAt!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  reason!: string;
+}
+
 export class CreateSupportNoteDto {
   @IsString()
   @IsNotEmpty()

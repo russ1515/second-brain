@@ -11,7 +11,19 @@ function resolveApiBaseUrl(): string {
   if (configured) return configured;
 
   const hostUri = Constants.expoConfig?.hostUri;
-  const host = hostUri?.split(':')[0] ?? 'localhost';
+  if (hostUri) {
+    const host = hostUri.split(':')[0];
+    return `http://${host}:3000`;
+  }
+
+  // Static Web exports are served behind the same reverse proxy as `/api`.
+  // Keep the existing Metro-host behavior above for development and native
+  // clients, but never send a deployed browser back to its own localhost.
+  if (typeof window !== 'undefined' && window.location.origin !== 'null') {
+    return window.location.origin;
+  }
+
+  const host = 'localhost';
   return `http://${host}:3000`;
 }
 

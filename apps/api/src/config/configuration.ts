@@ -1,6 +1,14 @@
 import { resolveUXFeatureFlags } from '@second-brain/shared';
 
 /** Typed application configuration, assembled from validated environment variables. */
+function strictBooleanEnvironment(name: string, fallback: boolean): boolean {
+  const value = process.env[name];
+  if (value === undefined) return fallback;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw new Error(`${name} must be exactly "true" or "false".`);
+}
+
 export default () => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
   api: {
@@ -83,6 +91,19 @@ export default () => ({
     // secret (still 32-byte-derived) when unset; set explicitly in production.
     twoFactorEncKey: process.env.TWO_FACTOR_ENC_KEY,
   },
+  privateBeta: {
+    // Private-beta enforcement is deliberately opt-in so existing environments
+    // keep their current access semantics until their explicit allowlist and
+    // audited grants are in place.
+    enforced: strictBooleanEnvironment('PRIVATE_BETA_ENFORCED', false),
+    // This list is only a narrow pre-registration allowlist. It never grants
+    // product access: a verified account still needs an audited
+    // `private_beta_access` entitlement override before it can authenticate.
+    registrationEmails: (process.env.PRIVATE_BETA_REGISTRATION_EMAILS ?? '')
+      .split(',')
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+  },
   mail: {
     // 'log' (dev, prints to console) or 'smtp' (real delivery via nodemailer).
     transport: process.env.MAIL_TRANSPORT ?? 'log',
@@ -93,7 +114,7 @@ export default () => ({
     smtp: {
       host: process.env.MAIL_HOST ?? 'smtp.gmail.com',
       port: parseInt(process.env.MAIL_PORT ?? '465', 10),
-      secure: (process.env.MAIL_SECURE ?? 'true') === 'true',
+        secure: strictBooleanEnvironment('MAIL_SECURE', true),
       user: process.env.MAIL_USER ?? '',
       pass: process.env.MAIL_PASS ?? '',
     },

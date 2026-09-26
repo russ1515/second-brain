@@ -33,7 +33,7 @@ const EXPIRY_SECONDS = 300;
  * offers NO skip — verification is enforced server-side.
  */
 export default function SignInScreen() {
-  const { login, register, verifyTwoFactor } = useAuth();
+  const { login, register, verifyEmailOtp, verifyTwoFactor } = useAuth();
   const { t } = useI18n();
   const { colors: c, spacing, reducedMotion } = useTokens();
   const { width } = useResponsive();
@@ -113,16 +113,22 @@ export default function SignInScreen() {
     if (expired) { setError(t('auth.expired')); return; }
     setBusy(true); clear();
     try {
-      await api('/auth/verify-otp', { method: 'POST', body: { code: otp } });
+      await verifyEmailOtp(otp);
       router.replace(destination);
     } catch (e) {
       setError((e as Error).message || t('auth.otpError'));
     } finally { setBusy(false); }
   };
-  const resend = async () => {
-    clear();
-    try { await api('/auth/resend-verification', { method: 'POST' }); } catch { /* best effort */ }
-    startCode(); setInfo(t('auth.newCodeSent'));
+  const resendVerification = async () => {
+    setBusy(true); clear();
+    try {
+      await api('/auth/resend-verification', { method: 'POST' });
+      startCode(); setInfo(t('auth.newCodeSent'));
+    } catch (e) {
+      setError((e as Error).message || t('auth.otpError'));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const verify2fa = async () => {
@@ -132,12 +138,35 @@ export default function SignInScreen() {
     finally { setBusy(false); }
   };
 
+  const requestPasswordReset = async () => {
+    await api('/auth/forgot-password', {
+      method: 'POST',
+      anonymous: true,
+      body: { email: email.trim() },
+    });
+  };
   const sendReset = async () => {
     setBusy(true); clear();
-    try { await api('/auth/forgot-password', { method: 'POST', anonymous: true, body: { email: email.trim() } }); } catch { /* endpoint optional */ }
-    setBusy(false);
-    setInfo(fmt('auth.resetSent', { email: email.trim() }));
-    startCode(); setStep('forgotSent');
+    try {
+      await requestPasswordReset();
+      setInfo(fmt('auth.resetSent', { email: email.trim() }));
+      startCode(); setStep('forgotSent');
+    } catch (e) {
+      setError((e as Error).message || t('auth.otpError'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const resendPasswordReset = async () => {
+    setBusy(true); clear();
+    try {
+      await requestPasswordReset();
+      startCode(); setInfo(t('auth.newCodeSent'));
+    } catch (e) {
+      setError((e as Error).message || t('auth.otpError'));
+    } finally {
+      setBusy(false);
+    }
   };
   const doReset = async () => {
     if (expired) { setError(t('auth.expired')); return; }
@@ -148,13 +177,13 @@ export default function SignInScreen() {
     } catch (e) { setError((e as Error).message || t('auth.otpError')); } finally { setBusy(false); }
   };
 
-  const resendRow = (
+  const resendRow = (onResend: () => void) => (
     <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
       <Text style={{ color: c.textMuted, fontSize: 13 }}>{t('auth.notReceived')}</Text>
       {cooldown > 0 ? (
         <Text style={{ color: c.textMuted, fontSize: 13 }}>{fmt('auth.resendIn', { n: cooldown })}</Text>
       ) : (
-        <Pressable onPress={resend} accessibilityRole="button"><Text style={{ color: c.primary, fontSize: 13, fontWeight: '700' }}>{t('auth.resend')}</Text></Pressable>
+        <Pressable onPress={onResend} disabled={busy} accessibilityRole="button" accessibilityState={{ disabled: busy }}><Text style={{ color: c.primary, fontSize: 13, fontWeight: '700' }}>{t('auth.resend')}</Text></Pressable>
       )}
     </View>
   );
@@ -193,7 +222,7 @@ export default function SignInScreen() {
             <Text style={{ color: c.textSecondary, fontSize: 14 }}>{fmt('auth.otpSubtitle', { email: maskEmail(email.trim()) })}</Text>
             <OtpInput value={otp} onChange={setOtp} />
             <AuthButton label={t('auth.verify')} onPress={verifyOtp} busy={busy} disabled={otp.length < 6} />
-            {resendRow}
+            {resendRow(resendVerification)}
             {/* No skip: OTP verification is mandatory and enforced server-side (§2). */}
             <Pressable onPress={() => { clear(); setStep('credentials'); }} style={{ alignSelf: 'center' }} accessibilityRole="button">
               <Text style={{ color: c.textMuted, fontSize: 13 }}>{t('auth.back')}</Text>
@@ -235,7 +264,7 @@ export default function SignInScreen() {
             <AuthField label={t('auth.newPassword')} placeholder="••••••••" value={newPassword} onChangeText={setNewPassword} secureTextEntry autoComplete="new-password" />
             <PasswordStrength password={newPassword} />
             <AuthButton label={t('auth.reset')} onPress={doReset} busy={busy} disabled={otp.length < 6 || newPassword.length < 8} />
-            {resendRow}
+            {resendRow(resendPasswordReset)}
             <Pressable onPress={() => { clear(); setStep('credentials'); }} style={{ alignSelf: 'center' }} accessibilityRole="button"><Text style={{ color: c.textMuted, fontSize: 13 }}>{t('auth.back')}</Text></Pressable>
           </View>
         ) : null}

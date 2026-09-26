@@ -54,6 +54,8 @@ interface AuthState {
   refreshOnboarding: () => Promise<void>;
   retry: () => void;
   register: (email: string, password: string, displayName?: string) => Promise<void>;
+  /** Confirm the signed-in user's registration email and refresh local identity. */
+  verifyEmailOtp: (code: string) => Promise<void>;
   /** Sign in. Returns a 2FA challenge instead of throwing when the account has
    *  two-step verification enabled, so the UI can collect the TOTP/recovery code. */
   login: (email: string, password: string) => Promise<LoginOutcome>;
@@ -166,6 +168,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [accept],
   );
 
+  const verifyEmailOtp = useCallback(async (code: string) => {
+    const verified = await api<AuthUser>('/auth/verify-otp', {
+      method: 'POST',
+      body: { code },
+    });
+    // The registration response is intentionally cached before the OTP step.
+    // Replace it immediately once the server confirms verification so no later
+    // screen continues to render the stale `emailVerified: false` identity.
+    setUser(verified);
+    await saveCachedAuthUser(verified);
+  }, []);
+
   const login = useCallback(
     async (email: string, password: string): Promise<LoginOutcome> => {
       const res = await api<LoginResponse>('/auth/login', {
@@ -221,11 +235,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshOnboarding,
       retry,
       register,
+      verifyEmailOtp,
       login,
       verifyTwoFactor,
       logout,
     }),
-    [user, loading, offline, onboarded, refreshOnboarding, retry, register, login, verifyTwoFactor, logout],
+    [user, loading, offline, onboarded, refreshOnboarding, retry, register, verifyEmailOtp, login, verifyTwoFactor, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
