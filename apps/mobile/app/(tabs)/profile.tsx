@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Platform, ScrollView, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import type {
   KycTeacher,
@@ -208,13 +208,22 @@ export default function ProfileScreen() {
               </Section>
 
               <Section title={t('profile.section.privacy')} description={t('profile.section.privacyDetail')}>
-                <DataPrivacyCard
-                  scheme={scheme}
-                  onScheme={setScheme}
-                  onPrivacy={() => router.push('/privacy')}
-                  onMemory={() => router.push('/memory')}
-                  onDocuments={() => router.push('/library')}
-                />
+                <View style={{ gap: 12 }}>
+                  {Platform.OS === 'web' ? (
+                    <Card style={{ gap: 10 }} testID="profile-mfa-card">
+                      <Text style={{ color: c.textPrimary, fontSize: 16, fontWeight: '800' }}>{t('mfa.profileTitle')}</Text>
+                      <Text style={{ color: c.textSecondary, fontSize: 13, lineHeight: 19 }}>{t('mfa.profileDetail')}</Text>
+                      <Button label={t('mfa.open')} variant="secondary" onPress={() => router.push('/two-factor')} />
+                    </Card>
+                  ) : null}
+                  <DataPrivacyCard
+                    scheme={scheme}
+                    onScheme={setScheme}
+                    onPrivacy={() => router.push('/privacy')}
+                    onMemory={() => router.push('/memory')}
+                    onDocuments={() => router.push('/library')}
+                  />
+                </View>
               </Section>
 
               <Section title={t('report.profileTitle')} description={t('report.profileDetail')}>

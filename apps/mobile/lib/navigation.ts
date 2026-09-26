@@ -79,6 +79,7 @@ const TITLE_KEYS: Readonly<Partial<Record<string, TranslationKey>>> = {
   '/progress': 'header.progress',
   '/privacy': 'priv.title',
   '/report-problem': 'report.title',
+  '/two-factor': 'mfa.title',
   '/subscription': 'sub.title',
   '/usage': 'usage.title',
   '/language-manager': 'lm.title',

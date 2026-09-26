@@ -127,6 +127,7 @@ function Navigator() {
           <Stack.Screen name="progress" options={{ title: t('header.progress') }} />
           <Stack.Screen name="health" options={{ title: t('header.health') }} />
           <Stack.Screen name="report-problem" options={{ title: t('report.title') }} />
+          <Stack.Screen name="two-factor" options={{ title: t('mfa.title') }} />
         </Stack>
       </RouteShellBoundary>
 

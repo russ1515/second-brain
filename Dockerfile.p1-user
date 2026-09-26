@@ -1,12 +1,18 @@
 FROM node:22-alpine AS build
 
+ARG EXPO_PUBLIC_FEATURE_NEW_APP_SHELL=false
+ARG EXPO_PUBLIC_FEATURE_NEW_LANDING=false
+
 RUN corepack enable && corepack prepare pnpm@11.13.1 --activate
 WORKDIR /workspace
 
 # Expo/Metro needs the same reproducible hoisted topology for both the frozen
 # filtered install and the later export. Do not relax the lockfile check.
 ENV CI=true \
+    EXPO_NO_DOTENV=1 \
     EXPO_NO_TELEMETRY=1 \
+    EXPO_PUBLIC_FEATURE_NEW_APP_SHELL=${EXPO_PUBLIC_FEATURE_NEW_APP_SHELL} \
+    EXPO_PUBLIC_FEATURE_NEW_LANDING=${EXPO_PUBLIC_FEATURE_NEW_LANDING} \
     PNPM_CONFIG_NODE_LINKER=hoisted \
     PNPM_CONFIG_TRUST_LOCKFILE=true
 

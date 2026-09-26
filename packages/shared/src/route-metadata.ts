@@ -136,6 +136,7 @@ export const ROUTE_METADATA: readonly RouteMetadata[] = [
 
   route('/privacy', 'profile', 'profile', { allowedContexts: ['user-profile'] }),
   route('/report-problem', 'profile', 'profile', { allowedContexts: ['user-profile'] }),
+  route('/two-factor', 'profile', 'profile', { allowedContexts: ['user-profile'] }),
   route('/subscription', 'profile', 'profile', { allowedContexts: ['user-profile'] }),
   route('/usage', 'profile', 'profile', { allowedContexts: ['user-profile'] }),
   route('/language-manager', 'profile', 'profile', { allowedContexts: ['user-profile', 'language'] }),
