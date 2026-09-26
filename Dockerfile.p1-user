@@ -1,0 +1,35 @@
+FROM node:22-alpine AS build
+
+RUN corepack enable && corepack prepare pnpm@11.13.1 --activate
+WORKDIR /workspace
+
+# Expo/Metro needs the same reproducible hoisted topology for both the frozen
+# filtered install and the later export. Do not relax the lockfile check.
+ENV CI=true \
+    EXPO_NO_TELEMETRY=1 \
+    PNPM_CONFIG_NODE_LINKER=hoisted \
+    PNPM_CONFIG_TRUST_LOCKFILE=true
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages/shared/package.json packages/shared/package.json
+COPY apps/mobile/package.json apps/mobile/package.json
+
+RUN pnpm --config.node-linker=hoisted --config.trust-lockfile=true \
+    --filter @second-brain/mobile... install --frozen-lockfile
+
+COPY packages/shared packages/shared
+COPY apps/mobile apps/mobile
+
+RUN pnpm --filter @second-brain/shared build \
+ && pnpm --filter @second-brain/mobile typecheck \
+ && pnpm --filter @second-brain/mobile run export:web
+
+FROM nginx:1.27-alpine
+
+COPY deploy/nginx/p1-user.conf /etc/nginx/nginx.conf
+COPY --from=build /workspace/apps/mobile/dist /usr/share/nginx/html
+
+RUN nginx -t
+
+EXPOSE 8082
+CMD ["nginx", "-g", "daemon off;"]
