@@ -44,6 +44,7 @@ const evidenceDir = process.env.STAGING_QUOTA_CAP_HTTP_TEST_EVIDENCE_DIR ?? '';
 const cipherMaterial = process.env.TWO_FACTOR_ENC_KEY ?? '';
 const runId = `staging-quota-cap-${Date.now()}-${randomBytes(4).toString('hex')}`;
 const prisma = new PrismaClient();
+let phase = 'configuration';
 
 const fixture = {
   admin: null,
@@ -490,32 +491,40 @@ async function verifyLearnerAdminDenied() {
 
 async function revokeAndVerifyEvidence(totpSecret) {
   // Keep cleanup independent of a deliberately short staging step-up TTL.
+  phase = 'cap-step-up';
   await stepUp(fixture.adminToken, totpSecret);
+  phase = 'cap-revoke';
   const capRevoked = await apiRequest(`/admin/users/${fixture.learner.id}/staging-quota-cap/${fixture.capId}/revoke`, {
     method: 'POST', token: fixture.adminToken,
     body: { reason: 'Technical staging quota-cap validation cleanup' },
   });
   assert.equal(capRevoked.status, 200, 'technical cap revocation must succeed');
   assert.equal(capRevoked.body?.revoked, true);
+  phase = 'cap-revocation-persistence';
   const cap = await prisma.entitlementOverride.findUnique({ where: { id: fixture.capId }, select: { revokedAt: true } });
   assert.ok(cap?.revokedAt, 'cap must be durably revoked before fixture cleanup');
   evidence.checks.capRevoked = 'PASS';
 
   // Refresh the proof again so the beta-revocation cleanup is independent of a
   // deliberately short staging step-up TTL.
+  phase = 'beta-step-up';
   await stepUp(fixture.adminToken, totpSecret);
+  phase = 'beta-revoke';
   const betaRevoked = await apiRequest(`/admin/users/${fixture.learner.id}/private-beta-access/${fixture.betaGrantId}/revoke`, {
     method: 'POST', token: fixture.adminToken,
     body: { reason: 'Technical staging quota-cap validation cleanup' },
   });
   assert.equal(betaRevoked.status, 200, 'technical beta grant revocation must succeed');
   assert.equal(betaRevoked.body?.revoked, true);
+  phase = 'beta-revocation-persistence';
   const grant = await prisma.entitlementOverride.findUnique({ where: { id: fixture.betaGrantId }, select: { revokedAt: true } });
   assert.ok(grant?.revokedAt, 'beta grant must be durably revoked before fixture cleanup');
+  phase = 'revoked-learner-jwt';
   const learnerSession = await apiRequest('/auth/me', { token: fixture.learnerToken });
   assert.equal(learnerSession.status, 401, 'beta revocation must invalidate the technical learner session');
   evidence.checks.betaGrantRevoked = 'PASS';
 
+  phase = 'audit-security-evidence';
   const [audits, securityEvents] = await Promise.all([
     prisma.auditLog.findMany({
       where: {
@@ -588,31 +597,45 @@ async function writeEvidence() {
 async function main() {
   let failure;
   try {
+    phase = 'execution-guards';
     ensureExecutionGuards();
+    phase = 'postgres-connect';
     await prisma.$connect();
+    phase = 'postgres-version';
     await verifyPostgres();
 
     const password = testPassword();
     const totpSecret = authenticator.generateSecret();
+    phase = 'technical-fixtures';
     await createFixtures(password, totpSecret);
+    phase = 'baseline-allowance';
     const baselineAllowance = await verifyBaselineAllowance();
     evidence.counts.baselineAiTextAllowance = baselineAllowance.kind;
 
+    phase = 'admin-mfa-login';
     fixture.adminToken = await loginAdmin(fixture.admin.email, password, totpSecret);
+    phase = 'private-beta-grant';
     await createBetaGrantWithStepUp(totpSecret);
+    phase = 'learner-login';
     fixture.learnerToken = await loginLearner(fixture.learner.email, password);
+    phase = 'quota-cap-create';
     await createCapWithStepUp(totpSecret, baselineAllowance);
+    phase = 'learner-admin-denial';
     await verifyLearnerAdminDenied();
 
+    phase = 'tutor-session-create';
     const sessionIds = await createTutorSessions();
+    phase = 'concurrent-tutor-requests';
     const requestIds = await runConcurrentTutorRequests(sessionIds);
+    phase = 'quota-provider-evidence';
     await verifyQuotaAndProviderEvidence(requestIds);
     await revokeAndVerifyEvidence(totpSecret);
+    phase = 'complete';
     evidence.status = 'PASS';
   } catch (error) {
     failure = error;
     evidence.status = 'FAIL';
-    evidence.failure = { code: safeFailureCode(error) };
+    evidence.failure = { code: safeFailureCode(error), phase };
   } finally {
     try {
       await deleteTechnicalFixtureData();
@@ -622,7 +645,7 @@ async function main() {
       if (!failure) {
         failure = cleanupError;
         evidence.status = 'FAIL';
-        evidence.failure = { code: safeFailureCode(cleanupError) };
+        evidence.failure = { code: safeFailureCode(cleanupError), phase: 'cleanup' };
       }
     }
     try {
@@ -631,7 +654,7 @@ async function main() {
       if (!failure) {
         failure = evidenceError;
         evidence.status = 'FAIL';
-        evidence.failure = { code: safeFailureCode(evidenceError) };
+        evidence.failure = { code: safeFailureCode(evidenceError), phase: 'evidence-write' };
       }
     }
     await prisma.$disconnect().catch(() => undefined);
