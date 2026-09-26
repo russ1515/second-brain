@@ -321,3 +321,19 @@ activation and restart verification.
 
 The remaining real-provider/instrumentation gate is intentionally still open.
 No Sprint 6 work has started.
+
+## PRIVATE STAGING ACCESS ADDENDUM — 26 September 2026
+
+The Gate 5.5 report now records bounded private-staging evidence for the User
+Web origin path, Admin gateway isolation, private-beta lifecycle/revocation,
+and an audited restrictive individual AI_TEXT quota cap under concurrent Echo
+requests. The isolated technical gates used fresh PostgreSQL databases with
+the 59 migrations and did not use human identities, real SMTP, public HTTPS,
+or a billable provider.
+
+Real SMTP/OTP delivery, personal Admin MFA/onboarding, human learner cap
+activation, public User HTTPS, and real OpenAI/provider pricing and
+instrumentation remain **NOT_VERIFIED**. See the Gate 5.5 addendum for exact
+boundaries and retained evidence.
+
+# SPRINT 6 NOT READY

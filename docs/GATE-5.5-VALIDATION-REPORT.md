@@ -305,3 +305,60 @@ state. Echo remains the explicit rollback throughout.
 Preparation and deterministic instrumentation evidence do not replace a real
 provider call with provider-returned usage and an immutable, source-backed
 price snapshot. No Sprint 6 work has started.
+
+## PRIVATE STAGING ACCESS ADDENDUM — 26 September 2026
+
+**Scope.** This addendum records bounded, non-production private-staging
+access hardening and fresh evidence. It preserves all earlier reports and
+upgrades only the checks explicitly named below. No production service,
+public Admin endpoint, real SMTP delivery, external provider request, or
+Sprint 6 work was started.
+
+**Source and deployment provenance.** The official staging source includes
+`89552b4`, `633d0d7`, `ac8e5d0`, `c4d665f`, `fb3465c`, and `f754c0e`.
+The P1 API was rebuilt from that source, is healthy, and retains a prior
+image and an owner-only configuration backup for rollback. The User Web image
+is healthy. Staging remains configured for non-billable Echo LLM and fake
+embeddings.
+
+**Human-account audit.** The intended personal Administrator identity is not
+present. The designated learner identity exists as an active, unverified,
+non-MFA account with no Admin role, private-beta grant, or temporary quota
+cap. No fixture was converted and no duplicate human account was created.
+
+### Verified bounded evidence
+
+| Validation | Status | Exact boundary |
+| --- | --- | --- |
+| User Web to API origin | **PASS** | The deployed User gateway reached the current staging API through the private SSH tunnel. A browser probe using a non-existent technical identity received the expected `401`, proving a real API request rather than a landing-page-only check. The Web export completed with 949 modules and 17 assets. |
+| User gateway Admin isolation | **PASS** | The User gateway returned `404` for Admin API paths. User, API, and Admin listeners remain loopback-only; no listener on public port `80` or `443` was found. |
+| Private-beta HTTP lifecycle | **PASS — isolated technical scope** | A fresh internal PostgreSQL database received the 59 migrations. The retained run `private-beta-http-20260926104304-38af84f2` verified default-deny unlisted registration without side effects, verified-but-ungranted access denial, technical Admin MFA/step-up, audited grant, learner login/refresh, and revocation blocking an already-issued JWT, refresh, and subsequent login. |
+| Individual staging quota cap | **PASS — isolated Echo-only scope** | A fresh internal PostgreSQL database in `staging-quota-cap-20260926110314-25b29fb7` verified the audited, expiring, AI_TEXT-only restrictive cap. Ten concurrent Tutor requests produced exactly 3 allowed and 7 blocked. No fallback, duplicate reservation/ledger, or provider attempt after blocking was observed. |
+| Learner Admin denial | **PASS — isolated technical scope** | The technical learner received `403` from the Admin backend. |
+| Cap-revocation HTTP contract | **PASS** | An initial isolated run found that a successful revoke returned `201`. The endpoint now explicitly returns `200`; the focused regression and fresh isolated gate passed. |
+| Regression baseline | **PASS — scoped source regression** | Frozen pnpm `11.13.1` install passed. API unit tests passed 121/121, Shared tests passed 58/58, Mobile typecheck completed without an error, and the full Mobile Web export completed. |
+
+The isolated gates used fresh internal-only Compose projects, fresh owner-only
+ephemeral credentials, technical fixture identities only, and Echo/Fake
+providers. Existing P1, Linux/PostgreSQL, Qdrant, and browser evidence was
+retained and was not cleaned.
+
+### Conditions explicitly still open
+
+| Condition | Status | Reason |
+| --- | --- | --- |
+| Real SMTP delivery and human OTP completion | **NOT_VERIFIED** | Mail remains non-delivering pending private VPS SMTP configuration and a user-confirmed received message. |
+| Personal Administrator registration, personal MFA, and audited SUPER_ADMIN assignment | **NOT_VERIFIED** | No human password, OTP, or TOTP material was used by automation. |
+| Human learner verification and individual cap activation | **NOT_VERIFIED** | The technical cap proof does not select a human quota amount or expiry. |
+| Public HTTPS User entry point | **NOT_VERIFIED** | ngrok is installed but no configuration or tunnel exists. Admin remains private. |
+| Real OpenAI response, provider-returned usage, pricing, ledger, Cost Center, and real embedding to Qdrant retrieval | **NOT_VERIFIED** | No credential, price activation, or billable provider request was authorized. |
+| Human assistive-technology review | **NOT_VERIFIED** | Existing automated browser-quality evidence remains bounded to its recorded scope. |
+| Delete/re-register same-address policy | **BUSINESS_DECISION_REQUIRED** | No personal or fixture account was deleted. |
+
+## SPRINT 6 READINESS — private staging access update
+
+# SPRINT 6 NOT READY
+
+The private technical access controls are validated within their stated
+isolated boundaries. Human email/MFA onboarding, public User HTTPS, and the
+real-provider attribution/pricing gate remain open. No Sprint 6 work started.
