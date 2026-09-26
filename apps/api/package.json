@@ -21,6 +21,8 @@
     "test:sprint5:postgres": "pnpm run build && node --test test/sprint5-postgres.integration.test.cjs",
     "test:sprint5:http": "node --test test/sprint5-http.test.cjs",
     "test:sprint5": "pnpm run test:sprint5:postgres && pnpm run test:sprint5:http",
+    "test:private-beta:http": "node --test test/private-beta-http.integration.test.cjs",
+    "test:staging-quota-cap:http": "node test/staging-quota-cap-http.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prisma:generate": "prisma generate",
     "prisma:deploy": "prisma migrate deploy",
