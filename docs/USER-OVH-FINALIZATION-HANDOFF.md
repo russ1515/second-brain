@@ -13,8 +13,8 @@ Ce document clôt uniquement la consolidation User demandée. Il ne démarre pas
 | Image User | `second-brain-user-web:ead28ac-user-final` |
 | ID de l'image | `sha256:332491924f2f8a722f01e8571201d58f5c15c814041bf97c388ea76d7347eb8b` |
 | Conteneur User | `sb-user-web-8082` — healthy, réseau hôte, restart `unless-stopped` |
-| API P1 | `sb-ovh-p1-http-20260923163756-0a803ec4-api-1`, image `second-brain-p1-api:f754c0e-quota200`, ID inspecté préfixé `sha256:1a101fad6259…`, healthy |
-| Admin P1 | `sb-ovh-p1-http-20260923163756-0a803ec4-admin-1`, image `second-brain-p1-admin:20260923163756-0a803ec4`, ID inspecté préfixé `sha256:19a053872b86…`, healthy |
+| API P1 | `sb-ovh-p1-http-20260923163756-0a803ec4-api-1`, image `second-brain-p1-api:f754c0e-quota200`, ID `sha256:1a101fad6259f515fe2ad2dd2bc1f1b226783c75b52e1bbc2ddd2927379837ae`, healthy |
+| Admin P1 | `sb-ovh-p1-http-20260923163756-0a803ec4-admin-1`, image `second-brain-p1-admin:20260923163756-0a803ec4`, ID `sha256:19a053872b86c133bfdb121f8b21959c71581bf709ccff335f00fe438daa31ce`, healthy |
 | Mode API staging | `NODE_ENV=test` |
 | Répertoire VPS | `/home/ubuntu/second-brain-staging` |
 | Preuves privées | `/home/ubuntu/.config/second-brain/sb-ovh-p1-http-20260923163756-0a803ec4/evidence/user-deploy-20260926T145744Z` |
