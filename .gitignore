@@ -23,6 +23,7 @@ apps/api/prisma/migrations/dev.db*
 .env.*
 !.env.example
 !.env.linux-validation.example
+apps/mobile/lib/locales/.translation-progress/
 /.claude/settings.local.json
 
 # Logs

@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@google/genai':
+        specifier: ^2.18.0
+        version: 2.18.0
       typescript:
         specifier: ^5.7.2
         version: 5.7.2

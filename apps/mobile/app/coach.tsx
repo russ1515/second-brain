@@ -132,7 +132,7 @@ export default function CoachScreen() {
         title={t('coachp.session')}
         setting={plan.sessionMinutes}
         options={MINUTES}
-        labelFor={(v) => `${v} min`}
+        labelFor={(v) => `${v} ${t('h.hero.min')}`}
         onPick={(v) => void override({ sessionMinutes: v })}
         disabled={busy}
         t={t}

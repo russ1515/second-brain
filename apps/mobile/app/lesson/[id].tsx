@@ -36,7 +36,7 @@ export default function LessonScreen() {
   const styles = useMemo(() => makeStyles(c), [c]);
   const { id, session } = useLocalSearchParams<{ id: string; session?: string }>();
   const router = useRouter();
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const [lesson, setLesson] = useState<LessonView | null>(null);
   const [cards, setCards] = useState<CardView[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -224,7 +224,7 @@ export default function LessonScreen() {
             variant="ghost"
             label={t('lesson.savePdf')}
             onPress={() => {
-              saveLessonAsPdf(lesson, locale).catch((e) => setError((e as Error).message));
+              saveLessonAsPdf(lesson, formatLocale).catch((e) => setError((e as Error).message));
             }}
           />
         </>

@@ -3,6 +3,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
 import { PLAYBACK_SUPPORTED, speak, stopSpeaking } from '../lib/speak';
 import { useTokens } from '../lib/design/theme';
 import type { ColorScale } from '../lib/design/tokens';
+import { useI18n } from '../lib/i18n';
 
 /**
  * "Read this aloud."
@@ -14,14 +15,16 @@ import type { ColorScale } from '../lib/design/tokens';
 export function SpeakButton({
   text,
   language,
-  label = 'Listen',
+  label,
 }: {
   text: string;
   language?: string;
   label?: string;
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const styles = useMemo(() => makeStyles(c), [c]);
+  const idleLabel = label ?? t('lesson.readAloud');
   const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle');
   const [error, setError] = useState<string | null>(null);
 
@@ -55,7 +58,7 @@ export function SpeakButton({
           <ActivityIndicator size="small" color={c.warning} />
         ) : (
           <Text style={styles.label}>
-            {state === 'playing' ? '⏹ Stop' : `🔊 ${label}`}
+            {state === 'playing' ? `⏹ ${t('learn.oral.stop')}` : `🔊 ${idleLabel}`}
           </Text>
         )}
       </Pressable>

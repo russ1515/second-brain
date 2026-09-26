@@ -15,6 +15,7 @@
     "clean": "pnpm -r --if-present run clean"
   },
   "devDependencies": {
+    "@google/genai": "^2.18.0",
     "typescript": "^5.7.2"
   }
 }

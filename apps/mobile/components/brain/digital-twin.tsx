@@ -241,7 +241,7 @@ export function LearningProfilePanel({ declared, observed, dna }: { declared: Br
 }
 
 export function HistoryTimeline({ entries, compact = false }: { entries: MemoryEntry[]; compact?: boolean }) {
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   if (entries.length === 0) return <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('brain8.history.empty')}</Text>;
   return (
@@ -251,7 +251,7 @@ export function HistoryTimeline({ entries, compact = false }: { entries: MemoryE
           <View accessible={false} style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: c.primary, marginTop: 5 }} />
           <View style={{ flex: 1, minWidth: 0, paddingBottom: compact ? 2 : spacing.sm, borderBottomWidth: compact ? 0 : 1, borderBottomColor: c.borderSubtle }}>
             <Text numberOfLines={compact ? 1 : 2} style={[typography.bodySmall, { color: c.textPrimary, fontWeight: '700' }]}>{entry.title}</Text>
-            <Text style={[typography.caption, { color: c.textMuted }]}>{t(`brain8.history.kind.${entry.kind}` as TranslationKey)} · {new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(new Date(entry.at))}</Text>
+            <Text style={[typography.caption, { color: c.textMuted }]}>{t(`brain8.history.kind.${entry.kind}` as TranslationKey)} · {new Intl.DateTimeFormat(formatLocale, { dateStyle: 'medium' }).format(new Date(entry.at))}</Text>
           </View>
         </View>
       ))}
@@ -314,7 +314,7 @@ export function AskBrainPanel({ question, onChange, onAsk, answer, busy, onSelec
 }
 
 export function BrainConceptPanel({ concept, onTutor, onPractice, onReview, onOpenSource, onSelectRelation }: { concept: BrainConceptView; onTutor: () => void; onPractice: () => void; onReview: () => void; onOpenSource: (id: string) => void; onSelectRelation: (id: string) => void }) {
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   const [previewSourceId, setPreviewSourceId] = useState<string | null>(null);
   const previewSource = concept.sources.find((source) => source.id === previewSourceId) ?? null;
@@ -325,12 +325,12 @@ export function BrainConceptPanel({ concept, onTutor, onPractice, onReview, onOp
       {concept.description ? <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{concept.description}</Text> : null}
       {concept.node.mastery !== null ? <View style={{ gap: 4 }}><Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('brain8.mastery.value').replace('{value}', String(Math.round(concept.node.mastery * 100)))}</Text><Progress value={concept.node.mastery} tone={concept.node.status === 'mastered' ? 'success' : 'primary'} /></View> : <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('brain8.mastery.unknown.detail')}</Text>}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}><Badge tone="neutral" label={t('brain8.concept.cards').replace('{count}', String(concept.cardCount))} /><Badge tone={concept.dueCount > 0 ? 'warning' : 'neutral'} label={t('brain8.concept.due').replace('{count}', String(concept.dueCount))} />{concept.memoryStabilityDays !== null ? <Badge tone="info" label={t('brain8.concept.stability').replace('{days}', concept.memoryStabilityDays.toFixed(1))} /> : null}</View>
-      {concept.nextReviewAt ? <Text style={[typography.caption, { color: c.textMuted }]}>{t('brain8.concept.nextReview').replace('{date}', new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(new Date(concept.nextReviewAt)))}</Text> : null}
+      {concept.nextReviewAt ? <Text style={[typography.caption, { color: c.textMuted }]}>{t('brain8.concept.nextReview').replace('{date}', new Intl.DateTimeFormat(formatLocale, { dateStyle: 'medium' }).format(new Date(concept.nextReviewAt)))}</Text> : null}
       <Button label={t('brain8.concept.tutor')} variant="ai" onPress={onTutor} />
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}><Button label={t('brain8.concept.practice')} variant="secondary" size="sm" onPress={onPractice} /><Button label={t('brain8.concept.review')} variant="secondary" size="sm" onPress={onReview} /></View>
       {concept.sources.length > 0 ? <View style={{ gap: spacing.xs }}><Text style={[typography.label, { color: c.textMuted }]}>{t('brain8.concept.sources')}</Text>{concept.sources.map((source) => <SourceCitation key={source.id} title={source.title} kind="document" compact={false} onPress={() => setPreviewSourceId(source.id)} />)}{previewSource ? <SourcePreview title={previewSource.title} location={previewSource.subject} kind="document" onOpen={() => onOpenSource(previewSource.id)} onClose={() => setPreviewSourceId(null)} /> : null}{concept.sourcesTruncated ? <Text style={[typography.caption, { color: c.textMuted }]}>{t('brain8.concept.truncated')}</Text> : null}</View> : null}
       {concept.relations.length > 0 ? <View style={{ gap: spacing.xs }}><Text style={[typography.label, { color: c.textMuted }]}>{t('brain8.concept.relations')}</Text>{concept.relations.map((relation) => <Pressable key={relation.id} onPress={() => onSelectRelation(relation.conceptId)} style={{ minHeight: 40, justifyContent: 'center' }}><Text style={[typography.bodySmall, { color: c.primary }]}>→ {relation.name} · {t(`brain8.relation.${relation.relation}` as TranslationKey)}</Text></Pressable>)}</View> : null}
-      {concept.recentInteractions.length > 0 ? <View style={{ gap: spacing.xs }}><Text style={[typography.label, { color: c.textMuted }]}>{t('brain8.concept.activity')}</Text>{concept.recentInteractions.map((item) => <Text key={item.id} style={[typography.caption, { color: c.textSecondary }]}>{item.title} · {new Intl.DateTimeFormat(locale, { dateStyle: 'short' }).format(new Date(item.at))}</Text>)}</View> : null}
+      {concept.recentInteractions.length > 0 ? <View style={{ gap: spacing.xs }}><Text style={[typography.label, { color: c.textMuted }]}>{t('brain8.concept.activity')}</Text>{concept.recentInteractions.map((item) => <Text key={item.id} style={[typography.caption, { color: c.textSecondary }]}>{item.title} · {new Intl.DateTimeFormat(formatLocale, { dateStyle: 'short' }).format(new Date(item.at))}</Text>)}</View> : null}
     </View>
   );
 }

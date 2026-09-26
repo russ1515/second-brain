@@ -193,7 +193,7 @@ export default function ResearchScreen() {
           progress: { completed: nextResult.stages.length, total: nextResult.stages.length, ...(nextResult.stages.length ? { percent: 100 } : {}) },
           sourceReferences,
           productions: [production],
-          nextBestAction: researchNextBestAction(cleanQuestion),
+          nextBestAction: researchNextBestAction(cleanQuestion, t),
         },
       });
     } catch (caught) {
@@ -405,13 +405,13 @@ function CollectionSelector({ collections, selected, onSelect }: { collections: 
   return <View style={{ gap: spacing.xs }}><Text style={[typography.label, { color: c.textSecondary }]}>{t('research10.collections')}</Text>{collections.length ? collections.map((collection) => <Pressable key={collection.id} accessibilityRole="radio" accessibilityState={{ selected: selected === collection.id }} onPress={() => onSelect(collection.id)} style={{ minHeight: 44, flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}><Text style={{ color: c.primary }}>{selected === collection.id ? '●' : '○'}</Text><Text style={[typography.bodySmall, { color: c.textPrimary }]}>{collection.name}</Text></Pressable>) : <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('research10.collections.empty')}</Text>}</View>;
 }
 
-function researchNextBestAction(question: string) {
+function researchNextBestAction(question: string, t: (key: TranslationKey) => string) {
   return {
-    title: 'Learn this researched topic',
-    primaryAction: { label: 'Learn', destination: { kind: 'route' as const, path: '/tutor', params: { mode: 'explain', q: question } } },
-    reason: 'A sourced synthesis is ready to turn into active learning.',
+    title: t('research10.next'),
+    primaryAction: { label: t('research10.action.learn'), destination: { kind: 'route' as const, path: '/tutor', params: { mode: 'explain', q: question } } },
+    reason: t('research10.next.reason'),
     estimatedDuration: null,
-    expectedImpact: { kind: 'knowledge' as const, label: 'Connect the researched topic to learning' },
+    expectedImpact: { kind: 'knowledge' as const, label: 'research-to-learning' },
     signalsUsed: [],
     alternatives: [],
     destination: { kind: 'route' as const, path: '/tutor', params: { mode: 'explain', q: question } },

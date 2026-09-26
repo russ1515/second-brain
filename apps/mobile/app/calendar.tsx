@@ -56,7 +56,7 @@ const DAY_OFFSETS: { key: TranslationKey; days: number }[] = [
 export default function CalendarScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const [view, setView] = useState<CalendarView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
@@ -149,7 +149,7 @@ export default function CalendarScreen() {
       {days.map((day) => (
         <View key={day.date} style={styles.day}>
           <Text style={[styles.dayLabel, day.today && styles.dayToday]}>
-            {formatDay(day.date, locale)}{day.today ? ` · ${t('cal.todayTag')}` : ''}
+            {formatDay(day.date, formatLocale)}{day.today ? ` · ${t('cal.todayTag')}` : ''}
           </Text>
           {day.entries.length === 0 ? (
             <Text style={styles.empty}>{t('cal.nothing')}</Text>
@@ -187,8 +187,8 @@ function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () 
   );
 }
 
-function formatDay(date: string, locale: string): string {
-  return new Date(`${date}T12:00:00`).toLocaleDateString(locale, {
+function formatDay(date: string, formatLocale: string): string {
+  return new Date(`${date}T12:00:00`).toLocaleDateString(formatLocale, {
     weekday: 'short',
     day: 'numeric',
     month: 'short',

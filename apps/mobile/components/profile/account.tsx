@@ -17,7 +17,7 @@ export function AccountUsageCard({
   onSubscription: () => void;
   onUsage: () => void;
 }) {
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   const items = usage ? prioritizedUsage(usage.items).slice(0, 3) : [];
 
@@ -46,8 +46,8 @@ export function AccountUsageCard({
           used={item.used}
           limit={item.limit}
           unit={item.unit}
-          resetAt={formatResetAt(item.resetAt, locale)}
-          formatValue={(value, unit) => formatUsageValue(value, unit, locale, t)}
+          resetAt={formatResetAt(item.resetAt, formatLocale)}
+          formatValue={(value, unit) => formatUsageValue(value, unit, formatLocale, t)}
           unlimitedLabel={t('usage.unlimited')}
           remainingLabel={t('usage.remaining')}
           resetLabel={t('usage.reset')}

@@ -16,7 +16,7 @@ import { Button, Card } from '../components/ui';
 export default function SyncScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const online = useOnline();
   const [pending, setPending] = useState(0);
   const [last, setLast] = useState<number | null>(null);
@@ -72,7 +72,7 @@ export default function SyncScreen() {
       <Card style={styles.rowCard}>
         <Text style={styles.rowLabel}>{t('sync.last')}</Text>
         <Text style={styles.rowValue}>
-          {last ? new Date(last).toLocaleString(locale === 'fr' ? 'fr-FR' : 'en-US') : t('sync.never')}
+          {last ? new Date(last).toLocaleString(formatLocale) : t('sync.never')}
         </Text>
       </Card>
 

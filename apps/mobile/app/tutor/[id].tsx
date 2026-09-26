@@ -84,7 +84,7 @@ export default function TutorSessionScreen() {
   const voiceFocused = voiceParam === '1';
   const { user, offline } = useAuth();
   const router = useRouter();
-  const { t, locale } = useI18n();
+  const { t, locale, formatLocale } = useI18n();
   const { colors: c, radius, spacing, typography, elevation } = useTokens();
   const { mode } = useResponsive();
   const compact = mode === 'compact';
@@ -441,7 +441,7 @@ export default function TutorSessionScreen() {
               <SmartState
                 state="quota-limited"
                 title={t('tutor6.quota.title')}
-                detail={quotaDetail(failure.quota, locale, t)}
+                detail={quotaDetail(failure.quota, formatLocale, t)}
               >
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
                   <Button label={t('tutor6.quota.usage')} variant="secondary" onPress={() => router.push('/usage')} />
@@ -616,11 +616,11 @@ function transcriptFrom(error: unknown): string | null {
 
 function quotaDetail(
   quota: QuotaErrorContract,
-  locale: string,
+  formatLocale: string,
   t: (key: TranslationKey) => string,
 ): string {
   if (!quota.resetAt) return t('tutor6.quota.detail');
-  const reset = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(quota.resetAt));
+  const reset = new Intl.DateTimeFormat(formatLocale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(quota.resetAt));
   return t('tutor6.quota.reset').replace('{date}', reset);
 }
 

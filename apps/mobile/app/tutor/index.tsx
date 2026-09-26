@@ -102,7 +102,7 @@ function tutorContextsFromParams(params: Record<string, string | string[] | unde
  * history and the existing specialist modes as secondary doors. */
 function TeacherHome() {
   const { colors: c, spacing, typography, radius } = useTokens();
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const { user } = useAuth();
   const router = useRouter();
   const [sessions, setSessions] = useState<TutorSessionSummary[] | null>(null);
@@ -176,7 +176,7 @@ function TeacherHome() {
       <Card key={session.id}>
         <Text style={[typography.title, { color: c.textPrimary }]}>{session.title ?? t('aiteacher.untitled')}</Text>
         <Text style={[typography.bodySmall, { color: c.textSecondary }]}>
-          {new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(new Date(session.updatedAt))}
+          {new Intl.DateTimeFormat(formatLocale, { dateStyle: 'medium' }).format(new Date(session.updatedAt))}
           {' · '}{session.messageCount} {t('aiteacher.messages')}
           {session.subject ? ` · ${session.subject}` : ''}
           {context?.label ? ` · ${context.label}` : ''}

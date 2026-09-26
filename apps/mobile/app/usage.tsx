@@ -14,7 +14,7 @@ import { formatResetAt, formatUsageValue, usageMetricLabel } from '../lib/usage-
 /** Usage & Quotas (Sprint 8.3) — how much of each plan limit has been used. */
 export default function UsageScreen() {
   const { colors: c, typography } = useTokens();
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const router = useRouter();
   const [usage, setUsage] = useState<UsageView | null>(null);
   const [subscription, setSubscription] = useState<SubscriptionView | null>(null);
@@ -46,7 +46,7 @@ export default function UsageScreen() {
 
   const exhausted = usage?.items.filter((item) => item.limit !== null && item.used >= item.limit) ?? [];
   const firstExhausted = exhausted[0];
-  const formattedReset = firstExhausted ? formatResetAt(firstExhausted.resetAt, locale) : null;
+  const formattedReset = firstExhausted ? formatResetAt(firstExhausted.resetAt, formatLocale) : null;
   const limitDetail = firstExhausted
     ? `${usageMetricLabel(firstExhausted.key, t)}. ${formattedReset
       ? t('usage.limitResetKnown').replace('{date}', formattedReset)
@@ -89,8 +89,8 @@ export default function UsageScreen() {
             used={item.used}
             limit={item.limit}
             unit={item.unit}
-            resetAt={formatResetAt(item.resetAt, locale)}
-            formatValue={(value, unit) => formatUsageValue(value, unit, locale, t)}
+            resetAt={formatResetAt(item.resetAt, formatLocale)}
+            formatValue={(value, unit) => formatUsageValue(value, unit, formatLocale, t)}
             unlimitedLabel={t('usage.unlimited')}
             remainingLabel={t('usage.remaining')}
             resetLabel={t('usage.reset')}

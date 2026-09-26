@@ -33,7 +33,7 @@ import { loadRlleCourse, type RlleCourseLoad } from '../../lib/language-rll-clie
 
 export default function LanguagesScreen() {
   const { user, offline } = useAuth();
-  const { locale, setLocale, t } = useI18n();
+  const { locale, formatLocale, setLocale, t } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   const router = useRouter();
   const [profiles, setProfiles] = useState<LanguageProfileSummary[] | null>(null);
@@ -154,7 +154,7 @@ export default function LanguagesScreen() {
                     </View>
                     <Text style={[typography.caption, { color: c.textMuted }]}>
                       {active.lastActivityAt
-                        ? t('languages11.lastActivity').replace('{date}', new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(new Date(active.lastActivityAt)))
+                        ? t('languages11.lastActivity').replace('{date}', new Intl.DateTimeFormat(formatLocale, { dateStyle: 'medium' }).format(new Date(active.lastActivityAt)))
                         : t('languages11.lastActivity.none')}
                     </Text>
                   </Card>
@@ -170,7 +170,7 @@ export default function LanguagesScreen() {
                       <Badge label={t('languages11.nba.badge')} tone="ai" />
                       <Text style={[typography.h3, { color: c.textPrimary }]}>{t(recommendation.messageCode as TranslationKey).replace('{count}', String(recommendation.count ?? ''))}</Text>
                       <Text style={[typography.bodySmall, { color: c.textSecondary }]}>
-                        {t(recommendation.reasonCode as TranslationKey)}{recommendation.durationMinutes ? ` · ${recommendation.durationMinutes} min` : ''}
+                        {t(recommendation.reasonCode as TranslationKey)}{recommendation.durationMinutes ? ` · ${recommendation.durationMinutes} ${t('h.hero.min')}` : ''}
                       </Text>
                       <Button label={t('languages11.nba.start')} variant="ai" onPress={() => open(actionDestinationHref(recommendation.destination))} />
                     </Card>

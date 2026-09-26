@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
-import { useI18n } from '../../lib/i18n';
+import { localeDirection, useI18n } from '../../lib/i18n';
 import { LangPill } from '../auth/kit';
 import { CapabilityExperience, PersonalIntelligenceSection } from './feature-experience';
 import { LandingHero } from './hero-section';
@@ -39,8 +39,6 @@ import {
 
 export { BrainViz } from './brain-viz';
 
-const RTL_LOCALES = new Set(['ar', 'fa', 'he', 'ur']);
-
 /** Public route `/` for visitors who are not signed in. */
 export function LandingPage() {
   const { colors: c } = useTokens();
@@ -48,7 +46,10 @@ export function LandingPage() {
   const router = useRouter();
   const scrollRef = useRef<ScrollView>(null);
   const anchors = useRef<Partial<Record<LandingAnchor, number>>>({});
-  const rtl = RTL_LOCALES.has(locale);
+  // Direction comes from the same 27-language registry as the root provider.
+  // Keeping the Landing on that source of truth prevents its public shell from
+  // disagreeing with <html dir> when the active locale changes.
+  const rtl = localeDirection(locale) === 'rtl';
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;

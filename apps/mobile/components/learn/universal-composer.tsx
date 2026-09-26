@@ -55,7 +55,7 @@ export function UniversalComposer({
   onExecute: (decision: LearnReadyDecision, payload: LearnComposerPayload) => Promise<LearnComposerExecutionResult>;
   onNavigate: (destination: string) => void;
 }) {
-  const { t } = useI18n();
+  const { formatLocale, t } = useI18n();
   const { colors: c, radius, spacing, typography } = useTokens();
   const initialContextSignature = initialContexts.map((item) => `${item.kind}:${item.id}:${item.label ?? ''}`).join('|');
   const stableInitialContexts = useMemo(() => [...initialContexts], [initialContextSignature]);
@@ -336,7 +336,7 @@ export function UniversalComposer({
             ) : <Text style={{ fontSize: 22 }}>▤</Text>}
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={[typography.bodySmall, { color: c.textPrimary, fontWeight: '700' }]} numberOfLines={1}>{attachment.name}</Text>
-              <Text style={[typography.caption, { color: c.textMuted }]}>{formatSize(attachment.size)} · {t('learn5.attachment.ready')}</Text>
+              <Text style={[typography.caption, { color: c.textMuted }]}>{formatSize(attachment.size, formatLocale)} · {t('learn5.attachment.ready')}</Text>
             </View>
             <Button label={t('learn5.attachment.remove')} variant="ghost" size="sm" onPress={() => { setAttachment(null); setPendingConfirmation(null); }} />
           </View>
@@ -409,9 +409,12 @@ function toDraftAttachment(value: PickedLearnDocument): LearnDraftAttachment {
   return { uri: value.uri, name: value.name, mimeType: value.mimeType, size: value.size };
 }
 
-function formatSize(size: number | null): string {
+function formatSize(size: number | null, formatLocale: string): string {
   if (size === null) return '—';
-  if (size < 1_024) return `${size} B`;
-  if (size < 1_048_576) return `${Math.round(size / 1_024)} KB`;
-  return `${(size / 1_048_576).toFixed(1)} MB`;
+  const format = (value: number, maximumFractionDigits: number) => new Intl.NumberFormat(formatLocale, {
+    maximumFractionDigits,
+  }).format(value);
+  if (size < 1_024) return `${format(size, 0)} B`;
+  if (size < 1_048_576) return `${format(Math.round(size / 1_024), 0)} KB`;
+  return `${format(size / 1_048_576, 1)} MB`;
 }

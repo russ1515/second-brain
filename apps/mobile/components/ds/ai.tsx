@@ -31,10 +31,11 @@ export function usePostureStyle(posture: Posture) {
 /** Small posture pill — icon + label + colour (accessible without colour). */
 export function PostureBadge({ posture }: { posture: Posture }) {
   const { radius } = useTokens();
+  const { t } = useI18n();
   const p = usePostureStyle(posture);
   return (
     <View
-      accessibilityLabel={`Posture: ${p.label}`}
+      accessibilityLabel={`${t('profile.card.posture')}: ${p.label}`}
       style={{ flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: p.soft, borderRadius: radius.full, paddingHorizontal: 9, paddingVertical: 3 }}
     >
       <Text style={{ fontSize: 11 }}>{p.icon}</Text>

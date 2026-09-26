@@ -3,13 +3,18 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
   type ReactNode,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { SUPPORTED_LANGUAGES } from '@second-brain/shared';
-import { api } from './client';
+import {
+  SUPPORTED_LANGUAGES,
+  toSupportedLanguage,
+  type SupportedLanguageCode,
+} from '@second-brain/shared';
+import { resolveFormatLocale, resolveUiLocale } from './locale-resolution';
 
 /**
  * Interface language.
@@ -47,6 +52,21 @@ export function registerLocale(
   registry.set(code, { code, name, catalog });
 }
 
+/** Add reviewed translations without rewriting a generated catalog. This is
+ *  used for small, high-priority UI surfaces that must remain understandable
+ *  in every locale even while the broader machine-generated catalogs catch up. */
+export function extendLocale(
+  code: Locale,
+  catalog: Partial<Record<string, string>>,
+): void {
+  const current = registry.get(code);
+  if (!current) return;
+  registry.set(code, {
+    ...current,
+    catalog: { ...current.catalog, ...catalog },
+  });
+}
+
 /** All registered locale codes, English first. */
 export function supportedLocaleCodes(): Locale[] {
   return [...registry.keys()];
@@ -55,6 +75,51 @@ export function supportedLocaleCodes(): Locale[] {
 /** Display name for a locale code (falls back to the code). */
 export function localeName(code: Locale): string {
   return registry.get(code)?.name ?? code;
+}
+
+/** Normalize browser/device locale variants (for example `pt-BR`) to one of
+ *  the 27 registered base languages. Unknown values deliberately fall back to
+ *  English rather than leaking an unsupported locale through the UI. */
+export function normalizeLocale(value: string | null | undefined): SupportedLanguageCode {
+  return toSupportedLanguage(value) ?? 'en';
+}
+
+/** Text direction comes from the shared language registry, the single source
+ *  of truth used by both the API and clients. */
+export function localeDirection(code: Locale): 'ltr' | 'rtl' {
+  return SUPPORTED_LANGUAGES[normalizeLocale(code)]?.rtl ? 'rtl' : 'ltr';
+}
+
+function runtimeLocaleSignals(): Pick<
+  Parameters<typeof resolveUiLocale>[0],
+  'browserLocales' | 'deviceLocale'
+> {
+  const browserLocales = typeof navigator !== 'undefined'
+    ? [
+        ...(Array.isArray(navigator.languages) ? navigator.languages : []),
+        navigator.language,
+      ]
+    : [];
+
+  let deviceLocale: string | null = null;
+  try {
+    deviceLocale = Intl.DateTimeFormat().resolvedOptions().locale;
+  } catch {
+    // A small number of embedded runtimes do not expose Intl locale metadata.
+  }
+
+  return { browserLocales, deviceLocale };
+}
+
+function detectedDeviceLocale(savedLocale?: string | null): Locale {
+  return resolveUiLocale({ savedLocale, ...runtimeLocaleSignals() });
+}
+
+function detectedFormatLocale(locale: Locale): string {
+  return resolveFormatLocale({
+    uiLocale: normalizeLocale(locale),
+    ...runtimeLocaleSignals(),
+  });
 }
 
 // Kept for backward compatibility with existing imports.
@@ -69,6 +134,20 @@ export const LOCALE_NAMES: Record<string, string> = {
 };
 
 const STORAGE_KEY = 'sb.locale';
+
+/** AsyncStorage uses localStorage on Web. Reading that value synchronously for
+ * the first render lets the public Landing render directly in the user's
+ * chosen language instead of briefly painting the English catalog first. */
+function savedWebLocale(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(STORAGE_KEY);
+  } catch {
+    // Storage can be unavailable in hardened/private browser contexts. Locale
+    // detection must remain usable from browser preferences in that case.
+    return null;
+  }
+}
 
 /** English is the source of truth: every key lives here first. */
 const en = {
@@ -104,6 +183,13 @@ const en = {
   'state.stale': 'Showing previously loaded data',
   'state.offline': 'You are offline',
   'state.quota-limited': 'Usage limit reached',
+  'learning.notTracked': 'Not tracked',
+  'profile.kyc.goalsImpact': 'These goals guide Review, the AI Professor and your Digital Twin.',
+  'profile.kyc.languagesEmpty': 'None yet.',
+  'learn.component.dropTitle': 'Drop your document here',
+  'learn.component.dropDetail': 'PDF, photo, scan, book, notebook…',
+  'learn.component.documentQuestion': 'What is this document?',
+  'learn.component.yourTurn': 'Your turn.',
   'ai.professor': 'AI Professor',
   'ai.recommendation': 'AI recommendation',
   'ai.insight': 'AI insight',
@@ -2105,6 +2191,7 @@ const en = {
   'research10.stage.compared': 'Sources compared',
   'research10.stage.synthesized': 'Synthesis completed',
   'research10.next': 'Continue from this research',
+  'research10.next.reason': 'A sourced synthesis is ready to turn into active learning.',
   'research10.action.learn': 'Learn this topic',
   'research10.action.workspace': 'Add to Workspace',
   'research10.action.deepen': 'Deepen',
@@ -2435,6 +2522,7 @@ const en = {
   'languages11.review.return': 'Back to the language',
   'languages11.reading.history': 'Open Reading history',
   'languages11.writing.workspace': 'Open the full Writing workspace',
+  'languages11.writing.instruction': 'Write in {language}.',
   'languages11.offline.title': 'Voice and AI are unavailable offline',
   'languages11.offline.detail': 'Your local draft is preserved. Reconnect before transcribing or asking the Professor.',
   'rlle.ui.hub.learn': 'Learn {language}',
@@ -3964,6 +4052,13 @@ const fr: Record<TranslationKey, string> = {
   'state.stale': 'Affichage des dernières données chargées',
   'state.offline': 'Tu es hors ligne',
   'state.quota-limited': 'Limite d’utilisation atteinte',
+  'learning.notTracked': 'Non suivi',
+  'profile.kyc.goalsImpact': 'Ces objectifs guident Réviser, le Professeur IA et ton Jumeau numérique.',
+  'profile.kyc.languagesEmpty': 'Aucune pour l’instant.',
+  'learn.component.dropTitle': 'Dépose ton document ici',
+  'learn.component.dropDetail': 'PDF, photo, scan, livre, cahier…',
+  'learn.component.documentQuestion': 'Quel est ce document ?',
+  'learn.component.yourTurn': 'À toi.',
   'ai.professor': 'Professeur IA',
   'ai.recommendation': 'Recommandation IA',
   'ai.insight': 'Analyse IA',
@@ -5954,6 +6049,7 @@ const fr: Record<TranslationKey, string> = {
   'research10.stage.compared': 'Sources comparées',
   'research10.stage.synthesized': 'Synthèse terminée',
   'research10.next': 'Poursuivre depuis cette recherche',
+  'research10.next.reason': 'Une synthèse sourcée est prête à devenir un apprentissage actif.',
   'research10.action.learn': 'Apprendre ce sujet',
   'research10.action.workspace': 'Ajouter au Workspace',
   'research10.action.deepen': 'Approfondir',
@@ -6284,6 +6380,7 @@ const fr: Record<TranslationKey, string> = {
   'languages11.review.return': 'Retour à la langue',
   'languages11.reading.history': 'Ouvrir l’historique Lecture',
   'languages11.writing.workspace': 'Ouvrir l’espace Écriture complet',
+  'languages11.writing.instruction': 'Écris en {language}.',
   'languages11.offline.title': 'La voix et l’IA sont indisponibles hors ligne',
   'languages11.offline.detail': 'Ton brouillon local est préservé. Reconnecte-toi avant de transcrire ou d’interroger le Professeur.',
   'rlle.ui.hub.learn': 'Apprendre {language}',
@@ -6906,7 +7003,7 @@ const fr: Record<TranslationKey, string> = {
   'org.noGroups': 'Aucune classe ni groupe.',
   'org.createGroup': 'Créer une classe',
   'org.createGroupBtn': 'Créer la classe',
-  'org.groupNamePlaceholder': 'Nom de la classe — ex. Terminale S1',
+  'org.groupNamePlaceholder': 'Nom de la classe — ex. 12e année – Sciences',
   'org.kind.class': 'Classe',
   'org.kind.group': 'Groupe',
   'org.back': 'Retour aux organisations',
@@ -7785,10 +7882,10 @@ registerLocale('en', 'English', en);
 registerLocale('fr', 'Français', fr);
 
 // Scalable i18n: register the whole shared language registry (27). Any language
-// without a full catalog yet is registered with an empty one, so it's selectable
-// immediately and its UI falls back to English — while the AI Professor already
-// teaches in that language (server-side Learning Locale). A partial resource
-// (e.g. lib/locales/es) registered later simply replaces the empty catalog.
+// without a full catalog yet is registered with an empty one, so it remains
+// selectable and missing UI copy falls back to English. UI locale and learning
+// language are deliberately independent: this provider never writes the
+// learner's server-side preferred language.
 for (const meta of Object.values(SUPPORTED_LANGUAGES)) {
   if (!registry.has(meta.code)) registerLocale(meta.code, meta.name, {});
 }
@@ -7804,53 +7901,87 @@ export function localeCoverage(code: Locale): number {
 
 interface I18nState {
   locale: Locale;
+  /** Canonical BCP 47 tag used only for regional dates/numbers/currencies. */
+  formatLocale: string;
   setLocale: (locale: Locale) => void;
-  t: (key: TranslationKey) => string;
+  t: (key: TranslationKey, values?: TranslationValues) => string;
 }
 
 const I18nContext = createContext<I18nState | null>(null);
+
+export type TranslationValues = Record<string, string | number>;
+
+/** Replace named placeholders while preserving any value the caller omitted.
+ *  This keeps fallback copy readable and avoids language-specific replacement
+ *  order assumptions. */
+function formatTranslation(template: string, values?: TranslationValues): string {
+  if (!values) return template;
+  return template.replace(/\{([^{}]+)\}/g, (placeholder, name: string) =>
+    Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : placeholder,
+  );
+}
 
 /** Module-level mirror of the active locale, kept in sync by the provider, so
  *  non-hook code (e.g. the API client) can localize messages too. */
 let activeLocale: Locale = 'en';
 /** Non-hook translate for the active locale (English fallback, then the key). */
-export function tr(key: TranslationKey): string {
-  return registry.get(activeLocale)?.catalog[key] ?? en[key] ?? key;
+export function tr(key: TranslationKey, values?: TranslationValues): string {
+  const template = registry.get(activeLocale)?.catalog[key] ?? en[key] ?? key;
+  return formatTranslation(template, values);
 }
 
-export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>('en');
+const useWebDocumentLocaleEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect;
 
-  useEffect(() => { activeLocale = locale; }, [locale]);
+export function I18nProvider({ children }: { children: ReactNode }) {
+  // The initializer is synchronous on Web: saved choice first, ordered browser
+  // preferences second. That applies to the Landing because this provider wraps
+  // the entire router, including public routes.
+  const [locale, setLocaleState] = useState<Locale>(() => detectedDeviceLocale(savedWebLocale()));
+  const formatLocale = useMemo(() => detectedFormatLocale(locale), [locale]);
+
+  useWebDocumentLocaleEffect(() => {
+    activeLocale = locale;
+    // Web accessibility, browser translation and screen readers all rely on
+    // the root language/direction. Keep it in sync for every route, not only
+    // the public Landing page. Native layouts use the same locale metadata in
+    // their directional components and are unaffected by this DOM-only branch.
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = locale;
+      document.documentElement.dir = localeDirection(locale);
+    }
+  }, [locale]);
 
   useEffect(() => {
     (async () => {
       const saved = await AsyncStorage.getItem(STORAGE_KEY);
-      if (saved && registry.has(saved)) {
-        setLocaleState(saved);
-      }
+      // Native storage is asynchronous; Web has already read this same value
+      // before its first render. Invalid/stale values are ignored so a valid
+      // browser/device preference still wins instead of forcing English.
+      const next = detectedDeviceLocale(saved);
+      if (registry.has(next)) setLocaleState(next);
     })();
   }, []);
 
   const setLocale = useCallback((next: Locale) => {
-    setLocaleState(next);
-    void AsyncStorage.setItem(STORAGE_KEY, next);
-    // Persist the Learning Locale server-side so ALL AI-generated content (tutor,
-    // examiner, writing, reading…) is produced directly in this language. Best-
-    // effort: harmless when signed out (the tutor also falls back to English).
-    void api('/auth/locale', { method: 'PATCH', body: { locale: next } }).catch(
-      () => {},
-    );
+    const normalized = normalizeLocale(next);
+    setLocaleState(normalized);
+    void AsyncStorage.setItem(STORAGE_KEY, normalized);
   }, []);
 
   const t = useCallback(
     // Registry lookup with English fallback: a missing translation reads as
     // untranslated, never as a broken raw key. Works for any registered locale.
-    (key: TranslationKey) => registry.get(locale)?.catalog[key] ?? en[key] ?? key,
+    (key: TranslationKey, values?: TranslationValues) => {
+      const template = registry.get(locale)?.catalog[key] ?? en[key] ?? key;
+      return formatTranslation(template, values);
+    },
     [locale],
   );
 
-  const value = useMemo(() => ({ locale, setLocale, t }), [locale, setLocale, t]);
+  const value = useMemo(
+    () => ({ locale, formatLocale, setLocale, t }),
+    [formatLocale, locale, setLocale, t],
+  );
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
 

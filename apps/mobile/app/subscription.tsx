@@ -25,10 +25,10 @@ function usageUnit(key: string): UsageUnit {
   return 'count';
 }
 
-function formatPrice(plan: PlanView, locale: string, fallback: string): string {
+function formatPrice(plan: PlanView, formatLocale: string, fallback: string): string {
   if (plan.priceMonthly === null) return plan.tier === 0 ? fallback : '';
   try {
-    return new Intl.NumberFormat(locale, {
+    return new Intl.NumberFormat(formatLocale, {
       style: 'currency',
       currency: plan.currency.toUpperCase(),
       maximumFractionDigits: 2,
@@ -44,7 +44,7 @@ function formatPrice(plan: PlanView, locale: string, fallback: string): string {
  *  reflects it. */
 export default function SubscriptionScreen() {
   const { colors: c, spacing, typography } = useTokens();
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const router = useRouter();
   const [plans, setPlans] = useState<PlanView[] | null>(null);
   const [current, setCurrent] = useState<SubscriptionView | null>(null);
@@ -139,7 +139,7 @@ export default function SubscriptionScreen() {
       return ratio(b) - ratio(a);
     })
     .slice(0, 2);
-  const formatDate = (value: string) => new Date(value).toLocaleDateString(locale, { dateStyle: 'medium' });
+  const formatDate = (value: string) => new Date(value).toLocaleDateString(formatLocale, { dateStyle: 'medium' });
 
   return (
     <ScrollView style={{ backgroundColor: c.background }}>
@@ -180,8 +180,8 @@ export default function SubscriptionScreen() {
                 used={item.used}
                 limit={item.limit}
                 unit={item.unit}
-                resetAt={formatResetAt(item.resetAt, locale)}
-                formatValue={(value, unit) => formatUsageValue(value, unit, locale, t)}
+                resetAt={formatResetAt(item.resetAt, formatLocale)}
+                formatValue={(value, unit) => formatUsageValue(value, unit, formatLocale, t)}
                 unlimitedLabel={t('usage.unlimited')}
                 remainingLabel={t('usage.remaining')}
                 resetLabel={t('usage.reset')}
@@ -209,7 +209,7 @@ export default function SubscriptionScreen() {
             {individualPlans.map((plan) => {
               const active = current?.planSlug === plan.slug;
               const selectable = plan.tier === 0 || plan.priceMonthly !== null;
-              const price = formatPrice(plan, locale, t('sub.free'));
+              const price = formatPrice(plan, formatLocale, t('sub.free'));
               const priceLabel = plan.priceMonthly === null ? (plan.tier === 0 ? price : t('sub.notAvailable')) : `${price}${t('sub.perMonth')}`;
               return (
                 <Card key={plan.id} style={{ gap: spacing.sm, borderColor: active ? c.primary : c.borderSubtle, height: '100%' }}>
@@ -233,7 +233,7 @@ export default function SubscriptionScreen() {
                         <View key={key} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: spacing.sm, paddingVertical: 5, borderTopWidth: 1, borderTopColor: c.borderSubtle }}>
                           <Text style={[typography.bodySmall, { color: c.textSecondary, flex: 1 }]}>{usageMetricLabel(key, t)}</Text>
                           <Text style={[typography.bodySmall, { color: c.textPrimary, fontWeight: '700', textAlign: 'right' }]}>
-                            {limit === null ? t('usage.unlimited') : formatUsageValue(limit, unit, locale, t)}
+                            {limit === null ? t('usage.unlimited') : formatUsageValue(limit, unit, formatLocale, t)}
                           </Text>
                         </View>
                       );
@@ -263,7 +263,7 @@ export default function SubscriptionScreen() {
                 <Card key={invoice.id} style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.sm }}>
                   <View style={{ flex: 1, minWidth: 180 }}>
                     <Text style={[typography.title, { color: c.textPrimary }]}>{invoice.number}</Text>
-                    <Text style={[typography.caption, { color: c.textMuted }]}>{new Date(invoice.createdAt).toLocaleDateString(locale)} · {invoice.status}</Text>
+                    <Text style={[typography.caption, { color: c.textMuted }]}>{new Date(invoice.createdAt).toLocaleDateString(formatLocale)} · {invoice.status}</Text>
                   </View>
                   <Text style={[typography.title, { color: c.textPrimary, fontVariant: ['tabular-nums'] }]}>
                     {(invoice.amount / 100).toFixed(2)} {invoice.currency.toUpperCase()}

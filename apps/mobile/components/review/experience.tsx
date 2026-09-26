@@ -23,7 +23,7 @@ export function TodayReview({
   onSize: (size: 5 | 10 | 'all') => void;
   onStart: () => void;
 }) {
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const { colors: c, radius, spacing, typography } = useTokens();
   const largeQueue = home.overdueCount >= 25;
   return (
@@ -35,7 +35,7 @@ export function TodayReview({
         </Text>
         <Text style={[typography.bodySmall, { color: c.textSecondary }]}>
           {home.dueCount === 0
-            ? nextDueText(home.plan, t, locale)
+            ? nextDueText(home.plan, t, formatLocale)
             : largeQueue
               ? t('review9.largeQueue')
               : t('review9.dueDetail').replace('{cards}', String(home.flashcardDueCount)).replace('{activities}', String(home.activityDueCount))}
@@ -215,14 +215,14 @@ export function ReviewFeedback({ code }: { code: 'review-soon' | 'still-fragile'
 }
 
 export function ReviewSummaryView({ summary }: { summary: ReviewSessionSummary }) {
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   return (
     <Card style={{ gap: spacing.md, alignItems: 'center', paddingVertical: spacing.xl }} testID="review-summary">
       <Text accessible={false} style={{ fontSize: 38 }}>✓</Text>
       <Text accessibilityRole="header" style={[typography.display, { color: c.textPrimary, textAlign: 'center' }]}>{t('review9.complete')}</Text>
       <Text style={[typography.body, { color: c.textSecondary, textAlign: 'center' }]}>{t('review9.completeDetail').replace('{reviewed}', String(summary.reviewed)).replace('{difficult}', String(summary.difficult))}</Text>
-      {summary.nextReviewAt ? <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('review9.nextReview').replace('{date}', new Date(summary.nextReviewAt).toLocaleDateString(locale))}</Text> : null}
+      {summary.nextReviewAt ? <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('review9.nextReview').replace('{date}', new Date(summary.nextReviewAt).toLocaleDateString(formatLocale))}</Text> : null}
     </Card>
   );
 }
@@ -245,11 +245,11 @@ function reasonText(reason: ReviewPriorityReason, dueCount: number, itemOnly: bo
   return t('review9.reason.resume');
 }
 
-function nextDueText(plan: ReviewDailyPlan, t: (key: TranslationKey) => string, locale: string): string {
+function nextDueText(plan: ReviewDailyPlan, t: (key: TranslationKey) => string, formatLocale: string): string {
   if (!plan.nextDueAt) return t('review9.caughtUpDetail');
   const next = new Date(plan.nextDueAt);
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   if (next.toDateString() === tomorrow.toDateString()) return t('review9.nextTomorrow');
-  return t('review9.nextDate').replace('{date}', next.toLocaleDateString(locale));
+  return t('review9.nextDate').replace('{date}', next.toLocaleDateString(formatLocale));
 }

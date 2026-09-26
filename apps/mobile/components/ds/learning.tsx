@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useTokens } from '../../lib/design/theme';
+import { useI18n } from '../../lib/i18n';
 
 /**
  * Learning components (UI/UX Sprint 1, task UI-1.10).
@@ -13,8 +14,9 @@ import { useTokens } from '../../lib/design/theme';
 // ── MasteryIndicator — 0..1, stars + %, accessible label ─────────────────────
 export function MasteryIndicator({ mastery }: { mastery: number | null }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   if (mastery === null) {
-    return <Text style={{ color: c.textMuted, fontSize: 12 }}>Not tracked</Text>;
+    return <Text style={{ color: c.textMuted, fontSize: 12 }}>{t('learning.notTracked')}</Text>;
   }
   const pct = Math.round(mastery * 100);
   const stars = Math.max(1, Math.round(mastery * 5));

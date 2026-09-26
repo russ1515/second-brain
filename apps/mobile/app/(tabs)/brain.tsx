@@ -55,7 +55,7 @@ export default function BrainScreen() {
   const languageProfileId = first(params.languageProfileId);
   const routeView = normalizeView(first(params.view));
   const { user } = useAuth();
-  const { t } = useI18n();
+  const { t, formatLocale } = useI18n();
   const router = useRouter();
   const { colors: c, radius, spacing, typography } = useTokens();
   const { width, maxContentWidth } = useResponsive();
@@ -226,7 +226,7 @@ export default function BrainScreen() {
           <Text style={[typography.body, { color: c.textSecondary, maxWidth: 760 }]}>{t('brain8.intro')}</Text>
         </View>
         <ContextBar items={contextItems} />
-        {staleAt ? <Card style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}><Badge tone="warning" label={t('state.stale')} /><Text style={[typography.caption, { color: c.textMuted }]}>{new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(staleAt))}</Text></Card> : null}
+        {staleAt ? <Card style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}><Badge tone="warning" label={t('state.stale')} /><Text style={[typography.caption, { color: c.textMuted }]}>{new Intl.DateTimeFormat(formatLocale, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(staleAt))}</Text></Card> : null}
         {overview.partial ? <Text accessibilityLiveRegion="polite" style={[typography.caption, { color: c.warning }]}>{t('brain8.partial')}</Text> : null}
         {experience?.twinImpact ? <ProgressNarrative session={experience} /> : null}
         {languageCourse && languageProfileId ? (

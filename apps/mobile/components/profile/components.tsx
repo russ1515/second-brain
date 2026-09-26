@@ -68,7 +68,7 @@ export function ProfilePhoto({
           <Text style={{ color: c.textMuted, fontSize: 12, fontWeight: '700', textTransform: 'uppercase' }}>{t('profile.card.avatar')}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {AVATAR_EMOJIS.map((e) => (
-              <Pressable key={e} onPress={() => { setOpen(false); onChooseAvatar(e); }} accessibilityRole="button" accessibilityLabel={`Avatar ${e}`}
+              <Pressable key={e} onPress={() => { setOpen(false); onChooseAvatar(e); }} accessibilityRole="button" accessibilityLabel={`${t('profile.card.avatar')} ${e}`}
                 style={{ width: 44, height: 44, borderRadius: radius.md, borderWidth: 1, borderColor: avatarEmoji === e ? c.aiAccent : c.border, backgroundColor: avatarEmoji === e ? c.aiAccentSoft : c.surface, alignItems: 'center', justifyContent: 'center' }}>
                 <Text style={{ fontSize: 22 }}>{e}</Text>
               </Pressable>

@@ -150,7 +150,7 @@ export default function SessionScreen() {
         <Text style={styles.planText}>{params.planMessage ?? t('session.defaultPlan')}</Text>
         {minutes ? (
           <View style={styles.metaChip}>
-            <Text style={styles.metaChipText}>⏱️ ~{minutes} min</Text>
+            <Text style={styles.metaChipText}>⏱️ ~{minutes} {t('h.hero.min')}</Text>
           </View>
         ) : null}
       </Card>

@@ -30,7 +30,7 @@ export function GroundedAsk({
   initialQuestion?: string;
 }) {
   const { colors: c, spacing, typography, reducedMotion } = useTokens();
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const { width } = useResponsive();
   const mobile = width < 768;
   const [question, setQuestion] = useState(initialQuestion);
@@ -70,7 +70,7 @@ export function GroundedAsk({
       </View>
 
       {error ? <View style={{ gap: spacing.sm }}>
-        <Alert tone={error.quota ? 'warning' : 'error'} title={error.quota ? t('library7.quota.title') : t('state.error')} detail={quotaDetail(error, locale, t)} />
+        <Alert tone={error.quota ? 'warning' : 'error'} title={error.quota ? t('library7.quota.title') : t('state.error')} detail={quotaDetail(error, formatLocale, t)} />
         {error.quota && onOpenUsage ? <Button label={t('library7.quota.usage')} variant="secondary" size="sm" onPress={onOpenUsage} /> : null}
       </View> : null}
 
@@ -106,11 +106,11 @@ export function GroundedAsk({
 
 function quotaDetail(
   error: { message: string; quota: QuotaErrorContract | null },
-  locale: string,
+  formatLocale: string,
   t: (key: Parameters<ReturnType<typeof useI18n>['t']>[0]) => string,
 ): string {
   if (!error.quota) return error.message;
-  const reset = error.quota.resetAt ? new Date(error.quota.resetAt).toLocaleString(locale) : null;
+  const reset = error.quota.resetAt ? new Date(error.quota.resetAt).toLocaleString(formatLocale) : null;
   const alternatives = error.quota.availableFeatures.length
     ? ` ${t('library7.quota.alternatives')}: ${error.quota.availableFeatures.join(', ')}.`
     : '';

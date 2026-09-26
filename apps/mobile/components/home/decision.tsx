@@ -108,7 +108,7 @@ export function NextBestActionCard({ action, onOpen }: { action: NextBestAction;
 }
 
 export function SessionResumeCard({ session, onResume }: { session: HomeResumableSession; onResume: () => void }) {
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   const typeLabel = t(`home4.session.type.${session.type}` as TranslationKey);
   const percent = session.progress?.percent;
@@ -121,7 +121,7 @@ export function SessionResumeCard({ session, onResume }: { session: HomeResumabl
             {session.title ?? typeLabel}
           </Text>
           <Text style={[typography.caption, { color: c.textMuted }]}>
-            {t('home4.lastActivity')}: {formatActivityDate(session.updatedAt, locale, t)}
+            {t('home4.lastActivity')}: {formatActivityDate(session.updatedAt, formatLocale, t)}
           </Text>
         </View>
         {percent !== undefined ? <Text style={[typography.title, { color: c.primary }]}>{percent}%</Text> : null}
@@ -157,7 +157,7 @@ export function ResumeSection({ sessions, onResume }: { sessions: HomeResumableS
 }
 
 export function UpcomingSection({ items, onOpen, onPlanning }: { items: HomeUpcomingItem[]; onOpen: (item: HomeUpcomingItem) => void; onPlanning: () => void }) {
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const { colors: c, radius, spacing, typography } = useTokens();
   return (
     <Section title={t('home4.upcoming')} description={t('home4.upcomingDetail')} action={<Button label={t('home4.planning')} size="sm" variant="ghost" onPress={onPlanning} />}>
@@ -169,7 +169,7 @@ export function UpcomingSection({ items, onOpen, onPlanning }: { items: HomeUpco
             <Pressable
               key={`${item.date}-${item.kind}-${item.id}`}
               accessibilityRole="button"
-              accessibilityLabel={`${formatUpcomingDate(item.date, locale, t)} — ${item.title}`}
+              accessibilityLabel={`${formatUpcomingDate(item.date, formatLocale, t)} — ${item.title}`}
               onPress={() => onOpen(item)}
               style={({ pressed }) => ({
                 flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 54,
@@ -178,7 +178,7 @@ export function UpcomingSection({ items, onOpen, onPlanning }: { items: HomeUpco
                 borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
               })}
             >
-              <Text style={[typography.caption, { color: c.textMuted, width: 88 }]}>{formatUpcomingDate(item.date, locale, t)}</Text>
+              <Text style={[typography.caption, { color: c.textMuted, width: 88 }]}>{formatUpcomingDate(item.date, formatLocale, t)}</Text>
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={[typography.bodySmall, { color: c.textPrimary, fontWeight: '700' }]} numberOfLines={2}>{item.title}</Text>
                 <Text style={[typography.caption, { color: c.textMuted }]}>{t(`home4.upcoming.kind.${item.kind}` as TranslationKey)}</Text>
@@ -252,7 +252,7 @@ export function HomeQuickActions({ onWrite, onSpeak, onScan, onImport }: { onWri
 
 type Translate = (key: TranslationKey) => string;
 
-function formatActivityDate(value: string, locale: string, t: Translate): string {
+function formatActivityDate(value: string, formatLocale: string, t: Translate): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return t('home4.date.unknown');
   const today = new Date();
@@ -260,10 +260,10 @@ function formatActivityDate(value: string, locale: string, t: Translate): string
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
   if (sameDay(date, yesterday)) return t('home4.date.yesterday');
-  return date.toLocaleDateString(locale, { dateStyle: 'medium' });
+  return date.toLocaleDateString(formatLocale, { dateStyle: 'medium' });
 }
 
-function formatUpcomingDate(value: string, locale: string, t: Translate): string {
+function formatUpcomingDate(value: string, formatLocale: string, t: Translate): string {
   const date = new Date(`${value}T12:00:00`);
   if (Number.isNaN(date.getTime())) return value;
   const today = new Date();
@@ -271,7 +271,7 @@ function formatUpcomingDate(value: string, locale: string, t: Translate): string
   const tomorrow = new Date(today);
   tomorrow.setDate(today.getDate() + 1);
   if (sameDay(date, tomorrow)) return t('home4.date.tomorrow');
-  return date.toLocaleDateString(locale, { day: 'numeric', month: 'short' });
+  return date.toLocaleDateString(formatLocale, { day: 'numeric', month: 'short' });
 }
 
 function sameDay(a: Date, b: Date): boolean {

@@ -45,7 +45,7 @@ export default function DocumentIntelligenceScreen() {
   const { width } = useResponsive();
   const desktop = width >= 1024;
   const { colors: c, spacing, typography } = useTokens();
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const [document, setDocument] = useState<LibraryDocumentDetail | null>(null);
   const [prerequisites, setPrerequisites] = useState<DocumentPrerequisites | null>(null);
   const [integration, setIntegration] = useState<KnowledgeIntegration | null>(null);
@@ -214,11 +214,11 @@ function DocumentHeader({ document }: { document: LibraryDocumentDetail }) {
 
 function DocumentPane({ document }: { document: LibraryDocumentDetail }) {
   const { colors: c, spacing, typography } = useTokens();
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   return <Card style={{ gap: spacing.md }} testID="document-reading-pane">
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: spacing.sm }}>
       <Text accessibilityRole="header" style={[typography.title, { color: c.textPrimary }]}>{t('library7.tab.document')}</Text>
-      <Text style={[typography.caption, { color: c.textMuted }]}>{document.charCount.toLocaleString(locale)} {t('lib.chars')} · {new Date(document.createdAt).toLocaleDateString(locale)}</Text>
+      <Text style={[typography.caption, { color: c.textMuted }]}>{document.charCount.toLocaleString(formatLocale)} {t('lib.chars')} · {new Date(document.createdAt).toLocaleDateString(formatLocale)}</Text>
     </View>
     <Text selectable style={[typography.body, { color: c.textPrimary, lineHeight: 25 }]}>{document.content.slice(0, 12000)}</Text>
     {document.content.length > 12000 ? <Alert tone="info" title={t('library7.document.previewLimited')} detail={t('library7.document.previewLimitedDetail')} /> : null}

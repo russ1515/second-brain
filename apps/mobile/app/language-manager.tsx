@@ -11,9 +11,9 @@ const flagOf = (code: string): string =>
 /**
  * 🌍 Language Manager (Sprint 10.5). Every registered UI language, with how
  * complete its translation is (missing keys fall back to English) and which is
- * active. Switching also switches the AI teacher's language — the server-side
- * Learning Locale drives all generated content. New languages appear here
- * automatically once their resource is registered; the engine never changes.
+ * active. This setting changes interface copy only; the learning language and
+ * AI Professor language are managed by their dedicated flows. New languages
+ * appear here automatically once their resource is registered.
  */
 export default function LanguageManagerScreen() {
   const { colors: c } = useTokens();

@@ -48,7 +48,7 @@ export default function LibraryScreen() {
   const { width } = useResponsive();
   const desktop = width >= 1024;
   const { colors: c, spacing, typography } = useTokens();
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const [facets, setFacets] = useState<LibraryFacets | null>(null);
   const [documents, setDocuments] = useState<LibraryDocument[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -191,7 +191,7 @@ export default function LibraryScreen() {
             <LibraryEmpty onImport={() => setPanel('import')} onScan={() => router.push('/scan')} />
           ) : (
             <View accessibilityRole="list" style={{ gap: spacing.sm }}>
-              {documents.map((document) => <DocumentRow key={document.id} document={document} locale={locale} onOpen={() => router.push(`/library/${document.id}`)} onFavorite={() => void mutate(document, 'favorite')} onTrash={() => void mutate(document, document.deletedAt ? 'restore' : 'trash')} />)}
+              {documents.map((document) => <DocumentRow key={document.id} document={document} formatLocale={formatLocale} onOpen={() => router.push(`/library/${document.id}`)} onFavorite={() => void mutate(document, 'favorite')} onTrash={() => void mutate(document, document.deletedAt ? 'restore' : 'trash')} />)}
             </View>
           )}
           {cursor ? <Button label={t('library7.more')} variant="secondary" loading={loadingMore} onPress={() => void load(true)} /> : null}
@@ -218,7 +218,7 @@ function LibraryEmpty({ onImport, onScan }: { onImport: () => void; onScan: () =
   );
 }
 
-function DocumentRow({ document, locale, onOpen, onFavorite, onTrash }: { document: LibraryDocument; locale: string; onOpen: () => void; onFavorite: () => void; onTrash: () => void }) {
+function DocumentRow({ document, formatLocale, onOpen, onFavorite, onTrash }: { document: LibraryDocument; formatLocale: string; onOpen: () => void; onFavorite: () => void; onTrash: () => void }) {
   const { colors: c, spacing, typography } = useTokens();
   const { t } = useI18n();
   return (
@@ -226,7 +226,7 @@ function DocumentRow({ document, locale, onOpen, onFavorite, onTrash }: { docume
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm }}>
         <Pressable onPress={onOpen} accessibilityRole="link" style={{ flex: 1, minHeight: 44 }}>
           <Text numberOfLines={2} style={[typography.title, { color: c.textPrimary }]}>{document.source === 'url' ? '↗' : document.source === 'text' ? '≡' : '▤'} {document.title}</Text>
-          <Text style={[typography.caption, { color: c.textMuted }]}>{new Date(document.createdAt).toLocaleDateString(locale)} · {document.charCount.toLocaleString(locale)} {t('lib.chars')}</Text>
+          <Text style={[typography.caption, { color: c.textMuted }]}>{new Date(document.createdAt).toLocaleDateString(formatLocale)} · {document.charCount.toLocaleString(formatLocale)} {t('lib.chars')}</Text>
         </Pressable>
         <Button label={document.isFavorite ? '★' : '☆'} accessibilityLabel={t('library7.favorite')} variant="ghost" size="sm" onPress={onFavorite} />
         <Button label={document.deletedAt ? '↺' : '⌫'} accessibilityLabel={document.deletedAt ? t('lib.restore') : t('lib.moveToTrash')} variant="ghost" size="sm" onPress={onTrash} />
@@ -310,8 +310,8 @@ function FacetGroup({ title, children }: { title: string; children: React.ReactN
 
 function LibraryError({ value, onRetry, onUsage }: { value: NonNullable<ErrorState>; onRetry?: () => void; onUsage?: () => void }) {
   const { spacing } = useTokens();
-  const { t, locale } = useI18n();
-  const reset = value.quota?.resetAt ? new Date(value.quota.resetAt).toLocaleString(locale) : null;
+  const { t, formatLocale } = useI18n();
+  const reset = value.quota?.resetAt ? new Date(value.quota.resetAt).toLocaleString(formatLocale) : null;
   return <View style={{ gap: spacing.sm }}>
     <Alert tone={value.quota ? 'warning' : 'error'} title={value.quota ? t('library7.quota.title') : t('state.error')} detail={value.quota ? `${value.message}${reset ? ` ${t('library7.quota.reset').replace('{date}', reset)}` : ''}` : value.message} />
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>

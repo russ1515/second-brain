@@ -138,12 +138,13 @@ export function DocumentDropZone({
   onPick: (label: string) => void;
 }) {
   const { colors: c, radius } = useTokens();
+  const { t } = useI18n();
   return (
     <Card style={{ gap: 12 }}>
       <View style={{ borderWidth: 2, borderStyle: 'dashed', borderColor: c.borderStrong, borderRadius: radius.lg, paddingVertical: 28, alignItems: 'center', gap: 6 }}>
         <Text style={{ fontSize: 30 }}>📥</Text>
-        <Text style={{ color: c.textPrimary, fontSize: 16, fontWeight: '700' }}>Dépose ton document</Text>
-        <Text style={{ color: c.textMuted, fontSize: 13 }}>PDF, photo, scan, livre, cahier…</Text>
+        <Text style={{ color: c.textPrimary, fontSize: 16, fontWeight: '700' }}>{t('learn.component.dropTitle')}</Text>
+        <Text style={{ color: c.textMuted, fontSize: 13 }}>{t('learn.component.dropDetail')}</Text>
       </View>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         {sources.map((s) => (
@@ -200,10 +201,11 @@ export function DocumentContextForm({
   onConfirm: () => void;
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const [name, setName] = useState('');
   return (
     <Card style={{ gap: 12 }}>
-      <Text style={{ color: c.textPrimary, fontSize: 16, fontWeight: '700' }}>Quel est ce document ?</Text>
+      <Text style={{ color: c.textPrimary, fontSize: 16, fontWeight: '700' }}>{t('learn.component.documentQuestion')}</Text>
       {suggestion ? (
         <View style={{ backgroundColor: c.aiAccentSoft, borderRadius: 12, padding: 12, gap: 8 }}>
           <Text style={{ color: c.aiAccent, fontSize: 12, fontWeight: '800' }}>🤖 SUGGESTION AUTOMATIQUE</Text>
@@ -317,6 +319,7 @@ export function VoiceShadowing({
   scores?: { pronunciation: number; accent: number; fluency: number } | null;
 }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const bar = (label: string, v: number) => (
     <View style={{ gap: 4 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
@@ -332,7 +335,7 @@ export function VoiceShadowing({
       <View style={{ backgroundColor: c.surfaceSunken, borderRadius: 12, padding: 14, gap: 8, alignItems: 'center' }}>
         <Text style={{ color: c.textPrimary, fontSize: 18, fontWeight: '600' }}>“{phrase}”</Text>
         <Text style={{ fontSize: 26 }}>🎙️</Text>
-        <Text style={{ color: c.aiAccent, fontSize: 14, fontWeight: '700' }}>À toi.</Text>
+        <Text style={{ color: c.aiAccent, fontSize: 14, fontWeight: '700' }}>{t('learn.component.yourTurn')}</Text>
       </View>
       {scores ? (
         <View style={{ gap: 10 }}>

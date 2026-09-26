@@ -30,7 +30,7 @@ const DAY_OFFSETS: { key: TranslationKey; days: number }[] = [
 export default function ExamsScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
-  const { t, locale } = useI18n();
+  const { t, formatLocale } = useI18n();
   const router = useRouter();
   const [exams, setExams] = useState<ExamView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -132,7 +132,7 @@ export default function ExamsScreen() {
               </View>
             </View>
             <Text style={styles.examMeta}>
-              📅 {formatDate(e.date, locale)} · {daysLabel(e.daysUntil, t)}
+              📅 {formatDate(e.date, formatLocale)} · {daysLabel(e.daysUntil, t)}
             </Text>
             <View style={styles.prepRow}>
               <Text style={styles.prepLabel}>{t('exams.prep')}</Text>
@@ -175,8 +175,8 @@ function daysLabel(days: number, t: (k: TranslationKey) => string): string {
   if (days === 1) return t('exams.tomorrow');
   return `${t('exams.in')} ${days} ${t('exams.days')}`;
 }
-function formatDate(date: string, locale: string): string {
-  return new Date(`${date}T12:00:00`).toLocaleDateString(locale, {
+function formatDate(date: string, formatLocale: string): string {
+  return new Date(`${date}T12:00:00`).toLocaleDateString(formatLocale, {
     weekday: 'short', day: 'numeric', month: 'short',
   });
 }

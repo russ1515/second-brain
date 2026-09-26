@@ -227,6 +227,10 @@ function Practice({ format, profile, capabilities, courseContext, coursePreferen
   const { t } = useI18n();
   const { spacing } = useTokens();
   const router = useRouter();
+  const writingInstruction = [
+    t('languages11.writing.instruction', { language: profile.language }),
+    profile.goal,
+  ].filter(Boolean).join(' ');
   if (format === 'conversation') return <ConversationSetup profile={profile} voice={false} courseContext={courseContext} coursePreferences={coursePreferences} onChanged={onChanged} />;
   if (format === 'oral') return <ConversationSetup profile={profile} voice courseContext={courseContext} coursePreferences={coursePreferences} onChanged={onChanged} />;
   if (format === 'vocabulary') return <VocabularyPractice profileId={profile.id} courseContext={courseContext} onChanged={onChanged} />;
@@ -243,7 +247,7 @@ function Practice({ format, profile, capabilities, courseContext, coursePreferen
       <DsButton
         label={t('languages11.writing.workspace')}
         variant="ghost"
-        onPress={() => router.push(`/writing?type=redaction&instructions=${encodeURIComponent(`Write in ${profile.language}. ${profile.goal ?? ''}`)}` as never)}
+        onPress={() => router.push(`/writing?type=redaction&instructions=${encodeURIComponent(writingInstruction)}` as never)}
       />
     </View>
   );

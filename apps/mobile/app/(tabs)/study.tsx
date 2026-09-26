@@ -24,7 +24,7 @@ type RouteParams = {
 /** Réviser answers one question: what should memory consolidate now? */
 export default function StudyScreen() {
   const { user } = useAuth();
-  const { t } = useI18n();
+  const { t, formatLocale } = useI18n();
   const router = useRouter();
   const params = useLocalSearchParams<RouteParams>();
   const { colors: c, spacing, typography } = useTokens();
@@ -129,7 +129,7 @@ export default function StudyScreen() {
         <Text style={[typography.body, { color: c.textSecondary, maxWidth: 720 }]}>{t('review9.intro')}</Text>
       </View>
       <ContextBar items={contextItems} />
-      {staleAt ? <Alert tone="warning" title={t('review9.offline')} detail={t('review9.stale').replace('{date}', new Date(staleAt).toLocaleString())} /> : null}
+      {staleAt ? <Alert tone="warning" title={t('review9.offline')} detail={t('review9.stale').replace('{date}', new Date(staleAt).toLocaleString(formatLocale))} /> : null}
       {home.partial ? <Alert tone="warning" title={t('review9.partial')} detail={t('review9.partialDetail')} /> : null}
       {error && !staleAt ? <Alert tone="warning" title={t('state.error')} detail={error} /> : null}
       {wide ? <View style={{ flexDirection: 'row', gap: spacing.lg, alignItems: 'flex-start' }}><View style={{ flex: 1.25, minWidth: 0 }}>{primary}</View><View style={{ flex: 0.75, minWidth: 300 }}>{secondary}</View></View> : <View style={{ gap: spacing.md }}>{primary}{secondary}</View>}

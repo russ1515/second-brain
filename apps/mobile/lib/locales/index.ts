@@ -6,7 +6,9 @@
  * translated + English fallback for the rest. Add a language by generating its
  * file (`node scripts/translate-locale.mjs <code>`) and adding one line here.
  */
-// Full (1312/1312):
+// Generated partial catalogs. Coverage is computed at runtime against the
+// current English source catalog; missing copy always falls back to English.
+// Do not label a locale "full" here: the source catalog evolves continuously.
 import './es'; // Spanish
 import './de'; // German
 import './it'; // Italian
@@ -17,7 +19,6 @@ import './pl'; // Polish
 import './ru'; // Russian
 import './zh'; // Chinese
 import './vi'; // Vietnamese
-// Partial (translated so far + English fallback — finish via translate-locale.mjs):
 import './ja'; // Japanese
 import './sv'; // Swedish
 import './th'; // Thai
@@ -33,3 +34,8 @@ import './fi'; // Finnish
 import './id'; // Indonesian
 import './no'; // Norwegian
 import './uk'; // Ukrainian
+
+// Reviewed essentials are layered last so generated catalogs can be refreshed
+// safely without losing the controls required to select/recover a locale.
+import './essential';
+import './review';

@@ -149,7 +149,7 @@ function Row({
           <Text style={styles.cardTitle}>{t(KIND_KEY[block.kind])}</Text>
           {!isEnd ? (
             <Text style={styles.cardMeta}>
-              {block.minutes} min{subject ? ` · ${subject}` : ''}
+              {block.minutes} {t('h.hero.min')}{subject ? ` · ${subject}` : ''}
             </Text>
           ) : null}
         </View>

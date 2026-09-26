@@ -29,7 +29,7 @@ export function CourseEntryCard({
   course: RlleCourseLoad | null;
   onOpen: () => void;
 }) {
-  const { copy, locale } = useRlleCopy();
+  const { copy, formatLocale } = useRlleCopy();
   const { colors: c, spacing, typography } = useTokens();
   const live = course?.kind === 'live' ? course.course : null;
   const resumable = live?.status === 'active' || live?.status === 'paused';
@@ -61,7 +61,7 @@ export function CourseEntryCard({
       ) : null}
       <Text style={[typography.caption, { color: c.textMuted }]}>
         {lastActivity
-          ? copy('rlle.ui.course.lastActivity', { date: new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(new Date(lastActivity)) })
+          ? copy('rlle.ui.course.lastActivity', { date: new Intl.DateTimeFormat(formatLocale, { dateStyle: 'medium' }).format(new Date(lastActivity)) })
           : copy('rlle.ui.course.noActivity')}
       </Text>
       {course?.kind === 'preview' ? <Text style={[typography.caption, { color: c.warning }]}>{copy('rlle.ui.hub.courseUnavailable')}</Text> : null}
@@ -71,7 +71,7 @@ export function CourseEntryCard({
 }
 
 export function LevelSummary({ course }: { course: RlleCourseView }) {
-  const { copy, locale } = useRlleCopy();
+  const { copy, formatLocale } = useRlleCopy();
   const { colors: c, spacing, typography } = useTokens();
   const levelRows = [
     { key: 'declared', level: course.level.declared, evidence: null },
@@ -89,7 +89,7 @@ export function LevelSummary({ course }: { course: RlleCourseView }) {
             <Badge label={row.level ?? copy('rlle.ui.course.notEvaluated')} tone={row.key === 'evaluated' && row.level ? 'success' : 'neutral'} />
             {row.evidence ? (
               <Text style={[typography.caption, { color: c.textMuted }]}>
-                {copy('rlle.ui.course.evidenceCount', { count: row.evidence.evidenceCount })} · {new Intl.DateTimeFormat(locale, { dateStyle: 'short' }).format(new Date(row.evidence.measuredAt))}
+                {copy('rlle.ui.course.evidenceCount', { count: row.evidence.evidenceCount })} · {new Intl.DateTimeFormat(formatLocale, { dateStyle: 'short' }).format(new Date(row.evidence.measuredAt))}
               </Text>
             ) : null}
           </View>
@@ -236,7 +236,7 @@ export function MissionList({
 }
 
 export function CanDoList({ items }: { items: readonly RlleCanDoCapability[] }) {
-  const { copy, locale } = useRlleCopy();
+  const { copy, formatLocale } = useRlleCopy();
   const { colors: c, spacing, typography } = useTokens();
   return (
     <View style={{ gap: spacing.sm }} testID="rll-can-do-map">
@@ -255,7 +255,7 @@ export function CanDoList({ items }: { items: readonly RlleCanDoCapability[] }) 
               <Text style={[typography.title, { color: c.textPrimary }]}>{copy(capability.labelCode)}</Text>
               {capability.evidence.length ? capability.evidence.slice(0, 3).map((evidence) => (
                 <View key={evidence.id} style={{ borderLeftWidth: 2, borderLeftColor: evidence.result === 'demonstrated' ? c.success : c.warning, paddingLeft: spacing.sm, gap: 2 }}>
-                  <Text style={[typography.caption, { color: c.textMuted }]}>{copy(`rlle.ui.cando.source.${evidence.source}`)} · {new Intl.DateTimeFormat(locale, { dateStyle: 'short' }).format(new Date(evidence.observedAt))}</Text>
+                  <Text style={[typography.caption, { color: c.textMuted }]}>{copy(`rlle.ui.cando.source.${evidence.source}`)} · {new Intl.DateTimeFormat(formatLocale, { dateStyle: 'short' }).format(new Date(evidence.observedAt))}</Text>
                   <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{evidence.observation}</Text>
                 </View>
               )) : <Text style={[typography.caption, { color: c.textMuted }]}>{copy('rlle.ui.cando.noEvidence')}</Text>}

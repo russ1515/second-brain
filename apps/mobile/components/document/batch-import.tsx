@@ -43,7 +43,7 @@ export function BatchImport({
   onUsage: () => void;
 }) {
   const { colors: c, spacing, typography } = useTokens();
-  const { t } = useI18n();
+  const { formatLocale, t } = useI18n();
   const [items, setItems] = useState<BatchItem[]>([]);
   const [running, setRunning] = useState(false);
   const cancelled = useRef(false);
@@ -162,7 +162,7 @@ export function BatchImport({
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
                   <Pressable disabled={!item.documentId} onPress={() => item.documentId && onOpen(item.documentId)} accessibilityRole={item.documentId ? 'link' : undefined} style={{ flex: 1, minHeight: 44, justifyContent: 'center' }}>
                     <Text numberOfLines={1} style={[typography.bodySmall, { color: item.documentId ? c.primary : c.textPrimary, fontWeight: '700' }]}>{item.file.name}</Text>
-                    {item.file.size ? <Text style={[typography.caption, { color: c.textMuted }]}>{Math.ceil(item.file.size / 1024)} KB</Text> : null}
+                    {item.file.size ? <Text style={[typography.caption, { color: c.textMuted }]}>{new Intl.NumberFormat(formatLocale).format(Math.ceil(item.file.size / 1024))} KB</Text> : null}
                   </Pressable>
                   {item.status === 'waiting' ? <Text style={[typography.caption, { color: c.textMuted }]}>{t('document.batch.waiting')}</Text> : null}
                 </View>

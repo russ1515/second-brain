@@ -25,8 +25,8 @@ function paragraphs(text: string): string {
  * Exercise ANSWERS are included — this is the learner's own study sheet, and a
  * revision sheet without the corrections is half a lesson.
  */
-export function lessonHtml(lesson: LessonView, locale = 'en'): string {
-  const fr = locale.toLowerCase().startsWith('fr');
+export function lessonHtml(lesson: LessonView, formatLocale = 'en'): string {
+  const fr = formatLocale.toLowerCase().startsWith('fr');
   const copy = fr
     ? {
         examples: 'Exemples guidés', exercises: 'Exercices', answer: 'Réponse',
@@ -93,7 +93,7 @@ export function lessonHtml(lesson: LessonView, locale = 'en'): string {
     <div class="meta">
       ${lesson.language ? `${esc(lesson.language)} · ` : ''}${
         lesson.level ? `${esc(lesson.level)} ${copy.level} · ` : ''
-      }${new Date(lesson.createdAt).toLocaleDateString(locale)}
+      }${new Date(lesson.createdAt).toLocaleDateString(formatLocale)}
     </div>
     <div class="objective"><strong>${copy.objective}.</strong> ${esc(lesson.objective)}</div>
     ${lesson.intro ? paragraphs(lesson.intro) : ''}
@@ -113,6 +113,6 @@ export function lessonHtml(lesson: LessonView, locale = 'en'): string {
 
 /** Open the platform's print/save dialog for this lesson. On web this is the
  *  browser's print sheet, where "Save as PDF" is the standard destination. */
-export async function saveLessonAsPdf(lesson: LessonView, locale = 'en'): Promise<void> {
-  await Print.printAsync({ html: lessonHtml(lesson, locale) });
+export async function saveLessonAsPdf(lesson: LessonView, formatLocale = 'en'): Promise<void> {
+  await Print.printAsync({ html: lessonHtml(lesson, formatLocale) });
 }

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import type { KycEducation, LearningCategory } from '@second-brain/shared';
 import { useTokens } from '../../lib/design/theme';
+import { useI18n } from '../../lib/i18n';
 import { Badge, Card, Input } from '../ds/core';
 
 /**
@@ -127,6 +128,7 @@ export const GOAL_CHOICES: { value: string; label: string; icon: string }[] = [
 ];
 export function GoalsCard({ goals, onToggle }: { goals: string[]; onToggle: (v: string[]) => void }) {
   const { colors: c, radius } = useTokens();
+  const { t } = useI18n();
   const toggle = (v: string) => onToggle(goals.includes(v) ? goals.filter((g) => g !== v) : [...goals, v]);
   return (
     <Section title="Objectifs de réussite">
@@ -142,7 +144,7 @@ export function GoalsCard({ goals, onToggle }: { goals: string[]; onToggle: (v: 
           );
         })}
       </View>
-      <Text style={{ color: c.textMuted, fontSize: 12 }}>Ces cibles alimentent Réviser, le Professeur IA et ton Digital Twin.</Text>
+      <Text style={{ color: c.textMuted, fontSize: 12 }}>{t('profile.kyc.goalsImpact')}</Text>
     </Section>
   );
 }
@@ -150,12 +152,13 @@ export function GoalsCard({ goals, onToggle }: { goals: string[]; onToggle: (v: 
 // ── Langues apprises (task 1.3, "autres langues") ────────────────────────────
 export function LearnedLanguages({ languages, onChange }: { languages: string[]; onChange: (v: string[]) => void }) {
   const { colors: c } = useTokens();
+  const { t } = useI18n();
   const [draft, setDraft] = useState('');
   const add = () => { const v = draft.trim(); if (v && !languages.includes(v)) onChange([...languages, v]); setDraft(''); };
   return (
     <Field label="Langues apprises">
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
-        {languages.length === 0 ? <Text style={{ color: c.textMuted, fontSize: 13 }}>Aucune pour l’instant.</Text> : languages.map((l) => (
+        {languages.length === 0 ? <Text style={{ color: c.textMuted, fontSize: 13 }}>{t('profile.kyc.languagesEmpty')}</Text> : languages.map((l) => (
           <Pressable key={l} onPress={() => onChange(languages.filter((x) => x !== l))} accessibilityLabel={`Retirer ${l}`}>
             <Badge label={`${l}  ✕`} tone="primary" />
           </Pressable>
