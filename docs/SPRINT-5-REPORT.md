@@ -331,9 +331,10 @@ requests. The isolated technical gates used fresh PostgreSQL databases with
 the 59 migrations and did not use human identities, real SMTP, public HTTPS,
 or a billable provider.
 
-Real SMTP/OTP delivery, personal Admin MFA/onboarding, human learner cap
-activation, public User HTTPS, and real OpenAI/provider pricing and
-instrumentation remain **NOT_VERIFIED**. See the Gate 5.5 addendum for exact
-boundaries and retained evidence.
+Real SMTP/OTP delivery, personal Admin MFA/onboarding (currently blocked by
+the absent User Web MFA-enrollment screen), human learner cap activation,
+public User HTTPS, and real OpenAI/provider pricing and instrumentation remain
+**NOT_VERIFIED**. See the Gate 5.5 addendum for exact boundaries and retained
+evidence.
 
 # SPRINT 6 NOT READY

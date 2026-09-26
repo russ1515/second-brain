@@ -348,7 +348,7 @@ retained and was not cleaned.
 | Condition | Status | Reason |
 | --- | --- | --- |
 | Real SMTP delivery and human OTP completion | **NOT_VERIFIED** | Mail remains non-delivering pending private VPS SMTP configuration and a user-confirmed received message. |
-| Personal Administrator registration, personal MFA, and audited SUPER_ADMIN assignment | **NOT_VERIFIED** | No human password, OTP, or TOTP material was used by automation. |
+| Personal Administrator registration, personal MFA, and audited SUPER_ADMIN assignment | **FAIL — browser-enrollment gap** | No human password, OTP, or TOTP material was used by automation. In addition, User Web has no screen that invokes the authenticated MFA enrollment endpoints (`/auth/2fa/setup` then enable), so a normal browser-only personal MFA enrollment cannot yet be performed. No API or fixture workaround was used. |
 | Human learner verification and individual cap activation | **NOT_VERIFIED** | The technical cap proof does not select a human quota amount or expiry. |
 | Public HTTPS User entry point | **NOT_VERIFIED** | ngrok is installed but no configuration or tunnel exists. Admin remains private. |
 | Real OpenAI response, provider-returned usage, pricing, ledger, Cost Center, and real embedding to Qdrant retrieval | **NOT_VERIFIED** | No credential, price activation, or billable provider request was authorized. |
