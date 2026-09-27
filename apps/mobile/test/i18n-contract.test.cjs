@@ -186,7 +186,7 @@ test('UI selectors expose only complete catalogs while learning selectors keep a
   assert.match(languagesScreen, /value=\{nativeCode\}[\s\S]{0,100}mode=['\"]learning['\"]/);
 });
 
-test('the restored UI selector has exactly 13 complete languages', () => {
+test('the restored UI selector has exactly 15 complete languages', () => {
   const complete = ['en', 'fr'];
   for (const resource of localeResources) {
     const translations = effectiveCatalog(resource);
@@ -197,7 +197,7 @@ test('the restored UI selector has exactly 13 complete languages', () => {
   }
   assert.deepEqual(
     complete.sort(),
-    ['en', 'fr', 'es', 'de', 'it', 'pt', 'nl', 'pl', 'ru', 'zh', 'ko', 'ar', 'hi'].sort(),
+    ['en', 'fr', 'es', 'de', 'it', 'pt', 'nl', 'pl', 'ru', 'zh', 'ja', 'ko', 'ar', 'hi', 'tr'].sort(),
   );
 });
 
