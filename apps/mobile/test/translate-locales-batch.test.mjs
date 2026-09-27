@@ -13,8 +13,8 @@ import { buildPlan } from '../../../scripts/translate-locale.mjs';
 const ROOT = path.resolve(import.meta.dirname, '../../..');
 const PROGRESS = path.join(ROOT, 'apps/mobile/lib/locales/.translation-progress');
 // Keep repository-backed Batch fixtures on a deliberately incomplete locale.
-// Spanish is now complete, so using it correctly produces no Batch request.
-const TEST_LOCALE = 'ja';
+// Japanese is now complete, so using it correctly produces no Batch request.
+const TEST_LOCALE = 'cs';
 
 function checksum(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
