@@ -1901,7 +1901,7 @@ const th: Record<string, string> = {
   "landing.footer.legal1": "ความเป็นส่วนตัว",
   "landing.footer.legal2": "ข้อกำหนด",
   "landing.footer.legal3": "ความปลอดภัย",
-  "landing.footer.copy": "© 2026 Second Brain — สภาพแวดล้อมการเรียนรู้ส่วนบุคคลด้วย AI ของคุณ"
+  "landing.footer.copy": "© 2026 Second Brain — สภาพแวดล้อมการเรียนรู้ส่วนบุคคลด้วย AI ของคุณ",
   "languageSelector.recent": "ล่าสุด",
   "languageSelector.nativeLabel": "ภาษาแม่",
   "voice11.state.ready": "พร้อม",

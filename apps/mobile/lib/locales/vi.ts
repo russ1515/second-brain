@@ -1901,7 +1901,7 @@ const vi: Record<string, string> = {
   "landing.footer.legal1": "Quyền riêng tư",
   "landing.footer.legal2": "Điều khoản",
   "landing.footer.legal3": "Bảo mật",
-  "landing.footer.copy": "© 2026 Second Brain — Môi trường học tập AI cá nhân của bạn."
+  "landing.footer.copy": "© 2026 Second Brain — Môi trường học tập AI cá nhân của bạn.",
   "languageSelector.recent": "Gần đây",
   "languageSelector.nativeLabel": "Ngôn ngữ mẹ đẻ",
   "voice11.state.ready": "Sẵn sàng",

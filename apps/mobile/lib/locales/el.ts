@@ -1901,7 +1901,7 @@ const el: Record<string, string> = {
   "landing.footer.legal1": "Απόρρητο",
   "landing.footer.legal2": "Όροι",
   "landing.footer.legal3": "Ασφάλεια",
-  "landing.footer.copy": "© 2026 Second Brain — Το προσωπικό σας περιβάλλον μάθησης AI."
+  "landing.footer.copy": "© 2026 Second Brain — Το προσωπικό σας περιβάλλον μάθησης AI.",
   "languageSelector.recent": "Πρόσφατες",
   "languageSelector.nativeLabel": "Μητρική γλώσσα",
   "voice11.state.ready": "Έτοιμο",
