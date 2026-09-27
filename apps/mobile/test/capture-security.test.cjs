@@ -55,6 +55,40 @@ test('browser stream cleanup stops tracks and detaches a failed preview', () => 
   assert.match(capture, /catch \(reason\) \{[\s\S]*releaseMediaStream\(next, video\.current\)/);
 });
 
+test('scan object URL leases release removed previews only after ownership changes', () => {
+  const { createObjectUrlLease } = loadTypeScriptModule('apps/mobile/lib/capture/object-url-lease.ts');
+  const revoked = [];
+  const lease = createObjectUrlLease((url) => revoked.push(url));
+
+  lease.replace(['blob:page-a', 'blob:page-a', 'file:///native-page.jpg']);
+  assert.deepEqual(revoked, []);
+  lease.replace(['blob:page-a', 'blob:page-a-edited']);
+  assert.deepEqual(revoked, []);
+  lease.replace(['blob:page-a']);
+  assert.deepEqual(revoked, ['blob:page-a-edited']);
+  lease.replace([]);
+  assert.deepEqual(revoked, ['blob:page-a-edited', 'blob:page-a']);
+
+  lease.replace(['blob:page-b', 'blob:page-b']);
+  lease.releaseAll();
+  lease.releaseAll();
+  assert.deepEqual(revoked, ['blob:page-a-edited', 'blob:page-a', 'blob:page-b']);
+});
+
+test('Scan owns handed-off object URLs and retries the durable failed document', () => {
+  const scan = read('apps/mobile/app/scan.tsx');
+  assert.match(scan, /objectUrls\.current\.replace\(pages\.flatMap/);
+  assert.match(scan, /objectUrls\.current\.releaseAll\(\)/);
+  assert.match(scan, /setTimeout\(\(\) => \{[\s\S]*objectUrls\.current\.releaseAll\(\)/);
+  assert.match(scan, /clearTimeout\(releaseObjectUrlsTimer\.current\)/);
+  assert.match(scan, /setPages\(\[\]\)/);
+  assert.match(scan, /payload\?\.documentId/);
+  assert.match(scan, /\/retry-scan`/);
+  assert.match(scan, /document\.pipeline\.retryOcr/);
+  assert.match(scan, /const resetScan = \(\) => \{[\s\S]*setPages\(\[\]\)[\s\S]*uploadRequestId\.current = null/);
+  assert.doesNotMatch(scan, /code === 'SCAN_ATTEMPT_FAILED'[\s\S]{0,400}uploadRequestId\.current = null/);
+});
+
 test('Learn exposes distinct photo, document, QR, import and real export actions', () => {
   const composer = read('apps/mobile/components/learn/universal-composer.tsx');
   const privacy = read('apps/mobile/app/privacy.tsx');

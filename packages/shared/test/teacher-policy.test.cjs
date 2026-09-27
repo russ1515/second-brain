@@ -71,6 +71,64 @@ test('assessed conversation preference does not override explicit lesson or exer
   assert.equal(resolveTeacherPolicy(preferences, { mode: 'conversation' }).mode, 'assessed_conversation');
 });
 
+test('assessed conversation preference never grades free questions or research', () => {
+  const preferences = { conversationMode: 'assessed' };
+  for (const mode of ['free', 'free_search', 'deepsearch', 'deep_research', 'research']) {
+    const policy = resolveTeacherPolicy(preferences, { mode });
+    assert.equal(policy.mode, 'practice_conversation', mode);
+    assert.equal(policy.assessed, false, mode);
+    assert.equal(policy.hintsAllowed, true, mode);
+  }
+  assert.equal(resolveTeacherPolicy(preferences, { mode: 'discuss' }).mode, 'assessed_conversation');
+  assert.equal(resolveTeacherPolicy(preferences, { mode: 'unknown-surface' }).mode, 'practice_conversation');
+});
+
+test('explicit tone and intervention preferences change safe teaching policy and prompt', () => {
+  const supportive = resolveTeacherPolicy(
+    { tone: 'supportive', intervention: 'guide_me' },
+    { mode: 'lesson' },
+  );
+  const demanding = resolveTeacherPolicy(
+    { tone: 'demanding', intervention: 'guide_me' },
+    { mode: 'lesson' },
+  );
+  assert.equal(supportive.posture, 'supportive');
+  assert.equal(demanding.posture, 'demanding');
+  assert.match(teacherPolicyDirective(supportive), /warm, patient teaching tone/i);
+  assert.match(teacherPolicyDirective(demanding), /high expectations/i);
+  assert.notEqual(teacherPolicyDirective(supportive), teacherPolicyDirective(demanding));
+
+  const learnerLed = resolveTeacherPolicy(
+    { tone: 'balanced', intervention: 'let_me_think' },
+    { mode: 'lesson' },
+  );
+  const interactive = resolveTeacherPolicy(
+    { tone: 'balanced', intervention: 'interactive' },
+    { mode: 'lesson' },
+  );
+  assert.equal(learnerLed.assistance, 'limited');
+  assert.equal(interactive.assistance, 'balanced');
+  assert.match(teacherPolicyDirective(learnerLed), /time to think; intervene only/i);
+  assert.match(teacherPolicyDirective(interactive), /back-and-forth questions/i);
+  assert.notEqual(teacherPolicyDirective(learnerLed), teacherPolicyDirective(interactive));
+});
+
+test('tone and intervention preferences cannot weaken exam safeguards', () => {
+  const gentleExam = resolveTeacherPolicy(
+    { tone: 'supportive', intervention: 'interactive', examRigor: 'strict' },
+    { mode: 'exam', difficulty: 'advanced' },
+  );
+  const demandingExam = resolveTeacherPolicy(
+    { tone: 'demanding', intervention: 'let_me_think', examRigor: 'strict' },
+    { mode: 'exam', difficulty: 'advanced' },
+  );
+  assert.deepEqual(gentleExam, demandingExam);
+  assert.equal(gentleExam.posture, 'impartial');
+  assert.equal(gentleExam.assistance, 'none');
+  assert.equal(gentleExam.hintsAllowed, false);
+  assert.match(teacherPolicyDirective(gentleExam), /Do not provide hints/i);
+});
+
 test('explicit teacher modes override contradictory broad intents', () => {
   const cases = [
     ['lesson', 'practice-language', 'lesson'],

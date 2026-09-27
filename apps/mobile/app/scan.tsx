@@ -4,12 +4,13 @@ import * as ImagePicker from 'expo-image-picker';
 import { manipulateAsync, SaveFormat, type Action } from 'expo-image-manipulator';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { DocumentDetail } from '@second-brain/shared';
-import { ApiError, apiUpload } from '../lib/client';
+import { ApiError, api, apiUpload } from '../lib/client';
 import { createClientRequestId } from '../lib/request-id';
 import { appendPickedDocument, type PickedDocument } from '../lib/document-import';
 import { useTokens } from '../lib/design/theme';
 import { useI18n } from '../lib/i18n';
 import { classifyQrPayload, type QrPayload } from '../lib/capture/qr-safety';
+import { createObjectUrlLease } from '../lib/capture/object-url-lease';
 import type { CapturedImage } from '../lib/capture/types';
 import { CameraCapture } from '../components/capture/camera-capture';
 import { Alert, Button, Card } from '../components/ds/core';
@@ -48,11 +49,34 @@ export default function ScanScreen() {
   const [done, setDone] = useState<DocumentDetail | null>(null);
   const [qr, setQr] = useState<QrPayload | null>(null);
   const [qrAttempt, setQrAttempt] = useState(0);
+  const [failedScanDocumentId, setFailedScanDocumentId] = useState<string | null>(null);
   const uploadRequestId = useRef<string | null>(null);
+  const objectUrls = useRef(createObjectUrlLease());
+  const releaseObjectUrlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activePage = pages[selected] ?? null;
   const remaining = MAX_PAGES - pages.length;
   const canAdd = remaining > 0;
+
+  useEffect(() => {
+    objectUrls.current.replace(pages.flatMap((page) => [page.originalUri, page.uri]));
+  }, [pages]);
+
+  useEffect(() => {
+    // React Strict Mode performs a development-only cleanup/setup cycle. Delay
+    // route cleanup by one task so that setup can cancel it instead of revoking
+    // a handed-off preview while the screen is still mounted.
+    if (releaseObjectUrlsTimer.current) {
+      clearTimeout(releaseObjectUrlsTimer.current);
+      releaseObjectUrlsTimer.current = null;
+    }
+    return () => {
+      releaseObjectUrlsTimer.current = setTimeout(() => {
+        objectUrls.current.releaseAll();
+        releaseObjectUrlsTimer.current = null;
+      }, 0);
+    };
+  }, []);
 
   const makePage = (image: CapturedImage): ScanPage => ({
     ...image,
@@ -175,15 +199,22 @@ export default function ScanScreen() {
       uploadRequestId.current = requestId;
       const document = await apiUpload<DocumentDetail>('/documents/scan', form, { requestId });
       setDone(document);
+      setPages([]);
+      setFailedScanDocumentId(null);
     } catch (reason) {
-      const code = reason instanceof ApiError && reason.payload && typeof reason.payload === 'object'
-        ? (reason.payload as { code?: unknown }).code
+      const payload = reason instanceof ApiError && reason.payload && typeof reason.payload === 'object'
+        ? reason.payload as { code?: unknown; documentId?: unknown }
         : null;
+      const code = payload?.code;
       if (code === 'SCAN_ATTEMPT_FAILED') {
-        // The previous provider operation is terminal and must never be replayed
-        // under the same ledger key. The next explicit click starts a new attempt.
-        uploadRequestId.current = null;
-        setError(t('scan.retryNewAttempt'));
+        // The durable document owns the captured pages. Never create a fresh
+        // scan implicitly: the explicit retry route rereads those exact bytes.
+        if (typeof payload?.documentId === 'string' && payload.documentId) {
+          setFailedScanDocumentId(payload.documentId);
+          setError(t('document.pipeline.ocrFailed'));
+        } else {
+          setError(t('scan.uploadError'));
+        }
       } else if (code === 'SCAN_IN_PROGRESS') {
         setError(t('scan.inProgress'));
       } else {
@@ -192,6 +223,43 @@ export default function ScanScreen() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const retrySavedScan = async () => {
+    if (!failedScanDocumentId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const document = await api<DocumentDetail>(
+        `/documents/${encodeURIComponent(failedScanDocumentId)}/retry-scan`,
+        { method: 'POST' },
+      );
+      setDone(document);
+      setPages([]);
+      setFailedScanDocumentId(null);
+    } catch (reason) {
+      const payload = reason instanceof ApiError && reason.payload && typeof reason.payload === 'object'
+        ? reason.payload as { code?: unknown; documentId?: unknown }
+        : null;
+      if (typeof payload?.documentId === 'string' && payload.documentId) {
+        setFailedScanDocumentId(payload.documentId);
+      }
+      setError(payload?.code === 'SCAN_IN_PROGRESS'
+        ? t('scan.inProgress')
+        : t('document.pipeline.ocrFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resetScan = () => {
+    setDone(null);
+    setPages([]);
+    setSelected(0);
+    setTitle('');
+    setError(null);
+    setFailedScanDocumentId(null);
+    uploadRequestId.current = null;
   };
 
   const handleQr = (value: string) => {
@@ -286,7 +354,7 @@ export default function ScanScreen() {
         {done.content ? <Text style={{ color: c.textSecondary }} numberOfLines={12}>{done.content}</Text> : null}
         {source === 'learn' ? <Button label={t('scan.returnToLearn')} onPress={() => router.replace({ pathname: '/learn', params: { documentId: done.id } })} /> : null}
         <Button variant="secondary" label={t('scan.openDocument')} onPress={() => router.replace(`/library/${done.id}`)} />
-        <Button variant="ghost" label={t('scan.scanAnother')} onPress={() => { setDone(null); setPages([]); setSelected(0); uploadRequestId.current = null; }} />
+        <Button variant="ghost" label={t('scan.scanAnother')} onPress={resetScan} />
       </ScrollView>
     );
   }
@@ -296,15 +364,26 @@ export default function ScanScreen() {
       <Text accessibilityRole="header" style={[typography.h1, { color: c.textPrimary }]}>{t('scan.title')}</Text>
       <Text style={[typography.body, { color: c.textSecondary }]}>{t('scan.help').replace('{max}', String(MAX_PAGES))}</Text>
       <Alert tone="info" title={t('scan.captureFirst')} detail={t('scan.captureFirstDetail')} />
-      {error ? <Alert tone="error" title={error} detail={t('scan.retryPreserved')} /> : null}
+      {error ? <Alert tone="error" title={error} detail={failedScanDocumentId ? t('document.pipeline.ocrRetryHelp') : t('scan.retryPreserved')} /> : null}
+      {failedScanDocumentId ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+          <Button
+            label={t('document.pipeline.retryOcr')}
+            loading={busy}
+            disabled={busy}
+            onPress={() => void retrySavedScan()}
+          />
+          <Button variant="ghost" label={t('scan.scanAnother')} disabled={busy} onPress={resetScan} />
+        </View>
+      ) : null}
       {cameraOpen ? (
         <Card style={{ gap: spacing.sm }}>
           <CameraCapture mode="document" onCapture={addCaptured} onCancel={() => setCameraOpen(false)} onImport={() => { setCameraOpen(false); void pick(); }} />
         </Card>
       ) : (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
-          <Button label={t('scan.takePhoto')} disabled={!canAdd || busy} onPress={() => setCameraOpen(true)} />
-          <Button variant="secondary" label={t('scan.chooseImages')} disabled={!canAdd || busy} onPress={() => void pick()} />
+          <Button label={t('scan.takePhoto')} disabled={!canAdd || busy || Boolean(failedScanDocumentId)} onPress={() => setCameraOpen(true)} />
+          <Button variant="secondary" label={t('scan.chooseImages')} disabled={!canAdd || busy || Boolean(failedScanDocumentId)} onPress={() => void pick()} />
         </View>
       )}
       {activePage ? (
@@ -312,11 +391,11 @@ export default function ScanScreen() {
           <Image source={{ uri: activePage.uri }} resizeMode="contain" style={{ width: '100%', aspectRatio: 4 / 3, borderRadius: radius.sm, backgroundColor: c.surfaceSunken }} />
           <Text style={{ color: c.textSecondary }}>{t('scan.pagePosition').replace('{current}', String(selected + 1)).replace('{total}', String(pages.length))}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
-            <Button size="sm" variant="secondary" label={t('scan.moveBefore')} disabled={selected === 0 || busy} onPress={() => move(selected, -1)} />
-            <Button size="sm" variant="secondary" label={t('scan.moveAfter')} disabled={selected === pages.length - 1 || busy} onPress={() => move(selected, 1)} />
-            <Button size="sm" variant="secondary" label={t('scan.rotate')} loading={busy} onPress={() => void transform(selected, 'rotate')} />
-            <Button size="sm" variant="secondary" label={t('scan.crop')} loading={busy} onPress={() => void transform(selected, 'crop')} />
-            <Button size="sm" variant="ghost" label={t('scan.remove')} disabled={busy} onPress={() => remove(selected)} />
+            <Button size="sm" variant="secondary" label={t('scan.moveBefore')} disabled={selected === 0 || busy || Boolean(failedScanDocumentId)} onPress={() => move(selected, -1)} />
+            <Button size="sm" variant="secondary" label={t('scan.moveAfter')} disabled={selected === pages.length - 1 || busy || Boolean(failedScanDocumentId)} onPress={() => move(selected, 1)} />
+            <Button size="sm" variant="secondary" label={t('scan.rotate')} loading={busy} disabled={Boolean(failedScanDocumentId)} onPress={() => void transform(selected, 'rotate')} />
+            <Button size="sm" variant="secondary" label={t('scan.crop')} loading={busy} disabled={Boolean(failedScanDocumentId)} onPress={() => void transform(selected, 'crop')} />
+            <Button size="sm" variant="ghost" label={t('scan.remove')} disabled={busy || Boolean(failedScanDocumentId)} onPress={() => remove(selected)} />
           </View>
           <Text style={{ color: c.textMuted, fontSize: 12 }}>{t('scan.perspectiveLimit')}</Text>
         </Card>
@@ -329,13 +408,13 @@ export default function ScanScreen() {
           </View>
           <TextInput
             value={title}
-            editable={!busy}
+            editable={!busy && !failedScanDocumentId}
             onChangeText={(value) => { setTitle(value); uploadRequestId.current = null; }}
             placeholder={t('scan.titlePlaceholder')}
             placeholderTextColor={c.textMuted}
             style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.sm, padding: spacing.sm, color: c.textPrimary, backgroundColor: c.surface }}
           />
-          <Button label={t('scan.readPages')} loading={busy} disabled={!pages.length || cameraOpen || busy} onPress={() => void upload()} />
+          {!failedScanDocumentId ? <Button label={t('scan.readPages')} loading={busy} disabled={!pages.length || cameraOpen || busy} onPress={() => void upload()} /> : null}
         </View>
       ) : null}
     </ScrollView>

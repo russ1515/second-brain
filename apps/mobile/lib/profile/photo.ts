@@ -8,6 +8,13 @@ export type PickResult =
   | { ok: true; image: CapturedImage }
   | { ok: false; reason: 'cancelled' | 'denied' | 'error' };
 
+export interface SavedAvatarPhoto {
+  /** Confirmed server bytes when read-back succeeds, otherwise the local
+   * normalized preview for the upload that the server already accepted. */
+  uri: string;
+  readback: 'confirmed' | 'unconfirmed';
+}
+
 const listeners = new Map<string, Set<(uri: string | null) => void>>();
 
 export function subscribeAvatarPhoto(
@@ -74,14 +81,29 @@ export async function loadAvatarPhoto(): Promise<string | null> {
   return `data:${response.contentType};base64,${arrayBufferToBase64(response.data)}`;
 }
 
-export async function saveAvatarPhoto(userId: string, image: CapturedImage): Promise<string> {
+export async function saveAvatarPhoto(userId: string, image: CapturedImage): Promise<SavedAvatarPhoto> {
   const form = new FormData();
   await appendPickedDocument(form, 'file', image);
+  // Nothing is published until the authenticated PUT itself succeeds. A
+  // rejected upload therefore leaves both the current UI and other surfaces
+  // on the previous avatar.
   await apiUpload('/profile/avatar', form, { method: 'PUT' });
-  const stored = await loadAvatarPhoto();
-  if (!stored) throw new Error('Avatar upload did not persist.');
-  publish(userId, stored);
-  return stored;
+  try {
+    const stored = await loadAvatarPhoto();
+    if (stored) {
+      publish(userId, stored);
+      return { uri: stored, readback: 'confirmed' };
+    }
+  } catch {
+    // The mutation has already succeeded. A transient read-back failure must
+    // not be reported as a failed upload or as preservation of the old photo.
+  }
+
+  // Keep all surfaces coherent with the successful mutation using the local
+  // normalized preview. The backend still serves binary media; no Base64 is
+  // added to an API payload.
+  publish(userId, image.uri);
+  return { uri: image.uri, readback: 'unconfirmed' };
 }
 
 export async function clearAvatarPhoto(userId: string): Promise<void> {

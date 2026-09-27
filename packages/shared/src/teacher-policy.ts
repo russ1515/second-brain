@@ -87,10 +87,16 @@ export function resolveTeacherExperienceMode(
   if (/^(assessed_conversation|evaluated_conversation)$/.test(mode)) return 'assessed_conversation';
   if (/^(exercise|oral_exercise|revision|review|practice)$/.test(mode)) return 'exercise';
   if (/^(lesson|teach|explain|learn)$/.test(mode)) return 'lesson';
-  if (/^(practice_conversation|conversation|chat|discussion)$/.test(mode)) {
+  if (/^(practice_conversation|conversation|chat|chat_tutor|discuss|discussion)$/.test(mode)) {
     return safePreferences?.conversationMode === 'assessed'
       ? 'assessed_conversation'
       : 'practice_conversation';
+  }
+  // Question/research surfaces are not evaluated conversations. In
+  // particular, a Profile preference for assessed *conversation* must not
+  // silently grade free questions or deep research sessions.
+  if (/^(free|free_search|deepsearch|deep_research|research|search)$/.test(mode)) {
+    return 'practice_conversation';
   }
 
   const intent = (context.intent ?? '').trim().toLowerCase();
@@ -98,8 +104,27 @@ export function resolveTeacherExperienceMode(
   if (/assessed|evaluated/.test(intent)) return 'assessed_conversation';
   if (/exercise|practice|revision|review|oral[_\s-]?exercise/.test(intent)) return 'exercise';
   if (/teach|lesson|explain|learn/.test(intent)) return 'lesson';
-  if (safePreferences?.conversationMode === 'assessed') return 'assessed_conversation';
   return 'practice_conversation';
+}
+
+function preferredPosture(
+  preferences: KycTeacher | null,
+  fallback: TeacherPolicySnapshot['posture'],
+): TeacherPolicySnapshot['posture'] {
+  if (preferences?.tone === 'supportive') return 'supportive';
+  if (preferences?.tone === 'balanced') return 'calm';
+  if (preferences?.tone === 'demanding') return 'demanding';
+  return fallback;
+}
+
+function preferredAssistance(
+  preferences: KycTeacher | null,
+  fallback: TeacherAssistance,
+): TeacherAssistance {
+  if (preferences?.intervention === 'let_me_think') return 'limited';
+  if (preferences?.intervention === 'guide_me') return 'progressive';
+  if (preferences?.intervention === 'interactive') return 'balanced';
+  return fallback;
 }
 
 export function resolveTeacherPolicy(
@@ -159,12 +184,17 @@ export function resolveTeacherPolicy(
 
   if (mode === 'exercise') {
     const support = safePreferences?.learningSupport ?? 'guided';
+    const fallbackAssistance = support === 'demanding'
+      ? 'limited'
+      : support === 'balanced'
+        ? 'balanced'
+        : 'progressive';
     return {
       version: TEACHER_POLICY_VERSION,
       mode,
       automaticAdaptation,
-      posture: support === 'demanding' ? 'demanding' : 'supportive',
-      assistance: support === 'demanding' ? 'limited' : support === 'balanced' ? 'balanced' : 'progressive',
+      posture: preferredPosture(safePreferences, support === 'demanding' ? 'demanding' : 'supportive'),
+      assistance: preferredAssistance(safePreferences, fallbackAssistance),
       correction: trainingCorrection,
       explanation,
       encouragement,
@@ -179,12 +209,13 @@ export function resolveTeacherPolicy(
   }
 
   if (mode === 'lesson') {
+    const fallbackAssistance = safePreferences?.learningSupport === 'demanding' ? 'balanced' : 'progressive';
     return {
       version: TEACHER_POLICY_VERSION,
       mode,
       automaticAdaptation,
-      posture: 'calm',
-      assistance: safePreferences?.learningSupport === 'demanding' ? 'balanced' : 'progressive',
+      posture: preferredPosture(safePreferences, 'calm'),
+      assistance: preferredAssistance(safePreferences, fallbackAssistance),
       correction: trainingCorrection,
       explanation,
       encouragement,
@@ -202,8 +233,8 @@ export function resolveTeacherPolicy(
     version: TEACHER_POLICY_VERSION,
     mode,
     automaticAdaptation,
-    posture: 'supportive',
-    assistance: 'balanced',
+    posture: preferredPosture(safePreferences, 'supportive'),
+    assistance: preferredAssistance(safePreferences, 'balanced'),
     correction: trainingCorrection,
     explanation,
     encouragement,
@@ -270,11 +301,25 @@ export function isTeacherPolicySnapshot(value: unknown): value is TeacherPolicyS
 /** System-level directive derived only from trusted server state. User text,
  * documents and QR payloads can never loosen these rules. */
 export function teacherPolicyDirective(policy: TeacherPolicySnapshot): string {
+  const postureDirective: Record<TeacherPolicySnapshot['posture'], string> = {
+    calm: 'Use a calm, neutral teaching tone. ',
+    supportive: 'Use a warm, patient teaching tone without false praise. ',
+    demanding: 'Set high expectations and be precise without humiliating the learner. ',
+    impartial: 'Remain neutral and apply the announced criteria consistently. ',
+  };
+  const assistanceDirective: Record<TeacherAssistance, string> = {
+    progressive: 'Offer guidance progressively, from a small prompt to a fuller explanation only as needed. ',
+    balanced: 'Use short back-and-forth questions and concise guidance while keeping the learner active. ',
+    limited: 'Give the learner time to think; intervene only with a brief prompt when necessary. ',
+    none: 'Do not provide hints, leading prompts or answers during the attempt. ',
+  };
   const base =
     ` Trusted session policy (v${policy.version}, ${policy.mode}): posture=${policy.posture}; ` +
     `assistance=${policy.assistance}; correction=${policy.correction}; ` +
     `explanation=${policy.explanation}; encouragement=${policy.encouragement}; ` +
     `session-summary=${policy.sessionSummary ? 'enabled' : 'disabled'}. ` +
+    postureDirective[policy.posture] +
+    assistanceDirective[policy.assistance] +
     (policy.automaticAdaptation
       ? 'Adapt pace, examples and difficulty only from verified answers and recorded learning evidence. '
       : 'Keep the captured teaching settings stable; do not auto-adjust pace or difficulty unless the learner explicitly asks. ') +

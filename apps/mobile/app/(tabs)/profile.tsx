@@ -53,7 +53,7 @@ export default function ProfileScreen() {
   const [avatarDraft, setAvatarDraft] = useState<CapturedImage | null>(null);
   const [avatarRotation, setAvatarRotation] = useState<0 | 90 | 180 | 270>(0);
   const [avatarZoom, setAvatarZoom] = useState(1);
-  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [avatarError, setAvatarError] = useState<{ title: string; detail?: string } | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -64,7 +64,14 @@ export default function ProfileScreen() {
     let cancel = false;
     loadAvatarPhoto()
       .then((value) => { if (!cancel) setPhoto(value); })
-      .catch(() => { if (!cancel) setAvatarError(t('profile.avatar.loadError')); });
+      .catch(() => {
+        if (!cancel) {
+          setAvatarError({
+            title: t('profile.avatar.loadError'),
+            detail: t('profile.avatar.preserved'),
+          });
+        }
+      });
     return () => { cancel = true; };
   }, [t, user?.id]);
 
@@ -147,9 +154,14 @@ export default function ProfileScreen() {
         setAvatarRotation(0);
         setAvatarZoom(1);
       }
-      else if (result.reason !== 'cancelled') setAvatarError(t(`profile.avatar.${result.reason}` as TranslationKey));
+      else if (result.reason !== 'cancelled') {
+        setAvatarError({
+          title: t(`profile.avatar.${result.reason}` as TranslationKey),
+          detail: t('profile.avatar.preserved'),
+        });
+      }
     } catch {
-      setAvatarError(t('profile.avatar.saveError'));
+      setAvatarError({ title: t('profile.avatar.saveError'), detail: t('profile.avatar.preserved') });
     } finally {
       setBusy(false);
     }
@@ -177,13 +189,6 @@ export default function ProfileScreen() {
         ...(avatarRotation ? [{ rotate: avatarRotation }] : []),
       ], { compress: 0.9, format: SaveFormat.JPEG });
       generatedUri = result.uri;
-      // Persist the identity mutation first. If it fails, the server-side
-      // avatar has not been touched and the previous photo remains intact.
-      const identitySaved = await patch('identity', { avatarEmoji: '' });
-      if (!identitySaved) {
-        setAvatarError(t('profile.avatar.saveError'));
-        return;
-      }
       const stored = await saveAvatarPhoto(user.id, {
         ...avatarDraft,
         uri: result.uri,
@@ -193,10 +198,22 @@ export default function ProfileScreen() {
         name: avatarDraft.name.replace(/\.[^.]+$/, '.jpg'),
         file: undefined,
       });
-      setPhoto(stored);
+      // A successful PUT is authoritative even if its immediate authenticated
+      // GET cannot be completed. Retain the normalized local object URL in
+      // that case so Profile and subscribed surfaces show the same new photo.
+      if (stored.readback === 'unconfirmed' && generatedUri === stored.uri && generatedUri.startsWith('blob:')) {
+        generatedUri = null;
+      }
+      setPhoto(stored.uri);
       setAvatarDraft(null);
+      // Clear the emoji only after the avatar mutation succeeds. If this
+      // independent identity write fails, the new photo remains primary and
+      // the old emoji is a harmless fallback rather than lost user data.
+      await patch('identity', { avatarEmoji: '' });
     } catch {
-      setAvatarError(t('profile.avatar.saveError'));
+      // The previous photo is preserved on a rejected PUT, but a lost network
+      // response is ambiguous; avoid making a preservation claim in the UI.
+      setAvatarError({ title: t('profile.avatar.saveError') });
     } finally {
       if (generatedUri?.startsWith('blob:')) URL.revokeObjectURL(generatedUri);
       setBusy(false);
@@ -209,13 +226,13 @@ export default function ProfileScreen() {
     try {
       const identitySaved = await patch('identity', { avatarEmoji: emoji });
       if (!identitySaved) {
-        setAvatarError(t('profile.avatar.removeError'));
+        setAvatarError({ title: t('profile.avatar.removeError'), detail: t('profile.avatar.preserved') });
         return;
       }
       await clearAvatarPhoto(user.id);
       setPhoto(null);
     } catch {
-      setAvatarError(t('profile.avatar.removeError'));
+      setAvatarError({ title: t('profile.avatar.removeError') });
     } finally {
       setBusy(false);
     }
@@ -227,13 +244,13 @@ export default function ProfileScreen() {
     try {
       const identitySaved = await patch('identity', { avatarEmoji: '' });
       if (!identitySaved) {
-        setAvatarError(t('profile.avatar.removeError'));
+        setAvatarError({ title: t('profile.avatar.removeError'), detail: t('profile.avatar.preserved') });
         return;
       }
       await clearAvatarPhoto(user.id);
       setPhoto(null);
     } catch {
-      setAvatarError(t('profile.avatar.removeError'));
+      setAvatarError({ title: t('profile.avatar.removeError') });
     } finally {
       setBusy(false);
     }
@@ -288,7 +305,7 @@ export default function ProfileScreen() {
 
         {partial ? <SmartState state="partial" detail={t('profile.partial')} /> : null}
         {settingsError ? <Alert tone="error" title={settingsError} detail={t('profile.settings.preserved')} /> : null}
-        {avatarError ? <Alert tone="error" title={avatarError} detail={t('profile.avatar.preserved')} /> : null}
+        {avatarError ? <Alert tone="error" title={avatarError.title} detail={avatarError.detail} /> : null}
 
         <ResponsiveSplit
           secondaryWidth={400}
