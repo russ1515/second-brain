@@ -8,14 +8,40 @@ const {
   teacherPolicyDirective,
 } = require('../dist/index.js');
 
-test('recommended defaults are adaptive, supportive and ungraded', () => {
+test('recommended defaults are adaptive, normal and ungraded', () => {
   const policy = resolveTeacherPolicy(undefined, { mode: 'conversation' });
   assert.equal(policy.automaticAdaptation, true);
   assert.equal(policy.mode, 'practice_conversation');
   assert.equal(policy.assessed, false);
   assert.equal(policy.hintsAllowed, true);
+  assert.equal(policy.posture, 'calm');
+  assert.equal(policy.assistance, 'balanced');
+  assert.match(teacherPolicyDirective(policy), /natural, upbeat and structured/i);
   assert.equal(policy.labelCode, 'teacher.mode.training');
   assert.equal(isTeacherPolicySnapshot(policy), true);
+});
+
+test('the three teaching levels have distinct safe effects outside exams', () => {
+  const lessDemanding = resolveTeacherPolicy({ learningSupport: 'guided' }, { mode: 'lesson' });
+  const normal = resolveTeacherPolicy({ learningSupport: 'balanced' }, { mode: 'lesson' });
+  const demanding = resolveTeacherPolicy({ learningSupport: 'demanding' }, { mode: 'lesson' });
+  assert.deepEqual(
+    [lessDemanding.posture, lessDemanding.assistance],
+    ['supportive', 'progressive'],
+  );
+  assert.deepEqual([normal.posture, normal.assistance], ['calm', 'balanced']);
+  assert.deepEqual([demanding.posture, demanding.assistance], ['demanding', 'limited']);
+  assert.match(teacherPolicyDirective(normal), /without constant jokes or false praise/i);
+  assert.equal(resolveTeacherPolicy({ learningSupport: 'guided' }, { mode: 'exam' }).assistance, 'none');
+});
+
+test('the explicit teaching level is authoritative over contradictory legacy fields', () => {
+  const policy = resolveTeacherPolicy(
+    { learningSupport: 'balanced', tone: 'demanding', intervention: 'let_me_think' },
+    { mode: 'lesson' },
+  );
+  assert.equal(policy.posture, 'calm');
+  assert.equal(policy.assistance, 'balanced');
 });
 
 test('practice exercises use graduated help without accepting false answers', () => {

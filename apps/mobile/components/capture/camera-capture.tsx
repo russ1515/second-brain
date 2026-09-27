@@ -23,6 +23,7 @@ export function CameraCapture({ mode, onCapture, onQr, onCancel, onImport }: Cam
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [permissionBusy, setPermissionBusy] = useState(false);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
@@ -62,12 +63,35 @@ export function CameraCapture({ mode, onCapture, onQr, onCancel, onImport }: Cam
     onQr?.(data);
   };
 
+  const askPermission = async () => {
+    if (permissionBusy) return;
+    setPermissionBusy(true);
+    try {
+      await requestPermission();
+    } finally {
+      setPermissionBusy(false);
+    }
+  };
+
+  const retake = () => {
+    setReady(false);
+    setError(null);
+    setCaptured(null);
+  };
+
+  const switchCamera = () => {
+    setReady(false);
+    setError(null);
+    setFacing((value) => value === 'back' ? 'front' : 'back');
+  };
+
   if (!permission) return <Text style={{ color: c.textMuted }}>{t('capture.permission.pending')}</Text>;
   if (!permission.granted) {
     return (
       <View style={{ gap: spacing.sm }}>
         <Alert tone="warning" title={t('capture.permission.title')} detail={t('capture.permission.detail')} />
-        {permission.canAskAgain ? <Button label={t('capture.permission.allow')} onPress={() => void requestPermission()} /> : null}
+        {permission.canAskAgain ? <Button label={t('capture.permission.allow')} loading={permissionBusy} onPress={() => void askPermission()} /> : null}
+        {permissionBusy ? <Text accessibilityLiveRegion="polite" style={{ color: c.textMuted }}>{t('capture.permission.pending')}</Text> : null}
         {onImport ? <Button variant="secondary" label={t('capture.importFallback')} onPress={onImport} /> : null}
         <Button variant="ghost" label={t('learn5.cancel')} onPress={onCancel} />
       </View>
@@ -83,7 +107,7 @@ export function CameraCapture({ mode, onCapture, onQr, onCancel, onImport }: Cam
           style={{ width: '100%', aspectRatio: mode === 'avatar' ? 1 : 4 / 3, borderRadius: radius.md, backgroundColor: c.surfaceSunken }}
         />
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
-          <Button variant="secondary" label={t('capture.retake')} onPress={() => setCaptured(null)} />
+          <Button variant="secondary" label={t('capture.retake')} onPress={retake} />
           <Button label={t('capture.confirm')} onPress={() => onCapture?.(captured)} />
           <Button variant="ghost" label={t('learn5.cancel')} onPress={onCancel} />
         </View>
@@ -105,6 +129,15 @@ export function CameraCapture({ mode, onCapture, onQr, onCancel, onImport }: Cam
             barcodeScannerSettings={mode === 'qr' ? { barcodeTypes: ['qr'] } : undefined}
             onBarcodeScanned={mode === 'qr' ? barcode : undefined}
           />
+          {!ready && !error ? (
+            <View
+              accessibilityLiveRegion="polite"
+              pointerEvents="none"
+              style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: '#00000099', padding: spacing.md }}
+            >
+              <Text style={{ color: '#FFF', fontWeight: '700', textAlign: 'center' }}>{t('capture.permission.pending')}</Text>
+            </View>
+          ) : null}
           {mode === 'document' || mode === 'qr' ? (
             <View pointerEvents="none" style={{ position: 'absolute', inset: 24, borderWidth: 2, borderColor: '#FFFFFFCC', borderRadius: radius.sm }} />
           ) : null}
@@ -112,7 +145,7 @@ export function CameraCapture({ mode, onCapture, onQr, onCancel, onImport }: Cam
       ) : <Alert tone="warning" title={t('capture.error.paused')} detail={t('capture.error.fallback')} />}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
         {mode !== 'qr' ? <Button label={t('capture.take')} loading={busy} disabled={!ready || !active} onPress={() => void takePicture()} /> : null}
-        <Button variant="secondary" label={t('capture.switch')} onPress={() => setFacing((value) => value === 'back' ? 'front' : 'back')} />
+        <Button variant="secondary" label={t('capture.switch')} onPress={switchCamera} />
         {onImport ? <Button variant="secondary" label={t('capture.importFallback')} onPress={onImport} /> : null}
         <Button variant="ghost" label={t('learn5.cancel')} onPress={onCancel} />
       </View>

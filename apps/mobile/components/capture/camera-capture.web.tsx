@@ -288,6 +288,15 @@ export function CameraCapture({ mode, onCapture, onQr, onCancel, onImport }: Cam
           'aria-label': t('capture.preview'),
           style: { width: '100%', height: '100%', objectFit: 'cover' },
         })}
+        {(busy || !ready) && !error ? (
+          <View
+            accessibilityLiveRegion="polite"
+            pointerEvents="none"
+            style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: '#00000099', padding: spacing.md }}
+          >
+            <Text style={{ color: '#FFF', fontWeight: '700', textAlign: 'center' }}>{t('capture.permission.pending')}</Text>
+          </View>
+        ) : null}
         {mode === 'document' || mode === 'qr' ? <View pointerEvents="none" style={{ position: 'absolute', inset: 24, borderWidth: 2, borderColor: '#FFFFFFCC', borderRadius: radius.sm }} /> : null}
       </View>
       {devices.length > 1 ? (
@@ -314,7 +323,6 @@ export function CameraCapture({ mode, onCapture, onQr, onCancel, onImport }: Cam
         {onImport ? <Button variant="secondary" label={t('capture.importFallback')} onPress={importFallback} /> : null}
         <Button variant="ghost" label={t('learn5.cancel')} onPress={cancel} />
       </View>
-      {busy ? <Text style={{ color: c.textMuted }}>{t('capture.permission.pending')}</Text> : null}
       {mode === 'qr' ? <Text style={{ color: c.textMuted }}>{t('qr.aim')}</Text> : null}
     </View>
   );

@@ -42,6 +42,31 @@ test('web capture never requests audio and releases every media track', () => {
   assert.doesNotMatch(capture, /getUserMedia\(\{[^}]*audio:\s*true/s);
 });
 
+test('camera surfaces show an explicit opening or permission state', () => {
+  const web = read('apps/mobile/components/capture/camera-capture.web.tsx');
+  const native = read('apps/mobile/components/capture/camera-capture.tsx');
+  assert.match(web, /\(busy \|\| !ready\)[\s\S]*capture\.permission\.pending/);
+  assert.match(web, /accessibilityLiveRegion="polite"/);
+  assert.match(native, /permissionBusy[\s\S]*capture\.permission\.pending/);
+  assert.match(native, /!ready && !error[\s\S]*capture\.permission\.pending/);
+  assert.match(native, /const retake = \(\) => \{[\s\S]*setReady\(false\)[\s\S]*setCaptured\(null\)/);
+  assert.match(native, /const switchCamera = \(\) => \{[\s\S]*setReady\(false\)[\s\S]*setFacing/);
+});
+
+test('the three visible teaching levels persist coherent legacy preferences', () => {
+  const profile = read('apps/mobile/components/profile/components.tsx');
+  assert.match(profile, /options=\{\['guided', 'balanced', 'demanding'\]/);
+  assert.match(profile, /value=\{displayedLearningSupport\}[\s\S]*wrap/);
+  assert.match(profile, /tone:\s*learningSupport === 'guided'[\s\S]*\? 'supportive'[\s\S]*: 'balanced'/);
+  assert.match(profile, /tone:\s*learningSupport === 'guided'[\s\S]*learningSupport === 'demanding'[\s\S]*\? 'demanding'/);
+  assert.match(profile, /intervention:\s*learningSupport === 'guided'[\s\S]*\? 'guide_me'[\s\S]*: 'interactive'/);
+  assert.match(profile, /intervention:\s*learningSupport === 'guided'[\s\S]*learningSupport === 'demanding'[\s\S]*\? 'let_me_think'/);
+  assert.match(profile, /learningSupport: 'balanced',[\s\S]*tone: 'balanced',[\s\S]*intervention: 'interactive'/);
+  const controls = read('apps/mobile/components/ds/core.tsx');
+  assert.match(controls, /wrap \? 'wrap' : 'nowrap'/);
+  assert.match(controls, /minWidth: wrap \? 112 : undefined/);
+});
+
 test('browser stream cleanup stops tracks and detaches a failed preview', () => {
   const { releaseMediaStream } = loadTypeScriptModule('apps/mobile/lib/capture/media-stream.ts');
   let stopped = 0;

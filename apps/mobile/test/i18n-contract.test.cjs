@@ -186,6 +186,21 @@ test('UI selectors expose only complete catalogs while learning selectors keep a
   assert.match(languagesScreen, /value=\{nativeCode\}[\s\S]{0,100}mode=['\"]learning['\"]/);
 });
 
+test('the restored UI selector has exactly 13 complete languages', () => {
+  const complete = ['en', 'fr'];
+  for (const resource of localeResources) {
+    const translations = effectiveCatalog(resource);
+    if (
+      translations.size === english.size
+      && [...english.keys()].every((key) => translations.has(key))
+    ) complete.push(resource.code);
+  }
+  assert.deepEqual(
+    complete.sort(),
+    ['en', 'fr', 'es', 'de', 'it', 'pt', 'nl', 'pl', 'ru', 'zh', 'ko', 'ar', 'hi'].sort(),
+  );
+});
+
 test('French is complete and every generated catalog is a safe English subset', (t) => {
   assert.deepEqual([...french.keys()].sort(), [...english.keys()].sort());
 

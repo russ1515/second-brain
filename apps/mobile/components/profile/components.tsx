@@ -254,9 +254,21 @@ export function AdaptiveTeacherConfig({
   const { colors: c } = useTokens();
   const { t } = useI18n();
   const [advanced, setAdvanced] = useState(false);
+  const displayedLearningSupport: NonNullable<KycTeacher['learningSupport']> = value.learningSupport
+    ?? (value.tone === 'supportive' && value.intervention !== 'let_me_think'
+      ? 'guided'
+      : value.tone === 'demanding' && value.intervention !== 'guide_me'
+        ? 'demanding'
+        : value.intervention === 'guide_me' && value.tone !== 'demanding'
+          ? 'guided'
+          : value.intervention === 'let_me_think' && value.tone !== 'supportive'
+            ? 'demanding'
+            : 'balanced');
   const reset = () => onChange({
     automaticAdaptation: true,
-    learningSupport: 'guided',
+    learningSupport: 'balanced',
+    tone: 'balanced',
+    intervention: 'interactive',
     conversationMode: 'training',
     examRigor: 'standard',
     correction: 'adaptive',
@@ -281,8 +293,21 @@ export function AdaptiveTeacherConfig({
       <Field label={t('profile.teacher.learning')}>
         <SegmentedControl
           options={['guided', 'balanced', 'demanding'] as const}
-          value={value.learningSupport ?? 'guided'}
-          onChange={(learningSupport) => onChange({ learningSupport })}
+          value={displayedLearningSupport}
+          wrap
+          onChange={(learningSupport) => onChange({
+            learningSupport,
+            tone: learningSupport === 'guided'
+              ? 'supportive'
+              : learningSupport === 'demanding'
+                ? 'demanding'
+                : 'balanced',
+            intervention: learningSupport === 'guided'
+              ? 'guide_me'
+              : learningSupport === 'demanding'
+                ? 'let_me_think'
+                : 'interactive',
+          })}
           labelFor={(option) => t(`profile.teacher.learning.${option}` as TranslationKey)}
         />
       </Field>

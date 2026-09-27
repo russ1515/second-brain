@@ -178,15 +178,17 @@ export function SegmentedControl<T extends string>({
   value,
   onChange,
   labelFor,
+  wrap = false,
 }: {
   options: readonly T[];
   value: T;
   onChange: (v: T) => void;
   labelFor?: (v: T) => string;
+  wrap?: boolean;
 }) {
   const { colors: c, radius } = useTokens();
   return (
-    <View style={{ flexDirection: 'row', backgroundColor: c.surfaceSunken, borderRadius: radius.sm, padding: 3, alignSelf: 'flex-start' }}>
+    <View style={{ flexDirection: 'row', flexWrap: wrap ? 'wrap' : 'nowrap', gap: wrap ? 3 : 0, backgroundColor: c.surfaceSunken, borderRadius: radius.sm, padding: 3, alignSelf: wrap ? 'stretch' : 'flex-start' }}>
       {options.map((o) => {
         const active = o === value;
         return (
@@ -195,7 +197,7 @@ export function SegmentedControl<T extends string>({
             onPress={() => onChange(o)}
             accessibilityRole="tab"
             accessibilityState={{ selected: active }}
-            style={{ paddingVertical: 8, paddingHorizontal: 16, borderRadius: radius.xs, backgroundColor: active ? c.surface : 'transparent', minHeight: 40, justifyContent: 'center' }}
+            style={{ paddingVertical: 8, paddingHorizontal: 16, borderRadius: radius.xs, backgroundColor: active ? c.surface : 'transparent', minHeight: 40, minWidth: wrap ? 112 : undefined, flexGrow: wrap ? 1 : 0, justifyContent: 'center', alignItems: 'center' }}
           >
             <Text style={{ color: active ? c.textPrimary : c.textSecondary, fontWeight: active ? '700' : '500', fontSize: 14 }}>
               {labelFor ? labelFor(o) : o}

@@ -127,6 +127,36 @@ function preferredAssistance(
   return fallback;
 }
 
+function supportPosture(
+  support: NonNullable<KycTeacher['learningSupport']>,
+): TeacherPolicySnapshot['posture'] {
+  return support === 'guided' ? 'supportive' : support === 'demanding' ? 'demanding' : 'calm';
+}
+
+function supportAssistance(
+  support: NonNullable<KycTeacher['learningSupport']>,
+): TeacherAssistance {
+  return support === 'guided' ? 'progressive' : support === 'demanding' ? 'limited' : 'balanced';
+}
+
+function trainingPosture(
+  preferences: KycTeacher | null,
+  support: NonNullable<KycTeacher['learningSupport']>,
+): TeacherPolicySnapshot['posture'] {
+  return preferences?.learningSupport
+    ? supportPosture(support)
+    : preferredPosture(preferences, supportPosture(support));
+}
+
+function trainingAssistance(
+  preferences: KycTeacher | null,
+  support: NonNullable<KycTeacher['learningSupport']>,
+): TeacherAssistance {
+  return preferences?.learningSupport
+    ? supportAssistance(support)
+    : preferredAssistance(preferences, supportAssistance(support));
+}
+
 export function resolveTeacherPolicy(
   preferences: KycTeacher | null | undefined,
   context: TeacherPolicyContext,
@@ -183,18 +213,13 @@ export function resolveTeacherPolicy(
   }
 
   if (mode === 'exercise') {
-    const support = safePreferences?.learningSupport ?? 'guided';
-    const fallbackAssistance = support === 'demanding'
-      ? 'limited'
-      : support === 'balanced'
-        ? 'balanced'
-        : 'progressive';
+    const support = safePreferences?.learningSupport ?? 'balanced';
     return {
       version: TEACHER_POLICY_VERSION,
       mode,
       automaticAdaptation,
-      posture: preferredPosture(safePreferences, support === 'demanding' ? 'demanding' : 'supportive'),
-      assistance: preferredAssistance(safePreferences, fallbackAssistance),
+      posture: trainingPosture(safePreferences, support),
+      assistance: trainingAssistance(safePreferences, support),
       correction: trainingCorrection,
       explanation,
       encouragement,
@@ -209,13 +234,13 @@ export function resolveTeacherPolicy(
   }
 
   if (mode === 'lesson') {
-    const fallbackAssistance = safePreferences?.learningSupport === 'demanding' ? 'balanced' : 'progressive';
+    const support = safePreferences?.learningSupport ?? 'balanced';
     return {
       version: TEACHER_POLICY_VERSION,
       mode,
       automaticAdaptation,
-      posture: preferredPosture(safePreferences, 'calm'),
-      assistance: preferredAssistance(safePreferences, fallbackAssistance),
+      posture: trainingPosture(safePreferences, support),
+      assistance: trainingAssistance(safePreferences, support),
       correction: trainingCorrection,
       explanation,
       encouragement,
@@ -229,12 +254,13 @@ export function resolveTeacherPolicy(
     };
   }
 
+  const support = safePreferences?.learningSupport ?? 'balanced';
   return {
     version: TEACHER_POLICY_VERSION,
     mode,
     automaticAdaptation,
-    posture: preferredPosture(safePreferences, 'supportive'),
-    assistance: preferredAssistance(safePreferences, 'balanced'),
+    posture: trainingPosture(safePreferences, support),
+    assistance: trainingAssistance(safePreferences, support),
     correction: trainingCorrection,
     explanation,
     encouragement,
@@ -302,7 +328,7 @@ export function isTeacherPolicySnapshot(value: unknown): value is TeacherPolicyS
  * documents and QR payloads can never loosen these rules. */
 export function teacherPolicyDirective(policy: TeacherPolicySnapshot): string {
   const postureDirective: Record<TeacherPolicySnapshot['posture'], string> = {
-    calm: 'Use a calm, neutral teaching tone. ',
+    calm: 'Use a natural, upbeat and structured teaching tone, without constant jokes or false praise. ',
     supportive: 'Use a warm, patient teaching tone without false praise. ',
     demanding: 'Set high expectations and be precise without humiliating the learner. ',
     impartial: 'Remain neutral and apply the announced criteria consistently. ',
@@ -356,7 +382,7 @@ export function teacherPolicyDirective(policy: TeacherPolicySnapshot): string {
   }
   if (policy.mode === 'lesson') {
     return base +
-      ' Teach calmly with examples, reformulation and short understanding checks. Adapt pace and difficulty ' +
+      ' Teach clearly and engagingly with examples, reformulation and short understanding checks. Adapt pace and difficulty ' +
       'only within the automatic-adaptation rule above; never invent mastery.' + encouragement + closing;
   }
   return base +
