@@ -1616,7 +1616,7 @@ const sv: Record<string, string> = {
   "onb.cfg.concepts": "inledande begrepp",
   "auth.brandTitle": "Din AI-förstärkta hjärna",
   "auth.brandSubtitle": "Lär dig. Förstå. Kom ihåg. Din AI-professor växer med dig.",
-  "auth.badgeLangs": "27 språk",
+  "auth.badgeLangs": "34 språk",
   "auth.badgeModels": "Multimodell-AI",
   "auth.badgeGraph": "Kunskapsgraf",
   "auth.sceneQuestion": "Förklara det här begreppet enkelt för mig.",
@@ -1673,7 +1673,7 @@ const sv: Record<string, string> = {
   "landing.hero.promise4": "Framsteg",
   "landing.hero.reassure1": "Adaptiv AI-professor",
   "landing.hero.reassure2": "Bestående minne",
-  "landing.hero.reassure3": "27 språk",
+  "landing.hero.reassure3": "34 språk",
   "landing.hero.reassure4": "Smarta dokument",
   "landing.mock.os": "SECOND BRAIN OS",
   "landing.mock.brain": "Mitt hjärta",
@@ -3495,7 +3495,7 @@ const sv: Record<string, string> = {
   ,"landing12.languages.mission.work": "Arbete"
   ,"landing12.languages.mission.studies": "Studier"
   ,"landing12.languages.mission.social": "Socialt liv"
-  ,"landing12.languages.registryTitle": "27 inlärningsspråk stöds"
+  ,"landing12.languages.registryTitle": "34 inlärningsspråk stöds"
   ,"landing12.languages.registryLead": "Namn på modersmålet och gränssnittsspråket förmedlar betydelsen. En neutral symbol ersätter landsflaggan när ett land skulle vara tvetydigt."
   ,"landing12.how.kicker": "Så fungerar det"
   ,"landing12.how.title": "En enkel resa, även när intelligensen är djupgående"
@@ -3573,7 +3573,7 @@ const sv: Record<string, string> = {
   ,"landing12.faq.q7": "Hur fungerar repetitionerna?"
   ,"landing12.faq.a7": "Repetera använder verklig historik och intervallrepetition för att prioritera kunskap som riskerar att glömmas. Repetition utan AI är fortfarande tillgänglig oberoende av AI-kvoter."
   ,"landing12.faq.q8": "Vilka språk är tillgängliga?"
-  ,"landing12.faq.a8": "Det gemensamma registret innehåller för närvarande 27 inlärningsspråk. Gränssnittsspråk och inlärningsspråk väljs alltid separat."
+  ,"landing12.faq.a8": "Det gemensamma registret innehåller för närvarande 34 inlärningsspråk. Gränssnittsspråk och inlärningsspråk väljs alltid separat."
   ,"landing12.faq.q9": "Söker Undersökning på webben?"
   ,"landing12.faq.a9": "Undersökning kan idag arbeta i Min hjärna och ditt Bibliotek. Den externa webbleverantören är inte konfigurerad i den aktuella distributionen, så Landingssidan påstår inte att den är det."
   ,"landing12.faq.q10": "Är mina data privata?"

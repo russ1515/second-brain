@@ -440,7 +440,7 @@ function reconstructSubmission(manifest, plan) {
 
 async function submit(options, dependencies) {
   invariant(!fs.existsSync(options.manifestPath), 'Batch manifest already exists; refusing a duplicate submission');
-  const plan = buildPlan(options.codes, options.batchSize);
+  const plan = (dependencies.buildPlan ?? buildPlan)(options.codes, options.batchSize);
   const submission = buildBatchSubmission(plan, options.modelName);
   invariant(submission.requestCount > 0, 'All selected locales are already complete; no Batch job is needed');
   const clock = dependencies.clock ?? Date.now;
@@ -570,7 +570,7 @@ async function poll(options, dependencies) {
     return { mode: 'poll', state: manifest.batch.state, terminal: true, cached: true, results: manifest.results };
   }
   const codes = Object.keys(manifest.locales);
-  const plan = buildPlan(codes, manifest.limits.batchSize);
+  const plan = (dependencies.buildPlan ?? buildPlan)(codes, manifest.limits.batchSize);
   assertPlanSnapshot(manifest, plan);
   const submission = reconstructSubmission(manifest, plan);
   const client = await createClient(options.apiKey, dependencies);
@@ -647,7 +647,7 @@ async function applyResults(options, dependencies) {
   assertManifest(manifest);
   const spool = loadResultSpool(manifest, options.manifestPath);
   const codes = Object.keys(manifest.locales);
-  const plan = buildPlan(codes, manifest.limits.batchSize);
+  const plan = (dependencies.buildPlan ?? buildPlan)(codes, manifest.limits.batchSize);
   assertPlanSnapshot(manifest, plan, { catalogs: false });
   const byRequest = new Map(spool.requests.map((request) => [request.requestId, request]));
   const validByLocale = new Map();
@@ -725,7 +725,7 @@ async function applyResults(options, dependencies) {
 export async function runBatchTranslation(options, dependencies = {}) {
   assertPinnedStableModel(options.modelName);
   if (options.action === 'dry-run') {
-    const plan = buildPlan(options.codes, options.batchSize);
+    const plan = (dependencies.buildPlan ?? buildPlan)(options.codes, options.batchSize);
     const submission = buildBatchSubmission(plan, options.modelName);
     return { mode: 'dry-run', providerCalls: 0, plan: planSummary(plan, submission) };
   }

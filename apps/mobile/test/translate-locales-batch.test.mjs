@@ -12,12 +12,37 @@ import { buildPlan } from '../../../scripts/translate-locale.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '../../..');
 const PROGRESS = path.join(ROOT, 'apps/mobile/lib/locales/.translation-progress');
-// Keep repository-backed Batch fixtures on a deliberately incomplete locale.
-// Japanese is now complete, so using it correctly produces no Batch request.
+// Production catalogs can all be complete. Batch tests therefore derive an
+// in-memory gap from one real catalog instead of requiring the repository to
+// keep an intentionally unfinished locale.
 const TEST_LOCALE = 'cs';
+const TEST_MISSING_KEYS = 220;
 
 function checksum(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function incompletePlan(codes, batchSize) {
+  const plan = buildPlan(codes, batchSize);
+  for (const locale of plan.locales) {
+    const selected = [...plan.english.keys()]
+      .filter((key) => locale.base.has(key))
+      .slice(0, TEST_MISSING_KEYS);
+    assert.equal(selected.length, TEST_MISSING_KEYS);
+    for (const key of selected) {
+      locale.base.delete(key);
+      locale.effective.delete(key);
+    }
+    locale.baseKeyCount = locale.base.size;
+    locale.effectiveKeyCount = locale.effective.size;
+    locale.missingKeys = selected;
+    locale.missingKeyCount = selected.length;
+    locale.minimumRequests = Math.ceil(selected.length / batchSize);
+    locale.missingChecksum = checksum(JSON.stringify(selected));
+  }
+  plan.totalMissing = plan.locales.reduce((sum, locale) => sum + locale.missingKeyCount, 0);
+  plan.minimumRequests = plan.locales.reduce((sum, locale) => sum + locale.minimumRequests, 0);
+  return plan;
 }
 
 function fixture(t, name) {
@@ -47,6 +72,7 @@ function options(manifestPath, action, overrides = {}) {
 function dependencies(client, overrides = {}) {
   return {
     client,
+    buildPlan: incompletePlan,
     acquireLock: () => ({ test: true }),
     releaseLock: () => {},
     idFactory: () => 'test-submit-attempt',
@@ -99,7 +125,7 @@ async function submittedFixture(t, name = 'submitted') {
 test('Batch dry-run plans inlined requests and performs zero calls or writes', async (t) => {
   const { manifestPath } = fixture(t, 'dry-run');
   let calls = 0;
-  const plan = buildPlan([TEST_LOCALE], 100);
+  const plan = incompletePlan([TEST_LOCALE], 100);
   const submission = buildBatchSubmission(plan, 'gemini-3.5-flash-lite');
   assert.equal(submission.requestCount, Math.ceil(plan.totalMissing / 100));
   assert.ok(submission.payloadBytes > 0 && submission.payloadBytes < 20 * 1024 * 1024);
@@ -107,6 +133,7 @@ test('Batch dry-run plans inlined requests and performs zero calls or writes', a
   assert.equal(submission.inlinedRequests[0].config.responseMimeType, 'application/json');
 
   const result = await runBatchTranslation(options(manifestPath, 'dry-run'), {
+    buildPlan: incompletePlan,
     client: { batches: { create: () => { calls += 1; }, get: () => { calls += 1; } } },
   });
   assert.equal(result.mode, 'dry-run');
