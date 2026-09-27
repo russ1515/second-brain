@@ -12,6 +12,7 @@ import { LlmModule } from './llm/llm.module';
 import { EmbeddingsModule } from './embeddings/embeddings.module';
 import { SpeechModule } from './speech/speech.module';
 import { MailModule } from './mail/mail.module';
+import { MediaModule } from './media/media.module';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { DocumentModule } from './documents/document.module';
@@ -87,6 +88,7 @@ import { DiagnosticsModule } from './diagnostics/diagnostics.module';
     EmbeddingsModule,
     SpeechModule,
     MailModule,
+    MediaModule,
     NotificationModule,
     HealthModule,
     AuthModule,

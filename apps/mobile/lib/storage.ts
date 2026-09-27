@@ -12,6 +12,13 @@ import type { AuthUser } from '@second-brain/shared';
 const ACCESS = 'sb.accessToken';
 const REFRESH = 'sb.refreshToken';
 const CACHED_USER = 'sb.cachedAuthUser';
+let sessionMutation: Promise<void> = Promise.resolve();
+
+function enqueueSessionMutation(operation: () => Promise<void>): Promise<void> {
+  const next = sessionMutation.then(operation, operation);
+  sessionMutation = next.catch(() => undefined);
+  return next;
+}
 
 export interface StoredSession {
   accessToken: string;
@@ -28,14 +35,41 @@ export async function loadSession(): Promise<StoredSession | null> {
 }
 
 export async function saveSession(session: StoredSession): Promise<void> {
-  await AsyncStorage.multiSet([
+  await enqueueSessionMutation(() => AsyncStorage.multiSet([
     [ACCESS, session.accessToken],
     [REFRESH, session.refreshToken],
-  ]);
+  ]));
 }
 
 export async function clearSession(): Promise<void> {
-  await AsyncStorage.multiRemove([ACCESS, REFRESH, CACHED_USER]);
+  await enqueueSessionMutation(() => AsyncStorage.multiRemove([ACCESS, REFRESH, CACHED_USER]));
+}
+
+/** Replace/clear only the credential that initiated an async operation. This
+ * prevents a late refresh response from overwriting a newer login or logout. */
+export async function replaceSessionIfRefreshMatches(
+  expectedRefreshToken: string,
+  next: StoredSession,
+): Promise<boolean> {
+  let replaced = false;
+  await enqueueSessionMutation(async () => {
+    const current = await AsyncStorage.getItem(REFRESH);
+    if (current !== expectedRefreshToken) return;
+    await AsyncStorage.multiSet([[ACCESS, next.accessToken], [REFRESH, next.refreshToken]]);
+    replaced = true;
+  });
+  return replaced;
+}
+
+export async function clearSessionIfRefreshMatches(expectedRefreshToken: string): Promise<boolean> {
+  let cleared = false;
+  await enqueueSessionMutation(async () => {
+    const current = await AsyncStorage.getItem(REFRESH);
+    if (current !== expectedRefreshToken) return;
+    await AsyncStorage.multiRemove([ACCESS, REFRESH, CACHED_USER]);
+    cleared = true;
+  });
+  return cleared;
 }
 
 /** Non-secret identity projection used only to isolate offline caches. */

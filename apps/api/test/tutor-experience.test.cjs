@@ -69,7 +69,9 @@ test('Conversation uses structured blocks, real-only progress and responsive sec
 test('Tutor data access is user-scoped, including ExperienceSession lookup and source retrieval', () => {
   const experience = read('apps/api/src/experience-sessions/experience-session.service.ts');
   const tutor = read('apps/api/src/tutor/tutor.service.ts');
-  assert.match(experience, /where: \{ userId, tutorSessionId, type: \{ in: \['tutor', 'language'\] \} \}/);
+  assert.match(experience, /userId_idempotencyKey/);
+  assert.match(experience, /row\.tutorSessionId === tutorSessionId/);
+  assert.match(experience, /row\.type === 'tutor' \|\| row\.type === 'language'/);
   assert.match(tutor, /this\.retrieval\.search\(userId/);
   assert.match(tutor, /where: \{ userId, id: \{ in: documents \}, deletedAt: null \}/);
 });

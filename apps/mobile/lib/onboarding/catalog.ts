@@ -143,18 +143,6 @@ export const SELF_RATING: Choice<KycMasteryLevel>[] = [
   { value: 'low', label: 'onb.rate.low', icon: '🔴' },
 ];
 
-// A handful of common interface/native languages surfaced first (the full
-// 25-language registry is available in Profil via the existing LocalePicker).
-export const QUICK_LANGUAGES: Choice[] = [
-  { value: 'fr', label: '🇫🇷 Français' },
-  { value: 'en', label: '🇬🇧 English' },
-  { value: 'es', label: '🇪🇸 Español' },
-  { value: 'de', label: '🇩🇪 Deutsch' },
-  { value: 'it', label: '🇮🇹 Italiano' },
-  { value: 'pt', label: '🇵🇹 Português' },
-  { value: 'ar', label: '🇸🇦 العربية' },
-];
-
 // ── Adaptive step order (the "FLUX COMPLET", but branched) ───────────────────
 
 /**

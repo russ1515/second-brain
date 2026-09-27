@@ -71,6 +71,7 @@ export interface KycEducation {
 export interface KycLanguages {
   native?: string; // langue maternelle
   interface?: string; // langue de l'interface
+  explanation?: string; // langue des explications générales du Professeur
   study?: string; // langue d'étude principale
   others?: string[];
   /** International mobility (2.7): studying in a non-native language. */
@@ -88,6 +89,20 @@ export interface KycLanguageLearner {
 }
 
 export interface KycTeacher {
+  /** Recommended default: let the existing ITE engine choose within the
+   *  explicit safeguards and preferences below. */
+  automaticAdaptation?: boolean;
+  /** Amount of guidance during lessons and practice. Exams always apply their
+   *  own declared assistance policy instead. */
+  learningSupport?: 'guided' | 'balanced' | 'demanding';
+  /** A free conversation is never graded unless this explicit mode is chosen. */
+  conversationMode?: 'training' | 'assessed';
+  /** Standard is already rigorous; strict is an announced simulation setting. */
+  examRigor?: 'standard' | 'strict';
+  /** Offer a useful recap after a learning or practice session. */
+  sessionSummary?: boolean;
+  /** Encouragement stays evidence-based in both variants. */
+  encouragement?: 'measured' | 'supportive';
   tone?: 'supportive' | 'balanced' | 'demanding'; // 😊 / 🎯 / 🔥
   explanations?: 'short' | 'balanced' | 'detailed';
   intervention?: 'let_me_think' | 'guide_me' | 'interactive';

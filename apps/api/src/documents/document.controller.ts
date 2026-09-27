@@ -4,9 +4,11 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
+  PayloadTooLargeException,
   Post,
   Query,
   UploadedFile,
@@ -39,6 +41,14 @@ import type { UploadedFileLike } from './extraction/text-extraction.service';
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
 /** Pages per scan. Mirrors ScanService's own cap. */
 const MAX_SCAN_IMAGES = 8;
+// BUSINESS_DECISION_REQUIRED: a bounded request total prevents eight valid
+// per-file uploads from exhausting API memory. This is a security ceiling, not
+// a commercial plan quota.
+const MAX_SCAN_TOTAL_BYTES = 30 * 1024 * 1024;
+// Multer's memory storage buffers files before the controller can validate the
+// aggregate. Capping each of the eight pages to one eighth of the request
+// ceiling makes that aggregate ceiling effective while bytes are received.
+const MAX_SCAN_PAGE_BYTES = Math.floor(MAX_SCAN_TOTAL_BYTES / MAX_SCAN_IMAGES);
 
 @UseGuards(JwtAccessGuard)
 @Controller('documents')
@@ -126,18 +136,26 @@ export class DocumentController {
   @HttpCode(HttpStatus.CREATED)
   @UseInterceptors(
     FilesInterceptor('images', MAX_SCAN_IMAGES, {
-      limits: { fileSize: MAX_UPLOAD_BYTES },
+      limits: { fileSize: MAX_SCAN_PAGE_BYTES },
     }),
   )
   createFromImages(
     @CurrentUser() user: AuthenticatedUser,
     @UploadedFiles() images: UploadedFileLike[] | undefined,
     @Body('title') title?: string,
+    @Headers('x-request-id') requestId?: string,
   ): Promise<DocumentDetail> {
     if (!images?.length) {
       throw new BadRequestException('No images were uploaded (field "images").');
     }
-    return this.scan.fromImages(user.userId, images, title);
+    const totalBytes = images.reduce(
+      (total, image) => total + Math.max(image.size || 0, image.buffer?.length || 0),
+      0,
+    );
+    if (totalBytes > MAX_SCAN_TOTAL_BYTES) {
+      throw new PayloadTooLargeException('The scan exceeds the 30 MB request safety limit.');
+    }
+    return this.scan.fromImages(user.userId, images, title, requestId);
   }
 
   /** Ingest a web page by URL (fetched and extracted server-side). */
@@ -179,6 +197,17 @@ export class DocumentController {
   }
 
   /** Re-run the embedding pipeline for a document (e.g. after a failure). */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post(':id/retry-scan')
+  @HttpCode(HttpStatus.ACCEPTED)
+  retryScan(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<DocumentDetail> {
+    return this.scan.retry(user.userId, id);
+  }
+
+  /** Re-run the embedding pipeline only when extracted text already exists. */
   @Post(':id/reindex')
   @HttpCode(HttpStatus.ACCEPTED)
   reindex(

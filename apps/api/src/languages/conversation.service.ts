@@ -10,8 +10,14 @@ import type {
   LanguageMode,
   StartConversationRequest,
   TutorSessionDetail,
+  KycTeacher,
 } from '@second-brain/shared';
-import { RLLE_CURRICULUM } from '@second-brain/shared';
+import {
+  RLLE_CURRICULUM,
+  resolveTeacherPolicy,
+  TEACHER_POLICY_METADATA_SOURCE,
+  teacherPolicyDirective,
+} from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
 import { TutorService } from '../tutor/tutor.service';
@@ -67,15 +73,26 @@ export class ConversationService {
       },
     });
 
-    const opening = await this.openingLine(profile, effectiveRequest, courseContext?.level ?? undefined);
+    const teacherPreferences = await this.loadTeacherPreferences(userId);
+    const teacherPolicy = resolveTeacherPolicy(teacherPreferences, {
+      mode: teacherPreferences?.conversationMode === 'assessed'
+        ? 'assessed_conversation'
+        : 'practice_conversation',
+      intent: 'practice-language',
+    });
+    const opening = await this.openingLine(
+      profile,
+      effectiveRequest,
+      courseContext?.level ?? undefined,
+      teacherPolicyDirective(teacherPolicy),
+    );
     await this.prisma.tutorMessage.create({
       data: { sessionId: session.id, role: 'assistant', content: opening },
     });
 
     const path = `/tutor/${session.id}`;
     const now = new Date().toISOString();
-    await this.experiences.create(userId, {
-      type: 'language',
+    await this.experiences.ensureLanguageSession(userId, {
       title: session.title ?? `${profile.language} conversation`,
       intent: 'practice-language',
       inputModality: request.inputModality ?? 'text',
@@ -143,6 +160,8 @@ export class ConversationService {
           mode: profile.mode,
           immersionIntensity: request.immersionIntensity ?? 'mixed',
           correctionIntensity: request.correctionIntensity ?? 'balanced',
+          teacherPolicy,
+          teacherPolicySource: TEACHER_POLICY_METADATA_SOURCE,
           ...(courseContext
             ? {
                 courseSessionId: courseContext.session.id,
@@ -196,7 +215,6 @@ export class ConversationService {
         languageProfileId: profile.id,
         ...(courseContext?.lessonId ? { lessonId: courseContext.lessonId } : {}),
       },
-      idempotencyKey: `language-conversation:${session.id}`,
     });
 
     return this.tutor.getSession(userId, session.id);
@@ -269,6 +287,7 @@ export class ConversationService {
     profile: LanguageProfile,
     request: StartConversationRequest,
     cefrLevel?: CefrLevel,
+    teacherDirective?: string,
   ): Promise<string> {
     const scenario = request.scenario;
     const mode = profile.mode as LanguageMode;
@@ -281,7 +300,7 @@ export class ConversationService {
       cefrLevel: cefrLevel ?? profile.cefrLevel,
       immersionIntensity: request.immersionIntensity,
       correctionIntensity: request.correctionIntensity,
-    });
+    }) + (teacherDirective ?? '');
 
     // Immersion (7.8) uses a CEFR-adaptive target ratio; other modes use the
     // static mode ratio.
@@ -320,5 +339,13 @@ export class ConversationService {
         'The teacher is temporarily unavailable. Please try again shortly.',
       );
     }
+  }
+
+  private async loadTeacherPreferences(userId: string): Promise<KycTeacher | null> {
+    const onboarding = await this.prisma.onboardingProfile.findUnique({
+      where: { userId },
+      select: { teacher: true },
+    });
+    return (onboarding?.teacher as KycTeacher | null) ?? null;
   }
 }

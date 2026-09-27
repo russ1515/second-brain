@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -18,6 +19,7 @@ import type {
 import { PrismaService } from '../../prisma/prisma.service';
 import { IngestionService } from '../ingestion/ingestion.service';
 import { DocumentEnrichmentService } from '../enrichment/document-enrichment.service';
+import { accountDataLockKey } from '../../common/account-data-lock';
 
 /** A document created within this many days shows on the "Recent" shelf. */
 const RECENT_DAYS = 7;
@@ -166,26 +168,66 @@ export class LibraryService {
 
   /** Soft-delete into the Trash and stop it grounding the AI (purge vectors). */
   async trash(userId: string, id: string): Promise<LibraryDocument> {
-    const doc = await this.own(userId, id);
-    if (doc.deletedAt) return this.hydrate(userId, doc);
-    await this.ingestion.purgeVectors(id);
-    const updated = await this.prisma.document.update({
-      where: { id },
-      data: { deletedAt: new Date() },
+    // Commit the visibility/writer barrier first. Ingestion takes the same lock
+    // and requires deletedAt=null, so an upsert cannot land after this point.
+    await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const doc = await tx.document.findFirst({ where: { id, userId } });
+      if (!doc) throw new NotFoundException('Document not found.');
+      if (doc.stage === 'deleting') {
+        throw new ConflictException({
+          code: 'DOCUMENT_DELETION_PENDING',
+          message: 'This document is being permanently deleted.',
+        });
+      }
+      if (!doc.deletedAt) {
+        await tx.document.update({
+          where: { id },
+          data: { deletedAt: new Date() },
+        });
+      }
     });
+
+    // Purge while holding the writer lock again. If Qdrant/SQL cleanup fails,
+    // the document remains safely hidden in Trash and this call is retryable.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const doc = await tx.document.findFirst({
+        where: { id, userId, deletedAt: { not: null } },
+      });
+      if (!doc || doc.stage === 'deleting') {
+        throw new ConflictException('Document trash cleanup is no longer applicable.');
+      }
+      await this.ingestion.purgeVectors(id, tx);
+      return doc;
+    }, { timeout: 60_000 });
     return this.hydrate(userId, updated);
   }
 
   /** Restore from the Trash and re-index it so it can ground the AI again. */
   async restore(userId: string, id: string): Promise<LibraryDocument> {
-    const doc = await this.own(userId, id);
-    if (!doc.deletedAt) return this.hydrate(userId, doc);
-    const updated = await this.prisma.document.update({
-      where: { id },
-      data: { deletedAt: null },
+    const result = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const doc = await tx.document.findFirst({ where: { id, userId } });
+      if (!doc) throw new NotFoundException('Document not found.');
+      if (!doc.deletedAt) return { document: doc, restored: false };
+      if (doc.stage === 'deleting') {
+        throw new ConflictException({
+          code: 'DOCUMENT_DELETION_PENDING',
+          message: 'This document is being permanently deleted and cannot be restored.',
+        });
+      }
+      const document = await tx.document.update({
+        where: { id },
+        data: { deletedAt: null, status: 'pending', stage: null, error: null },
+      });
+      return { document, restored: true };
     });
-    void this.ingestion.ingest(id); // re-embed in the background
-    return this.hydrate(userId, updated);
+    if (result.restored) void this.ingestion.ingest(id); // re-embed in the background
+    return this.hydrate(userId, result.document);
   }
 
   /** (Re)run AI enrichment for one document — used to backfill older docs. */

@@ -40,11 +40,13 @@ test('speech endpoints report real capabilities and return provider transcriptio
 test('language conversations create a language ExperienceSession and Tutor reuses it', () => {
   const conversation = read('apps/api/src/languages/conversation.service.ts');
   const experiences = read('apps/api/src/experience-sessions/experience-session.service.ts');
-  assert.match(conversation, /type: 'language'/);
+  assert.match(conversation, /ensureLanguageSession\(userId/);
   assert.match(conversation, /languageProfileId: profile\.id/);
   assert.match(conversation, /immersionIntensity/);
   assert.match(conversation, /correctionIntensity/);
-  assert.match(experiences, /\['tutor', 'language'\]/);
+  assert.match(experiences, /ensureTutorLinkedSession\(userId, 'language', request\)/);
+  assert.match(experiences, /SERVER_IDEMPOTENCY_PREFIX = 'server:v2:'/);
+  assert.match(experiences, /tutorIdempotencyKey\(tutorSessionId/);
 });
 
 test('language vocabulary remains in FSRS with document and session provenance', () => {

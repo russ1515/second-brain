@@ -25,13 +25,13 @@ import {
   INTERVENTION_CHOICES,
   LANGUAGE_SKILL_CHOICES,
   PREFERENCE_CHOICES,
-  QUICK_LANGUAGES,
   SELF_RATING,
   SUBJECT_CHOICES,
   TONE_CHOICES,
   type Choice,
 } from '../../lib/onboarding/catalog';
 import { MultiChoice, PrivacyNote, SingleChoice, StepScaffold } from './kit';
+import { LanguageSelector } from '../ds/language';
 
 /**
  * The KYC steps (UI/UX Sprint 2). Each step is a self-contained body rendered by
@@ -224,18 +224,37 @@ export function StepLanguages({ progress, answers, patchField, onNext, onBack, o
       onNext={onNext}
     >
       <View style={{ gap: 16 }}>
+        <LanguageSelector
+          mode="learning"
+          label={t('onb.languages.native')}
+          value={l.native ?? null}
+          onChange={(v) => patchField('languages', { native: v })}
+        />
         <View style={{ gap: 8 }}>
-          <Label text={t('onb.languages.native')} />
-          <SingleChoice choices={QUICK_LANGUAGES} value={l.native} onChange={(v) => patchField('languages', { native: v })} />
-        </View>
-        <View style={{ gap: 8 }}>
-          <Label text={t('onb.languages.interface')} />
-          <SingleChoice choices={QUICK_LANGUAGES} value={l.interface} onChange={(v) => patchField('languages', { interface: v })} />
+          <LanguageSelector
+            mode="ui"
+            label={t('onb.languages.interface')}
+            value={l.interface ?? null}
+            onChange={(v) => patchField('languages', { interface: v })}
+          />
           <PrivacyNote why={t('onb.languages.interfaceWhy')} />
         </View>
         <View style={{ gap: 8 }}>
-          <Label text={t('onb.languages.study')} />
-          <SingleChoice choices={QUICK_LANGUAGES} value={l.study} onChange={(v) => patchField('languages', { study: v })} />
+          <LanguageSelector
+            mode="learning"
+            label={t('onb.languages.explanation')}
+            value={l.explanation ?? null}
+            onChange={(v) => patchField('languages', { explanation: v })}
+          />
+          <PrivacyNote why={t('onb.languages.explanationWhy')} />
+        </View>
+        <View style={{ gap: 8 }}>
+          <LanguageSelector
+            mode="learning"
+            label={t('onb.languages.study')}
+            value={l.study ?? null}
+            onChange={(v) => patchField('languages', { study: v })}
+          />
           <PrivacyNote why={t('onb.languages.studyWhy')} />
         </View>
       </View>
@@ -288,10 +307,12 @@ export function StepLanguageLearner({ progress, answers, patchField, onNext, onB
       nextDisabled={!ll.targetLanguage}
     >
       <View style={{ gap: 16 }}>
-        <View style={{ gap: 8 }}>
-          <Label text={t('onb.ll.target')} />
-          <SingleChoice choices={QUICK_LANGUAGES} value={ll.targetLanguage} onChange={(v) => patchField('languageLearner', { targetLanguage: v })} />
-        </View>
+        <LanguageSelector
+          mode="learning"
+          label={t('onb.ll.target')}
+          value={ll.targetLanguage ?? null}
+          onChange={(v) => patchField('languageLearner', { targetLanguage: v })}
+        />
         <View style={{ gap: 8 }}>
           <Label text={t('onb.ll.currentLevel')} />
           <SingleChoice choices={CEFR_LEVELS} value={ll.currentLevel} onChange={(v) => patchField('languageLearner', { currentLevel: v })} />

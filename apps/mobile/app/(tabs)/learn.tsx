@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
@@ -15,7 +15,8 @@ import type {
 } from '@second-brain/shared';
 import { resolveLearnComposition } from '@second-brain/shared';
 import { useAuth } from '../../lib/auth-context';
-import { api, apiUpload } from '../../lib/client';
+import { ApiError, api, apiUpload } from '../../lib/client';
+import { createClientRequestId } from '../../lib/request-id';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
@@ -64,6 +65,7 @@ export default function LearnScreen() {
   const { width } = useResponsive();
   const composition = resolveLearnComposition(width);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const scanUpload = useRef<{ signature: string; requestId: string } | null>(null);
 
   const contexts = useMemo(() => contextFromParams(params, t), [params, t]);
   const resumable = useQuery<ExperienceSessionPage>({
@@ -91,7 +93,25 @@ export default function LearnScreen() {
       const image = isImageDocument(payload.attachment);
       const form = new FormData();
       await appendLearnDocument(form, image ? 'images' : 'file', payload.attachment);
-      const document = await apiUpload<DocumentDetail>(image ? '/documents/scan' : '/documents/upload', form);
+      const signature = `${payload.attachment.uri}:${payload.attachment.name}:${payload.attachment.size ?? ''}`;
+      if (image && scanUpload.current?.signature !== signature) {
+        scanUpload.current = { signature, requestId: createClientRequestId('learn-scan') };
+      }
+      let document: DocumentDetail;
+      try {
+        document = await apiUpload<DocumentDetail>(
+          image ? '/documents/scan' : '/documents/upload',
+          form,
+          image && scanUpload.current ? { requestId: scanUpload.current.requestId } : {},
+        );
+      } catch (reason) {
+        const code = reason instanceof ApiError && reason.payload && typeof reason.payload === 'object'
+          ? (reason.payload as { code?: unknown }).code
+          : null;
+        if (image && code === 'SCAN_ATTEMPT_FAILED') scanUpload.current = null;
+        throw reason;
+      }
+      if (image) scanUpload.current = null;
       return { outcome: 'completed', destination: `/library/${document.id}` };
     }
 

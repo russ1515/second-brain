@@ -19,14 +19,25 @@ export default function RootLayout() {
   return (
     <QueryProvider>
       <ThemeProvider>
-        <I18nProvider>
-          <AuthProvider>
-            <StatusBar style="light" />
-            <Navigator />
-          </AuthProvider>
-        </I18nProvider>
+        <AuthProvider>
+          <AccountScopedApplication />
+        </AuthProvider>
       </ThemeProvider>
     </QueryProvider>
+  );
+}
+
+function AccountScopedApplication() {
+  const { user, setInterfaceLanguage } = useAuth();
+  return (
+    <I18nProvider
+      accountId={user?.id}
+      accountLocale={user?.interfaceLanguage ?? user?.preferredLanguage}
+      onAccountLocaleChange={setInterfaceLanguage}
+    >
+      <StatusBar style="light" />
+      <Navigator />
+    </I18nProvider>
   );
 }
 

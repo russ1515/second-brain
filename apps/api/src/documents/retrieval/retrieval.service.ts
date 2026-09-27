@@ -86,7 +86,9 @@ export class RetrievalService {
     // Resolve document titles in one query (also re-checks ownership in Postgres).
     const documentIds = [...new Set(hits.map((h) => String(h.payload.documentId)))];
     const docs = await this.prisma.document.findMany({
-      where: { id: { in: documentIds }, userId },
+      // Defensive SQL revalidation closes the short interval between the
+      // committed Trash barrier and asynchronous vector cleanup.
+      where: { id: { in: documentIds }, userId, deletedAt: null },
       select: { id: true, title: true },
     });
     const titleById = new Map(docs.map((d) => [d.id, d.title]));

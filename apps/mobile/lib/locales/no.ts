@@ -1,7 +1,7 @@
 import { registerLocale } from '../i18n';
 
-/** Norwegian UI locale — machine-generated (Step 2), review recommended.
- *  Regenerate/extend with: node scripts/translate-locale.mjs no */
+/** Norwegian Bokmål UI locale — legacy file name retained until the catalogue
+ *  migration is complete. Runtime identity is the canonical `nb` code. */
 const no: Record<string, string> = {
   "app.today": "I dag",
   "app.signOut": "Logg ut",
@@ -1904,4 +1904,4 @@ const no: Record<string, string> = {
   "landing.footer.copy": "© 2026 Second Brain – Ditt personlige AI-læringsmiljø."
 };
 
-registerLocale('no', "Norsk", no);
+registerLocale('nb', "Norsk (bokmål)", no);

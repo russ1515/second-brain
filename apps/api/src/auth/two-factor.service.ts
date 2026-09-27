@@ -115,7 +115,7 @@ export class TwoFactorService {
     const userId = await this.auth.verifyChallengeToken(challengeToken);
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { profile: true },
+      include: { profile: true, onboardingProfile: { select: { extra: true } } },
     });
     if (!user || !user.twoFactorEnabled) {
       throw new UnauthorizedException('Two-factor auth is not available.');
@@ -189,11 +189,11 @@ export class TwoFactorService {
     });
     for (const candidate of candidates) {
       if (await argon2.verify(candidate.codeHash, normalized)) {
-        await this.prisma.recoveryCode.update({
-          where: { id: candidate.id },
+        const consumed = await this.prisma.recoveryCode.updateMany({
+          where: { id: candidate.id, userId, usedAt: null },
           data: { usedAt: new Date() },
         });
-        return true;
+        if (consumed.count === 1) return true;
       }
     }
     return false;

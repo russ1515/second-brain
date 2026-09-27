@@ -98,7 +98,7 @@ test('the audit diagnoses every blocking quality dimension', () => {
   assert.equal(gateStatus(report, true).exitCode, 1, 'strict mode must enforce the final gate');
 });
 
-test('identical English is diagnostic only and ignores brands or short codes', () => {
+test('identical English blocks disguised catalogs but ignores brands or short codes', () => {
   for (const protectedValue of ['Second Brain', 'FSRS', 'OK', 'PDF', 'v2', 'https://example.test', '🧠 100%']) {
     assert.equal(isSuspiciousEnglishIdentity(protectedValue), false, protectedValue);
   }
@@ -116,13 +116,15 @@ test('identical English is diagnostic only and ignores brands or short codes', (
     expectedCodes: ['en', 'es'],
   });
   assert.deepEqual(report.locales[1].identicalToEnglish.map(({ key }) => key), ['sentence']);
-  assert.equal(report.locales[1].errorCount, 0);
-  assert.equal(report.readyForFinalGate, true);
+  assert.equal(report.locales[1].identicalErrorCount, 1);
+  assert.equal(report.locales[1].errorCount, 1);
+  assert.equal(report.readyForFinalGate, false);
+  assert.equal(gateStatus(report, true).exitCode, 1);
 });
 
 test('the repository audit always runs offline and remains non-blocking until explicitly strict', () => {
   const report = auditRepository();
-  assert.equal(report.localeCount, 27);
+  assert.equal(report.localeCount, 34);
   assert.deepEqual(report.locales.map(({ code }) => code), ALL_LOCALE_CODES);
   assert.ok(report.sourceKeyCount > 3_000);
   assert.equal(gateStatus(report, false).exitCode, 0);

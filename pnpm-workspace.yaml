@@ -24,3 +24,5 @@ allowBuilds:
   argon2: true
   '@google/genai': false
   protobufjs: false
+  # Avatar/scan hardening decodes and re-encodes untrusted images with libvips.
+  sharp: true

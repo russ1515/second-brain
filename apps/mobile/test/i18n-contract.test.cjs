@@ -117,37 +117,81 @@ const french = catalog(I18N_FILE, 'fr');
 const supported = objectKeys(SHARED_LANGUAGES_FILE, 'SUPPORTED_LANGUAGES');
 const essentials = nestedCatalog(path.join(LOCALES_DIR, 'essential.ts'), 'essential');
 const reviewCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'review.ts'), 'review');
-const localeFiles = fs.readdirSync(LOCALES_DIR)
-  .filter((file) => file.endsWith('.ts') && supported.has(path.basename(file, '.ts')))
-  .sort();
+const overlayFiles = new Set(['essential.ts', 'index.ts', 'review.ts']);
 
-function effectiveCatalog(file) {
-  const code = path.basename(file, '.ts');
+function registeredLocale(file) {
+  const source = sourceFile(path.join(LOCALES_DIR, file));
+  let registration;
+  function visit(node) {
+    if (
+      ts.isCallExpression(node)
+      && ts.isIdentifier(node.expression)
+      && node.expression.text === 'registerLocale'
+      && ts.isStringLiteralLike(node.arguments[0])
+      && ts.isIdentifier(node.arguments[2])
+    ) {
+      registration = {
+        file,
+        code: node.arguments[0].text,
+        variableName: node.arguments[2].text,
+      };
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert.ok(registration, `Missing registerLocale call in ${file}`);
+  return registration;
+}
+
+const localeResources = fs.readdirSync(LOCALES_DIR)
+  .filter((file) => file.endsWith('.ts') && !overlayFiles.has(file))
+  .sort()
+  .map(registeredLocale);
+
+function effectiveCatalog(resource) {
+  const { code, file, variableName } = resource;
   return new Map([
-    ...catalog(path.join(LOCALES_DIR, file), code),
+    ...catalog(path.join(LOCALES_DIR, file), variableName),
     ...(essentials.get(code) ?? new Map()),
     ...(reviewCatalogs.get(code) ?? new Map()),
   ]);
 }
 
-test('the UI registry covers exactly the 27 shared languages', () => {
-  assert.equal(supported.size, 27);
-  const resourceCodes = new Set(['en', 'fr', ...localeFiles.map((file) => path.basename(file, '.ts'))]);
-  assert.deepEqual([...resourceCodes].sort(), [...supported].sort());
+test('the UI registry exposes 34 unique targets without fake empty runtime resources', () => {
+  assert.equal(supported.size, 34);
+  const resourceCodes = new Set(['en', 'fr', ...localeResources.map(({ code }) => code)]);
+  assert.equal(resourceCodes.size, 27);
+  assert.ok(resourceCodes.has('nb'));
+  assert.ok(!resourceCodes.has('no'));
+  for (const code of resourceCodes) assert.ok(supported.has(code), `${code} is not a supported language`);
+  assert.deepEqual(
+    [...supported].filter((code) => !resourceCodes.has(code)).sort(),
+    ['bn', 'ha', 'he', 'ln', 'sw', 'wo', 'zh-Hant'].sort(),
+  );
 
   const barrel = fs.readFileSync(path.join(LOCALES_DIR, 'index.ts'), 'utf8');
-  for (const file of localeFiles) {
-    const code = path.basename(file, '.ts');
-    assert.match(barrel, new RegExp(`import ['\"]\\./${code}['\"]`), `${code} is not registered by the locale barrel`);
+  for (const { file, code } of localeResources) {
+    const basename = path.basename(file, '.ts');
+    assert.match(barrel, new RegExp(`import ['\"]\\./${basename}['\"]`), `${code} is not registered by the locale barrel`);
   }
+});
+
+test('UI selectors expose only complete catalogs while learning selectors keep all targets', () => {
+  const i18nSource = fs.readFileSync(I18N_FILE, 'utf8');
+  const selector = fs.readFileSync(path.join(ROOT, 'apps/mobile/components/ds/language.tsx'), 'utf8');
+  const languagesScreen = fs.readFileSync(path.join(ROOT, 'apps/mobile/app/languages/index.tsx'), 'utf8');
+  assert.match(i18nSource, /Object\.keys\(source\)\.every/);
+  assert.match(i18nSource, /registry\.keys\(\)\]\.filter\(isSelectableLocale\)/);
+  assert.match(selector, /mode\s*===\s*['\"]ui['\"]\s*\?\s*supportedLocaleCodes\(\)\s*:\s*SUPPORTED_LANGUAGE_CODES/);
+  assert.match(languagesScreen, /value=\{nativeCode\}[\s\S]{0,100}mode=['\"]learning['\"]/);
 });
 
 test('French is complete and every generated catalog is a safe English subset', (t) => {
   assert.deepEqual([...french.keys()].sort(), [...english.keys()].sort());
 
-  for (const file of localeFiles) {
-    const code = path.basename(file, '.ts');
-    const translations = effectiveCatalog(file);
+  for (const resource of localeResources) {
+    const { code } = resource;
+    const translations = effectiveCatalog(resource);
     assert.ok(translations.size > 0, `${code} catalog is empty`);
     for (const [key, value] of translations) {
       assert.ok(english.has(key), `${code} contains unknown key ${key}`);
@@ -162,9 +206,9 @@ test('translated messages preserve every named placeholder', () => {
   for (const [key, value] of french) {
     assert.deepEqual(placeholders(value), placeholders(english.get(key)), `fr.${key}`);
   }
-  for (const file of localeFiles) {
-    const code = path.basename(file, '.ts');
-    const translations = effectiveCatalog(file);
+  for (const resource of localeResources) {
+    const { code } = resource;
+    const translations = effectiveCatalog(resource);
     for (const [key, value] of translations) {
       assert.deepEqual(placeholders(value), placeholders(english.get(key)), `${code}.${key}`);
     }
@@ -185,22 +229,23 @@ test('all locales translate the language selector and global recovery controls',
     'state.error',
     'error.network',
   ];
-  for (const file of localeFiles) {
-    const code = path.basename(file, '.ts');
-    const translations = effectiveCatalog(file);
+  for (const resource of localeResources) {
+    const { code } = resource;
+    const translations = effectiveCatalog(resource);
     for (const key of criticalKeys) assert.ok(translations.has(key), `${code} is missing critical key ${key}`);
   }
 });
 
-test('all 27 locales fully translate the Review experience', () => {
+test('every concrete locale resource fully translates the Review experience', () => {
   const reviewKeys = [...english.keys()].filter((key) => key.startsWith('review9.'));
   assert.equal(reviewKeys.length, 83);
-  for (const code of supported) {
+  for (const code of ['en', 'fr', ...localeResources.map((resource) => resource.code)]) {
+    const resource = localeResources.find((candidate) => candidate.code === code);
     const translations = code === 'en'
       ? english
       : code === 'fr'
         ? french
-        : effectiveCatalog(`${code}.ts`);
+        : effectiveCatalog(resource);
     for (const key of reviewKeys) {
       assert.ok(translations.has(key), `${code} is missing Review key ${key}`);
       assert.deepEqual(placeholders(translations.get(key)), placeholders(english.get(key)), `${code}.${key}`);
@@ -208,16 +253,18 @@ test('all 27 locales fully translate the Review experience', () => {
   }
 });
 
-test('UI locale stays local and Web language/direction metadata is global', () => {
+test('UI locale is account-scoped, server-synchronized and Web metadata remains global', () => {
   const i18nSource = fs.readFileSync(I18N_FILE, 'utf8');
   const authSource = fs.readFileSync(path.join(ROOT, 'apps/mobile/lib/auth-context.tsx'), 'utf8');
-  assert.doesNotMatch(i18nSource, /api\(['\"]\/auth\/locale/);
-  assert.doesNotMatch(authSource, /api\(['\"]\/auth\/locale/);
+  assert.match(i18nSource, /ACCOUNT_STORAGE_PREFIX\s*=\s*`\$\{STORAGE_KEY\}\.account\.`/);
+  assert.match(i18nSource, /onAccountLocaleChange\?:/);
+  assert.match(authSource, /api<AuthUser>\(['\"]\/auth\/locale['\"]/);
+  assert.match(authSource, /method:\s*['\"]PATCH['\"]/);
   assert.match(i18nSource, /document\.documentElement\.lang\s*=\s*locale/);
   assert.match(i18nSource, /document\.documentElement\.dir\s*=\s*localeDirection\(locale\)/);
 });
 
-test('Arabic is registered as RTL and other current locales remain LTR', () => {
+test('Arabic and Hebrew are registered as RTL and all other locales remain LTR', () => {
   const languageObject = objectLiteral(SHARED_LANGUAGES_FILE, 'SUPPORTED_LANGUAGES');
   for (const property of languageObject.properties) {
     if (!ts.isPropertyAssignment(property)) continue;
@@ -229,7 +276,7 @@ test('Arabic is registered as RTL and other current locales remain LTR', () => {
       && propertyName(item) === 'rtl'
       && item.initializer.kind === ts.SyntaxKind.TrueKeyword,
     );
-    assert.equal(rtl, code === 'ar', `${code} has unexpected RTL metadata`);
+    assert.equal(rtl, code === 'ar' || code === 'he', `${code} has unexpected RTL metadata`);
   }
 });
 

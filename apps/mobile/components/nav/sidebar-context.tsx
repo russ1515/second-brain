@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Platform } from 'react-native';
-import { useI18n } from '../../lib/i18n';
+import { localeDirection, useI18n } from '../../lib/i18n';
 
 const STORAGE_KEY = 'sb.sidebar.collapsed';
 const EXPANDED = 232;
@@ -46,8 +46,7 @@ export function useSidebar(): SidebarState {
   return useContext(SidebarContext);
 }
 
-const RTL_LOCALES = new Set(['ar', 'fa', 'he', 'ur']);
 export function useIsRTL(): boolean {
   const { locale } = useI18n();
-  return RTL_LOCALES.has(locale as string);
+  return localeDirection(locale) === 'rtl';
 }

@@ -30,7 +30,7 @@ export class ExperienceSessionController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateExperienceSessionDto,
   ): Promise<ExperienceSession> {
-    return this.sessions.create(user.userId, dto);
+    return this.sessions.createFromClient(user.userId, dto);
   }
 
   @Get()
@@ -63,7 +63,7 @@ export class ExperienceSessionController {
     @Param('id') id: string,
     @Body() dto: UpdateExperienceSessionDto,
   ): Promise<ExperienceSession> {
-    return this.sessions.updateState(user.userId, id, dto);
+    return this.sessions.updateFromClient(user.userId, id, dto);
   }
 
   @Post(':id/pause')

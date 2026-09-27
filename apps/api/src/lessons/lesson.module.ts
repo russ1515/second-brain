@@ -6,6 +6,7 @@ import { DocumentModule } from '../documents/document.module';
 import { FlashcardsModule } from '../flashcards/flashcards.module';
 import { ConceptModule } from '../concepts/concept.module';
 import { RevisionModule } from '../revision/revision.module';
+import { ExperienceSessionModule } from '../experience-sessions/experience-session.module';
 
 /** Written-first learning engine + the Examiner (Phase 5, Educational Engine).
  *  Turns topics / concepts / tutoring interactions into complete written
@@ -13,7 +14,13 @@ import { RevisionModule } from '../revision/revision.module';
  *  marks the learner's answers with root-cause gap detection. Reuses the
  *  document, flashcard and concept layers. */
 @Module({
-  imports: [DocumentModule, FlashcardsModule, ConceptModule, RevisionModule],
+  imports: [
+    DocumentModule,
+    FlashcardsModule,
+    ConceptModule,
+    RevisionModule,
+    ExperienceSessionModule,
+  ],
   controllers: [LessonController],
   providers: [LessonService, AssessmentService],
   exports: [LessonService, AssessmentService],

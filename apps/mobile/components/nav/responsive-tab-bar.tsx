@@ -1,4 +1,5 @@
-import { Platform, Pressable, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Image, Platform, Pressable, Text, View } from 'react-native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import type { ParentSpace } from '@second-brain/shared';
 import { useTokens } from '../../lib/design/theme';
@@ -7,6 +8,8 @@ import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { PRIMARY_SPACES } from '../../lib/navigation';
 import { ThemeToggle, LangPill } from '../auth/kit';
 import { useSidebar, useIsRTL } from './sidebar-context';
+import { useAuth } from '../../lib/auth-context';
+import { loadAvatarPhoto, subscribeAvatarPhoto } from '../../lib/profile/photo';
 
 interface NavigationItem {
   key: string;
@@ -64,10 +67,21 @@ export function PrimaryNavigation({
 
 function ResponsiveNavigation({ items }: { items: NavigationItem[] }) {
   const { width } = useResponsive();
-  return width >= 1024 ? <Sidebar items={items} /> : <BottomBar items={items} />;
+  const { user } = useAuth();
+  const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    setAvatarUri(null);
+    void loadAvatarPhoto().then((value) => { if (active) setAvatarUri(value); }).catch(() => undefined);
+    const unsubscribe = user?.id
+      ? subscribeAvatarPhoto(user.id, (value) => { if (active) setAvatarUri(value); })
+      : () => undefined;
+    return () => { active = false; unsubscribe(); };
+  }, [user?.id]);
+  return width >= 1024 ? <Sidebar items={items} avatarUri={avatarUri} /> : <BottomBar items={items} avatarUri={avatarUri} />;
 }
 
-function Sidebar({ items }: { items: NavigationItem[] }) {
+function Sidebar({ items, avatarUri }: { items: NavigationItem[]; avatarUri: string | null }) {
   const { colors: c, radius, spacing } = useTokens();
   const { t } = useI18n();
   const rtl = useIsRTL();
@@ -99,7 +113,9 @@ function Sidebar({ items }: { items: NavigationItem[] }) {
           accessibilityLabel={t(item.labelKey)}
           style={{ flexDirection: 'row', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 12, paddingVertical: 11, paddingHorizontal: spacing.sm, borderRadius: radius.sm, backgroundColor: item.active ? c.aiAccentSoft : 'transparent', minHeight: 44 }}
         >
-          <Text accessible={false} style={{ fontSize: 18 }}>{item.icon}</Text>
+          {item.key === 'profile' && avatarUri ? (
+            <Image source={{ uri: avatarUri }} accessible={false} style={{ width: 24, height: 24, borderRadius: 999 }} />
+          ) : <Text accessible={false} style={{ fontSize: 18 }}>{item.icon}</Text>}
           {!collapsed ? (
             <Text style={{ color: item.active ? c.aiAccent : c.textSecondary, fontSize: 15, fontWeight: item.active ? '700' : '500' }} numberOfLines={1}>
               {t(item.labelKey)}
@@ -117,7 +133,7 @@ function Sidebar({ items }: { items: NavigationItem[] }) {
   );
 }
 
-function BottomBar({ items }: { items: NavigationItem[] }) {
+function BottomBar({ items, avatarUri }: { items: NavigationItem[]; avatarUri: string | null }) {
   const { colors: c } = useTokens();
   const { t } = useI18n();
   return (
@@ -134,7 +150,9 @@ function BottomBar({ items }: { items: NavigationItem[] }) {
           accessibilityLabel={t(item.labelKey)}
           style={{ flex: 1, alignItems: 'center', gap: 2, paddingVertical: 4, minHeight: 48, justifyContent: 'center' }}
         >
-          <Text accessible={false} style={{ fontSize: 20, opacity: item.active ? 1 : 0.6 }}>{item.icon}</Text>
+          {item.key === 'profile' && avatarUri ? (
+            <Image source={{ uri: avatarUri }} accessible={false} style={{ width: 24, height: 24, borderRadius: 999, opacity: item.active ? 1 : 0.65 }} />
+          ) : <Text accessible={false} style={{ fontSize: 20, opacity: item.active ? 1 : 0.6 }}>{item.icon}</Text>}
           <Text style={{ color: item.active ? c.aiAccent : c.textMuted, fontSize: 10, fontWeight: item.active ? '700' : '500' }} numberOfLines={1}>
             {t(item.labelKey)}
           </Text>

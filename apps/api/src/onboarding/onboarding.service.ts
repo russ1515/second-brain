@@ -17,6 +17,7 @@ import {
   type OnboardingStatus,
   type SaveOnboardingRequest,
   type SystemConfiguration,
+  sanitizeTeacherPreferences,
 } from '@second-brain/shared';
 import type { OnboardingProfile, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -76,10 +77,13 @@ export class OnboardingService {
     userId: string,
     dto: SaveOnboardingRequest,
   ): Promise<OnboardingState> {
-    const current = await this.prisma.onboardingProfile.findUnique({
-      where: { userId },
-    });
-    const answers = dto.answers ?? {};
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = `onboarding-profile:${userId}`;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const current = await tx.onboardingProfile.findUnique({
+        where: { userId },
+      });
+      const answers = dto.answers ?? {};
 
     const merged = {
       identity: this.mergeObject(current?.identity, answers.identity),
@@ -89,7 +93,10 @@ export class OnboardingService {
         current?.languageLearner,
         answers.languageLearner,
       ),
-      teacher: this.mergeObject(current?.teacher, answers.teacher),
+      teacher: this.mergeObject(
+        sanitizeTeacherPreferences(current?.teacher) ?? undefined,
+        this.sanitizeTeacherPatch(answers.teacher),
+      ),
       assessment: this.mergeObject(current?.assessment, answers.assessment),
       // Lists: replace when provided, else keep what's stored.
       goals: answers.goals ?? (current?.goals as Prisma.InputJsonValue),
@@ -113,23 +120,31 @@ export class OnboardingService {
     const status: OnboardingStatus =
       current?.status === 'completed' ? 'completed' : 'in_progress';
 
-    const row = await this.prisma.onboardingProfile.upsert({
-      where: { userId },
-      create: {
-        userId,
-        status,
-        category,
-        currentStep: dto.currentStep ?? 'identity',
-        ...this.jsonData(merged),
-      },
-      update: {
-        status,
-        category,
-        ...(dto.currentStep ? { currentStep: dto.currentStep } : {}),
-        ...this.jsonData(merged),
-      },
+      const row = await tx.onboardingProfile.upsert({
+        where: { userId },
+        create: {
+          userId,
+          status,
+          category,
+          currentStep: dto.currentStep ?? 'identity',
+          ...this.jsonData(merged),
+        },
+        update: {
+          status,
+          category,
+          ...(dto.currentStep ? { currentStep: dto.currentStep } : {}),
+          ...this.jsonData(merged),
+        },
+      });
+      return this.toState(row);
     });
-    return this.toState(row);
+  }
+
+  /** JSON-backed preferences still need a runtime allow-list. This prevents an
+   *  arbitrary object from becoming trusted prompt policy while keeping the
+   *  additive onboarding schema migration-free. */
+  private sanitizeTeacherPatch(value: unknown): Partial<KycTeacher> | undefined {
+    return sanitizeTeacherPreferences(value) ?? undefined;
   }
 
   /** A short adaptive diagnostic for one subject (2.12). Best-effort LLM; on
@@ -187,29 +202,35 @@ export class OnboardingService {
       conceptsCreated: 0,
     };
 
-    // 1) Profile: display name + interface language.
+    // 1) Profile: display name + pedagogical explanation language. The UI
+    // locale is persisted separately in onboarding.extra below.
     const identity = answers.identity ?? {};
     const languages = answers.languages ?? {};
     const displayName = [identity.firstName, identity.lastName]
       .filter(Boolean)
       .join(' ')
       .trim();
-    const preferredLanguage = SUPPORTED_LANGUAGE_CODES.includes(
+    const explanationLanguage = SUPPORTED_LANGUAGE_CODES.includes(
+      (languages.explanation ?? '') as never,
+    )
+      ? (languages.explanation as string)
+      : undefined;
+    const interfaceLanguage = SUPPORTED_LANGUAGE_CODES.includes(
       (languages.interface ?? '') as never,
     )
       ? (languages.interface as string)
       : undefined;
-    if (displayName || preferredLanguage) {
+    if (displayName || explanationLanguage) {
       await this.prisma.profile.upsert({
         where: { userId },
         create: {
           userId,
           displayName: displayName || null,
-          ...(preferredLanguage ? { preferredLanguage } : {}),
+          ...(explanationLanguage ? { preferredLanguage: explanationLanguage } : {}),
         },
         update: {
           ...(displayName ? { displayName } : {}),
-          ...(preferredLanguage ? { preferredLanguage } : {}),
+          ...(explanationLanguage ? { preferredLanguage: explanationLanguage } : {}),
         },
       });
       applied.profileUpdated = true;
@@ -236,13 +257,21 @@ export class OnboardingService {
       if (ok) applied.conceptsCreated += 1;
     }
 
-    const updated = await this.prisma.onboardingProfile.update({
-      where: { userId },
-      data: {
-        status: 'completed',
-        currentStep: 'done',
-        completedAt: new Date(),
-      },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const lockKey = `onboarding-profile:${userId}`;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const latest = await tx.onboardingProfile.findUniqueOrThrow({ where: { userId } });
+      return tx.onboardingProfile.update({
+        where: { userId },
+        data: {
+          status: 'completed',
+          currentStep: 'done',
+          completedAt: new Date(),
+          ...(interfaceLanguage
+            ? { extra: this.mergeObject(latest.extra, { interfaceLanguage }) }
+            : {}),
+        },
+      });
     });
 
     return {
@@ -384,7 +413,7 @@ export class OnboardingService {
       goals: (row.goals as string[] | null) ?? undefined,
       subjects: (row.subjects as string[] | null) ?? undefined,
       preferences: (row.preferences as string[] | null) ?? undefined,
-      teacher: (row.teacher as KycTeacher | null) ?? undefined,
+      teacher: sanitizeTeacherPreferences(row.teacher) ?? undefined,
       academicSupport: (row.academicSupport as string[] | null) ?? undefined,
       assessment: (row.assessment as KycAssessment | null) ?? undefined,
       extra: (row.extra as Record<string, unknown> | null) ?? undefined,

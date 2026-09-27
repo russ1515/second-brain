@@ -1,67 +1,100 @@
+import { Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
-/**
- * Profile photo (UI/UX Sprint 7).
- *
- * Wraps expo-image-picker for the camera / gallery flows with clean permission
- * handling and a square crop (`allowsEditing`, 1:1). The backend has no image
- * store yet, so the chosen photo URI is persisted LOCALLY (AsyncStorage) — the
- * seam to swap for a real upload later. Returns a typed result so the UI can
- * distinguish "cancelled" from "permission denied".
- */
-const KEY = 'sb.avatarPhoto';
+import { api, apiBinary, apiUpload } from '../client';
+import { appendPickedDocument } from '../document-import';
+import type { CapturedImage } from '../capture/types';
 
 export type PickResult =
-  | { ok: true; uri: string }
+  | { ok: true; image: CapturedImage }
   | { ok: false; reason: 'cancelled' | 'denied' | 'error' };
 
-async function ensurePermission(source: 'camera' | 'gallery'): Promise<boolean> {
-  const res =
-    source === 'camera'
-      ? await ImagePicker.requestCameraPermissionsAsync()
-      : await ImagePicker.requestMediaLibraryPermissionsAsync();
-  return res.granted;
+const listeners = new Map<string, Set<(uri: string | null) => void>>();
+
+export function subscribeAvatarPhoto(
+  userId: string,
+  listener: (uri: string | null) => void,
+): () => void {
+  const ownerListeners = listeners.get(userId) ?? new Set();
+  ownerListeners.add(listener);
+  listeners.set(userId, ownerListeners);
+  return () => {
+    ownerListeners.delete(listener);
+    if (ownerListeners.size === 0) listeners.delete(userId);
+  };
 }
 
+function publish(userId: string, uri: string | null): void {
+  listeners.get(userId)?.forEach((listener) => listener(uri));
+}
+
+async function ensurePermission(source: 'camera' | 'gallery'): Promise<boolean> {
+  if (Platform.OS === 'web') return true;
+  const result = source === 'camera'
+    ? await ImagePicker.requestCameraPermissionsAsync()
+    : await ImagePicker.requestMediaLibraryPermissionsAsync();
+  return result.granted;
+}
+
+/** Gallery fallback. Live camera capture uses the shared CameraCapture layer so
+ * desktop can choose a webcam and every platform has retake/confirm/cancel. */
 export async function pickPhoto(source: 'camera' | 'gallery'): Promise<PickResult> {
   try {
     if (!(await ensurePermission(source))) return { ok: false, reason: 'denied' };
-    const opts: ImagePicker.ImagePickerOptions = {
+    const options: ImagePicker.ImagePickerOptions = {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true, // instant square crop preview (task 1)
+      allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.7,
+      quality: 0.9,
     };
-    const result =
-      source === 'camera'
-        ? await ImagePicker.launchCameraAsync(opts)
-        : await ImagePicker.launchImageLibraryAsync(opts);
-    if (result.canceled || result.assets.length === 0) return { ok: false, reason: 'cancelled' };
-    return { ok: true, uri: result.assets[0].uri };
+    const result = source === 'camera'
+      ? await ImagePicker.launchCameraAsync(options)
+      : await ImagePicker.launchImageLibraryAsync(options);
+    if (result.canceled || !result.assets[0]) return { ok: false, reason: 'cancelled' };
+    const asset = result.assets[0];
+    return {
+      ok: true,
+      image: {
+        uri: asset.uri,
+        name: asset.fileName ?? `avatar-${Date.now()}.jpg`,
+        mimeType: asset.mimeType ?? 'image/jpeg',
+        width: asset.width,
+        height: asset.height,
+        size: asset.fileSize ?? null,
+        ...(asset.file ? { file: asset.file } : {}),
+      },
+    };
   } catch {
     return { ok: false, reason: 'error' };
   }
 }
 
 export async function loadAvatarPhoto(): Promise<string | null> {
-  try {
-    return await AsyncStorage.getItem(KEY);
-  } catch {
-    return null;
-  }
+  const response = await apiBinary('/profile/avatar');
+  if (!response) return null;
+  return `data:${response.contentType};base64,${arrayBufferToBase64(response.data)}`;
 }
-export async function saveAvatarPhoto(uri: string): Promise<void> {
-  try {
-    await AsyncStorage.setItem(KEY, uri);
-  } catch {
-    /* best effort */
-  }
+
+export async function saveAvatarPhoto(userId: string, image: CapturedImage): Promise<string> {
+  const form = new FormData();
+  await appendPickedDocument(form, 'file', image);
+  await apiUpload('/profile/avatar', form, { method: 'PUT' });
+  const stored = await loadAvatarPhoto();
+  if (!stored) throw new Error('Avatar upload did not persist.');
+  publish(userId, stored);
+  return stored;
 }
-export async function clearAvatarPhoto(): Promise<void> {
-  try {
-    await AsyncStorage.removeItem(KEY);
-  } catch {
-    /* best effort */
+
+export async function clearAvatarPhoto(userId: string): Promise<void> {
+  await api('/profile/avatar', { method: 'DELETE' });
+  publish(userId, null);
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
   }
+  return btoa(binary);
 }

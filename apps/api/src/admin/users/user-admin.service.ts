@@ -111,6 +111,7 @@ export class UserAdminService {
           createdAt: true,
           lastActiveAt: true,
           profile: { select: { displayName: true, preferredLanguage: true } },
+          onboardingProfile: { select: { extra: true } },
           subscription: { select: { status: true, plan: { select: { slug: true } } } },
           quotaCycles: {
             where: { status: 'ACTIVE', startsAt: { lte: now }, endsAt: { gt: now } },
@@ -147,7 +148,10 @@ export class UserAdminService {
           usagePercent: quotasAllowed ? quota.percent : null,
           country: null,
           countryStatus: 'NOT_AVAILABLE',
-          interfaceLanguage: user.profile?.preferredLanguage ?? null,
+          interfaceLanguage: interfaceLanguage(
+            user.onboardingProfile?.extra,
+            user.profile?.preferredLanguage,
+          ),
           createdAt: user.createdAt.toISOString(),
           lastActiveAt: user.lastActiveAt?.toISOString() ?? null,
         };
@@ -600,7 +604,7 @@ export class UserAdminService {
       status: onboarding?.status ?? 'NOT_STARTED',
       category: onboarding?.category ?? null,
       completedAt: iso(onboarding?.completedAt),
-      interfaceLanguage: user.profile?.preferredLanguage ?? null,
+      interfaceLanguage: interfaceLanguage(onboarding?.extra, user.profile?.preferredLanguage),
       timezone: user.profile?.timezone ?? null,
       educationLevel: jsonString(onboarding?.education, ['level', 'educationLevel', 'currentLevel']),
       languages: user.languageProfiles.map((language) => ({
@@ -1038,6 +1042,7 @@ export class UserAdminService {
         id: true, email: true, emailVerified: true, accountStatus: true,
         suspendedAt: true, bannedAt: true, createdAt: true, lastActiveAt: true,
         profile: { select: { displayName: true, preferredLanguage: true, timezone: true } },
+        onboardingProfile: { select: { extra: true } },
         subscription: { select: { status: true, plan: { select: { slug: true } } } },
         quotaCycles: {
           where: { status: 'ACTIVE', startsAt: { lte: now }, endsAt: { gt: now } },
@@ -1061,7 +1066,10 @@ export class UserAdminService {
       emailVerified: user.emailVerified,
       createdAt: user.createdAt.toISOString(),
       lastActiveAt: iso(user.lastActiveAt),
-      interfaceLanguage: user.profile?.preferredLanguage ?? null,
+      interfaceLanguage: interfaceLanguage(
+        user.onboardingProfile?.extra,
+        user.profile?.preferredLanguage,
+      ),
       timezone: user.profile?.timezone ?? null,
       suspendedAt: iso(user.suspendedAt),
       bannedAt: iso(user.bannedAt),
@@ -1190,4 +1198,11 @@ function jsonString(value: unknown, keys: readonly string[]): string | null {
     if (typeof object[key] === 'string' && object[key].trim()) return object[key].trim();
   }
   return null;
+}
+
+function interfaceLanguage(
+  extra: Prisma.JsonValue | null | undefined,
+  legacyPreferredLanguage: string | null | undefined,
+): string | null {
+  return jsonString(extra, ['interfaceLanguage']) ?? legacyPreferredLanguage ?? null;
 }

@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -14,6 +15,8 @@ import { CONSENT_KEYS } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { DOCUMENT_CHUNKS_COLLECTION } from '../qdrant/qdrant.constants';
 import { QdrantService } from '../qdrant/qdrant.service';
+import { PrivateMediaService } from '../media/private-media.service';
+import { accountDataLockKey } from '../common/account-data-lock';
 
 /**
  * Privacy & GDPR (Sprint 8.7). The three user rights: portability (export),
@@ -26,6 +29,7 @@ export class PrivacyService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly qdrant: QdrantService,
+    private readonly privateMedia: PrivateMediaService,
   ) {}
 
   // ── consent ──────────────────────────────────────────────────────────────
@@ -66,21 +70,97 @@ export class PrivacyService {
     if (!user) throw new NotFoundException('Account not found.');
     const ok = await argon2.verify(user.passwordHash, password).catch(() => false);
     if (!ok) throw new ForbiddenException('Incorrect password.');
-    // External vectors are not covered by SQL cascades. Delete them first: if
-    // Qdrant is unavailable, retain the account so erasure can be retried and
-    // no ownerless vectors are left behind.
-    try {
-      await this.qdrant.deleteByUser(DOCUMENT_CHUNKS_COLLECTION, userId);
-    } catch {
+    // Phase 1 commits a durable writer barrier before any external data is
+    // removed. Ingestion takes this same lock and only accepts active owners.
+    // Keep updatedAt as an optimistic token so a failed pre-cleanup restore
+    // cannot overwrite a concurrent Admin account-state workflow.
+    const deletion = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const current = await tx.user.findUnique({
+        where: { id: userId },
+        select: { id: true, accountStatus: true, updatedAt: true },
+      });
+      if (!current) throw new NotFoundException('Account not found.');
+      if (current.accountStatus === 'deletion_pending') {
+        const administrativeRequest = await tx.accountDeletionRequest.findFirst({
+          where: { userId, status: { in: ['requested', 'approved'] } },
+          select: { id: true },
+        });
+        if (administrativeRequest) {
+          throw new ConflictException('Account deletion is managed by an administrative workflow.');
+        }
+        // A prior self-erasure reached its durable barrier but failed during
+        // cleanup. Resume it without ever reactivating a possibly partial account.
+        return { stagedAt: current.updatedAt, canRestoreActive: false };
+      }
+      if (current.accountStatus !== 'active') {
+        // Do not reinterpret an Admin-managed deletion/suspension workflow as
+        // an immediate self-erasure request that bypasses its audit state.
+        throw new ConflictException('Account deletion cannot start from its current state.');
+      }
+      const staged = await tx.user.update({
+        where: { id: userId },
+        data: { accountStatus: 'deletion_pending' },
+        select: { updatedAt: true },
+      });
+      return { stagedAt: staged.updatedAt, canRestoreActive: true };
+    }, { timeout: 60_000 });
+
+    // Phase 2 keeps the same writer lock until Qdrant and the hard SQL delete
+    // have reached a terminal state. The SQL delete is deliberately executed
+    // by the regular client: it commits before the tombstone is purged, while
+    // this transaction exists only to own the advisory lock.
+    const purged = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+
+      const staged = await tx.user.findFirst({
+        where: {
+          id: userId,
+          accountStatus: 'deletion_pending',
+          updatedAt: deletion.stagedAt,
+        },
+        select: { id: true },
+      });
+      if (!staged) {
+        throw new ConflictException('Account deletion state changed before cleanup.');
+      }
+
+      try {
+        await this.qdrant.deleteByUser(DOCUMENT_CHUNKS_COLLECTION, userId);
+      } catch {
+        // Qdrant failed before any destructive local mutation. Restore only the
+        // exact row staged by this request; never overwrite an Admin transition.
+        if (deletion.canRestoreActive) {
+          await tx.user.updateMany({
+            where: {
+              id: userId,
+              accountStatus: 'deletion_pending',
+              updatedAt: deletion.stagedAt,
+            },
+            data: { accountStatus: 'active' },
+          });
+        }
+        return false;
+      }
+
+      // Once Qdrant has been purged, any later failure intentionally leaves the
+      // durable deletion_pending barrier in place. The media helper restores its
+      // tombstone when the independently committed SQL delete fails.
+      await this.privateMedia.deleteUserMediaAnd(userId, async () => {
+        await this.prisma.user.delete({ where: { id: userId } });
+      });
+      return true;
+    }, { timeout: 60_000 });
+
+    if (!purged) {
       throw new ServiceUnavailableException({
         code: 'PRIVACY_ERASURE_UNAVAILABLE',
         message: 'Account deletion is temporarily unavailable. Please retry.',
         retryable: true,
       });
     }
-
-    // ON DELETE CASCADE removes all relational data owned by the user.
-    await this.prisma.user.delete({ where: { id: userId } });
   }
 
   // ── portability ──────────────────────────────────────────────────────────
@@ -222,10 +302,40 @@ export class PrivacyService {
       this.prisma.reviewable.findMany({ where: { userId } }),
       this.prisma.studySession.findMany({ where: { userId } }),
       this.prisma.homework.findMany({ where: { userId } }),
-      this.prisma.assessment.findMany({ where: { userId } }),
+      this.prisma.assessment.findMany({
+        where: { userId },
+        // `questions` contains server-side answer keys and grading rubrics.
+        // Export learner-owned metadata and submissions, never solution data.
+        select: {
+          id: true,
+          userId: true,
+          type: true,
+          topic: true,
+          title: true,
+          level: true,
+          conceptId: true,
+          createdAt: true,
+        },
+      }),
       this.prisma.assessmentSubmission.findMany({ where: { userId } }),
       this.prisma.writingSubmission.findMany({ where: { userId } }),
-      this.prisma.readingExercise.findMany({ where: { userId } }),
+      this.prisma.readingExercise.findMany({
+        where: { userId },
+        // The persisted question payload includes answer keys. Learner results
+        // remain portable, but the private marking material does not.
+        select: {
+          id: true,
+          userId: true,
+          level: true,
+          topic: true,
+          title: true,
+          text: true,
+          score: true,
+          adaptedLevel: true,
+          result: true,
+          createdAt: true,
+        },
+      }),
       this.prisma.usageCounter.findMany({ where: { userId } }),
       this.prisma.membership.findMany({
         where: { userId },
@@ -245,6 +355,11 @@ export class PrivacyService {
       this.prisma.report.findMany({ where: { reporterId: userId } }),
       this.prisma.auditLog.findMany({ where: { actorId: userId } }),
     ]);
+
+    const privateMedia = await this.privateMedia.exportUserMedia(
+      userId,
+      documents.map((document) => document.id),
+    );
 
     return {
       generatedAt: new Date().toISOString(),
@@ -296,6 +411,7 @@ export class PrivacyService {
         learningDna,
         submittedReports,
         auditActivity,
+        privateMedia,
       },
     };
   }

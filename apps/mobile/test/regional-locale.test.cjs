@@ -34,7 +34,10 @@ test('regional BCP 47 variants resolve to the supported base catalog', () => {
     'fr-CA': 'fr',
     'pt-BR': 'pt',
     'pt_PT': 'pt',
-    'zh-Hant-TW': 'zh',
+    'zh-Hans-CN': 'zh',
+    'zh-Hant-TW': 'zh-Hant',
+    'zh-TW': 'zh-Hant',
+    'no-NO': 'nb',
     'es-419': 'es',
     'ar-MA': 'ar',
     'en-GB': 'en',
@@ -46,10 +49,14 @@ test('regional BCP 47 variants resolve to the supported base catalog', () => {
 });
 
 test('every registered UI language accepts a regional BCP 47 signal', () => {
-  assert.equal(SUPPORTED_LANGUAGE_CODES.length, 27);
+  assert.equal(SUPPORTED_LANGUAGE_CODES.length, 34);
 
   for (const code of SUPPORTED_LANGUAGE_CODES) {
-    const regional = code === 'zh' ? 'zh-Hant-TW' : `${code}-ZZ`;
+    const regional = code === 'zh'
+      ? 'zh-Hans-CN'
+      : code === 'zh-Hant'
+        ? 'zh-Hant-TW'
+        : `${code}-ZZ`;
     assert.equal(resolveUiLocale({ browserLocales: [regional] }), code, regional);
   }
 });
@@ -72,7 +79,8 @@ test('regional formatting keeps the first compatible canonical BCP 47 locale', (
     ['fr', ['en-US', 'fr-ca'], null, 'fr-CA'],
     ['pt', ['pt-BR'], null, 'pt-BR'],
     ['en', ['en-gb'], null, 'en-GB'],
-    ['zh', ['zh-hant-tw'], null, 'zh-Hant-TW'],
+    ['zh', ['zh-hant-tw'], null, 'zh'],
+    ['zh-Hant', ['zh-hant-tw'], null, 'zh-Hant-TW'],
     ['pt', ['de-DE'], 'pt_BR', 'pt-BR'],
   ];
 
@@ -119,7 +127,9 @@ test('the public Landing receives the resolved locale on its first client render
   assert.match(i18n, /Intl\.DateTimeFormat\(\)\.resolvedOptions\(\)\.locale/);
   assert.match(i18n, /formatLocale:\s*string/);
   assert.match(i18n, /resolveFormatLocale\(/);
-  assert.match(rootLayout, /<I18nProvider>[\s\S]*?<AuthProvider>/);
+  assert.match(rootLayout, /<AuthProvider>[\s\S]*?<AccountScopedApplication\s*\/>/);
+  assert.match(rootLayout, /accountId=\{user\?\.id\}/);
+  assert.match(rootLayout, /accountLocale=\{user\?\.interfaceLanguage \?\? user\?\.preferredLanguage\}/);
 });
 
 test('Web metadata follows UI locale and automatic locale detection stays local-only', () => {
@@ -130,8 +140,8 @@ test('Web metadata follows UI locale and automatic locale detection stays local-
 
   assert.match(i18n, /document\.documentElement\.lang\s*=\s*locale/);
   assert.match(i18n, /document\.documentElement\.dir\s*=\s*localeDirection\(locale\)/);
-  assert.doesNotMatch(i18n, /\/auth\/locale/);
-  assert.doesNotMatch(auth, /\/auth\/locale/);
+  assert.doesNotMatch(i18n, /api\([^)]*\/auth\/locale/);
+  assert.match(auth, /api<AuthUser>\(['\"]\/auth\/locale['\"]/);
   assert.doesNotMatch(i18n, /geolocation|getCurrentPosition|ipapi|ipinfo/i);
   assert.doesNotMatch(resolution, /navigator\.geolocation|getCurrentPosition|ipapi|ipinfo/i);
   assert.match(landing, /localeDirection\(locale\)\s*===\s*'rtl'/);

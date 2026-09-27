@@ -14,6 +14,7 @@ import {
   emojiSignature,
   generationConfigForModel,
   isRetryableProviderError,
+  localeCatalogDescriptor,
   parseCli,
   processBatchesConcurrently,
   releaseJobLock,
@@ -89,6 +90,24 @@ test('translation dry-run derives current catalog totals without a provider requ
   assert.equal(result.requestsAttempted, 0);
   assert.equal(providerFactoryCalls, 0);
   assert.equal(fs.existsSync(manifestPath), false);
+});
+
+test('catalog planning supports legacy filenames, missing resources and BCP 47 scripts', () => {
+  const norwegian = localeCatalogDescriptor('nb');
+  assert.equal(path.basename(norwegian.file), 'no.ts');
+  assert.equal(norwegian.variableName, 'no');
+
+  const traditionalChinese = localeCatalogDescriptor('zh-Hant');
+  assert.equal(path.basename(traditionalChinese.file), 'zh-Hant.ts');
+  assert.equal(traditionalChinese.variableName, 'zhHant');
+
+  const plan = buildPlan(['ln', 'zh-Hant'], 60);
+  for (const locale of plan.locales) {
+    assert.equal(locale.baseKeyCount, 0);
+    assert.equal(locale.effectiveKeyCount, 0);
+    assert.equal(locale.missingKeyCount, plan.sourceKeyCount);
+    assert.equal(locale.persistedFileChecksum, null);
+  }
 });
 
 test('provider batches require exact keys and preserve protected syntax', () => {

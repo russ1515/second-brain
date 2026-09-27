@@ -1,11 +1,16 @@
 /** Auth wire contracts shared by the API and the mobile client.
  *  Wire shapes only — no server-side secrets, no runtime dependencies. */
 
+import type { SupportedLanguageCode } from './languages';
+
 export interface RegisterRequest {
   email: string;
   password: string;
   /** Optional friendly name stored on the user's profile. */
   displayName?: string;
+  /** Initial interface locale selected on the public auth screen. For a new
+   * account it also seeds the explanation locale until onboarding changes it. */
+  preferredLanguage?: SupportedLanguageCode;
 }
 
 export interface LoginRequest {
@@ -34,6 +39,11 @@ export interface AuthUser {
   email: string;
   emailVerified: boolean;
   displayName?: string;
+  /** Server-backed interface locale. Older cached identities may omit it. */
+  interfaceLanguage?: SupportedLanguageCode;
+  /** Language used for general pedagogical explanations. It is intentionally
+   * separate from the interface locale and from a studied language profile. */
+  preferredLanguage?: SupportedLanguageCode;
 }
 
 /** Access + refresh token pair issued on register/login (and rotated on refresh in a later increment). */

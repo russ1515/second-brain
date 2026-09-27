@@ -13,6 +13,12 @@ import type {
   LessonExercise,
   LessonSummary,
   LessonView,
+  KycTeacher,
+} from '@second-brain/shared';
+import {
+  resolveTeacherPolicy,
+  TEACHER_POLICY_METADATA_SOURCE,
+  teacherPolicyDirective,
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
@@ -25,6 +31,7 @@ import { MasteryService } from '../concepts/mastery.service';
 import { RevisionEngineService } from '../revision/revision-engine.service';
 import { localeDirective, resolveLocale } from '../common/learning-locale';
 import type { GenerateLessonDto } from './dto/generate-lesson.dto';
+import { ExperienceSessionService } from '../experience-sessions/experience-session.service';
 
 const CONTEXT_LIMIT = 5;
 const FLASHCARD_COUNT = 8;
@@ -94,6 +101,7 @@ export class LessonService {
     private readonly concepts: ConceptService,
     private readonly mastery: MasteryService,
     private readonly revision: RevisionEngineService,
+    private readonly experienceSessions: ExperienceSessionService,
   ) {}
 
   async generate(
@@ -108,17 +116,31 @@ export class LessonService {
 
     // Ground the lesson in the learner's existing notes when available.
     const context = await this.retrieveContext(userId, topic);
+    const teacherPreferences = await this.loadTeacherPreferences(userId);
     // "Difficulty auto-adapts — mastery down → simplify; mastery up → increase
-    // complexity." An explicit level always wins; this only fills the gap.
-    const level = dto.level ?? (await this.levelFromMastery(userId, conceptId));
+    // complexity." An explicit level always wins. Turning automatic adaptation
+    // off is authoritative and prevents reading mastery to infer a level.
+    const level = dto.level ?? (
+      teacherPreferences?.automaticAdaptation === false
+        ? undefined
+        : await this.levelFromMastery(userId, conceptId)
+    );
     const localeInstruction =
       internal.directive ??
       (!dto.language ? localeDirective(await resolveLocale(this.prisma, userId)) : undefined);
+    const teacherPolicy = resolveTeacherPolicy(teacherPreferences, {
+      mode: 'lesson',
+      intent: 'learn',
+      difficulty: level ?? null,
+    });
+    const trustedDirective = [localeInstruction, teacherPolicyDirective(teacherPolicy)]
+      .filter((value): value is string => Boolean(value))
+      .join(' ');
     const raw = await this.generateLesson(
       topic,
       context,
       { ...dto, level },
-      localeInstruction,
+      trustedDirective,
     );
 
     const lesson = await this.prisma.lesson.create({
@@ -141,6 +163,25 @@ export class LessonService {
         keyPoints: raw.keyPoints as unknown as Prisma.InputJsonValue,
         revisionSheet: raw.revisionSheet,
       },
+    });
+
+    // Freeze the effective policy with the lesson. Corrections later in this
+    // lesson must not silently change because Profile preferences were edited.
+    await this.experienceSessions.ensureLessonSession(userId, {
+      title: `Lesson — ${topic}`.slice(0, 300),
+      intent: 'learn',
+      inputModality: 'text',
+      currentStep: {
+        id: 'lesson',
+        label: topic,
+        state: 'active',
+        metadata: {
+          teacherPolicy,
+          teacherPolicySource: TEACHER_POLICY_METADATA_SOURCE,
+        },
+      },
+      resumeTarget: { kind: 'route', path: `/lesson/${lesson.id}` },
+      links: { lessonId: lesson.id },
     });
 
     // Index into long-term memory via the existing document pipeline (chunk+embed).
@@ -198,8 +239,34 @@ export class LessonService {
   }
 
   async remove(userId: string, id: string): Promise<void> {
-    await this.requireOwned(userId, id);
-    await this.prisma.lesson.delete({ where: { id } });
+    await this.prisma.$transaction(async (tx) => {
+      const owned = await tx.lesson.findFirst({
+        where: { id, userId },
+        select: { id: true },
+      });
+      if (!owned) {
+        throw new NotFoundException('Lesson not found.');
+      }
+
+      // Lesson uses an optional SetNull FK from ExperienceSession. Abandon its
+      // resumable envelopes while that link still exists, then delete the lesson
+      // in the same transaction so a dead resume route is never committed.
+      await tx.experienceSession.updateMany({
+        where: {
+          userId,
+          lessonId: id,
+          status: { in: ['active', 'paused'] },
+        },
+        data: {
+          status: 'abandoned',
+          pausedAt: null,
+          resumeTarget: Prisma.JsonNull,
+          nextBestAction: Prisma.JsonNull,
+          version: { increment: 1 },
+        },
+      });
+      await tx.lesson.delete({ where: { id } });
+    });
   }
 
   // ── internals ────────────────────────────────────────────────────────────
@@ -292,6 +359,14 @@ export class LessonService {
     if (m.level === 'strong') return 'advanced';
     if (m.level === 'developing') return 'intermediate';
     return 'beginner';
+  }
+
+  private async loadTeacherPreferences(userId: string): Promise<KycTeacher | null> {
+    const onboarding = await this.prisma.onboardingProfile.findUnique({
+      where: { userId },
+      select: { teacher: true },
+    });
+    return (onboarding?.teacher as KycTeacher | null) ?? null;
   }
 
   /**

@@ -49,6 +49,9 @@ export default () => ({
       ),
     },
   },
+  privateMedia: {
+    directory: process.env.PRIVATE_MEDIA_DIR ?? '.private-media',
+  },
   embeddings: {
     // 'gemini' calls the Google API; 'fake' produces deterministic local vectors.
     provider: process.env.EMBEDDINGS_PROVIDER ?? 'fake',
@@ -87,6 +90,10 @@ export default () => ({
     otpTtl: parseInt(process.env.OTP_TTL ?? '600', 10),
     // Max wrong OTP guesses before the code is locked out.
     otpMaxAttempts: parseInt(process.env.OTP_MAX_ATTEMPTS ?? '5', 10),
+    // Dedicated server-only key for HMACing the small six-digit OTP space.
+    // It is deliberately independent from JWT and encryption keys so it can
+    // be rotated without invalidating sessions or encrypted MFA material.
+    otpHmacSecret: process.env.OTP_HMAC_SECRET as string,
     // Key material for encrypting TOTP secrets at rest. Falls back to the access
     // secret (still 32-byte-derived) when unset; set explicitly in production.
     twoFactorEncKey: process.env.TWO_FACTOR_ENC_KEY,

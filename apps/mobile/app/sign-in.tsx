@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Animated, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { toSupportedLanguage } from '@second-brain/shared';
 import { useAuth } from '../lib/auth-context';
 import { api } from '../lib/client';
 import { useI18n, type TranslationKey } from '../lib/i18n';
@@ -34,7 +35,7 @@ const EXPIRY_SECONDS = 300;
  */
 export default function SignInScreen() {
   const { login, register, verifyEmailOtp, verifyTwoFactor } = useAuth();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { colors: c, spacing, reducedMotion } = useTokens();
   const { width } = useResponsive();
   const router = useRouter();
@@ -98,7 +99,12 @@ export default function SignInScreen() {
     setBusy(true); clear();
     try {
       if (mode === 'register') {
-        await register(email.trim(), password, name.trim() || undefined);
+        await register(
+          email.trim(),
+          password,
+          name.trim() || undefined,
+          toSupportedLanguage(locale) ?? 'en',
+        );
         setInfo(fmt('auth.codeSent', { email: email.trim() }));
         startCode(); setStep('otp');
       } else {

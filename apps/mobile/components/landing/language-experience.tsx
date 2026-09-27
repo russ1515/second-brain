@@ -4,6 +4,7 @@ import type { RlleDemoStage } from '@second-brain/shared';
 import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
+import { LanguageFlag } from '../ds/language-flag';
 import { publicLanguageOptions, RLLE_PUBLIC_DEMO } from './landing-content';
 import {
   DemoLabel,
@@ -119,7 +120,7 @@ export function LanguageExperience({ onStart }: { onStart: () => void }) {
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {languages.map((language) => (
             <View key={language.code} accessibilityLabel={`${language.nativeName}, ${language.displayName}`} style={{ flexGrow: 1, flexBasis: width >= 1050 ? '13%' : width >= 660 ? '22%' : '44%', minWidth: width >= 660 ? 135 : 125, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: radius.md, backgroundColor: c.surfaceSunken, paddingVertical: 9, paddingHorizontal: 10 }}>
-              <Text accessible={false} style={{ fontSize: 16 }}>{language.symbol}</Text>
+              <LanguageFlag code={language.code} size={16} />
               <View style={{ flex: 1 }}>
                 <Text style={{ color: c.textPrimary, fontSize: 12, lineHeight: 17, fontWeight: '800', writingDirection: language.rtl ? 'rtl' : 'ltr' }}>{language.nativeName}</Text>
                 {language.displayName !== language.nativeName ? <Text style={{ color: c.textMuted, fontSize: 10, lineHeight: 14 }}>{language.displayName}</Text> : null}

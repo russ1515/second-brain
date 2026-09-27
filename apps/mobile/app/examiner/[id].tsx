@@ -77,6 +77,24 @@ export default function AssessmentScreen() {
         </Text>
       ) : null}
 
+      {assessment?.teacherPolicy ? (
+        <Card style={styles.rulesCard} testID="assessment-rules">
+          <Text style={styles.rulesTitle}>{t('teacher.exam.rulesTitle')}</Text>
+          <Text style={styles.rulesLine}>
+            {t('teacher.exam.mode')} · {t(assessment.teacherPolicy.labelCode as TranslationKey)}
+          </Text>
+          <Text style={styles.rulesLine}>
+            {t('teacher.exam.grading')} · {t('teacher.exam.rubric')}
+          </Text>
+          <Text style={styles.rulesLine}>
+            {t('teacher.exam.help')} · {assessment.teacherPolicy.hintsAllowed
+              ? t('teacher.exam.helpLimited')
+              : t('teacher.exam.helpNone')}
+          </Text>
+          <Text style={styles.rulesDetail}>{t('teacher.exam.feedbackAfter')}</Text>
+        </Card>
+      ) : null}
+
       {result ? (
         <Card style={styles.scoreCard} testID="assessment-score">
           <Text style={styles.scoreBig}>{result.score}/100</Text>
@@ -172,6 +190,10 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
   title: { fontSize: 22, fontWeight: '700', color: c.textPrimary },
   meta: { fontSize: 13, color: c.textSecondary, textTransform: 'capitalize' },
+  rulesCard: { gap: 5, borderColor: c.warning },
+  rulesTitle: { fontSize: 16, fontWeight: '800', color: c.textPrimary },
+  rulesLine: { fontSize: 13, fontWeight: '600', color: c.textPrimary },
+  rulesDetail: { fontSize: 13, lineHeight: 19, color: c.textSecondary },
   scoreCard: { alignItems: 'center', gap: 6, borderColor: c.primary },
   scoreBig: { fontSize: 34, fontWeight: '800', color: c.textPrimary },
   summary: { fontSize: 14, color: c.textPrimary, lineHeight: 20, textAlign: 'center' },

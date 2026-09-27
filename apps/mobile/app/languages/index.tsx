@@ -200,7 +200,7 @@ export default function LanguagesScreen() {
               {learningCode && !selectedExists ? (
                 <Card style={{ gap: spacing.md }}>
                   <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('languages11.create.title').replace('{language}', SUPPORTED_LANGUAGES[learningCode as SupportedLanguageCode]?.name ?? learningCode)}</Text>
-                  <LanguageSelector value={nativeCode} onChange={setNativeCode} mode="ui" label={t('languageSelector.nativeLabel')} />
+                  <LanguageSelector value={nativeCode} onChange={setNativeCode} mode="learning" label={t('languageSelector.nativeLabel')} />
                   <SegmentedControl options={CEFR_LEVELS} value={level} onChange={setLevel} />
                   <SegmentedControl options={LANGUAGE_MODES.slice(0, 3)} value={mode} onChange={setMode} labelFor={(value) => t(`langmode.${value}` as TranslationKey)} />
                   <Input label={t('languages11.goal.label')} value={goal} onChangeText={setGoal} placeholder={t('languages11.goal.placeholder')} maxLength={300} />

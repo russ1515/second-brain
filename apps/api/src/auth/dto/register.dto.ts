@@ -1,11 +1,18 @@
 import {
   IsEmail,
+  IsIn,
   IsOptional,
   IsString,
   MaxLength,
   MinLength,
 } from 'class-validator';
-import type { RegisterRequest } from '@second-brain/shared';
+import { Transform } from 'class-transformer';
+import {
+  SUPPORTED_LANGUAGE_CODES,
+  toSupportedLanguage,
+  type RegisterRequest,
+  type SupportedLanguageCode,
+} from '@second-brain/shared';
 
 export class RegisterDto implements RegisterRequest {
   @IsEmail()
@@ -21,4 +28,9 @@ export class RegisterDto implements RegisterRequest {
   @IsString()
   @MaxLength(80)
   displayName?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => typeof value === 'string' ? (toSupportedLanguage(value) ?? value) : value)
+  @IsIn(SUPPORTED_LANGUAGE_CODES)
+  preferredLanguage?: SupportedLanguageCode;
 }

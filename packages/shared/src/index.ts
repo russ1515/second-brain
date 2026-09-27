@@ -65,6 +65,7 @@ export * from './session';
 export * from './speech';
 export * from './subscription';
 export * from './tutor';
+export * from './teacher-policy';
 export * from './usage';
 export * from './ux-state';
 export * from './workspace-persistence';

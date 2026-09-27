@@ -117,6 +117,7 @@ test('directory pagination is server-side, bounded by request values, and does n
         return [{
           id: 'learner-1', email: 'learner@example.test', accountStatus: 'active', createdAt: now, lastActiveAt: now,
           profile: { displayName: 'Learner', preferredLanguage: 'fr' },
+          onboardingProfile: { extra: { interfaceLanguage: 'es' } },
           subscription: { status: 'active', plan: { slug: 'pro' } },
           quotaCycles: [{ accounts: [{ state: 'PRIMARY', primaryLimit: 100, primaryUsed: 30, fallbackLimit: 50, fallbackUsed: 0 }] }],
         }];
@@ -131,9 +132,35 @@ test('directory pagination is server-side, bounded by request values, and does n
   assert.equal(findArgs.skip, 5);
   assert.equal(findArgs.take, 5);
   assert.deepEqual(findArgs.orderBy, { email: 'asc' });
+  assert.deepEqual(findArgs.select.onboardingProfile, { select: { extra: true } });
   assert.equal(response.total, 6);
   assert.equal(response.totalPages, 2);
   assert.equal(response.items[0].usagePercent, 20);
+  assert.equal(response.items[0].interfaceLanguage, 'es');
+});
+
+test('user detail reads the UI locale from onboarding and keeps the profile language as legacy fallback', async () => {
+  let findArgs;
+  const prisma = {
+    user: {
+      findUnique: async (args) => {
+        findArgs = args;
+        return {
+          id: 'learner-1', email: 'learner@example.test', emailVerified: true,
+          accountStatus: 'active', suspendedAt: null, bannedAt: null,
+          createdAt: now, lastActiveAt: now,
+          profile: { displayName: 'Learner', preferredLanguage: 'fr', timezone: 'Europe/Paris' },
+          onboardingProfile: { extra: { interfaceLanguage: 'de' } },
+          subscription: { status: 'active', plan: { slug: 'pro' } },
+          quotaCycles: [],
+        };
+      },
+    },
+  };
+  const service = new UserAdminService(prisma, {}, {});
+  const response = await service.detail('learner-1', superIdentity());
+  assert.deepEqual(findArgs.select.onboardingProfile, { select: { extra: true } });
+  assert.equal(response.sections.overview.data.interfaceLanguage, 'de');
 });
 
 test('highly restricted learner profile requires its distinct capability and a body reason, then audits without exposing documents or conversations', async () => {
@@ -175,6 +202,7 @@ test('highly restricted learner profile requires its distinct capability and a b
     'learner-1', superIdentity(), { access: 'highly_restricted', reason: 'support case' }, { actorId: 'admin-1' },
   );
   assert.equal(result.classification, 'HIGHLY_RESTRICTED');
+  assert.equal(result.interfaceLanguage, 'fr');
   assert.deepEqual(result.documents, { status: 'HIGHLY_RESTRICTED_NOT_IMPLEMENTED' });
   assert.deepEqual(result.conversations, { status: 'HIGHLY_RESTRICTED_NOT_IMPLEMENTED' });
   assert.equal(writes.length, 2);

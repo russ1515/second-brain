@@ -151,6 +151,8 @@ export interface AssessmentView {
   title: string;
   level: string | null;
   questions: AssessmentQuestionView[];
+  /** Rules captured at creation and kept stable for every attempt. */
+  teacherPolicy?: import('./teacher-policy').TeacherPolicySnapshot | null;
   createdAt: string;
   /** Most recent graded attempt, when the learner has submitted. */
   latestSubmission: AssessmentSubmissionView | null;

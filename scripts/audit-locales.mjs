@@ -8,10 +8,12 @@
 //   node scripts/audit-locales.mjs --strict
 //
 // This module performs no network request and never writes to a catalog.
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   SUPPORTED_CODES,
+  localeCatalogDescriptor,
   readCatalog,
   readNestedCatalog,
 } from './translate-locale.mjs';
@@ -54,6 +56,7 @@ const ISSUE_KINDS = Object.freeze([
   'emojis',
   'brands',
 ]);
+const MAX_SUSPICIOUS_IDENTITY_RATIO = 0.10;
 
 function occurrences(value, expression) {
   return [...value.matchAll(expression)].map((match) => match[0]).sort();
@@ -226,10 +229,21 @@ export function auditCatalogSet({ english, catalogs, layersByLocale = new Map(),
     const coveragePercent = english.size === 0
       ? 100
       : Math.round((translatedKnownKeys / english.size) * 100_000) / 1_000;
-    const errorCount = ISSUE_KINDS.reduce((sum, kind) => sum + issues[kind].length, 0);
+    // Individual unchanged words can be legitimate. A catalog where at least
+    // 10% of known strings are suspicious English identities is not a reviewed
+    // translation, though, and must not pass the final gate.
+    const identicalRatio = code === 'en' || translatedKnownKeys === 0
+      ? 0
+      : identicalToEnglish.length / translatedKnownKeys;
+    const identicalErrorCount = identicalRatio >= MAX_SUSPICIOUS_IDENTITY_RATIO
+      ? identicalToEnglish.length
+      : 0;
+    const errorCount = ISSUE_KINDS.reduce((sum, kind) => sum + issues[kind].length, 0)
+      + identicalErrorCount;
     const nonMissingErrorCount = ISSUE_KINDS
       .filter((kind) => kind !== 'missing')
-      .reduce((sum, kind) => sum + issues[kind].length, 0);
+      .reduce((sum, kind) => sum + issues[kind].length, 0)
+      + identicalErrorCount;
     localeReports.push({
       code,
       keyCount: catalog.size,
@@ -240,6 +254,8 @@ export function auditCatalogSet({ english, catalogs, layersByLocale = new Map(),
       nonMissingErrorCount,
       issues,
       identicalToEnglish,
+      identicalRatio,
+      identicalErrorCount,
     });
   }
 
@@ -283,12 +299,16 @@ export function auditRepository() {
   ]);
 
   for (const code of SUPPORTED_CODES) {
-    const base = readCatalog(path.join(LOCALES_DIR, `${code}.ts`), code);
+    const { file, variableName } = localeCatalogDescriptor(code);
+    // A newly registered locale is intentionally reported as 0% coverage until
+    // its first real catalog is generated. Never synthesize an empty runtime
+    // resource merely to make the registry look complete.
+    const base = fs.existsSync(file) ? readCatalog(file, variableName) : new Map();
     const essential = essentials.get(code) ?? new Map();
     const review = reviews.get(code) ?? new Map();
     catalogs.set(code, new Map([...base, ...essential, ...review]));
     layersByLocale.set(code, [
-      { name: `${code}.ts`, entries: base },
+      { name: path.relative(LOCALES_DIR, file).replaceAll('\\', '/'), entries: base },
       { name: 'essential.ts', entries: essential },
       { name: 'review.ts', entries: review },
     ]);
@@ -341,7 +361,7 @@ export function formatHumanReport(report, { strict = false, diagnosticLimit = 8 
   lines.push(
     `Integrity errors: ${report.errorCount}`,
     `Non-missing integrity errors: ${report.nonMissingErrorCount}`,
-    `Identical-to-English review diagnostics (non-blocking): ${report.identicalDiagnosticCount}`,
+    `Identical-to-English review diagnostics: ${report.identicalDiagnosticCount}`,
     report.readyForFinalGate
       ? 'FINAL_LOCALE_GATE_READY: YES'
       : `FINAL_LOCALE_GATE_READY: NO${strict ? ' — validation failed' : ' — rerun with --strict only after translation is complete'}`,

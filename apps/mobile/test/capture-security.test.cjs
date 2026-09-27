@@ -1,0 +1,76 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const ts = require('typescript');
+
+const root = path.resolve(__dirname, '../../..');
+const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+
+function loadTypeScriptModule(file) {
+  const source = read(file);
+  const output = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const module = { exports: {} };
+  vm.runInNewContext(output, { module, exports: module.exports, URL }, { filename: file });
+  return module.exports;
+}
+
+test('QR safety permits only explicit http(s) URLs and keeps text inert', () => {
+  const { classifyQrPayload, isRepeatedQr } = loadTypeScriptModule('apps/mobile/lib/capture/qr-safety.ts');
+  assert.equal(classifyQrPayload('https://example.test/path').kind, 'url');
+  assert.equal(classifyQrPayload('http://example.test').kind, 'url');
+  for (const value of ['javascript:alert(1)', 'data:text/html,test', 'file:///tmp/x', 'intent://scan', 'secondbrain://login']) {
+    assert.equal(classifyQrPayload(value).kind, 'blocked', value);
+  }
+  assert.equal(classifyQrPayload('Explain chapter 2').kind, 'text');
+  assert.equal(isRepeatedQr('same', 'same'), true);
+});
+
+test('web capture never requests audio and releases every media track', () => {
+  const capture = read('apps/mobile/components/capture/camera-capture.web.tsx');
+  assert.match(capture, /getUserMedia\(\{/);
+  assert.match(capture, /audio:\s*false/);
+  assert.match(capture, /enumerateDevices\(\)/);
+  assert.match(capture, /import \{ releaseMediaStream \}/);
+  assert.match(capture, /releaseMediaStream\(/);
+  assert.match(capture, /visibilitychange/);
+  assert.doesNotMatch(capture, /getUserMedia\(\{[^}]*audio:\s*true/s);
+});
+
+test('browser stream cleanup stops tracks and detaches a failed preview', () => {
+  const { releaseMediaStream } = loadTypeScriptModule('apps/mobile/lib/capture/media-stream.ts');
+  let stopped = 0;
+  const candidate = { getTracks: () => [{ stop: () => { stopped += 1; } }, { stop: () => { stopped += 1; } }] };
+  const preview = { srcObject: candidate };
+  releaseMediaStream(candidate, preview);
+  assert.equal(stopped, 2);
+  assert.equal(preview.srcObject, null);
+
+  const capture = read('apps/mobile/components/capture/camera-capture.web.tsx');
+  assert.match(capture, /catch \(reason\) \{[\s\S]*releaseMediaStream\(next, video\.current\)/);
+});
+
+test('Learn exposes distinct photo, document, QR, import and real export actions', () => {
+  const composer = read('apps/mobile/components/learn/universal-composer.tsx');
+  const privacy = read('apps/mobile/app/privacy.tsx');
+  assert.match(composer, /learn5\.capture\.photo/);
+  assert.match(composer, /openScan\('document'\)/);
+  assert.match(composer, /openScan\('qr'\)/);
+  assert.match(composer, /learn5\.modality\.import[\s\S]*chooseFile\(\)/);
+  assert.match(composer, /testID="learn-composer-export"[\s\S]*learn5\.modality\.export[\s\S]*onNavigate\('\/privacy'\)/);
+  assert.match(privacy, /api<DataExportResponse>\('\/me\/export'\)/);
+  assert.match(composer, /<CameraCapture\s+mode="photo"/);
+});
+
+test('avatar persistence is authenticated server media, not a global local URI', () => {
+  const photo = read('apps/mobile/lib/profile/photo.ts');
+  assert.match(photo, /apiUpload\('\/profile\/avatar'/);
+  assert.match(photo, /apiBinary\('\/profile\/avatar'\)/);
+  assert.match(photo, /method:\s*'DELETE'/);
+  assert.doesNotMatch(photo, /AsyncStorage|sb\.avatarPhoto/);
+});

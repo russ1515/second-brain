@@ -81,6 +81,14 @@ export default function DocumentIntelligenceScreen() {
   useFocusEffect(useCallback(() => { void load(); }, [load]));
   useEffect(() => {
     if (!document || (document.status !== 'pending' && document.status !== 'processing')) return;
+    // A capture saved without an authorised Vision provider is intentionally
+    // pending until the learner retries it. Do not poll the API forever for a
+    // state that cannot advance by itself.
+    if (
+      document.status === 'pending'
+      && document.charCount === 0
+      && document.sourceRef?.startsWith('scan:')
+    ) return;
     const timer = setTimeout(() => void load(), 2500);
     return () => clearTimeout(timer);
   }, [document, load]);
@@ -123,12 +131,35 @@ export default function DocumentIntelligenceScreen() {
   if (!document) return <SmartLoadingState title={t('library7.document.loading')} />;
 
   if (document.status !== 'ready') {
+    const emptyOcrScan = document.sourceRef?.startsWith('scan:') === true && document.charCount === 0;
+    const failedOcrScan = emptyOcrScan && document.status === 'failed';
+    const staleOcrScan = emptyOcrScan && document.status === 'processing' &&
+      Date.now() - Date.parse(document.updatedAt) > 5 * 60_000;
+    const retryableOcrScan = emptyOcrScan &&
+      (document.status === 'pending' || failedOcrScan || staleOcrScan);
     return (
       <ScrollView contentContainerStyle={{ padding: desktop ? 28 : 16, gap: spacing.lg, maxWidth: 920, width: '100%', alignSelf: 'center' }}>
         <DocumentHeader document={document} />
         {error ? <Alert tone="error" title={t('state.error')} detail={error} /> : null}
-        <Card><DocumentPipeline status={document.status} stage={document.stage} error={document.error} onRetry={document.status === 'failed' ? () => void action('retry', () => api(`/documents/${document.id}/reindex`, { method: 'POST' })) : undefined} /></Card>
-        <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('library7.document.processingHelp')}</Text>
+        <Card><DocumentPipeline
+          status={document.status}
+          stage={document.stage}
+          error={failedOcrScan ? t('document.pipeline.ocrFailed') : document.error}
+          retryLabelKey={retryableOcrScan ? 'document.pipeline.retryOcr' : undefined}
+          onRetry={retryableOcrScan || document.status === 'failed'
+            ? () => void action('retry', () => api(
+                retryableOcrScan
+                  ? `/documents/${document.id}/retry-scan`
+                  : `/documents/${document.id}/reindex`,
+                { method: 'POST' },
+              ))
+            : undefined}
+        /></Card>
+        <Text style={[typography.bodySmall, { color: c.textSecondary }]}>
+          {retryableOcrScan
+            ? t('document.pipeline.ocrRetryHelp')
+            : t('library7.document.processingHelp')}
+        </Text>
         <Button label={t('library7.backLibrary')} variant="ghost" onPress={() => router.push('/library')} />
       </ScrollView>
     );

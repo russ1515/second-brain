@@ -84,6 +84,9 @@ test('Lot 7 UI keeps one importer, real pipeline, offline cache, citations, batc
   assert.match(detail, /pathname: '\/tutor'/);
   assert.match(detail, /pathname: '\/brain'/);
   assert.match(detail, /library\/workspace/);
+  assert.match(detail, /sourceRef\?\.startsWith\('scan:'\)/);
+  assert.match(detail, /\/retry-scan/);
+  assert.match(detail, /\/reindex/);
   assert.match(ask, /documentIds: selectedIds/);
   assert.match(sources, /testID="source-preview"/);
   assert.match(cache, /\$\{PREFIX\}\.\$\{userId\}/);

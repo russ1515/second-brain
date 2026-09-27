@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { Image, Pressable, Text, View } from 'react-native';
+import { Image, Platform, Pressable, Text, View } from 'react-native';
 import type { KycTeacher, LearningCategory } from '@second-brain/shared';
 import { useTokens } from '../../lib/design/theme';
 import { Badge, Button, Card, Input, Progress, SegmentedControl, Switch } from '../ds/core';
@@ -62,8 +62,8 @@ export function ProfilePhoto({
       </View>
 
       <Sheet visible={open} onClose={() => setOpen(false)} title={t('profile.card.photo')}>
-        <PhotoRow icon="📷" label={t('profile.card.takePhoto')} onPress={() => { setOpen(false); onPick('camera'); }} disabled={busy} />
-        <PhotoRow icon="🖼️" label={t('profile.card.gallery')} onPress={() => { setOpen(false); onPick('gallery'); }} disabled={busy} />
+        <PhotoRow icon="📷" label={t(Platform.OS === 'web' ? 'profile.card.webcam' : 'profile.card.takePhoto')} onPress={() => { setOpen(false); onPick('camera'); }} disabled={busy} />
+        <PhotoRow icon="🖼️" label={t(Platform.OS === 'web' ? 'profile.card.importImage' : 'profile.card.gallery')} onPress={() => { setOpen(false); onPick('gallery'); }} disabled={busy} />
         <View style={{ gap: 8, marginTop: 4 }}>
           <Text style={{ color: c.textMuted, fontSize: 12, fontWeight: '700', textTransform: 'uppercase' }}>{t('profile.card.avatar')}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -237,6 +237,118 @@ export function TeacherConfig({
           labelFor={(v) => t(v === 'short' ? 'profile.card.explShort' : v === 'balanced' ? 'profile.card.explBalanced' : 'profile.card.explDetailed')}
         />
       </Field>
+    </ProfileSection>
+  );
+}
+
+/** Essential-first adaptive teacher settings. The backend captures these
+ * preferences when a new session/assessment begins; it never trusts the UI as
+ * the authority for exam safeguards. */
+export function AdaptiveTeacherConfig({
+  value,
+  onChange,
+}: {
+  value: KycTeacher;
+  onChange: (patch: Partial<KycTeacher>) => void;
+}) {
+  const { colors: c } = useTokens();
+  const { t } = useI18n();
+  const [advanced, setAdvanced] = useState(false);
+  const reset = () => onChange({
+    automaticAdaptation: true,
+    learningSupport: 'guided',
+    conversationMode: 'training',
+    examRigor: 'standard',
+    correction: 'adaptive',
+    explanations: 'balanced',
+    sessionSummary: true,
+    encouragement: 'supportive',
+  });
+
+  return (
+    <ProfileSection title={t('profile.teacher.title')}>
+      <Text style={{ color: c.textSecondary, fontSize: 13, lineHeight: 19 }}>
+        {t('profile.teacher.detail')}
+      </Text>
+      <Switch
+        value={value.automaticAdaptation !== false}
+        onChange={(automaticAdaptation) => onChange({ automaticAdaptation })}
+        label={t('profile.teacher.auto')}
+      />
+      <Text style={{ color: c.textMuted, fontSize: 12, lineHeight: 18 }}>
+        {t('profile.teacher.autoDetail')}
+      </Text>
+      <Field label={t('profile.teacher.learning')}>
+        <SegmentedControl
+          options={['guided', 'balanced', 'demanding'] as const}
+          value={value.learningSupport ?? 'guided'}
+          onChange={(learningSupport) => onChange({ learningSupport })}
+          labelFor={(option) => t(`profile.teacher.learning.${option}` as TranslationKey)}
+        />
+      </Field>
+      <Field label={t('profile.teacher.conversation')}>
+        <SegmentedControl
+          options={['training', 'assessed'] as const}
+          value={value.conversationMode ?? 'training'}
+          onChange={(conversationMode) => onChange({ conversationMode })}
+          labelFor={(option) => t(`profile.teacher.conversation.${option}` as TranslationKey)}
+        />
+        <Text style={{ color: c.textMuted, fontSize: 12, lineHeight: 18 }}>
+          {t(value.conversationMode === 'assessed'
+            ? 'profile.teacher.conversation.assessedDetail'
+            : 'profile.teacher.conversation.trainingDetail')}
+        </Text>
+      </Field>
+      <Field label={t('profile.teacher.exam')}>
+        <SegmentedControl
+          options={['standard', 'strict'] as const}
+          value={value.examRigor ?? 'standard'}
+          onChange={(examRigor) => onChange({ examRigor })}
+          labelFor={(option) => t(`profile.teacher.exam.${option}` as TranslationKey)}
+        />
+        <Text style={{ color: c.textMuted, fontSize: 12, lineHeight: 18 }}>
+          {t('profile.teacher.examDetail')}
+        </Text>
+      </Field>
+      <Button
+        label={t(advanced ? 'profile.teacher.advancedClose' : 'profile.teacher.advancedOpen')}
+        variant="ghost"
+        onPress={() => setAdvanced((open) => !open)}
+      />
+      {advanced ? (
+        <View style={{ gap: 12 }} testID="teacher-advanced-settings">
+          <Field label={t('profile.teacher.correction')}>
+            <SegmentedControl
+              options={['immediate', 'let_me_finish', 'adaptive'] as const}
+              value={value.correction ?? 'adaptive'}
+              onChange={(correction) => onChange({ correction })}
+              labelFor={(option) => t(`profile.teacher.correction.${option}` as TranslationKey)}
+            />
+          </Field>
+          <Field label={t('profile.card.explanations')}>
+            <SegmentedControl
+              options={['short', 'balanced', 'detailed'] as const}
+              value={value.explanations ?? 'balanced'}
+              onChange={(explanations) => onChange({ explanations })}
+              labelFor={(option) => t(`profile.card.expl${option === 'short' ? 'Short' : option === 'balanced' ? 'Balanced' : 'Detailed'}` as TranslationKey)}
+            />
+          </Field>
+          <Switch
+            value={value.sessionSummary !== false}
+            onChange={(sessionSummary) => onChange({ sessionSummary })}
+            label={t('profile.teacher.summary')}
+          />
+          <Field label={t('profile.teacher.encouragement')}>
+            <SegmentedControl
+              options={['measured', 'supportive'] as const}
+              value={value.encouragement ?? 'supportive'}
+              onChange={(encouragement) => onChange({ encouragement })}
+              labelFor={(option) => t(`profile.teacher.encouragement.${option}` as TranslationKey)}
+            />
+          </Field>
+        </View>
+      ) : null}
+      <Button label={t('profile.teacher.reset')} variant="secondary" onPress={reset} />
     </ProfileSection>
   );
 }

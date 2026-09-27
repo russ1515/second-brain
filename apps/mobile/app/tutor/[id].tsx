@@ -430,6 +430,12 @@ export default function TutorSessionScreen() {
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.sm }}>
               {session.role.kind !== 'general' ? <Badge label={`${session.role.emoji} ${teacherRoleLabel(session.role, locale)}`} tone="ai" /> : null}
               {session.focusConceptName ? <Badge label={session.focusConceptName} tone="warning" /> : null}
+              {session.teacherPolicy ? (
+                <Badge
+                  label={t(session.teacherPolicy.labelCode as TranslationKey)}
+                  tone={session.teacherPolicy.assessed ? 'warning' : 'ai'}
+                />
+              ) : null}
               <TutorAIState state={workState} />
             </View>
             <ContextBar items={contexts} onRemove={(item) => void removeContext(item)} />

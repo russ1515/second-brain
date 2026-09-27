@@ -17,6 +17,7 @@ import {
 import { ContextBar } from '../context/context-bar';
 import { Alert, Badge, Button, Card } from '../ds/core';
 import { Sheet } from '../ds/overlays';
+import { CameraCapture } from '../capture/camera-capture';
 import { createRecorder, RECORDING_SUPPORTED, type Recording, type Recorder } from '../../lib/recorder';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
@@ -26,6 +27,7 @@ import {
   saveLearnDraft,
   type LearnDraftAttachment,
 } from '../../lib/learn/composer-draft';
+import type { CapturedImage } from '../../lib/capture/types';
 import {
   isImageDocument,
   pickLearnDocument,
@@ -67,6 +69,7 @@ export function UniversalComposer({
   const [hydrated, setHydrated] = useState(false);
   const [restored, setRestored] = useState(false);
   const [captureOpen, setCaptureOpen] = useState(false);
+  const [photoOpen, setPhotoOpen] = useState(false);
   const [clarification, setClarification] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState<LearnReadyDecision | null>(null);
   const [busy, setBusy] = useState(false);
@@ -109,6 +112,10 @@ export function UniversalComposer({
   }, [attachment, contexts, depth, hydrated, intent, ownerUserId, text]);
 
   useEffect(() => () => recorder.current?.cancel(), []);
+
+  useEffect(() => () => {
+    if (attachment?.uri.startsWith('blob:')) URL.revokeObjectURL(attachment.uri);
+  }, [attachment]);
 
   const decision = useMemo(() => routeLearnIntent({
     text,
@@ -178,15 +185,22 @@ export function UniversalComposer({
         setAttachment(picked);
         setPendingConfirmation(null);
         setCaptureOpen(false);
+        setPhotoOpen(false);
       }
     } catch (reason) {
       setError((reason as Error).message || t('learn5.attachment.error'));
     }
   };
 
-  const openScan = () => {
+  const openScan = (mode: 'document' | 'qr') => {
     setCaptureOpen(false);
-    void run(routeLearnIntent({ text, selectedIntent: intent, modality: 'capture', depth, contexts }));
+    onNavigate(`/scan?mode=${mode}&source=learn`);
+  };
+
+  const attachPhoto = (image: CapturedImage) => {
+    setAttachment(image);
+    setPendingConfirmation(null);
+    setPhotoOpen(false);
   };
 
   const toggleVoice = async () => {
@@ -374,7 +388,15 @@ export function UniversalComposer({
           />
           {!RECORDING_SUPPORTED ? <Text style={[typography.caption, { color: c.textMuted }]}>{t('learn5.voice.unavailable')}</Text> : null}
           <Button label={t('learn5.modality.capture')} icon="▣" variant="ghost" onPress={() => setCaptureOpen(true)} />
-          <Button label={t('learn5.modality.import')} icon="＋" variant="ghost" onPress={() => setCaptureOpen(true)} />
+          <Button label={t('learn5.modality.import')} icon="＋" variant="ghost" onPress={() => void chooseFile()} />
+          <Button
+            testID="learn-composer-export"
+            label={t('learn5.modality.export')}
+            accessibilityLabel={t('learn5.modality.exportData')}
+            icon="⇩"
+            variant="ghost"
+            onPress={() => onNavigate('/privacy')}
+          />
           <View style={{ flex: 1 }} />
           {(text || attachment || intent || contexts.length > stableInitialContexts.length) ? <Button label={t('learn5.draft.clear')} variant="ghost" onPress={clearAll} /> : null}
           <Button
@@ -391,9 +413,20 @@ export function UniversalComposer({
 
       <Sheet visible={captureOpen} onClose={() => setCaptureOpen(false)} title={t('learn5.capture.title')}>
         <Text style={[typography.body, { color: c.textSecondary }]}>{t('learn5.capture.detail')}</Text>
-        <Button fullWidth label={t('learn5.capture.scan')} icon="▣" onPress={openScan} />
+        <Button fullWidth label={t('learn5.capture.photo')} icon="📷" onPress={() => { setCaptureOpen(false); setPhotoOpen(true); }} />
+        <Button fullWidth label={t('learn5.capture.document')} icon="▣" variant="secondary" onPress={() => openScan('document')} />
+        <Button fullWidth label={t('learn5.capture.qr')} icon="⌗" variant="secondary" onPress={() => openScan('qr')} />
         <Button fullWidth label={t('learn5.capture.file')} icon="＋" variant="secondary" onPress={() => void chooseFile()} />
         <Button fullWidth label={t('learn5.cancel')} variant="ghost" onPress={() => setCaptureOpen(false)} />
+      </Sheet>
+
+      <Sheet visible={photoOpen} onClose={() => setPhotoOpen(false)} title={t('learn5.capture.photo')}>
+        <CameraCapture
+          mode="photo"
+          onCapture={attachPhoto}
+          onCancel={() => setPhotoOpen(false)}
+          onImport={() => { setPhotoOpen(false); void chooseFile(); }}
+        />
       </Sheet>
     </View>
   );

@@ -25,6 +25,7 @@ test('private beta and SMTP security booleans reject ambiguous environment value
     LLM_PROVIDER: 'echo', LLM_MODEL: 'echo',
     JWT_ACCESS_SECRET: 'controlled-access-secret',
     JWT_REFRESH_SECRET: 'controlled-refresh-secret',
+    OTP_HMAC_SECRET: 'controlled-otp-hmac-secret-at-least-32-chars',
     JWT_ACCESS_TTL: '900', JWT_REFRESH_TTL: '3600',
   };
   assert.doesNotThrow(() => validateEnv({

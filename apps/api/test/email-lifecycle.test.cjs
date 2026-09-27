@@ -4,14 +4,18 @@ require('reflect-metadata');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createHash } = require('node:crypto');
+const { createHash, createHmac } = require('node:crypto');
 const { BadRequestException } = require('@nestjs/common');
 
 const { EmailOtpService } = require('../dist/auth/email-otp.service.js');
 
-const hash = (value) => createHash('sha256').update(value).digest('hex');
+const OTP_HMAC_SECRET = 'test-only-otp-hmac-secret-at-least-32-chars';
+const hash = (value, userId = 'user-1', purpose = 'email_verify', secret = OTP_HMAC_SECRET) =>
+  `v2:${createHmac('sha256', secret)
+    .update(userId).update('\0').update(purpose).update('\0').update(value)
+    .digest('hex')}`;
 
-function createHarness({ mailFails = false, synchronizeReads = false } = {}) {
+function createHarness({ mailFails = false, synchronizeReads = false, locale = 'en' } = {}) {
   const records = [];
   const sent = [];
   const diagnostics = [];
@@ -70,6 +74,12 @@ function createHarness({ mailFails = false, synchronizeReads = false } = {}) {
     // lock. The fake deliberately does not serialize callbacks so the test also
     // exercises the conditional consumption update as a second line of defense.
     $transaction: async (callback) => callback(tx),
+    user: {
+      findUnique: async () => ({
+        profile: { preferredLanguage: 'en' },
+        onboardingProfile: { extra: { interfaceLanguage: locale } },
+      }),
+    },
   };
   const mail = {
     activeTransport: 'smtp',
@@ -82,6 +92,7 @@ function createHarness({ mailFails = false, synchronizeReads = false } = {}) {
     getOrThrow: (key) => ({
       'auth.otpTtl': 600,
       'auth.otpMaxAttempts': 5,
+      'auth.otpHmacSecret': OTP_HMAC_SECRET,
     })[key],
   };
 
@@ -101,7 +112,7 @@ function createHarness({ mailFails = false, synchronizeReads = false } = {}) {
         id: `otp-${++sequence}`,
         userId: 'user-1',
         purpose,
-        codeHash: hash(code),
+        codeHash: hash(code, 'user-1', purpose),
         expiresAt: new Date(Date.now() + 60_000),
         consumedAt: null,
         attempts,
@@ -126,6 +137,24 @@ test('email OTP issuance serializes the user scope and leaves only the newest co
   assert.equal(harness.sent.length, 2);
 });
 
+test('OTP digests require the server HMAC key and legacy unkeyed hashes are rejected', async () => {
+  const harness = createHarness();
+  const legacy = harness.add({ code: '654321' });
+  legacy.codeHash = createHash('sha256').update('654321').digest('hex');
+
+  await assert.rejects(
+    harness.service.verify('user-1', '654321', 'email_verify'),
+    (error) => error instanceof BadRequestException,
+  );
+
+  const current = harness.add({ code: '123456' });
+  current.codeHash = hash('123456', 'user-1', 'email_verify', 'different-server-secret-at-least-32-chars');
+  await assert.rejects(
+    harness.service.verify('user-1', '123456', 'email_verify'),
+    (error) => error instanceof BadRequestException,
+  );
+});
+
 test('email OTP delivery failure does not roll back issuance or introduce a fallback transport', async () => {
   const harness = createHarness({ mailFails: true });
 
@@ -140,6 +169,18 @@ test('email OTP delivery failure does not roll back issuance or introduce a fall
     'OTP email delivery failed (purpose=password_reset; transport=smtp).',
   ]);
   assert.doesNotMatch(harness.diagnostics[0], /email-lifecycle|simulated|\d{6}/i);
+});
+
+test('OTP mail uses the trusted persisted interface locale including regional aliases', async () => {
+  const harness = createHarness({ locale: 'fr-FR' });
+  const user = { id: 'user-1', email: 'email-lifecycle@example.test' };
+  await harness.service.issue(user, 'email_verify');
+  assert.match(harness.sent[0].subject, /code de vérification Second Brain$/);
+  assert.match(harness.sent[0].text, /confirmer votre adresse e-mail/);
+
+  await harness.service.issue(user, 'password_reset');
+  assert.match(harness.sent[1].subject, /code de réinitialisation Second Brain$/);
+  assert.match(harness.sent[1].text, /réinitialiser votre mot de passe/);
 });
 
 test('only the newest OTP can be consumed, once, even when valid submissions race', async () => {

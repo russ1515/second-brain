@@ -2,9 +2,10 @@
  * Locale resources barrel (scalable i18n).
  *
  * Importing this once (in app/_layout) registers every generated UI dictionary.
- * Complete catalogs give a fully translated UI; partial ones give what's
- * translated + English fallback for the rest. Add a language by generating its
- * file (`node scripts/translate-locale.mjs <code>`) and adding one line here.
+ * Complete catalogs become selectable. Partial catalogs remain registered for
+ * translation work but are not exposed as a finished interface language.
+ * Add a language by generating its file (`node scripts/translate-locale.mjs
+ * <code>`) and adding one line here.
  */
 // Generated partial catalogs. Coverage is computed at runtime against the
 // current English source catalog; missing copy always falls back to English.
@@ -32,7 +33,7 @@ import './hu'; // Hungarian
 import './da'; // Danish
 import './fi'; // Finnish
 import './id'; // Indonesian
-import './no'; // Norwegian
+import './no'; // Norwegian Bokmål (`nb`; legacy file name)
 import './uk'; // Ukrainian
 
 // Reviewed essentials are layered last so generated catalogs can be refreshed

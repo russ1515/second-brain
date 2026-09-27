@@ -19,12 +19,20 @@ import type {
   LanguageCorrectionIntensity,
   LLMMessage,
   SendTutorMessageResponse,
+  TeacherPolicySnapshot,
   TeachingStrategy,
   TutorMessageView,
   TutorSessionDetail,
   TutorSessionSummary,
 } from '@second-brain/shared';
-import { createContext, parseTutorMessageBlocks } from '@second-brain/shared';
+import {
+  createContext,
+  isTeacherPolicySnapshot,
+  parseTutorMessageBlocks,
+  resolveTeacherPolicy,
+  TEACHER_POLICY_METADATA_SOURCE,
+  teacherPolicyDirective,
+} from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
 import { RetrievalService } from '../documents/retrieval/retrieval.service';
@@ -203,6 +211,13 @@ export class TutorService {
     const session = await this.prisma.tutorSession.create({
       data: { userId, focusConceptId: target.conceptId, title: target.name },
     });
+    const experience = await this.ensureExperience(userId, session, {
+      objective: target.name,
+      intent: 'practice',
+      mode: 'exercise',
+      inputModality: 'text',
+    });
+    const teacherPolicy = await this.ensureTeacherPolicy(userId, experience);
 
     const focus: FocusInfo = {
       name: target.name,
@@ -214,7 +229,16 @@ export class TutorService {
     const opening = await this.callLlm([
       {
         role: 'system',
-        content: this.systemPrompt(focus, undefined, undefined, undefined, undefined, focusLocale),
+        content: this.systemPrompt(
+          focus,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          focusLocale,
+          undefined,
+          teacherPolicy,
+        ),
       },
       {
         role: 'user',
@@ -277,6 +301,13 @@ export class TutorService {
         title: recentTopic ?? 'Conversation',
       },
     });
+    const experience = await this.ensureExperience(userId, session, {
+      objective: recentTopic ?? undefined,
+      intent: 'practice',
+      mode: 'conversation',
+      inputModality: 'text',
+    });
+    const teacherPolicy = await this.ensureTeacherPolicy(userId, experience);
 
     let focus: FocusInfo | undefined;
     if (recent?.conceptId) {
@@ -303,7 +334,16 @@ export class TutorService {
     const opening = await this.callLlm([
       {
         role: 'system',
-        content: this.systemPrompt(focus, undefined, undefined, undefined, undefined, resumeLocale),
+        content: this.systemPrompt(
+          focus,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          resumeLocale,
+          undefined,
+          teacherPolicy,
+        ),
       },
       { role: 'user', content: userPrompt },
     ]);
@@ -368,8 +408,34 @@ export class TutorService {
   }
 
   async deleteSession(userId: string, id: string): Promise<void> {
-    await this.requireOwned(userId, id);
-    await this.prisma.tutorSession.delete({ where: { id } });
+    await this.prisma.$transaction(async (tx) => {
+      const owned = await tx.tutorSession.findFirst({
+        where: { id, userId },
+        select: { id: true },
+      });
+      if (!owned) {
+        throw new NotFoundException('Tutor session not found.');
+      }
+
+      // A TutorSession FK is SetNull. Explicitly terminalize its resumable UX
+      // envelopes before deleting the domain session so no active/paused row
+      // survives with a dead route after the FK is cleared.
+      await tx.experienceSession.updateMany({
+        where: {
+          userId,
+          tutorSessionId: id,
+          status: { in: ['active', 'paused'] },
+        },
+        data: {
+          status: 'abandoned',
+          pausedAt: null,
+          resumeTarget: Prisma.JsonNull,
+          nextBestAction: Prisma.JsonNull,
+          version: { increment: 1 },
+        },
+      });
+      await tx.tutorSession.delete({ where: { id } });
+    });
   }
 
   async sendMessage(
@@ -387,6 +453,8 @@ export class TutorService {
       mode: 'conversation',
       inputModality: viaVoice ? 'voice' : 'text',
     });
+    const teacherPolicy = await this.ensureTeacherPolicy(userId, experience);
+    const adaptationEnabled = teacherPolicy.automaticAdaptation;
 
     // Usage & Quotas (8.3): each answer counts as one AI question and is gated by
     // the plan's limit (throws 403 quota_exceeded when the cap is reached).
@@ -395,17 +463,25 @@ export class TutorService {
     // Twin steering: if focused, load the learner's grasp of the concept.
     let focus: FocusInfo | undefined;
     if (session.focusConceptId) {
-      const m = await this.mastery
-        .conceptMastery(userId, session.focusConceptId)
-        .catch(() => null); // concept may have been deleted (FK set null)
-      if (m) {
-        focus = { name: m.name, mastery: m.mastery, level: m.level };
+      if (adaptationEnabled) {
+        const m = await this.mastery
+          .conceptMastery(userId, session.focusConceptId)
+          .catch(() => null); // concept may have been deleted (FK set null)
+        if (m) focus = { name: m.name, mastery: m.mastery, level: m.level };
+      } else {
+        const concept = await this.prisma.concept.findFirst({
+          where: { id: session.focusConceptId, userId },
+          select: { name: true },
+        });
+        if (concept) focus = { name: concept.name, mastery: null, level: 'fixed' };
       }
     }
 
     // Language steering: language-practice sessions get the Professor role.
     const language = await this.loadLanguage(userId, session.languageProfileId, experience);
-    const personalization = await this.loadPersonalization(userId);
+    const personalization = adaptationEnabled
+      ? await this.loadPersonalization(userId)
+      : { directive: '' };
 
     // Role engine (task 3.6): the same teacher auto-adopts the specialist role
     // for the subject. A language session already carries the richer Language
@@ -426,7 +502,7 @@ export class TutorService {
     // on the session so the approach stays coherent across turns.
     let strategy = session.strategy as TeachingStrategy | null;
     let strategyReason = session.strategyReason;
-    if (!strategy) {
+    if (adaptationEnabled && !strategy) {
       const sel = selectStrategy({
         subject,
         isLanguage: !!language,
@@ -502,9 +578,10 @@ export class TutorService {
           language,
           pace,
           role,
-          strategy,
+          adaptationEnabled ? strategy : null,
           locale,
           personalization.directive,
+          teacherPolicy,
         ),
       },
       ...history.map((m) => ({ role: m.role, content: m.content })),
@@ -521,7 +598,7 @@ export class TutorService {
     }
 
     const subjectChanged = subject != null && subject !== session.subject;
-    const strategyChanged = strategy !== session.strategy;
+    const strategyChanged = adaptationEnabled && strategy !== session.strategy;
 
     const assistantCreate = this.prisma.tutorMessage.create({
       data: {
@@ -687,14 +764,13 @@ export class TutorService {
     const [onboarding, dna] = await Promise.all([
       this.prisma.onboardingProfile.findUnique({
         where: { userId },
-        select: { teacher: true, preferences: true },
+        select: { preferences: true },
       }),
       this.prisma.learningDna.findUnique({
         where: { userId },
         select: { traits: true, maturity: true },
       }),
     ]);
-    const teacher = (onboarding?.teacher as KycTeacher | null) ?? null;
     const preferences = Array.isArray(onboarding?.preferences)
       ? onboarding.preferences
           .filter((value): value is string => typeof value === 'string' && /^[a-z][a-z0-9_-]{0,39}$/i.test(value))
@@ -713,10 +789,6 @@ export class TutorService {
           .map((trait) => `${trait.key}=${trait.label}`)
       : [];
     const signals = [
-      teacher?.tone ? `tone=${teacher.tone}` : null,
-      teacher?.explanations ? `explanation length=${teacher.explanations}` : null,
-      teacher?.intervention ? `intervention=${teacher.intervention}` : null,
-      teacher?.correction ? `correction timing=${teacher.correction}` : null,
       preferences.length > 0 ? `preferred formats=${preferences.join(', ')}` : null,
       dna && dna.maturity > 0 ? `Learning DNA maturity=${dna.maturity}%` : null,
       dnaTraits.length > 0 ? `established Learning DNA traits=${dnaTraits.join(', ')}` : null,
@@ -737,6 +809,7 @@ export class TutorService {
     strategy?: TeachingStrategy | null,
     locale?: string,
     personalization?: string,
+    teacherPolicy?: TeacherPolicySnapshot,
   ): string {
     // A language session swaps the persona; everything else is unchanged. With
     // no language profile this returns exactly the pre-language-engine prompt.
@@ -751,7 +824,7 @@ export class TutorService {
     if (language?.sessionDirective) {
       prompt += ` ${language.sessionDirective}. Keep the exchange tied to this verified session context.`;
     }
-    if (language?.recentMistakes.length) {
+    if (teacherPolicy?.automaticAdaptation !== false && language?.recentMistakes.length) {
       prompt += ` Recently observed RLLE patterns to repair when relevant: ${language.recentMistakes.join('; ')}. Use them as bounded teaching guidance, never as permanent learner traits.`;
     }
     // Auto-adopt the specialist role for the subject (task 3.6). A language
@@ -760,7 +833,9 @@ export class TutorService {
     if (role && !language) {
       prompt += role.persona;
     }
-    if (focus) {
+    if (focus && teacherPolicy?.automaticAdaptation === false) {
+      prompt += ` This session focuses on the explicitly selected concept "${focus.name}". Keep the exchange tied to it without inferring mastery or changing difficulty automatically.`;
+    } else if (focus) {
       const pct =
         focus.mastery === null
           ? 'not yet assessed'
@@ -775,11 +850,14 @@ export class TutorService {
       prompt += PACE_DIRECTIVE[pace];
     }
     // Teaching Strategy Engine (7.9): how the teacher CONDUCTS the session.
-    if (strategy) {
+    if (strategy && teacherPolicy?.automaticAdaptation !== false) {
       prompt += strategyDirective(strategy);
     }
-    if (personalization) {
+    if (personalization && teacherPolicy?.automaticAdaptation !== false) {
       prompt += personalization;
+    }
+    if (teacherPolicy) {
+      prompt += teacherPolicyDirective(teacherPolicy);
     }
     // Global Learning Locale: general sessions answer in the learner's locale.
     // Language-practice sessions are the exception — the language engine (mode,
@@ -888,6 +966,8 @@ export class TutorService {
       languageProfileId?: string;
     },
   ): Promise<ExperienceSession> {
+    const existing = await this.experienceSessions.findByTutorSession(userId, session.id);
+    if (existing) return existing;
     const contexts = [...(options.activeContexts ?? [])];
     const addContext = (item: ContextItemInput) => {
       if (!contexts.some((current) => current.kind === item.kind && current.referenceId === item.referenceId)) {
@@ -918,6 +998,11 @@ export class TutorService {
     const documentId = options.documentId ?? this.firstContextReference(contexts, 'document');
     const goalId = options.goalId ?? this.firstContextReference(contexts, 'goal');
     const objective = options.objective?.trim() || session.title || undefined;
+    const teacherPreferences = await this.loadTeacherPreferences(userId);
+    const teacherPolicy = resolveTeacherPolicy(teacherPreferences, {
+      mode: options.mode,
+      intent: options.intent,
+    });
     return this.experienceSessions.ensureTutorSession(userId, {
       title: session.title ?? objective,
       intent: options.intent?.trim() || 'learn',
@@ -927,6 +1012,10 @@ export class TutorService {
         id: options.mode?.trim() || 'conversation',
         ...(objective ? { label: objective } : {}),
         state: 'active',
+        metadata: {
+          teacherPolicy,
+          teacherPolicySource: TEACHER_POLICY_METADATA_SOURCE,
+        },
       },
       sourceReferences: contexts
         .filter((item) => item.referenceId && ['document', 'document-collection', 'concept', 'lesson'].includes(item.kind))
@@ -943,6 +1032,41 @@ export class TutorService {
         languageProfileId: languageProfileId ?? null,
       },
     });
+  }
+
+  private async loadTeacherPreferences(userId: string): Promise<KycTeacher | null> {
+    const onboarding = await this.prisma.onboardingProfile.findUnique({
+      where: { userId },
+      select: { teacher: true },
+    });
+    return (onboarding?.teacher as KycTeacher | null) ?? null;
+  }
+
+  /** Legacy sessions receive a policy once, on their next turn. New sessions
+   *  already carry it from ensureExperience. Either way, later Profile edits
+   *  cannot silently change a running assessment or conversation. */
+  private async ensureTeacherPolicy(
+    userId: string,
+    experience: ExperienceSession,
+  ): Promise<TeacherPolicySnapshot> {
+    const stored = experience.currentStep?.metadata?.teacherPolicy;
+    const source = experience.currentStep?.metadata?.teacherPolicySource;
+    if (source === TEACHER_POLICY_METADATA_SOURCE && isTeacherPolicySnapshot(stored)) return stored;
+    const policy = resolveTeacherPolicy(await this.loadTeacherPreferences(userId), {
+      mode: experience.currentStep?.id,
+      intent: experience.intent,
+    });
+    const currentStep = {
+      ...(experience.currentStep ?? { id: 'conversation' }),
+      metadata: {
+        ...(experience.currentStep?.metadata ?? {}),
+        teacherPolicy: policy,
+        teacherPolicySource: TEACHER_POLICY_METADATA_SOURCE,
+      },
+    };
+    await this.experienceSessions.updateState(userId, experience.id, { currentStep });
+    experience.currentStep = currentStep;
+    return policy;
   }
 
   private firstContextReference(
@@ -1033,11 +1157,23 @@ export class TutorService {
       strategy,
       strategyReason: session.strategyReason ?? null,
       strategyReasonCode: strategy ? `strategy.reason.${strategy}` : null,
+      teacherPolicy: this.teacherPolicyFromExperience(experienceSession),
       messageCount,
       experienceSession,
       createdAt: session.createdAt.toISOString(),
       updatedAt: session.updatedAt.toISOString(),
     };
+  }
+
+  private teacherPolicyFromExperience(
+    experience: ExperienceSession | null,
+  ): TeacherPolicySnapshot | null {
+    const metadata = experience?.currentStep?.metadata;
+    const policy = metadata?.teacherPolicy;
+    return metadata?.teacherPolicySource === TEACHER_POLICY_METADATA_SOURCE &&
+      isTeacherPolicySnapshot(policy)
+      ? policy
+      : null;
   }
 
   private toMessageView(message: TutorMessage): TutorMessageView {

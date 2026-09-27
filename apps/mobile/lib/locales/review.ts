@@ -176,7 +176,7 @@ const review: Record<string, Record<string, string>> = {
     "review9.goalReview": "Herhalen",
     "review9.tutorSummaryPrompt": "Help me de items te begrijpen die tijdens deze herhaling moeilijk waren.",
   },
-  no: {
+  nb: {
     "learn5.context.active": "Aktiv kontekst",
     "learn5.context.remove": "Fjern {label} fra aktiv kontekst",
     "review9.title": "Repetisjon",

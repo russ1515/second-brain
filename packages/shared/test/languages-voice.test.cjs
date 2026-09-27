@@ -4,28 +4,33 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const shared = require('../dist/index.js');
 
-test('the supported language registry exposes exactly 27 meaningful native names', () => {
-  assert.equal(shared.SUPPORTED_LANGUAGE_CODES.length, 27);
-  assert.equal(new Set(shared.SUPPORTED_LANGUAGE_CODES).size, 27);
+test('the supported language registry exposes exactly 34 meaningful native names and local flag regions', () => {
+  assert.equal(shared.SUPPORTED_LANGUAGE_CODES.length, 34);
+  assert.equal(new Set(shared.SUPPORTED_LANGUAGE_CODES).size, 34);
   for (const code of shared.SUPPORTED_LANGUAGE_CODES) {
     const language = shared.SUPPORTED_LANGUAGES[code];
     assert.equal(language.code, code);
     assert.ok(language.name.trim().length > 0);
     assert.ok(language.englishName.trim().length > 0);
+    assert.match(language.flagRegion, /^[A-Z]{2}$/);
   }
 });
 
-test('international languages use neutral symbols and Arabic exposes RTL', () => {
-  for (const code of ['en', 'pt', 'zh', 'ar']) {
-    assert.equal(shared.SUPPORTED_LANGUAGES[code].neutralIcon, true);
-  }
+test('Arabic and Hebrew expose centralized RTL metadata', () => {
   assert.equal(shared.SUPPORTED_LANGUAGES.ar.rtl, true);
+  assert.equal(shared.SUPPORTED_LANGUAGES.he.rtl, true);
   assert.equal(shared.SUPPORTED_LANGUAGES.fr.rtl, undefined);
 });
 
 test('language resolution accepts code variants and native names without creating variants', () => {
   assert.equal(shared.toSupportedLanguage('en-GB'), 'en');
   assert.equal(shared.toSupportedLanguage('pt_BR'), 'pt');
+  assert.equal(shared.toSupportedLanguage('no-NO'), 'nb');
+  assert.equal(shared.toSupportedLanguage('zh-Hans-CN'), 'zh');
+  assert.equal(shared.toSupportedLanguage('zh-Hans-TW'), 'zh');
+  assert.equal(shared.toSupportedLanguage('zh-Hant-TW'), 'zh-Hant');
+  assert.equal(shared.toSupportedLanguage('zh-TW'), 'zh-Hant');
+  assert.equal(shared.toSupportedLanguage('iw-IL'), 'he');
   assert.equal(shared.toSupportedLanguage('Français'), 'fr');
   assert.equal(shared.toSupportedLanguage('العربية'), 'ar');
   assert.equal(shared.toSupportedLanguage('Klingon'), null);

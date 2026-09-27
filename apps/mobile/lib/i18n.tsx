@@ -5,6 +5,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -31,10 +32,9 @@ import { resolveFormatLocale, resolveUiLocale } from './locale-resolution';
  */
 export type Locale = string;
 
-/** A registered UI language: code, display name, and a (possibly partial)
- *  catalog. Partial is fine — missing keys fall back to English, so a language
- *  can ship at any coverage and still work. Adding a language = one
- *  `registerLocale` call from a resource file; the engine below never changes. */
+/** A registered UI language: code, display name, and its catalog. Partial
+ * resources may be registered while translation work is in progress, but they
+ * are never exposed by the interface selector until every source key exists. */
 export interface LocaleEntry {
   code: Locale;
   name: string;
@@ -42,6 +42,15 @@ export interface LocaleEntry {
 }
 
 const registry = new Map<Locale, LocaleEntry>();
+function isSelectableLocale(code: Locale): boolean {
+  const catalog = registry.get(code)?.catalog;
+  const source = registry.get('en')?.catalog;
+  if (!catalog || !source) return false;
+  return Object.keys(source).every((key) => {
+    const value = catalog[key];
+    return typeof value === 'string' && value.trim().length > 0;
+  });
+}
 
 /** Register (or replace) a UI language. Call from a locale resource module. */
 export function registerLocale(
@@ -69,7 +78,15 @@ export function extendLocale(
 
 /** All registered locale codes, English first. */
 export function supportedLocaleCodes(): Locale[] {
-  return [...registry.keys()];
+  return [...registry.keys()].filter(isSelectableLocale);
+}
+
+/** A locale is selectable for the interface only after its complete catalogue
+ * has registered. The wider shared registry safely contains partial/future
+ * learning languages without producing an English fallback labelled active. */
+export function hasLocaleCatalog(code: string | null | undefined): boolean {
+  const normalized = toSupportedLanguage(code);
+  return Boolean(normalized && isSelectableLocale(normalized));
 }
 
 /** Display name for a locale code (falls back to the code). */
@@ -78,16 +95,18 @@ export function localeName(code: Locale): string {
 }
 
 /** Normalize browser/device locale variants (for example `pt-BR`) to one of
- *  the 27 registered base languages. Unknown values deliberately fall back to
+ *  the concretely registered UI catalogues. Unknown values deliberately fall back to
  *  English rather than leaking an unsupported locale through the UI. */
 export function normalizeLocale(value: string | null | undefined): SupportedLanguageCode {
-  return toSupportedLanguage(value) ?? 'en';
+  const normalized = toSupportedLanguage(value);
+  return normalized && isSelectableLocale(normalized) ? normalized : 'en';
 }
 
 /** Text direction comes from the shared language registry, the single source
  *  of truth used by both the API and clients. */
 export function localeDirection(code: Locale): 'ltr' | 'rtl' {
-  return SUPPORTED_LANGUAGES[normalizeLocale(code)]?.rtl ? 'rtl' : 'ltr';
+  const normalized = toSupportedLanguage(code);
+  return normalized && SUPPORTED_LANGUAGES[normalized]?.rtl ? 'rtl' : 'ltr';
 }
 
 function runtimeLocaleSignals(): Pick<
@@ -112,7 +131,8 @@ function runtimeLocaleSignals(): Pick<
 }
 
 function detectedDeviceLocale(savedLocale?: string | null): Locale {
-  return resolveUiLocale({ savedLocale, ...runtimeLocaleSignals() });
+  const resolved = resolveUiLocale({ savedLocale, ...runtimeLocaleSignals() });
+  return isSelectableLocale(resolved) ? resolved : 'en';
 }
 
 function detectedFormatLocale(locale: Locale): string {
@@ -134,6 +154,11 @@ export const LOCALE_NAMES: Record<string, string> = {
 };
 
 const STORAGE_KEY = 'sb.locale';
+const ACCOUNT_STORAGE_PREFIX = `${STORAGE_KEY}.account.`;
+
+function localeStorageKey(accountId: string | null | undefined): string {
+  return accountId ? `${ACCOUNT_STORAGE_PREFIX}${accountId}` : STORAGE_KEY;
+}
 
 /** AsyncStorage uses localStorage on Web. Reading that value synchronously for
  * the first render lets the public Landing render directly in the user's
@@ -417,6 +442,14 @@ const en = {
   'error.serverBusy': 'The service is busy right now. Please try again shortly.',
   'error.network': 'Connection problem. Check your network and try again.',
   'error.timeout': 'The request took too long. Please try again.',
+  'error.unauthorized': 'Your session has expired or the credentials are invalid.',
+  'error.forbidden': 'This action is not available for this account.',
+  'error.notFound': 'The requested item is no longer available.',
+  'error.conflict': 'This change conflicts with the current state. Refresh and try again.',
+  'error.rateLimit': 'Too many attempts. Wait a moment before trying again.',
+  'error.validation': 'Some information is invalid. Check the fields and try again.',
+  'error.upload': 'The upload failed. Your existing work was preserved.',
+  'error.download': 'The file could not be loaded. Please try again.',
 
   // Onboarding finalization screens (§31).
   'onboarding.preparing': 'Preparing your space…',
@@ -554,7 +587,9 @@ const en = {
   'onb.languages.title': 'Your languages',
   'onb.languages.native': 'Native language',
   'onb.languages.interface': 'Interface language',
-  'onb.languages.interfaceWhy': 'The interface language changes the display and the language the AI Professor teaches you in.',
+  'onb.languages.interfaceWhy': 'This changes menus and application controls only.',
+  'onb.languages.explanation': 'Explanation language',
+  'onb.languages.explanationWhy': 'The AI Professor uses this language for general explanations and guidance.',
   'onb.languages.study': 'Study language (optional)',
   'onb.languages.studyWhy': 'If you study in a language other than your native one, I turn on bilingual support and academic vocabulary.',
   'onb.mobility.title': 'International mobility',
@@ -955,6 +990,8 @@ const en = {
   'learn5.modality.speak': 'Speak',
   'learn5.modality.capture': 'Capture',
   'learn5.modality.import': 'Import',
+  'learn5.modality.export': 'Export',
+  'learn5.modality.exportData': 'Open your data export',
   'learn5.route.prefix': 'Next:',
   'learn5.route.capture': 'open the scanner, preview the pages, then confirm.',
   'learn5.route.import': 'import this file into the Library and its understanding pipeline.',
@@ -1040,6 +1077,19 @@ const en = {
   'teacher.due': 'You have revisions waiting. Start with those.',
   'teacher.first': 'Ready for your first lesson? Scan a course or ask me anything.',
   'teacher.default': 'Ready to learn something new today?',
+  'teacher.mode.lesson': 'Lesson',
+  'teacher.mode.exercise': 'Exercise',
+  'teacher.mode.training': 'Training',
+  'teacher.mode.assessed': 'Assessed',
+  'teacher.mode.exam': 'Exam',
+  'teacher.exam.rulesTitle': 'Exam rules',
+  'teacher.exam.mode': 'Exam mode',
+  'teacher.exam.grading': 'Grading',
+  'teacher.exam.rubric': 'Evaluation rubric',
+  'teacher.exam.help': 'Allowed help',
+  'teacher.exam.helpLimited': 'Limited help',
+  'teacher.exam.helpNone': 'No help',
+  'teacher.exam.feedbackAfter': 'Feedback after submission',
 
   // Coming soon (tasks 3-6)
   'soon.badge': 'Coming soon',
@@ -1267,6 +1317,36 @@ const en = {
   'profile.privacy.memory': 'AI memory',
   'profile.privacy.documents': 'My documents',
   'profile.partial': 'Some profile information could not be refreshed. The available settings remain usable.',
+  'profile.teacher.title': 'Adaptive professor',
+  'profile.teacher.detail': 'Choose a teaching posture. Automatic mode keeps adapting from your results.',
+  'profile.teacher.auto': 'Automatic adaptation',
+  'profile.teacher.autoDetail': 'Second Brain adjusts guidance, challenge and corrections from your progress.',
+  'profile.teacher.learning': 'Learning mode',
+  'profile.teacher.learning.guided': 'Guided',
+  'profile.teacher.learning.balanced': 'Balanced',
+  'profile.teacher.learning.demanding': 'Demanding',
+  'profile.teacher.conversation': 'Conversation mode',
+  'profile.teacher.conversation.training': 'Training',
+  'profile.teacher.conversation.assessed': 'Assessed',
+  'profile.teacher.conversation.trainingDetail': 'Practice freely with hints and corrections.',
+  'profile.teacher.conversation.assessedDetail': 'Complete an announced evaluated conversation with limited assistance and evidence-based feedback.',
+  'profile.teacher.exam': 'Exam mode',
+  'profile.teacher.exam.standard': 'Standard',
+  'profile.teacher.exam.strict': 'Strict',
+  'profile.teacher.examDetail': 'Exam rules control available help, grading and feedback timing.',
+  'profile.teacher.advancedOpen': 'Show advanced settings',
+  'profile.teacher.advancedClose': 'Hide advanced settings',
+  'profile.teacher.correction': 'Correction timing',
+  'profile.teacher.correction.immediate': 'Correct immediately',
+  'profile.teacher.correction.let_me_finish': 'Let me finish',
+  'profile.teacher.correction.adaptive': 'Adapt to the situation',
+  'profile.teacher.summary': 'Session summary',
+  'profile.teacher.encouragement': 'Encouragement',
+  'profile.teacher.encouragement.measured': 'Measured',
+  'profile.teacher.encouragement.supportive': 'Supportive',
+  'profile.teacher.reset': 'Reset to defaults',
+  'profile.settings.saveError': 'These settings could not be saved.',
+  'profile.settings.preserved': 'Your previous settings were preserved.',
   // Compact KYC card (§20) — summary + button to the KYC flow, not a big form.
   'profile.kyc.title': 'My profile',
   'profile.kyc.complete': 'Complete',
@@ -1983,6 +2063,9 @@ const en = {
   'document.pipeline.failed': 'Processing stopped',
   'document.pipeline.noEstimate': 'Current step — no reliable time estimate',
   'document.pipeline.retry': 'Retry this document',
+  'document.pipeline.retryOcr': 'Read the saved scan again',
+  'document.pipeline.ocrFailed': 'Text recognition failed. Your captured pages are still saved.',
+  'document.pipeline.ocrRetryHelp': 'The captured pages are preserved. This action retries text recognition; it does not reindex an empty document.',
   'document.batch.title': 'Multiple document import',
   'document.batch.detail': 'Each file is processed independently. A failure never cancels successful documents.',
   'document.batch.choose': 'Choose documents',
@@ -3068,6 +3151,8 @@ const en = {
   'scan.filed': 'Filed into your memory',
   'scan.filedDetail':
     '{n} characters read. It is being indexed now — once ready it is searchable, and your teacher can build lessons on it.',
+  'scan.captured': 'Pages saved securely',
+  'scan.capturedDetail': 'The capture is preserved. Text analysis will become available when an authorised Vision provider is active.',
   'scan.cameraRefused': 'Camera access was refused. Allow the camera and try again.',
 
   // Progress (progress.tsx)
@@ -4042,6 +4127,78 @@ const en = {
   'landing12.footer.privacy': 'Privacy and data controls',
   'landing12.footer.copy': '© 2026 Second Brain. All product demonstrations are public examples.',
   'landing12.footer.noTracking': 'No fictional partner, testimonial or metric.',
+
+  // Camera, document capture, QR and durable profile media.
+  'capture.permission.pending': 'Preparing the camera…',
+  'capture.permission.title': 'Camera permission is required',
+  'capture.permission.detail': 'Second Brain opens the camera only after your action. You can still import an existing image.',
+  'capture.permission.allow': 'Allow camera',
+  'capture.importFallback': 'Import an image',
+  'capture.error.capture': 'The photo could not be captured.',
+  'capture.error.fallback': 'Close another app using the camera, check the permission, or import an image.',
+  'capture.error.unavailable': 'No available camera was found.',
+  'capture.error.paused': 'The camera is paused.',
+  'capture.error.denied': 'Camera permission was denied.',
+  'capture.error.secureContext': 'The camera requires a secure HTTPS connection.',
+  'capture.error.busy': 'The camera is unavailable or already in use.',
+  'capture.retake': 'Retake',
+  'capture.confirm': 'Use this photo',
+  'capture.take': 'Take photo',
+  'capture.switch': 'Switch camera',
+  'capture.preview': 'Live camera preview',
+  'capture.cameraChoice': 'Choose a camera',
+  'capture.camera': 'Camera',
+  'qr.title': 'Read a QR code',
+  'qr.detail': 'Aim at a QR code. Its content stays inactive until you review it.',
+  'qr.aim': 'Keep the QR code inside the frame.',
+  'qr.unsupported': 'QR reading is unavailable in this browser',
+  'qr.unsupportedDetail': 'Use a compatible HTTPS browser or another device. No content has been opened.',
+  'qr.detected': 'QR destination detected',
+  'qr.confirmDetail': 'Check the complete destination before opening it.',
+  'qr.open': 'Open this destination',
+  'qr.openError': 'This destination could not be opened. It was not executed or imported.',
+  'qr.noneFound': 'No QR code was found. Reframe it and try again.',
+  'qr.scanAgain': 'Scan another QR code',
+  'qr.textDetected': 'QR text detected',
+  'qr.textInert': 'This text is displayed only. It is not executed or sent to the AI teacher.',
+  'qr.done': 'Done',
+  'qr.blocked': 'Unsafe QR destination blocked',
+  'qr.blockedDetail': 'Only explicit HTTP and HTTPS links can be opened. Custom, file, data and script schemes are refused.',
+  'scan.importError': 'The selected images could not be imported.',
+  'scan.editError': 'This page could not be edited. The other pages are preserved.',
+  'scan.uploadError': 'The scan could not be saved.',
+  'scan.inProgress': 'This scan is still processing. Try again in a moment.',
+  'scan.retryNewAttempt': 'The previous attempt ended safely. Press save again to start a new scan attempt.',
+  'scan.returnToLearn': 'Return to Learn with this document',
+  'scan.captureFirst': 'Review before saving',
+  'scan.captureFirstDetail': 'Capture or import pages, adjust their order, crop and rotation, then confirm. Nothing is uploaded before the final action.',
+  'scan.retryPreserved': 'Your pages stay here so you can retry without recapturing them.',
+  'scan.pagePosition': 'Page {current} of {total}',
+  'scan.moveBefore': 'Move left',
+  'scan.moveAfter': 'Move right',
+  'scan.rotate': 'Rotate',
+  'scan.crop': 'Adjust crop',
+  'scan.perspectiveLimit': 'Centered crop presets are available. Adjustable page edges and perspective correction are not yet available.',
+  'learn5.capture.photo': 'Photo',
+  'learn5.capture.document': 'Scan a document',
+  'learn5.capture.qr': 'Read a QR code',
+  'profile.card.webcam': 'Use webcam',
+  'profile.card.importImage': 'Import an image',
+  'profile.email.verified': 'Email verified',
+  'profile.email.unverified': 'Email not verified',
+  'profile.edit': 'Edit my profile',
+  'profile.avatar.loadError': 'The saved profile photo could not be loaded.',
+  'profile.avatar.saveError': 'The new profile photo could not be saved.',
+  'profile.avatar.removeError': 'The profile photo could not be removed.',
+  'profile.avatar.denied': 'Photo access was denied.',
+  'profile.avatar.error': 'The image chooser could not be opened.',
+  'profile.avatar.preserved': 'The previous saved photo was preserved. You can retry safely.',
+  'profile.avatar.editorTitle': 'Adjust profile photo',
+  'profile.avatar.editorDetail': 'Preview the circular result. Rotation and zoom are applied only after confirmation.',
+  'profile.avatar.rotate': 'Rotate',
+  'profile.avatar.zoomOut': 'Zoom out',
+  'profile.avatar.zoomIn': 'Zoom in',
+  'profile.avatar.confirm': 'Save this photo',
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -4313,6 +4470,14 @@ const fr: Record<TranslationKey, string> = {
   'error.serverBusy': 'Le service est momentanément indisponible. Réessaie dans un instant.',
   'error.network': 'Problème de connexion. Vérifie ton réseau et réessaie.',
   'error.timeout': 'La requête a pris trop de temps. Réessaie.',
+  'error.unauthorized': 'Ta session a expiré ou les identifiants sont invalides.',
+  'error.forbidden': 'Cette action n’est pas disponible pour ce compte.',
+  'error.notFound': 'L’élément demandé n’est plus disponible.',
+  'error.conflict': 'Cette modification entre en conflit avec l’état actuel. Actualise puis réessaie.',
+  'error.rateLimit': 'Trop de tentatives. Attends un instant avant de réessayer.',
+  'error.validation': 'Certaines informations sont invalides. Vérifie les champs puis réessaie.',
+  'error.upload': 'L’import a échoué. Ton travail existant a été conservé.',
+  'error.download': 'Le fichier n’a pas pu être chargé. Réessaie.',
 
   // Écrans de finalisation de l’onboarding (§31).
   'onboarding.preparing': 'Je prépare ton espace…',
@@ -4450,7 +4615,9 @@ const fr: Record<TranslationKey, string> = {
   'onb.languages.title': 'Tes langues',
   'onb.languages.native': 'Langue maternelle',
   'onb.languages.interface': 'Langue de l’interface',
-  'onb.languages.interfaceWhy': 'La langue de l’interface change l’affichage et la langue dans laquelle le Professeur IA t’enseigne.',
+  'onb.languages.interfaceWhy': 'Cela change uniquement les menus et les contrôles de l’application.',
+  'onb.languages.explanation': 'Langue des explications',
+  'onb.languages.explanationWhy': 'Le Professeur IA utilise cette langue pour les explications générales et l’accompagnement.',
   'onb.languages.study': 'Langue d’étude (facultatif)',
   'onb.languages.studyWhy': 'Si tu étudies dans une autre langue que ta langue maternelle, j’active un support bilingue et du vocabulaire académique.',
   'onb.mobility.title': 'Mobilité internationale',
@@ -4852,6 +5019,8 @@ const fr: Record<TranslationKey, string> = {
   'learn5.modality.speak': 'Parler',
   'learn5.modality.capture': 'Capturer',
   'learn5.modality.import': 'Importer',
+  'learn5.modality.export': 'Exporter',
+  'learn5.modality.exportData': 'Ouvrir l’export de tes données',
   'learn5.route.prefix': 'Ensuite :',
   'learn5.route.capture': 'ouvrir le scanner, prévisualiser les pages, puis confirmer.',
   'learn5.route.import': 'importer ce fichier dans la Bibliothèque et son pipeline de compréhension.',
@@ -4938,6 +5107,19 @@ const fr: Record<TranslationKey, string> = {
   'teacher.first':
     'Prêt pour ta première leçon ? Scanne un cours ou pose-moi une question.',
   'teacher.default': 'Prêt à apprendre quelque chose de nouveau aujourd’hui ?',
+  'teacher.mode.lesson': 'Leçon',
+  'teacher.mode.exercise': 'Exercice',
+  'teacher.mode.training': 'Entraînement',
+  'teacher.mode.assessed': 'Évalué',
+  'teacher.mode.exam': 'Examen',
+  'teacher.exam.rulesTitle': 'Règles de l’examen',
+  'teacher.exam.mode': 'Mode examen',
+  'teacher.exam.grading': 'Notation',
+  'teacher.exam.rubric': 'Grille d’évaluation',
+  'teacher.exam.help': 'Aide autorisée',
+  'teacher.exam.helpLimited': 'Aide limitée',
+  'teacher.exam.helpNone': 'Aucune aide',
+  'teacher.exam.feedbackAfter': 'Retour après la remise',
 
   'soon.badge': 'Bientôt disponible',
   'soon.detail':
@@ -5161,6 +5343,36 @@ const fr: Record<TranslationKey, string> = {
   'profile.privacy.memory': 'Mémoire IA',
   'profile.privacy.documents': 'Mes documents',
   'profile.partial': 'Certaines informations du profil n’ont pas pu être actualisées. Les réglages disponibles restent utilisables.',
+  'profile.teacher.title': 'Professeur adaptatif',
+  'profile.teacher.detail': 'Choisis une posture pédagogique. Le mode automatique continue de s’adapter à tes résultats.',
+  'profile.teacher.auto': 'Adaptation automatique',
+  'profile.teacher.autoDetail': 'Second Brain ajuste le guidage, l’exigence et les corrections selon tes progrès.',
+  'profile.teacher.learning': 'Mode d’apprentissage',
+  'profile.teacher.learning.guided': 'Guidé',
+  'profile.teacher.learning.balanced': 'Équilibré',
+  'profile.teacher.learning.demanding': 'Exigeant',
+  'profile.teacher.conversation': 'Mode de conversation',
+  'profile.teacher.conversation.training': 'Entraînement',
+  'profile.teacher.conversation.assessed': 'Évalué',
+  'profile.teacher.conversation.trainingDetail': 'Entraîne-toi librement avec des indices et des corrections.',
+  'profile.teacher.conversation.assessedDetail': 'Réalise une conversation évaluée annoncée, avec une aide limitée et un retour fondé sur des preuves.',
+  'profile.teacher.exam': 'Mode examen',
+  'profile.teacher.exam.standard': 'Standard',
+  'profile.teacher.exam.strict': 'Strict',
+  'profile.teacher.examDetail': 'Les règles d’examen contrôlent l’aide disponible, la notation et le moment du retour.',
+  'profile.teacher.advancedOpen': 'Afficher les réglages avancés',
+  'profile.teacher.advancedClose': 'Masquer les réglages avancés',
+  'profile.teacher.correction': 'Moment de la correction',
+  'profile.teacher.correction.immediate': 'Corriger immédiatement',
+  'profile.teacher.correction.let_me_finish': 'Me laisser terminer',
+  'profile.teacher.correction.adaptive': 'S’adapter à la situation',
+  'profile.teacher.summary': 'Résumé de session',
+  'profile.teacher.encouragement': 'Encouragement',
+  'profile.teacher.encouragement.measured': 'Mesuré',
+  'profile.teacher.encouragement.supportive': 'Bienveillant',
+  'profile.teacher.reset': 'Réinitialiser les valeurs',
+  'profile.settings.saveError': 'Ces réglages n’ont pas pu être enregistrés.',
+  'profile.settings.preserved': 'Tes réglages précédents ont été conservés.',
   // Carte KYC compacte (§20) — résumé + bouton vers le parcours, pas un gros formulaire.
   'profile.kyc.title': 'Mon profil',
   'profile.kyc.complete': 'Complété',
@@ -5868,6 +6080,9 @@ const fr: Record<TranslationKey, string> = {
   'document.pipeline.failed': 'Traitement interrompu',
   'document.pipeline.noEstimate': 'Étape actuelle — aucune durée fiable disponible',
   'document.pipeline.retry': 'Réessayer ce document',
+  'document.pipeline.retryOcr': 'Relire le scan enregistré',
+  'document.pipeline.ocrFailed': 'La reconnaissance du texte a échoué. Tes pages capturées sont toujours enregistrées.',
+  'document.pipeline.ocrRetryHelp': 'Les pages capturées sont conservées. Cette action relance la reconnaissance du texte ; elle ne réindexe pas un document vide.',
   'document.batch.title': 'Import de documents multiples',
   'document.batch.detail': 'Chaque fichier est traité indépendamment. Un échec n’annule jamais les documents réussis.',
   'document.batch.choose': 'Choisir les documents',
@@ -6953,6 +7168,8 @@ const fr: Record<TranslationKey, string> = {
   'scan.filed': 'Classé dans ta mémoire',
   'scan.filedDetail':
     '{n} caractères lus. En cours d’indexation — une fois prêt, c’est recherchable et ton professeur peut en tirer des leçons.',
+  'scan.captured': 'Pages enregistrées en toute sécurité',
+  'scan.capturedDetail': 'La capture est conservée. L’analyse du texte sera disponible lorsqu’un fournisseur Vision autorisé sera actif.',
   'scan.cameraRefused': 'L’accès à la caméra a été refusé. Autorise la caméra et réessaie.',
 
   // Progression (progress.tsx)
@@ -7927,6 +8144,78 @@ const fr: Record<TranslationKey, string> = {
   'landing12.footer.privacy': 'Confidentialité et contrôle des données',
   'landing12.footer.copy': '© 2026 Second Brain. Toutes les démonstrations produit sont des exemples publics.',
   'landing12.footer.noTracking': 'Aucun partenaire, témoignage ou chiffre fictif.',
+
+  // Caméra, capture de document, QR et média de profil durable.
+  'capture.permission.pending': 'Préparation de la caméra…',
+  'capture.permission.title': 'L’autorisation de la caméra est nécessaire',
+  'capture.permission.detail': 'Second Brain ouvre la caméra uniquement après ton action. Tu peux aussi importer une image existante.',
+  'capture.permission.allow': 'Autoriser la caméra',
+  'capture.importFallback': 'Importer une image',
+  'capture.error.capture': 'La photo n’a pas pu être capturée.',
+  'capture.error.fallback': 'Ferme une autre application qui utilise la caméra, vérifie l’autorisation ou importe une image.',
+  'capture.error.unavailable': 'Aucune caméra disponible n’a été trouvée.',
+  'capture.error.paused': 'La caméra est en pause.',
+  'capture.error.denied': 'L’autorisation de la caméra a été refusée.',
+  'capture.error.secureContext': 'La caméra nécessite une connexion HTTPS sécurisée.',
+  'capture.error.busy': 'La caméra est indisponible ou déjà utilisée.',
+  'capture.retake': 'Reprendre',
+  'capture.confirm': 'Utiliser cette photo',
+  'capture.take': 'Prendre la photo',
+  'capture.switch': 'Changer de caméra',
+  'capture.preview': 'Aperçu vidéo en direct',
+  'capture.cameraChoice': 'Choisir une caméra',
+  'capture.camera': 'Caméra',
+  'qr.title': 'Lire un code QR',
+  'qr.detail': 'Cadre un code QR. Son contenu reste inactif tant que tu ne l’as pas vérifié.',
+  'qr.aim': 'Garde le code QR à l’intérieur du cadre.',
+  'qr.unsupported': 'La lecture QR est indisponible dans ce navigateur',
+  'qr.unsupportedDetail': 'Utilise un navigateur HTTPS compatible ou un autre appareil. Aucun contenu n’a été ouvert.',
+  'qr.detected': 'Destination QR détectée',
+  'qr.confirmDetail': 'Vérifie la destination complète avant de l’ouvrir.',
+  'qr.open': 'Ouvrir cette destination',
+  'qr.openError': 'Cette destination n’a pas pu être ouverte. Elle n’a été ni exécutée ni importée.',
+  'qr.noneFound': 'Aucun code QR n’a été trouvé. Recadre-le puis réessaie.',
+  'qr.scanAgain': 'Lire un autre code QR',
+  'qr.textDetected': 'Texte QR détecté',
+  'qr.textInert': 'Ce texte est seulement affiché. Il n’est ni exécuté ni envoyé au Professeur IA.',
+  'qr.done': 'Terminer',
+  'qr.blocked': 'Destination QR dangereuse bloquée',
+  'qr.blockedDetail': 'Seuls les liens HTTP et HTTPS explicites peuvent être ouverts. Les schémas personnalisés, fichier, data et script sont refusés.',
+  'scan.importError': 'Les images choisies n’ont pas pu être importées.',
+  'scan.editError': 'Cette page n’a pas pu être modifiée. Les autres pages sont conservées.',
+  'scan.uploadError': 'Le scan n’a pas pu être enregistré.',
+  'scan.inProgress': 'Ce scan est encore en cours. Réessaie dans un instant.',
+  'scan.retryNewAttempt': 'La tentative précédente est terminée en sécurité. Appuie de nouveau sur enregistrer pour lancer une nouvelle tentative.',
+  'scan.returnToLearn': 'Revenir dans Apprendre avec ce document',
+  'scan.captureFirst': 'Vérifier avant d’enregistrer',
+  'scan.captureFirstDetail': 'Capture ou importe les pages, ajuste leur ordre, leur recadrage et leur rotation, puis confirme. Rien n’est envoyé avant l’action finale.',
+  'scan.retryPreserved': 'Tes pages restent ici afin de réessayer sans les reprendre.',
+  'scan.pagePosition': 'Page {current} sur {total}',
+  'scan.moveBefore': 'Déplacer à gauche',
+  'scan.moveAfter': 'Déplacer à droite',
+  'scan.rotate': 'Faire pivoter',
+  'scan.crop': 'Ajuster le recadrage',
+  'scan.perspectiveLimit': 'Des recadrages centrés prédéfinis sont disponibles. Les bords ajustables et la correction de perspective ne le sont pas encore.',
+  'learn5.capture.photo': 'Photo',
+  'learn5.capture.document': 'Scanner un document',
+  'learn5.capture.qr': 'Lire un code QR',
+  'profile.card.webcam': 'Utiliser la webcam',
+  'profile.card.importImage': 'Importer une image',
+  'profile.email.verified': 'Adresse e-mail vérifiée',
+  'profile.email.unverified': 'Adresse e-mail non vérifiée',
+  'profile.edit': 'Modifier mon profil',
+  'profile.avatar.loadError': 'La photo de profil enregistrée n’a pas pu être chargée.',
+  'profile.avatar.saveError': 'La nouvelle photo de profil n’a pas pu être enregistrée.',
+  'profile.avatar.removeError': 'La photo de profil n’a pas pu être supprimée.',
+  'profile.avatar.denied': 'L’accès aux photos a été refusé.',
+  'profile.avatar.error': 'Le sélecteur d’image n’a pas pu être ouvert.',
+  'profile.avatar.preserved': 'La photo précédemment enregistrée est conservée. Tu peux réessayer sans risque.',
+  'profile.avatar.editorTitle': 'Ajuster la photo de profil',
+  'profile.avatar.editorDetail': 'Prévisualise le rendu circulaire. La rotation et le zoom ne sont appliqués qu’après confirmation.',
+  'profile.avatar.rotate': 'Faire pivoter',
+  'profile.avatar.zoomOut': 'Réduire le zoom',
+  'profile.avatar.zoomIn': 'Augmenter le zoom',
+  'profile.avatar.confirm': 'Enregistrer cette photo',
 };
 
 // Register the built-in languages. English is the source of truth (its keys
@@ -7935,14 +8224,9 @@ const fr: Record<TranslationKey, string> = {
 registerLocale('en', 'English', en);
 registerLocale('fr', 'Français', fr);
 
-// Scalable i18n: register the whole shared language registry (27). Any language
-// without a full catalog yet is registered with an empty one, so it remains
-// selectable and missing UI copy falls back to English. UI locale and learning
-// language are deliberately independent: this provider never writes the
-// learner's server-side preferred language.
-for (const meta of Object.values(SUPPORTED_LANGUAGES)) {
-  if (!registry.has(meta.code)) registerLocale(meta.code, meta.name, {});
-}
+// Only concrete resource modules register UI locales. The shared registry is
+// intentionally wider while new catalogues are being completed: never expose
+// an empty locale that silently renders the English fallback as if translated.
 
 /** Share of the English keys a locale actually translates (0..1). Drives the
  *  Language Manager's coverage bar. */
@@ -7986,11 +8270,23 @@ export function tr(key: TranslationKey, values?: TranslationValues): string {
 
 const useWebDocumentLocaleEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect;
 
-export function I18nProvider({ children }: { children: ReactNode }) {
+export function I18nProvider({
+  children,
+  accountId = null,
+  accountLocale = null,
+  onAccountLocaleChange,
+}: {
+  children: ReactNode;
+  accountId?: string | null;
+  accountLocale?: string | null;
+  onAccountLocaleChange?: (locale: SupportedLanguageCode) => Promise<void> | void;
+}) {
   // The initializer is synchronous on Web: saved choice first, ordered browser
   // preferences second. That applies to the Landing because this provider wraps
   // the entire router, including public routes.
   const [locale, setLocaleState] = useState<Locale>(() => detectedDeviceLocale(savedWebLocale()));
+  const persistenceRevision = useRef(0);
+  const storageKey = localeStorageKey(accountId);
   const formatLocale = useMemo(() => detectedFormatLocale(locale), [locale]);
 
   useWebDocumentLocaleEffect(() => {
@@ -8006,21 +8302,49 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   }, [locale]);
 
   useEffect(() => {
+    let cancelled = false;
+    const revision = ++persistenceRevision.current;
     (async () => {
-      const saved = await AsyncStorage.getItem(STORAGE_KEY);
-      // Native storage is asynchronous; Web has already read this same value
-      // before its first render. Invalid/stale values are ignored so a valid
-      // browser/device preference still wins instead of forcing English.
-      const next = detectedDeviceLocale(saved);
-      if (registry.has(next)) setLocaleState(next);
+      const saved = await AsyncStorage.getItem(storageKey).catch(() => null);
+      const serverCode = accountId ? toSupportedLanguage(accountLocale) : null;
+      // A server preference is authoritative for an authenticated account. If
+      // its catalog is not shipped yet, render honest English rather than a
+      // stale locale belonging to this or another account.
+      const next = serverCode
+        ? isSelectableLocale(serverCode) ? serverCode : 'en'
+        : detectedDeviceLocale(saved);
+      if (cancelled || revision !== persistenceRevision.current) return;
+      setLocaleState(next);
+      if (accountId && saved !== next) {
+        void AsyncStorage.setItem(storageKey, next).catch(() => undefined);
+      }
     })();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, accountLocale, storageKey]);
 
   const setLocale = useCallback((next: Locale) => {
     const normalized = normalizeLocale(next);
+    const previous = locale;
+    const revision = ++persistenceRevision.current;
     setLocaleState(normalized);
-    void AsyncStorage.setItem(STORAGE_KEY, normalized);
-  }, []);
+    void AsyncStorage.setItem(storageKey, normalized).catch(() => undefined);
+    if (accountId && onAccountLocaleChange) {
+      void (async () => {
+        try {
+          await onAccountLocaleChange(normalized);
+        } catch {
+          // Keep the client and authoritative server preference aligned. A
+          // later user choice invalidates this revision and cannot be rolled
+          // back by an earlier failed request.
+          if (revision !== persistenceRevision.current) return;
+          setLocaleState(previous);
+          void AsyncStorage.setItem(storageKey, previous).catch(() => undefined);
+        }
+      })();
+    }
+  }, [accountId, locale, onAccountLocaleChange, storageKey]);
 
   const t = useCallback(
     // Registry lookup with English fallback: a missing translation reads as

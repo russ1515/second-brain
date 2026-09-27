@@ -23,8 +23,9 @@ export interface UiLocaleSignals {
  * 4. English when none of those languages is supported.
  *
  * `toSupportedLanguage` owns BCP 47 normalization, so regional and script
- * variants such as `fr-CA`, `pt-BR` and `zh-Hant-TW` map to their supported
- * base catalog without changing the separate language being learned.
+ * variants such as `fr-CA` and `pt-BR` map to a base catalog, while the script
+ * in `zh-Hant-TW` selects the distinct Traditional Chinese target, without
+ * changing the separate language being learned.
  */
 export function resolveUiLocale({
   savedLocale,

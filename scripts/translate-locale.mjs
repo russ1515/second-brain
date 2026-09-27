@@ -6,7 +6,7 @@
 //
 // Network calls and catalog writes require the explicit --apply flag. Keep runs
 // bounded with --max-requests and --max-attempts; a low request ceiling is the
-// default so a 25-language run has to state its budget deliberately.
+// default so a multi-language run has to state its budget deliberately.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -35,7 +35,10 @@ const PROMPT_VERSION = 'keyed-ui-translation-v2';
 const BRANDS = ['Second Brain', 'FSRS', 'Gemini'];
 const EMOJI_PATTERN = /(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*)/gu;
 
-// code -> { name (native), language (English name for the prompt) }
+// code -> { name (native), language (English prompt name), optional persisted
+// file/identifier overrides }. Overrides keep legacy `no.ts` readable as `nb`
+// and allow canonical BCP 47 codes such as `zh-Hant` without generating an
+// invalid TypeScript identifier.
 export const LANGS = Object.freeze({
   es: { name: 'Español', language: 'Spanish' },
   de: { name: 'Deutsch', language: 'German' },
@@ -44,7 +47,7 @@ export const LANGS = Object.freeze({
   nl: { name: 'Nederlands', language: 'Dutch' },
   pl: { name: 'Polski', language: 'Polish' },
   ru: { name: 'Русский', language: 'Russian' },
-  zh: { name: '中文', language: 'Chinese (Simplified)' },
+  zh: { name: '简体中文', language: 'Chinese (Simplified)' },
   ja: { name: '日本語', language: 'Japanese' },
   ko: { name: '한국어', language: 'Korean' },
   ar: { name: 'العربية', language: 'Arabic' },
@@ -60,8 +63,15 @@ export const LANGS = Object.freeze({
   da: { name: 'Dansk', language: 'Danish' },
   fi: { name: 'Suomi', language: 'Finnish' },
   id: { name: 'Bahasa Indonesia', language: 'Indonesian' },
-  no: { name: 'Norsk', language: 'Norwegian' },
+  nb: { name: 'Norsk (bokmål)', language: 'Norwegian Bokmål', fileName: 'no.ts', variableName: 'no' },
   uk: { name: 'Українська', language: 'Ukrainian' },
+  ln: { name: 'Lingála', language: 'Lingala' },
+  sw: { name: 'Kiswahili', language: 'Swahili' },
+  wo: { name: 'Wolof', language: 'Wolof' },
+  ha: { name: 'Hausa', language: 'Hausa' },
+  he: { name: 'עברית', language: 'Hebrew' },
+  'zh-Hant': { name: '繁體中文', language: 'Chinese (Traditional)', variableName: 'zhHant' },
+  bn: { name: 'বাংলা', language: 'Bengali' },
 });
 
 export const SUPPORTED_CODES = Object.freeze(Object.keys(LANGS));
@@ -188,6 +198,19 @@ function catalogChecksum(catalog) {
   return sha256(JSON.stringify([...catalog.entries()]));
 }
 
+export function localeCatalogDescriptor(code) {
+  const locale = LANGS[code];
+  invariant(locale, `Unsupported locale code: ${code}`);
+  return {
+    file: path.join(OUT_DIR, locale.fileName ?? `${code}.ts`),
+    variableName: locale.variableName ?? code.replace(/-([a-z])/gi, (_, letter) => letter.toUpperCase()),
+  };
+}
+
+function fileChecksumOrNull(file) {
+  return fs.existsSync(file) ? sha256(fs.readFileSync(file)) : null;
+}
+
 function batchesFor(count, batchSize) {
   return count === 0 ? 0 : Math.ceil(count / batchSize);
 }
@@ -201,8 +224,8 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
 
   for (const code of codes) {
     invariant(LANGS[code], `Unsupported locale code: ${code}`);
-    const file = path.join(OUT_DIR, `${code}.ts`);
-    const base = readCatalog(file, code);
+    const { file, variableName } = localeCatalogDescriptor(code);
+    const base = fs.existsSync(file) ? readCatalog(file, variableName) : new Map();
     const essential = essentials.get(code) ?? new Map();
     const review = reviews.get(code) ?? new Map();
     const effective = new Map([...base, ...essential, ...review]);
@@ -218,7 +241,7 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
       file,
       base,
       effective,
-      persistedFileChecksum: sha256(fs.readFileSync(file)),
+      persistedFileChecksum: fileChecksumOrNull(file),
       baseKeyCount: base.size,
       effectiveKeyCount: effective.size,
       missingKeys,
@@ -704,16 +727,17 @@ export function releaseJobLock(lock) {
 }
 
 export function writeLocale(code, catalog) {
+  const { file, variableName } = localeCatalogDescriptor(code);
   const body = JSON.stringify(Object.fromEntries(catalog), null, 2);
   const source = `import { registerLocale } from '../i18n';
 
 /** ${LANGS[code].language} UI locale — machine-generated, native review required.
  *  Extend safely with: node scripts/translate-locale.mjs --apply ${code} */
-const ${code}: Record<string, string> = ${body};
+const ${variableName}: Record<string, string> = ${body};
 
-registerLocale('${code}', ${JSON.stringify(LANGS[code].name)}, ${code});
+registerLocale('${code}', ${JSON.stringify(LANGS[code].name)}, ${variableName});
 `;
-  atomicWrite(path.join(OUT_DIR, `${code}.ts`), source);
+  atomicWrite(file, source);
   return sha256(source);
 }
 
@@ -1077,7 +1101,7 @@ function assertPlanInputsUnchanged(plan) {
   );
   for (const locale of plan.locales) {
     invariant(
-      sha256(fs.readFileSync(locale.file)) === locale.persistedFileChecksum,
+      fileChecksumOrNull(locale.file) === locale.persistedFileChecksum,
       `${locale.code} catalog changed during translation; stop and rebuild the plan`,
     );
   }
@@ -1230,7 +1254,7 @@ export async function runTranslation(options, dependencies = {}) {
           commit: (translations, batch) => {
             assertPlanInputsUnchanged({ ...plan, locales: [] });
             invariant(
-              sha256(fs.readFileSync(locale.file)) === locale.persistedFileChecksum,
+              fileChecksumOrNull(locale.file) === locale.persistedFileChecksum,
               `${locale.code} catalog changed during translation; refusing to overwrite concurrent edits`,
             );
             for (const [key, translation] of translations) {

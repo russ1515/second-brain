@@ -47,7 +47,7 @@ test('usage meter preserves unlimited and truthful threshold states', () => {
 });
 
 test('language search is accent-insensitive and ranks active then recent', () => {
-  assert.equal(SUPPORTED_LANGUAGE_CODES.length, 27);
+  assert.equal(SUPPORTED_LANGUAGE_CODES.length, 34);
   const options = [
     { code: 'fr', nativeName: 'Français', displayName: 'French' },
     { code: 'en', nativeName: 'English', displayName: 'English' },

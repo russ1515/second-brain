@@ -3,7 +3,11 @@ import { isQuotaError } from '@second-brain/shared';
 import { API_BASE_URL } from './api';
 import { tr } from './i18n';
 import { createClientRequestId } from './request-id';
-import { clearSession, loadSession, saveSession } from './storage';
+import {
+  clearSessionIfRefreshMatches,
+  loadSession,
+  replaceSessionIfRefreshMatches,
+} from './storage';
 
 export class ApiError extends Error {
   constructor(
@@ -28,6 +32,17 @@ interface RequestOptions {
   signal?: AbortSignal;
   /** Stable across a logical retry so support can correlate one client action. */
   requestId?: string;
+}
+
+interface UploadOptions {
+  method?: 'POST' | 'PUT';
+  /** Stable across explicit retries of the same logical upload. */
+  requestId?: string;
+}
+
+export interface BinaryResponse {
+  data: ArrayBuffer;
+  contentType: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 45_000;
@@ -74,6 +89,12 @@ function messageFrom(payload: unknown, status: number, fallback: string): string
   // API error prose is untrusted transport data: it can contain a provider
   // detail, a document fragment, or a secret.  Keep validation feedback on
   // the server/auditable channels and never render that prose in the client.
+  if (status === 401) return tr('error.unauthorized');
+  if (status === 403) return tr('error.forbidden');
+  if (status === 404) return tr('error.notFound');
+  if (status === 409) return tr('error.conflict');
+  if (status === 429) return tr('error.rateLimit');
+  if (status === 400 || status === 422) return tr('error.validation');
   return fallback;
 }
 
@@ -97,7 +118,9 @@ async function raw(
 
 /** Exchange the refresh token for a new pair. Returns false if the session is
  *  truly gone (the API rotates refresh tokens and revokes reused ones). */
-async function refresh(): Promise<string | null> {
+let refreshInFlight: Promise<string | null> | null = null;
+
+async function refreshOnce(): Promise<string | null> {
   const session = await loadSession();
   if (!session) return null;
 
@@ -106,15 +129,33 @@ async function refresh(): Promise<string | null> {
     body: { refreshToken: session.refreshToken },
   });
   if (!res.ok) {
-    await clearSession();
-    return null;
+    const payload = await res.json().catch(() => null);
+    if (res.status === 401 || res.status === 403) {
+      await clearSessionIfRefreshMatches(session.refreshToken);
+      return null;
+    }
+    throw new ApiError(
+      res.status,
+      messageFrom(payload, res.status, tr('error.detail')),
+      payload,
+    );
   }
   const tokens = (await res.json()) as AuthTokens;
-  await saveSession({
+  const replaced = await replaceSessionIfRefreshMatches(session.refreshToken, {
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
   });
-  return tokens.accessToken;
+  return replaced ? tokens.accessToken : null;
+}
+
+function refresh(): Promise<string | null> {
+  if (refreshInFlight) return refreshInFlight;
+  const operation = refreshOnce();
+  refreshInFlight = operation;
+  void operation.finally(() => {
+    if (refreshInFlight === operation) refreshInFlight = null;
+  }).catch(() => undefined);
+  return operation;
 }
 
 /**
@@ -134,6 +175,7 @@ async function refresh(): Promise<string | null> {
 export async function apiUpload<T>(
   path: string,
   form: FormData,
+  options: UploadOptions = {},
 ): Promise<T> {
   const send = async (accessToken?: string) => {
     const requestId = uploadRequestId;
@@ -141,13 +183,13 @@ export async function apiUpload<T>(
     if (accessToken) headers.authorization = `Bearer ${accessToken}`;
     headers['x-request-id'] = requestId;
     return fetchWithTimeout(`${API_BASE_URL}/api${path}`, {
-      method: 'POST',
+      method: options.method ?? 'POST',
       headers,
       body: form,
     }, UPLOAD_TIMEOUT_MS, undefined, requestId);
   };
 
-  const uploadRequestId = createClientRequestId('upload');
+  const uploadRequestId = options.requestId ?? createClientRequestId('upload');
   const session = await loadSession();
   let res = await send(session?.accessToken);
 
@@ -158,9 +200,31 @@ export async function apiUpload<T>(
 
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new ApiError(res.status, messageFrom(payload, res.status, `Upload failed (${res.status})`), payload, uploadRequestId);
+    throw new ApiError(res.status, messageFrom(payload, res.status, tr('error.upload')), payload, uploadRequestId);
   }
   return payload as T;
+}
+
+/** Authenticated binary read used for private media. A 404 is an ordinary
+ * "no avatar yet" state; every other response follows the normal refresh and
+ * secret-safe error path. */
+export async function apiBinary(path: string): Promise<BinaryResponse | null> {
+  const requestId = createClientRequestId('binary');
+  const session = await loadSession();
+  let res = await raw(path, {}, session?.accessToken, requestId);
+  if (res.status === 401 && session) {
+    const accessToken = await refresh();
+    if (accessToken) res = await raw(path, {}, accessToken, requestId);
+  }
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const payload = await res.json().catch(() => null);
+    throw new ApiError(res.status, messageFrom(payload, res.status, tr('error.download')), payload, requestId);
+  }
+  return {
+    data: await res.arrayBuffer(),
+    contentType: res.headers.get('content-type')?.split(';')[0] || 'application/octet-stream',
+  };
 }
 
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -179,7 +243,7 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
 
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new ApiError(res.status, messageFrom(payload, res.status, `Request failed (${res.status})`), payload, requestId);
+    throw new ApiError(res.status, messageFrom(payload, res.status, tr('error.detail')), payload, requestId);
   }
   return payload as T;
 }

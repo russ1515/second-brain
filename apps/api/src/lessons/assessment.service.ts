@@ -8,14 +8,23 @@ import type { Lesson } from '@prisma/client';
 import type {
   ExerciseAttemptView,
   KnowledgeGap,
+  KycTeacher,
   LessonExercise,
   SubmitAttemptResponse,
+  TeacherPolicySnapshot,
+} from '@second-brain/shared';
+import {
+  isTeacherPolicySnapshot,
+  resolveTeacherPolicy,
+  TEACHER_POLICY_METADATA_SOURCE,
+  teacherPolicyDirective,
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
 import { RootCauseService } from '../concepts/root-cause.service';
 import { RevisionEngineService } from '../revision/revision-engine.service';
 import { localeDirective, resolveLocale } from '../common/learning-locale';
+import { ExperienceSessionService } from '../experience-sessions/experience-session.service';
 
 const MAX_ANSWER_CHARS = 4000;
 
@@ -80,6 +89,7 @@ export class AssessmentService {
     private readonly llm: LlmService,
     private readonly rootCause: RootCauseService,
     private readonly revision: RevisionEngineService,
+    private readonly experienceSessions: ExperienceSessionService,
   ) {}
 
   async submit(
@@ -96,7 +106,8 @@ export class AssessmentService {
       language: lesson.language,
       conceptId: lesson.conceptId,
     };
-    const verdict = await this.mark(userId, ctx, exercise, answer);
+    const teacherPolicy = await this.teacherPolicyForLesson(userId, lesson);
+    const verdict = await this.mark(userId, ctx, exercise, answer, teacherPolicy);
 
     // Knowledge-gap detection: a wrong answer is a symptom, not the disease.
     const gap =
@@ -168,7 +179,15 @@ export class AssessmentService {
     exerciseIndex: number,
     answer: string,
   ): Promise<SubmitAttemptResponse> {
-    const verdict = await this.mark(userId, ctx, exercise, answer);
+    const onboarding = await this.prisma.onboardingProfile.findUnique({
+      where: { userId },
+      select: { teacher: true },
+    });
+    const teacherPolicy = resolveTeacherPolicy(
+      (onboarding?.teacher as KycTeacher | null) ?? null,
+      { mode: 'exercise', intent: 'practice' },
+    );
+    const verdict = await this.mark(userId, ctx, exercise, answer, teacherPolicy);
     const gap =
       !verdict.correct && ctx.conceptId
         ? await this.rootCause.findFor(userId, ctx.conceptId).catch(() => null)
@@ -221,11 +240,55 @@ export class AssessmentService {
     return exercise;
   }
 
+  private async teacherPolicyForLesson(
+    userId: string,
+    lesson: Lesson,
+  ): Promise<TeacherPolicySnapshot> {
+    const experience = await this.experienceSessions.findByLesson(userId, lesson.id);
+    const stored = experience?.currentStep?.metadata?.teacherPolicy;
+    const source = experience?.currentStep?.metadata?.teacherPolicySource;
+    if (source === TEACHER_POLICY_METADATA_SOURCE && isTeacherPolicySnapshot(stored)) {
+      return stored;
+    }
+
+    // Legacy lessons acquire one trusted snapshot on their next correction.
+    const onboarding = await this.prisma.onboardingProfile.findUnique({
+      where: { userId },
+      select: { teacher: true },
+    });
+    const policy = resolveTeacherPolicy(
+      (onboarding?.teacher as KycTeacher | null) ?? null,
+      { mode: 'exercise', intent: 'practice' },
+    );
+    const currentStep = {
+      ...(experience?.currentStep ?? { id: 'exercise' }),
+      metadata: {
+        ...(experience?.currentStep?.metadata ?? {}),
+        teacherPolicy: policy,
+        teacherPolicySource: TEACHER_POLICY_METADATA_SOURCE,
+      },
+    };
+    if (experience) {
+      await this.experienceSessions.updateState(userId, experience.id, { currentStep });
+    } else {
+      await this.experienceSessions.ensureLessonSession(userId, {
+        title: `Lesson — ${lesson.topic}`.slice(0, 300),
+        intent: 'learn',
+        inputModality: 'text',
+        currentStep,
+        resumeTarget: { kind: 'route', path: `/lesson/${lesson.id}` },
+        links: { lessonId: lesson.id },
+      });
+    }
+    return policy;
+  }
+
   private async mark(
     userId: string,
     ctx: MarkContext,
     exercise: LessonExercise,
     answer: string,
+    policy: TeacherPolicySnapshot,
   ): Promise<RawVerdict> {
     const language = ctx.language
       ? ` This is a ${ctx.language} language exercise; mark the ${ctx.language} too.`
@@ -234,7 +297,10 @@ export class AssessmentService {
     try {
       const result = await this.llm.generate(
         [
-          { role: 'system', content: EXAMINER_SYSTEM + language },
+          {
+            role: 'system',
+            content: EXAMINER_SYSTEM + language + teacherPolicyDirective(policy),
+          },
           {
             role: 'user',
             content:

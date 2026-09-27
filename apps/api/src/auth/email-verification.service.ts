@@ -6,10 +6,11 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { User } from '@prisma/client';
-import type { AuthUser } from '@second-brain/shared';
+import { Prisma, type User } from '@prisma/client';
+import { toSupportedLanguage, type AuthUser } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
+import { composeVerificationEmail, resolveAuthEmailLocale } from './auth-email-content';
 
 /** Issues, sends and consumes email-verification tokens.
  *  Tokens are high-entropy random strings; only their SHA-256 hash is stored,
@@ -32,15 +33,14 @@ export class EmailVerificationService {
     const verifyUrl = `${this.config.getOrThrow<string>('app.url')}/verify-email?token=${token}`;
 
     try {
-      await this.mail.send({
-        to: user.email,
-        subject: 'Confirm your Second Brain email',
-        text:
-          `Welcome to Second Brain!\n\n` +
-          `Confirm your email by opening this link:\n${verifyUrl}\n\n` +
-          `Or submit this token to POST /api/auth/verify-email:\n${token}\n\n` +
-          `This link expires in ${this.ttlHours()} hours.`,
-      });
+      const locale = await resolveAuthEmailLocale(this.prisma, user.id).catch(() => 'en' as const);
+      await this.mail.send(composeVerificationEmail(
+        locale,
+        user.email,
+        verifyUrl,
+        token,
+        this.ttlHours(),
+      ));
     } catch {
       this.logger.warn('Failed to send verification email.');
     }
@@ -52,7 +52,14 @@ export class EmailVerificationService {
     const tokenHash = this.hash(rawToken);
     const record = await this.prisma.emailVerificationToken.findUnique({
       where: { tokenHash },
-      include: { user: { include: { profile: true } } },
+      include: {
+        user: {
+          include: {
+            profile: true,
+            onboardingProfile: { select: { extra: true } },
+          },
+        },
+      },
     });
 
     const invalid = new BadRequestException('Invalid or expired verification token.');
@@ -69,7 +76,7 @@ export class EmailVerificationService {
       this.prisma.user.update({
         where: { id: record.userId },
         data: { emailVerified: true },
-        include: { profile: true },
+        include: { profile: true, onboardingProfile: { select: { extra: true } } },
       }),
     ]);
 
@@ -78,6 +85,11 @@ export class EmailVerificationService {
       email: user.email,
       emailVerified: user.emailVerified,
       displayName: user.profile?.displayName ?? undefined,
+      interfaceLanguage:
+        interfaceLanguage(user.onboardingProfile?.extra) ??
+        toSupportedLanguage(user.profile?.preferredLanguage) ??
+        'en',
+      preferredLanguage: toSupportedLanguage(user.profile?.preferredLanguage) ?? 'en',
     };
   }
 
@@ -121,4 +133,10 @@ export class EmailVerificationService {
   private ttlHours(): number {
     return Math.round(this.config.getOrThrow<number>('auth.emailVerificationTtl') / 3600);
   }
+}
+
+function interfaceLanguage(value: Prisma.JsonValue | null | undefined) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const locale = (value as Prisma.JsonObject).interfaceLanguage;
+  return typeof locale === 'string' ? toSupportedLanguage(locale) : undefined;
 }

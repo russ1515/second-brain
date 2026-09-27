@@ -46,7 +46,7 @@ export function LandingPage() {
   const router = useRouter();
   const scrollRef = useRef<ScrollView>(null);
   const anchors = useRef<Partial<Record<LandingAnchor, number>>>({});
-  // Direction comes from the same 27-language registry as the root provider.
+  // Direction comes from the same 34-language registry as the root provider.
   // Keeping the Landing on that source of truth prevents its public shell from
   // disagreeing with <html dir> when the active locale changes.
   const rtl = localeDirection(locale) === 'rtl';

@@ -8,7 +8,8 @@ import {
   type VoiceExperienceState,
 } from '@second-brain/shared';
 import { useTokens } from '../../lib/design/theme';
-import { useI18n } from '../../lib/i18n';
+import { supportedLocaleCodes, useI18n } from '../../lib/i18n';
+import { LanguageFlag } from './language-flag';
 
 /**
  * Language components (UI/UX Sprint 1, task UI-1.9).
@@ -22,11 +23,6 @@ function meta(code: string) {
   return SUPPORTED_LANGUAGES[code as SupportedLanguageCode];
 }
 
-function languageSymbol(code: string): string {
-  const language = meta(code);
-  return language?.neutralIcon ? '◉' : language?.flag ?? '◉';
-}
-
 function uiLanguageName(code: string, locale: string): string {
   try {
     return new Intl.DisplayNames([locale], { type: 'language' }).of(code) ?? meta(code)?.englishName ?? code.toUpperCase();
@@ -38,7 +34,7 @@ function uiLanguageName(code: string, locale: string): string {
 export type LanguageSelectorMode = 'ui' | 'learning';
 
 /**
- * Searchable 27-language selector. The flag is decorative; native and UI names
+ * Searchable 34-language selector. The flag is decorative; native and UI names
  * carry the meaning. UI language and learning language are explicit modes.
  */
 export function LanguageSelector({
@@ -46,9 +42,10 @@ export function LanguageSelector({
   onChange,
   mode,
   label,
-  codes = SUPPORTED_LANGUAGE_CODES,
+  codes,
   recentCodes = [],
   uiNameFor,
+  compact = false,
 }: {
   value: string | null;
   onChange: (code: string) => void;
@@ -57,13 +54,18 @@ export function LanguageSelector({
   codes?: readonly string[];
   recentCodes?: readonly string[];
   uiNameFor?: (code: string) => string;
+  compact?: boolean;
 }) {
   const { colors: c, radius, spacing, typography } = useTokens();
   const { locale, t } = useI18n();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const effectiveCodes = useMemo(
+    () => codes ?? (mode === 'ui' ? supportedLocaleCodes() : SUPPORTED_LANGUAGE_CODES),
+    [codes, mode],
+  );
   const options = useMemo(() => {
-    const source = codes.map((code) => {
+    const source = effectiveCodes.map((code) => {
       const language = meta(code);
       return {
         code,
@@ -73,7 +75,7 @@ export function LanguageSelector({
       };
     });
     return filterAndRankLanguages(source, query, value, recentCodes);
-  }, [codes, locale, query, recentCodes, uiNameFor, value]);
+  }, [effectiveCodes, locale, query, recentCodes, uiNameFor, value]);
   const active = value ? meta(value) : null;
   const activeUiName = value ? (uiNameFor?.(value) ?? uiLanguageName(value, locale)) : null;
   const close = () => {
@@ -87,8 +89,8 @@ export function LanguageSelector({
   const resolvedLabel = label ?? t(mode === 'ui' ? 'languageSelector.uiLabel' : 'languageSelector.learningLabel');
 
   return (
-    <View style={{ gap: spacing.xs }}>
-      <Text style={[typography.label, { color: c.textMuted }]}>{resolvedLabel}</Text>
+    <View style={{ gap: compact ? 0 : spacing.xs }}>
+      {!compact ? <Text style={[typography.label, { color: c.textMuted }]}>{resolvedLabel}</Text> : null}
       <Pressable
         onPress={() => setOpen(true)}
         accessibilityRole="button"
@@ -98,20 +100,30 @@ export function LanguageSelector({
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'space-between',
-          minHeight: 48,
+          minHeight: compact ? 36 : 48,
           gap: spacing.sm,
           borderWidth: 1,
           borderColor: c.border,
-          borderRadius: radius.sm,
-          paddingVertical: spacing.xs,
-          paddingHorizontal: spacing.sm,
+          borderRadius: compact ? radius.full : radius.sm,
+          paddingVertical: compact ? 6 : spacing.xs,
+          paddingHorizontal: compact ? 12 : spacing.sm,
           backgroundColor: c.surface,
           opacity: pressed ? 0.8 : 1,
         })}
       >
-        {value ? (
+        {value && compact ? (
+          <>
+            <LanguageFlag code={value} size={14} />
+            <Text
+              numberOfLines={1}
+              style={{ color: c.textSecondary, fontSize: 13, fontWeight: '700', maxWidth: 116 }}
+            >
+              {active?.name ?? value.toUpperCase()}
+            </Text>
+          </>
+        ) : value ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: spacing.sm }}>
-            <Text accessible={false} style={{ fontSize: 22 }}>{value ? languageSymbol(value) : '◉'}</Text>
+            <LanguageFlag code={value} size={18} />
             <View style={{ flex: 1 }}>
               <Text style={[typography.title, { color: c.textPrimary }]}>{active?.name ?? value.toUpperCase()}</Text>
               {activeUiName && activeUiName !== active?.name ? <Text style={[typography.caption, { color: c.textSecondary }]}>{activeUiName}</Text> : null}
@@ -171,7 +183,7 @@ export function LanguageSelector({
                       borderBottomColor: c.borderSubtle,
                     })}
                   >
-                    <Text accessible={false} style={{ fontSize: 22 }}>{languageSymbol(item.code)}</Text>
+                    <LanguageFlag code={item.code} size={18} />
                     <View style={{ flex: 1 }}>
                       <Text style={[typography.title, { color: c.textPrimary }]}>{item.nativeName}</Text>
                       {item.displayName !== item.nativeName ? <Text style={[typography.caption, { color: c.textSecondary }]}>{item.displayName}</Text> : null}
@@ -195,7 +207,7 @@ export function LanguageBadge({ code }: { code: string }) {
   const m = meta(code);
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: c.surfaceSunken, borderRadius: radius.full, paddingHorizontal: 10, paddingVertical: 4 }}>
-      <Text accessible={false} style={{ fontSize: 13 }}>{languageSymbol(code)}</Text>
+      <LanguageFlag code={code} size={14} />
       <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: '600', writingDirection: m?.rtl ? 'rtl' : 'ltr' }}>{m?.name ?? code.toUpperCase()}</Text>
     </View>
   );

@@ -13,7 +13,14 @@ import type {
   AssessmentView,
   CreateAssessmentRequest,
   GradedAnswer,
+  KycTeacher,
   QuestionFormat,
+  TeacherPolicySnapshot,
+} from '@second-brain/shared';
+import {
+  isTeacherPolicySnapshot,
+  resolveTeacherPolicy,
+  teacherPolicyDirective,
 } from '@second-brain/shared';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -32,6 +39,12 @@ interface StoredQuestion {
   answerKey: string;
   /** What a good answer must contain — the marking rubric. */
   rubric: string;
+}
+
+interface StoredAssessmentPayload {
+  version: 2;
+  teacherPolicy: TeacherPolicySnapshot;
+  questions: StoredQuestion[];
 }
 
 const EXAMINER_PERSONA =
@@ -117,7 +130,22 @@ export class ExaminerService {
       Math.min(20, Math.max(1, dto.questionCount ?? brief.defaultCount));
 
     const locale = await resolveLocale(this.prisma, userId);
-    const questions = await this.generate(type, topic, difficulty, count, brief, locale);
+    const teacherPreferences = await this.loadTeacherPreferences(userId);
+    const teacherPolicy = resolveTeacherPolicy(teacherPreferences, {
+      mode: type === 'oral' ? 'oral_exam' : 'exam',
+      intent: 'assessment',
+      difficulty,
+      assessment: true,
+    });
+    const questions = await this.generate(
+      type,
+      topic,
+      difficulty,
+      count,
+      brief,
+      locale,
+      teacherPolicy,
+    );
     if (questions.length === 0) {
       throw new ServiceUnavailableException(
         'The examiner could not draft that assessment. Please try again.',
@@ -132,7 +160,11 @@ export class ExaminerService {
         title: this.titleFor(type, topic),
         level: difficulty,
         conceptId: dto.conceptId ?? null,
-        questions: questions as unknown as object,
+        questions: {
+          version: 2,
+          teacherPolicy,
+          questions,
+        } as unknown as object,
       },
     });
     return this.toView(assessment, null);
@@ -147,13 +179,13 @@ export class ExaminerService {
       },
     });
     return rows.map((a) => {
-      const qs = a.questions as unknown as StoredQuestion[];
+      const qs = this.readPayload(a.questions).questions;
       return {
         id: a.id,
         type: a.type as AssessmentType,
         topic: a.topic,
         title: a.title,
-        questionCount: Array.isArray(qs) ? qs.length : 0,
+        questionCount: qs.length,
         createdAt: a.createdAt.toISOString(),
         score: a.submissions[0] ? a.submissions[0].score : null,
       };
@@ -175,10 +207,35 @@ export class ExaminerService {
     answers: string[],
   ): Promise<AssessmentSubmissionView> {
     const assessment = await this.requireOwned(userId, id);
-    const questions = assessment.questions as unknown as StoredQuestion[];
+    const payload = this.readPayload(assessment.questions);
+    const teacherPolicy = payload.teacherPolicy ?? resolveTeacherPolicy(null, {
+      mode: assessment.type === 'oral' ? 'oral_exam' : 'exam',
+      intent: 'assessment',
+      difficulty: this.asDifficulty(assessment.level),
+      assessment: true,
+    });
+    const questions = payload.questions;
+    if (!payload.teacherPolicy) {
+      await this.prisma.assessment.update({
+        where: { id: assessment.id },
+        data: {
+          questions: {
+            version: 2,
+            teacherPolicy,
+            questions,
+          } as unknown as object,
+        },
+      });
+    }
 
     const locale = await resolveLocale(this.prisma, userId);
-    const graded = await this.grade(assessment, questions, answers, locale);
+    const graded = await this.grade(
+      assessment,
+      questions,
+      answers,
+      locale,
+      teacherPolicy,
+    );
 
     const submission = await this.prisma.assessmentSubmission.create({
       data: {
@@ -211,6 +268,7 @@ export class ExaminerService {
     count: number,
     brief: (typeof TYPE_BRIEF)[AssessmentType],
     locale: string,
+    teacherPolicy: TeacherPolicySnapshot,
   ): Promise<StoredQuestion[]> {
     const countLine =
       brief.fixedCount === 1
@@ -230,7 +288,10 @@ export class ExaminerService {
     try {
       const result = await this.llm.generate(
         [
-          { role: 'system', content: EXAMINER_PERSONA },
+          {
+            role: 'system',
+            content: `${EXAMINER_PERSONA}${teacherPolicyDirective(teacherPolicy)}`,
+          },
           { role: 'user', content: user },
         ],
         { temperature: 0.5, operation: 'assessment' },
@@ -276,6 +337,7 @@ export class ExaminerService {
     questions: StoredQuestion[],
     answers: string[],
     locale: string,
+    teacherPolicy: TeacherPolicySnapshot,
   ): Promise<{
     score: number;
     results: GradedAnswer[];
@@ -317,7 +379,10 @@ export class ExaminerService {
     try {
       const result = await this.llm.generate(
         [
-          { role: 'system', content: EXAMINER_PERSONA },
+          {
+            role: 'system',
+            content: `${EXAMINER_PERSONA}${teacherPolicyDirective(teacherPolicy)}`,
+          },
           { role: 'user', content: user },
         ],
         { temperature: 0.2, operation: 'grading' },
@@ -414,23 +479,59 @@ export class ExaminerService {
     assessment: Assessment,
     latest: AssessmentSubmission | null,
   ): AssessmentView {
-    const stored = assessment.questions as unknown as StoredQuestion[];
+    const payload = this.readPayload(assessment.questions);
     return {
       id: assessment.id,
       type: assessment.type as AssessmentType,
       topic: assessment.topic,
       title: assessment.title,
       level: assessment.level,
-      questions: (Array.isArray(stored) ? stored : []).map((q) => ({
+      questions: payload.questions.map((q) => ({
         id: q.id,
         prompt: q.prompt,
         format: q.format,
         options: q.options,
         points: q.points,
       })),
+      teacherPolicy: payload.teacherPolicy,
       createdAt: assessment.createdAt.toISOString(),
       latestSubmission: latest ? this.toSubmissionView(latest) : null,
     };
+  }
+
+  private async loadTeacherPreferences(userId: string): Promise<KycTeacher | null> {
+    const onboarding = await this.prisma.onboardingProfile.findUnique({
+      where: { userId },
+      select: { teacher: true },
+    });
+    return (onboarding?.teacher as KycTeacher | null) ?? null;
+  }
+
+  private readPayload(value: unknown): {
+    questions: StoredQuestion[];
+    teacherPolicy: TeacherPolicySnapshot | null;
+  } {
+    if (Array.isArray(value)) {
+      return { questions: value as StoredQuestion[], teacherPolicy: null };
+    }
+    if (!value || typeof value !== 'object') {
+      return { questions: [], teacherPolicy: null };
+    }
+    const payload = value as Partial<StoredAssessmentPayload>;
+    return {
+      questions: Array.isArray(payload.questions)
+        ? payload.questions as StoredQuestion[]
+        : [],
+      teacherPolicy: isTeacherPolicySnapshot(payload.teacherPolicy)
+        ? payload.teacherPolicy
+        : null,
+    };
+  }
+
+  private asDifficulty(value: string | null): AssessmentDifficulty | null {
+    return value === 'beginner' || value === 'intermediate' || value === 'advanced'
+      ? value
+      : null;
   }
 
   private toSubmissionView(s: AssessmentSubmission): AssessmentSubmissionView {

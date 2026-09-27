@@ -5,6 +5,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  MinLength,
   validateSync,
 } from 'class-validator';
 
@@ -39,6 +40,10 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   CORS_ALLOWED_ORIGINS?: string;
+
+  @IsOptional()
+  @IsString()
+  PRIVATE_MEDIA_DIR?: string;
 
   @IsOptional()
   @IsString()
@@ -95,6 +100,10 @@ class EnvironmentVariables {
 
   @IsString()
   JWT_REFRESH_SECRET!: string;
+
+  @IsString()
+  @MinLength(32)
+  OTP_HMAC_SECRET!: string;
 
   @IsInt()
   JWT_ACCESS_TTL!: number;

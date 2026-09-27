@@ -337,7 +337,7 @@ const essential: Record<string, Record<string, string>> = {
     'mfa.doneDetail': 'Bij je volgende aanmelding heb je je authenticator of een ongebruikte herstelcode nodig.',
     'mfa.backProfile': 'Terug naar Profiel',
   },
-  no: {
+  nb: {
     'app.dismiss': 'Lukk',
     'languageSelector.uiLabel': 'Grensesnittspråk',
     'languageSelector.learningLabel': 'Læringsspråk',

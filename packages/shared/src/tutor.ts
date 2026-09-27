@@ -3,6 +3,7 @@
 import type { Citation } from './document';
 import type { ContextItemInput } from './context';
 import type { ExperienceSession, InputModality } from './experience-session';
+import type { TeacherPolicySnapshot } from './teacher-policy';
 
 export type TutorRole = 'user' | 'assistant';
 
@@ -96,6 +97,8 @@ export interface TutorSessionSummary {
   /** Stable localization key for clients that should not display the legacy
    *  English reason in another interface language. */
   strategyReasonCode: string | null;
+  /** Immutable policy captured when the session starts. */
+  teacherPolicy: TeacherPolicySnapshot | null;
   messageCount: number;
   /** Present on the Lot 6 API. Optional keeps older consumers compatible. */
   experienceSession?: ExperienceSession | null;

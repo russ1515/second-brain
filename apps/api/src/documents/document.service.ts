@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
   PayloadTooLargeException,
@@ -13,6 +14,8 @@ import {
 } from './extraction/text-extraction.service';
 import { IngestionService } from './ingestion/ingestion.service';
 import { DocumentEnrichmentService } from './enrichment/document-enrichment.service';
+import { PrivateMediaService } from '../media/private-media.service';
+import { accountDataLockKey } from '../common/account-data-lock';
 
 const MAX_CONTENT_CHARS = 1_000_000; // ~1 MB of extracted text
 
@@ -23,18 +26,181 @@ export class DocumentService {
     private readonly extraction: TextExtractionService,
     private readonly ingestion: IngestionService,
     private readonly enrichment: DocumentEnrichmentService,
+    private readonly privateMedia: PrivateMediaService,
   ) {}
 
   /** Ingest pasted text/markdown. */
   createFromText(
     userId: string,
-    input: { title: string; content: string },
+    input: { title: string; content: string; sourceRef?: string | null },
   ): Promise<DocumentDetail> {
     return this.persist(userId, {
       title: input.title.trim(),
       content: input.content,
       source: 'text',
-      sourceRef: null,
+      sourceRef: input.sourceRef ?? null,
+    });
+  }
+
+  /** Resolve a durable ingestion idempotency marker for this owner only. */
+  async findBySourceRef(userId: string, sourceRef: string): Promise<DocumentDetail | null> {
+    const doc = await this.prisma.document.findFirst({
+      where: { userId, sourceRef, deletedAt: null },
+      orderBy: { createdAt: 'desc' },
+    });
+    return doc ? this.toDetail(doc) : null;
+  }
+
+  /** Create the durable shell before a potentially billable vision call. A
+   * lost HTTP response can then be reconciled by sourceRef without a second
+   * provider call. */
+  async beginScan(
+    userId: string,
+    title: string | undefined,
+    sourceRef: string,
+  ): Promise<{ document: DocumentDetail; created: boolean }> {
+    // The in-process coalescer in ScanService only protects one replica. Keep
+    // creation safe across API replicas without a schema migration by taking a
+    // transaction-scoped PostgreSQL advisory lock on this owner/idempotency key.
+    // The lock is released automatically on commit/rollback.
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = `document-scan:${userId}:${sourceRef}`;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+
+      const existing = await tx.document.findFirst({
+        where: { userId, sourceRef, deletedAt: null },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (existing) return { document: this.toDetail(existing), created: false };
+
+      const doc = await tx.document.create({
+        data: {
+          userId,
+        title: (title?.trim() || new Date().toISOString().slice(0, 16).replace('T', ' ')).slice(0, 300),
+          source: 'text',
+          sourceRef,
+          content: '',
+          charCount: 0,
+        status: 'processing',
+        stage: 'capturing',
+        },
+      });
+      return { document: this.toDetail(doc), created: true };
+    });
+  }
+
+  async markScanCaptured(userId: string, id: string): Promise<DocumentDetail> {
+    await this.prisma.document.updateMany({
+      where: { id, userId, deletedAt: null, status: 'processing', charCount: 0 },
+      data: { status: 'pending', stage: null, error: null },
+    });
+    return this.get(userId, id);
+  }
+
+  /** Atomically claim one captured scan for OCR. Only one replica wins. */
+  async startScanReading(
+    userId: string,
+    id: string,
+  ): Promise<{ document: DocumentDetail; started: boolean }> {
+    const claimed = await this.prisma.document.updateMany({
+      where: { id, userId, deletedAt: null, status: 'pending', charCount: 0 },
+      data: { status: 'processing', stage: 'reading', error: null },
+    });
+    return {
+      document: await this.get(userId, id),
+      started: claimed.count === 1,
+    };
+  }
+
+  /** Atomically claim a captured scan for an explicit OCR retry. This is
+   * deliberately separate from reindex: the document has no text to embed yet. */
+  async startScanRetry(
+    userId: string,
+    id: string,
+  ): Promise<{ document: DocumentDetail; started: boolean }> {
+    const claimed = await this.prisma.document.updateMany({
+      where: {
+        id,
+        userId,
+        deletedAt: null,
+        status: { in: ['pending', 'failed'] },
+        charCount: 0,
+        sourceRef: { startsWith: 'scan:' },
+      },
+      data: { status: 'processing', stage: 'reading', error: null },
+    });
+    return {
+      document: await this.get(userId, id),
+      started: claimed.count === 1,
+    };
+  }
+
+  /** Recover a worker that died after claiming OCR. Only genuinely stale,
+   * empty scan reads are moved to failed; a live worker cannot be displaced. */
+  async failStaleScanReading(
+    userId: string,
+    id: string,
+    staleBefore: Date,
+  ): Promise<boolean> {
+    const failed = await this.prisma.document.updateMany({
+      where: {
+        id,
+        userId,
+        deletedAt: null,
+        status: 'processing',
+        stage: 'reading',
+        charCount: 0,
+        sourceRef: { startsWith: 'scan:' },
+        updatedAt: { lte: staleBefore },
+      },
+      data: {
+        status: 'failed',
+        stage: null,
+        error: 'SCAN_READING_INTERRUPTED',
+      },
+    });
+    return failed.count === 1;
+  }
+
+  async completeScan(
+    userId: string,
+    id: string,
+    input: { title: string; content: string },
+  ): Promise<DocumentDetail> {
+    const existing = await this.get(userId, id);
+    if (existing.status !== 'processing') return existing;
+    const content = input.content.trim();
+    if (!input.title.trim()) throw new BadRequestException('A title is required.');
+    if (!content) throw new BadRequestException('No text content could be ingested.');
+    if (content.length > MAX_CONTENT_CHARS) {
+      throw new PayloadTooLargeException(
+        `Document exceeds the ${MAX_CONTENT_CHARS.toLocaleString()}-character limit.`,
+      );
+    }
+    const doc = await this.prisma.document.update({
+      where: { id },
+      data: {
+        title: input.title.trim().slice(0, 300),
+        content,
+        charCount: content.length,
+        status: 'pending',
+        stage: null,
+        error: null,
+      },
+    });
+    void this.ingestion.ingest(doc.id);
+    void this.enrichment.enrich(doc.id);
+    return this.toDetail(doc);
+  }
+
+  async failScan(userId: string, id: string): Promise<void> {
+    await this.prisma.document.updateMany({
+      where: { id, userId, status: 'processing' },
+      data: {
+        status: 'failed',
+        stage: null,
+        error: 'Scan reading failed. The saved pages were preserved for retry.',
+      },
     });
   }
 
@@ -110,20 +276,82 @@ export class DocumentService {
 
   /** Delete one of the caller's documents (and its vectors). */
   async remove(userId: string, id: string): Promise<void> {
-    const doc = await this.prisma.document.findUnique({ where: { id } });
-    if (!doc || doc.userId !== userId) {
-      throw new NotFoundException('Document not found.');
-    }
-    // Remove vectors first; Postgres chunk rows cascade with the document.
-    await this.ingestion.purgeVectors(id);
-    await this.prisma.document.delete({ where: { id } });
+    // Phase 1 commits the deletion barrier. Ingestion takes the same lock and
+    // requires deletedAt=null, so no late worker can recreate vectors after
+    // this transaction. A cleanup failure leaves a hidden row safe to retry.
+    await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const owned = await tx.document.findFirst({
+        where: { id, userId },
+        select: { id: true, deletedAt: true },
+      });
+      if (!owned) {
+        throw new NotFoundException('Document not found.');
+      }
+      await tx.document.update({
+        where: { id },
+        data: {
+          deletedAt: owned.deletedAt ?? new Date(),
+          status: 'processing',
+          stage: 'deleting',
+          error: null,
+        },
+      });
+    }, { timeout: 60_000 });
+
+    // Phase 2 keeps restore and ingestion serialized while destructive cleanup
+    // runs. The SQL hard delete uses the regular client and commits before the
+    // private-media tombstone is purged; this lock transaction holds no row
+    // mutation that could roll that deletion back.
+    await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const staged = await tx.document.findFirst({
+        where: { id, userId, deletedAt: { not: null }, stage: 'deleting' },
+        select: { id: true },
+      });
+      if (!staged) {
+        throw new ConflictException('Document deletion is no longer staged.');
+      }
+      await this.ingestion.purgeVectors(id);
+      await this.privateMedia.deleteScanPagesAnd(userId, id, async () => {
+        await this.prisma.document.delete({ where: { id } });
+      });
+    }, { timeout: 60_000 });
   }
 
   /** Re-run the embedding pipeline for a document (e.g. after a failure). */
   async reindex(userId: string, id: string): Promise<DocumentDetail> {
-    const doc = await this.prisma.document.findUnique({ where: { id } });
-    if (!doc || doc.userId !== userId) {
-      throw new NotFoundException('Document not found.');
+    const doc = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const owned = await tx.document.findFirst({
+        where: {
+          id,
+          userId,
+          deletedAt: null,
+          user: { accountStatus: 'active' },
+        },
+      });
+      if (!owned) throw new NotFoundException('Document not found.');
+      return owned;
+    });
+    // Reindex only transforms existing text into chunks/vectors. A captured
+    // scan whose OCR failed has no text and must use the explicit scan retry;
+    // otherwise the ingestion pipeline could honestly process zero chunks but
+    // incorrectly finish the empty shell as READY.
+    if (doc.charCount <= 0 || !doc.content.trim()) {
+      if (doc.sourceRef?.startsWith('scan:')) {
+        throw new ConflictException({
+          code: 'SCAN_OCR_RETRY_REQUIRED',
+          message: 'This scan has no extracted text. Retry scan reading instead.',
+        });
+      }
+      throw new ConflictException({
+        code: 'DOCUMENT_CONTENT_REQUIRED',
+        message: 'This document has no extracted text to reindex.',
+      });
     }
     void this.ingestion.ingest(id);
     return this.get(userId, id);

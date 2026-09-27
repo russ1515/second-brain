@@ -33,12 +33,14 @@ export function DocumentPipeline({
   stage,
   error,
   onRetry,
+  retryLabelKey = 'document.pipeline.retry',
   compact = false,
 }: {
   status: DocumentStatus;
   stage: PipelineStage | null;
   error?: string | null;
   onRetry?: () => void;
+  retryLabelKey?: TranslationKey;
   compact?: boolean;
 }) {
   const { colors: c, radius, spacing, typography, reducedMotion } = useTokens();
@@ -98,8 +100,11 @@ export function DocumentPipeline({
       {status === 'failed' ? (
         <View style={{ gap: spacing.sm }}>
           {error ? <Text style={[typography.bodySmall, { color: c.error }]}>{error}</Text> : null}
-          {state.canRetry && onRetry ? <Button label={t('document.pipeline.retry')} variant="secondary" size="sm" onPress={onRetry} /> : null}
+          {state.canRetry && onRetry ? <Button label={t(retryLabelKey)} variant="secondary" size="sm" onPress={onRetry} /> : null}
         </View>
+      ) : null}
+      {status !== 'failed' && onRetry ? (
+        <Button label={t(retryLabelKey)} variant="secondary" size="sm" onPress={onRetry} />
       ) : null}
     </View>
   );

@@ -1,9 +1,10 @@
-import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, type User } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
+import { composeOtpEmail, resolveAuthEmailLocale } from './auth-email-content';
 
 /** Why an OTP was issued. Kept as a plain union so it maps straight onto the
  *  `EmailOtp.purpose` string column. */
@@ -13,7 +14,8 @@ export type OtpPurpose = 'email_verify' | 'password_reset';
  * Issues, emails and verifies short-lived 6-digit email OTP codes.
  *
  * Codes are single-use, expire fast (config `auth.otpTtl`), and only their
- * SHA-256 hash is stored — a DB leak never exposes a usable code. Guessing is
+ * versioned HMAC-SHA-256 digest is stored — the six-digit space cannot be
+ * precomputed from a database leak without the server-only key. Guessing is
  * capped by `auth.otpMaxAttempts`. Delivery rides the shared Mail seam. The
  * `log` transport simulates delivery without exposing a code; SMTP delivers the
  * code to the recipient. There is no fallback between transports.
@@ -47,14 +49,15 @@ export class EmailOtpService {
         data: {
           userId: user.id,
           purpose,
-          codeHash: this.hash(code),
+          codeHash: this.hash(user.id, purpose, code),
           expiresAt: new Date(Date.now() + ttl * 1000),
         },
       });
     });
 
     try {
-      await this.mail.send(this.compose(purpose, code, ttl, user.email));
+      const locale = await resolveAuthEmailLocale(this.prisma, user.id).catch(() => 'en' as const);
+      await this.mail.send(composeOtpEmail(locale, purpose, code, ttl, user.email));
     } catch {
       // Do not include an Error object: provider errors can carry recipient or
       // transport details. The provider has its own safe startup diagnostic.
@@ -94,7 +97,7 @@ export class EmailOtpService {
         throw invalid;
       }
 
-      if (!this.matches(code, record.codeHash)) {
+      if (!this.matches(userId, purpose, code, record.codeHash)) {
         await tx.emailOtp.updateMany({
           where: { id: record.id, consumedAt: null },
           data: { attempts: { increment: 1 } },
@@ -132,33 +135,24 @@ export class EmailOtpService {
     });
   }
 
-  private compose(purpose: OtpPurpose, code: string, ttl: number, to: string) {
-    const minutes = Math.max(1, Math.round(ttl / 60));
-    const subject =
-      purpose === 'password_reset'
-        ? `${code} is your Second Brain password reset code`
-        : `${code} is your Second Brain verification code`;
-    const action =
-      purpose === 'password_reset'
-        ? 'reset your password'
-        : 'confirm your email';
-    return {
-      to,
-      subject,
-      text:
-        `Your Second Brain code to ${action} is:\n\n${code}\n\n` +
-        `It expires in ${minutes} minutes. If you didn't request this, ignore this email.`,
-    };
+  private hash(userId: string, purpose: OtpPurpose, code: string): string {
+    const secret = this.config.getOrThrow<string>('auth.otpHmacSecret');
+    const digest = createHmac('sha256', secret)
+      .update(userId)
+      .update('\0')
+      .update(purpose)
+      .update('\0')
+      .update(code)
+      .digest('hex');
+    return `v2:${digest}`;
   }
 
-  private hash(code: string): string {
-    return createHash('sha256').update(code).digest('hex');
-  }
-
-  /** Constant-time comparison of the candidate's hash against the stored hash. */
-  private matches(code: string, storedHash: string): boolean {
-    const candidate = Buffer.from(this.hash(code), 'hex');
-    const stored = Buffer.from(storedHash, 'hex');
+  /** Constant-time comparison. Unversioned SHA-256 records are intentionally
+   * invalid after rollout and are replaced by the normal resend workflow. */
+  private matches(userId: string, purpose: OtpPurpose, code: string, storedHash: string): boolean {
+    if (!storedHash.startsWith('v2:')) return false;
+    const candidate = Buffer.from(this.hash(userId, purpose, code).slice(3), 'hex');
+    const stored = Buffer.from(storedHash.slice(3), 'hex');
     return candidate.length === stored.length && timingSafeEqual(candidate, stored);
   }
 }

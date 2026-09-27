@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Platform, ScrollView, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Image, Platform, ScrollView, Text, View } from 'react-native';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { useFocusEffect, useRouter } from 'expo-router';
 import type {
-  KycTeacher,
   OnboardingAnswers,
   OnboardingState,
   StrengthsWeaknesses,
@@ -14,13 +14,16 @@ import { api } from '../../lib/client';
 import { useAuth } from '../../lib/auth-context';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { useTheme, useTokens } from '../../lib/design/theme';
-import { Badge, Button, Card } from '../../components/ds/core';
+import { Alert, Badge, Button, Card } from '../../components/ds/core';
+import { Sheet } from '../../components/ds/overlays';
 import { Page, PageHeader, ResponsiveSplit, Section } from '../../components/ds/layout';
 import { SmartLoadingState, SmartState } from '../../components/ds/states';
 import { categoryLabel } from '../../lib/onboarding/catalog';
 import { LocalePicker } from '../../components/locale-picker';
 import { clearAvatarPhoto, loadAvatarPhoto, pickPhoto, saveAvatarPhoto } from '../../lib/profile/photo';
-import { ProfilePhoto, TeacherConfig } from '../../components/profile/components';
+import { AdaptiveTeacherConfig, ProfilePhoto } from '../../components/profile/components';
+import { CameraCapture } from '../../components/capture/camera-capture';
+import type { CapturedImage } from '../../lib/capture/types';
 import {
   AccountUsageCard,
   BrainProfilePreview,
@@ -46,15 +49,28 @@ export default function ProfileScreen() {
   const [subscription, setSubscription] = useState<SubscriptionView | null>(null);
   const [usage, setUsage] = useState<UsageView | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
+  const [avatarCameraOpen, setAvatarCameraOpen] = useState(false);
+  const [avatarDraft, setAvatarDraft] = useState<CapturedImage | null>(null);
+  const [avatarRotation, setAvatarRotation] = useState<0 | 90 | 180 | 270>(0);
+  const [avatarZoom, setAvatarZoom] = useState(1);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [partial, setPartial] = useState(false);
+  const profilePatchQueue = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     let cancel = false;
-    loadAvatarPhoto().then((value) => { if (!cancel) setPhoto(value); });
+    loadAvatarPhoto()
+      .then((value) => { if (!cancel) setPhoto(value); })
+      .catch(() => { if (!cancel) setAvatarError(t('profile.avatar.loadError')); });
     return () => { cancel = true; };
-  }, [user?.displayName]);
+  }, [t, user?.id]);
+
+  useEffect(() => () => {
+    if (avatarDraft?.uri.startsWith('blob:')) URL.revokeObjectURL(avatarDraft.uri);
+  }, [avatarDraft]);
 
   const load = useCallback(async (active: () => boolean = () => true) => {
     setLoading(true);
@@ -91,24 +107,137 @@ export default function ProfileScreen() {
 
   /** PATCH a KYC section (object merge or list replace) + refresh (task 1.8). */
   const patch = useCallback(
-    async <K extends keyof OnboardingAnswers>(section: K, value: OnboardingAnswers[K]) => {
-      setKyc((prev) => (prev ? { ...prev, answers: { ...prev.answers, [section]: Array.isArray(value) ? value : { ...(prev.answers[section] as object ?? {}), ...(value as object) } } } : prev));
-      try {
-        await api('/onboarding', { method: 'PUT', body: { answers: { [section]: value } } });
-        await refreshOnboarding?.();
-      } catch { /* local state already updated */ }
+    <K extends keyof OnboardingAnswers>(
+      section: K,
+      value: OnboardingAnswers[K],
+    ): Promise<OnboardingState | null> => {
+      const execute = async (): Promise<OnboardingState | null> => {
+        setSettingsError(null);
+        try {
+          const saved = await api<OnboardingState>('/onboarding', {
+            method: 'PUT',
+            body: { answers: { [section]: value } },
+          });
+          setKyc(saved);
+          await refreshOnboarding?.();
+          return saved;
+        } catch {
+          setSettingsError(t('profile.settings.saveError'));
+          return null;
+        }
+      };
+      const pending = profilePatchQueue.current.then(execute, execute);
+      profilePatchQueue.current = pending.then(() => undefined, () => undefined);
+      return pending;
     },
-    [refreshOnboarding],
+    [refreshOnboarding, t],
   );
 
   const onPick = async (source: 'camera' | 'gallery') => {
+    if (source === 'camera') {
+      setAvatarCameraOpen(true);
+      return;
+    }
     setBusy(true);
-    const res = await pickPhoto(source);
-    setBusy(false);
-    if (res.ok) { setPhoto(res.uri); await saveAvatarPhoto(res.uri); }
+    setAvatarError(null);
+    try {
+      const result = await pickPhoto(source);
+      if (result.ok) {
+        setAvatarDraft(result.image);
+        setAvatarRotation(0);
+        setAvatarZoom(1);
+      }
+      else if (result.reason !== 'cancelled') setAvatarError(t(`profile.avatar.${result.reason}` as TranslationKey));
+    } catch {
+      setAvatarError(t('profile.avatar.saveError'));
+    } finally {
+      setBusy(false);
+    }
   };
-  const onChooseAvatar = (emoji: string) => { setPhoto(null); void clearAvatarPhoto(); void patch('identity', { avatarEmoji: emoji }); };
-  const onRemove = () => { setPhoto(null); void clearAvatarPhoto(); void patch('identity', { avatarEmoji: '' }); };
+  const editCapturedAvatar = (image: CapturedImage) => {
+    setAvatarDraft(image);
+    setAvatarRotation(0);
+    setAvatarZoom(1);
+    setAvatarCameraOpen(false);
+  };
+  const storeCapturedAvatar = async () => {
+    if (!avatarDraft || !user?.id) return;
+    setBusy(true);
+    setAvatarError(null);
+    let generatedUri: string | null = null;
+    try {
+      const edge = Math.max(1, Math.floor(Math.min(avatarDraft.width, avatarDraft.height) / avatarZoom));
+      const result = await manipulateAsync(avatarDraft.uri, [
+        { crop: {
+          originX: Math.max(0, Math.floor((avatarDraft.width - edge) / 2)),
+          originY: Math.max(0, Math.floor((avatarDraft.height - edge) / 2)),
+          width: edge,
+          height: edge,
+        } },
+        ...(avatarRotation ? [{ rotate: avatarRotation }] : []),
+      ], { compress: 0.9, format: SaveFormat.JPEG });
+      generatedUri = result.uri;
+      // Persist the identity mutation first. If it fails, the server-side
+      // avatar has not been touched and the previous photo remains intact.
+      const identitySaved = await patch('identity', { avatarEmoji: '' });
+      if (!identitySaved) {
+        setAvatarError(t('profile.avatar.saveError'));
+        return;
+      }
+      const stored = await saveAvatarPhoto(user.id, {
+        ...avatarDraft,
+        uri: result.uri,
+        width: result.width,
+        height: result.height,
+        mimeType: 'image/jpeg',
+        name: avatarDraft.name.replace(/\.[^.]+$/, '.jpg'),
+        file: undefined,
+      });
+      setPhoto(stored);
+      setAvatarDraft(null);
+    } catch {
+      setAvatarError(t('profile.avatar.saveError'));
+    } finally {
+      if (generatedUri?.startsWith('blob:')) URL.revokeObjectURL(generatedUri);
+      setBusy(false);
+    }
+  };
+  const onChooseAvatar = async (emoji: string) => {
+    if (!user?.id) return;
+    setBusy(true);
+    setAvatarError(null);
+    try {
+      const identitySaved = await patch('identity', { avatarEmoji: emoji });
+      if (!identitySaved) {
+        setAvatarError(t('profile.avatar.removeError'));
+        return;
+      }
+      await clearAvatarPhoto(user.id);
+      setPhoto(null);
+    } catch {
+      setAvatarError(t('profile.avatar.removeError'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const onRemove = async () => {
+    if (!user?.id) return;
+    setBusy(true);
+    setAvatarError(null);
+    try {
+      const identitySaved = await patch('identity', { avatarEmoji: '' });
+      if (!identitySaved) {
+        setAvatarError(t('profile.avatar.removeError'));
+        return;
+      }
+      await clearAvatarPhoto(user.id);
+      setPhoto(null);
+    } catch {
+      setAvatarError(t('profile.avatar.removeError'));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const name = [identity.firstName, identity.lastName].filter(Boolean).join(' ');
   const strengths = (sw?.strengths ?? []).map((s) => s.name);
@@ -126,6 +255,8 @@ export default function ProfileScreen() {
       <ProfilePhoto photoUri={photo} avatarEmoji={identity.avatarEmoji} name={name} busy={busy} onPick={onPick} onChooseAvatar={onChooseAvatar} onRemove={onRemove} />
       <Text style={{ color: c.textPrimary, fontSize: 22, fontWeight: '800' }}>{name || user?.email?.split('@')[0]}</Text>
       <Text style={{ color: c.textMuted, fontSize: 13 }}>{user?.email ?? ''}</Text>
+      <Badge tone={user?.emailVerified ? 'success' : 'warning'} label={user?.emailVerified ? t('profile.email.verified') : t('profile.email.unverified')} />
+      <Button size="sm" variant="secondary" label={t('profile.edit')} onPress={() => router.push('/onboarding')} />
     </View>
   );
 
@@ -142,7 +273,7 @@ export default function ProfileScreen() {
         <SummaryRow c={c} label={t('profile.kyc.languagesRow')} value={langLine} />
         <SummaryRow c={c} label={t('profile.kyc.goalsRow')} value={`${goals.length} ${t('profile.kyc.goalsN')}`} />
       </View>
-      <Button label={t('profile.kyc.verify')} variant="secondary" icon="→" onPress={() => router.push('/onboarding')} />
+      <Button label={t('profile.edit')} variant="secondary" icon="→" onPress={() => router.push('/onboarding')} />
     </Card>
   );
 
@@ -156,6 +287,8 @@ export default function ProfileScreen() {
         <PageHeader title={t('profile.title')} description={t('profile.intro')} />
 
         {partial ? <SmartState state="partial" detail={t('profile.partial')} /> : null}
+        {settingsError ? <Alert tone="error" title={settingsError} detail={t('profile.settings.preserved')} /> : null}
+        {avatarError ? <Alert tone="error" title={avatarError} detail={t('profile.avatar.preserved')} /> : null}
 
         <ResponsiveSplit
           secondaryWidth={400}
@@ -170,11 +303,9 @@ export default function ProfileScreen() {
 
               <Section title={t('profile.section.personalization')} description={t('profile.section.personalizationDetail')}>
                 <View style={{ gap: 12 }}>
-                  <TeacherConfig
-                    tone={teacher.tone}
-                    explanations={teacher.explanations}
-                    onTone={(value: NonNullable<KycTeacher['tone']>) => patch('teacher', { tone: value })}
-                    onExplanations={(value: NonNullable<KycTeacher['explanations']>) => patch('teacher', { explanations: value })}
+                  <AdaptiveTeacherConfig
+                    value={teacher}
+                    onChange={(value) => void patch('teacher', value)}
                   />
                   <BrainProfilePreview
                     totalConcepts={twin?.summary.totalConcepts ?? null}
@@ -239,6 +370,37 @@ export default function ProfileScreen() {
             </View>
           )}
         />
+
+        <Sheet visible={avatarCameraOpen} onClose={() => { if (!busy) setAvatarCameraOpen(false); }} title={t('profile.card.photo')}>
+          <CameraCapture
+            mode="avatar"
+            onCapture={editCapturedAvatar}
+            onCancel={() => setAvatarCameraOpen(false)}
+            onImport={() => { setAvatarCameraOpen(false); void onPick('gallery'); }}
+          />
+        </Sheet>
+
+        <Sheet visible={Boolean(avatarDraft)} onClose={() => { if (!busy) setAvatarDraft(null); }} title={t('profile.avatar.editorTitle')}>
+          {avatarDraft ? (
+            <View style={{ gap: 12 }}>
+              <View style={{ width: 260, height: 260, maxWidth: '100%', borderRadius: 999, overflow: 'hidden', alignSelf: 'center', backgroundColor: c.surfaceSunken }}>
+                <Image
+                  source={{ uri: avatarDraft.uri }}
+                  resizeMode="cover"
+                  style={{ width: '100%', height: '100%', transform: [{ scale: avatarZoom }, { rotate: `${avatarRotation}deg` }] }}
+                />
+              </View>
+              <Text style={{ color: c.textMuted, textAlign: 'center' }}>{t('profile.avatar.editorDetail')}</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+                <Button size="sm" variant="secondary" label={t('profile.avatar.rotate')} onPress={() => setAvatarRotation((value) => ((value + 90) % 360) as 0 | 90 | 180 | 270)} />
+                <Button size="sm" variant="secondary" label={t('profile.avatar.zoomOut')} disabled={avatarZoom <= 1} onPress={() => setAvatarZoom((value) => Math.max(1, Number((value - 0.1).toFixed(1))))} />
+                <Button size="sm" variant="secondary" label={t('profile.avatar.zoomIn')} disabled={avatarZoom >= 1.5} onPress={() => setAvatarZoom((value) => Math.min(1.5, Number((value + 0.1).toFixed(1))))} />
+              </View>
+              <Button label={t('profile.avatar.confirm')} loading={busy} onPress={() => void storeCapturedAvatar()} />
+              <Button variant="ghost" label={t('learn5.cancel')} disabled={busy} onPress={() => setAvatarDraft(null)} />
+            </View>
+          ) : null}
+        </Sheet>
 
         <Text style={{ color: c.textMuted, fontSize: 12, textAlign: 'center' }}>{t('profile.footer')}</Text>
       </Page>

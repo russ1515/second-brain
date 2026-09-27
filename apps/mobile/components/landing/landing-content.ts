@@ -147,7 +147,7 @@ export interface PublicLanguageOption {
   code: SupportedLanguageCode;
   nativeName: string;
   displayName: string;
-  symbol: string;
+  flagRegion: string;
   rtl: boolean;
 }
 
@@ -165,7 +165,7 @@ export function publicLanguageOptions(locale: string): PublicLanguageOption[] {
       code,
       nativeName: meta.name,
       displayName: displayNames?.of(code) ?? meta.englishName,
-      symbol: meta.neutralIcon ? '◉' : meta.flag,
+      flagRegion: meta.flagRegion,
       rtl: Boolean(meta.rtl),
     };
   });

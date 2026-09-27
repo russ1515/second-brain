@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -13,6 +14,7 @@ import {
   type AuthUser,
   type LoginResponse,
   type OnboardingState,
+  type SupportedLanguageCode,
 } from '@second-brain/shared';
 import { ApiError, api } from './client';
 import {
@@ -38,7 +40,12 @@ interface AuthState {
   /** Re-check onboarding status — called after the flow completes. */
   refreshOnboarding: () => Promise<void>;
   retry: () => void;
-  register: (email: string, password: string, displayName?: string) => Promise<void>;
+  register: (
+    email: string,
+    password: string,
+    displayName?: string,
+    preferredLanguage?: SupportedLanguageCode,
+  ) => Promise<void>;
   /** Confirm the signed-in user's registration email and refresh local identity. */
   verifyEmailOtp: (code: string) => Promise<void>;
   /** Sign in. Returns a 2FA challenge instead of throwing when the account has
@@ -46,6 +53,8 @@ interface AuthState {
   login: (email: string, password: string) => Promise<LoginOutcome>;
   /** Complete a 2FA challenge with a TOTP or recovery code. */
   verifyTwoFactor: (challengeToken: string, code: string) => Promise<void>;
+  /** Persist the account-scoped UI locale through the existing auth contract. */
+  setInterfaceLanguage: (locale: SupportedLanguageCode) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -59,11 +68,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [offline, setOffline] = useState(false);
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // Locale PATCHes are serialized so the server observes user choices in the
+  // same order. The sequence gate also prevents a stale response from
+  // replacing the latest account identity or its cached copy.
+  const localeWriteSequence = useRef(0);
+  const localeWriteQueue = useRef<Promise<void>>(Promise.resolve());
 
   const retry = useCallback(() => setAttempt((a) => a + 1), []);
 
   /** Read onboarding status AND refresh the in-memory user. Completing the KYC
-   *  updates the Profile server-side (display name, preferred language); without
+   *  updates the Profile server-side (display name, explanation language); without
    *  re-reading `/auth/me` the dashboard would greet the learner with their
    *  register-time name until a reload. Both run in parallel; the user refetch
    *  is best-effort so a hiccup there never affects the onboarding gate. On any
@@ -129,6 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [attempt]);
 
   const accept = useCallback(async (res: AuthResponse) => {
+    localeWriteSequence.current += 1;
     await saveSession({
       accessToken: res.tokens.accessToken,
       refreshToken: res.tokens.refreshToken,
@@ -138,11 +153,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const register = useCallback(
-    async (email: string, password: string, displayName?: string) => {
+    async (
+      email: string,
+      password: string,
+      displayName?: string,
+      preferredLanguage?: SupportedLanguageCode,
+    ) => {
       const res = await api<AuthResponse>('/auth/register', {
         method: 'POST',
         anonymous: true,
-        body: { email, password, ...(displayName ? { displayName } : {}) },
+        body: {
+          email,
+          password,
+          ...(displayName ? { displayName } : {}),
+          ...(preferredLanguage ? { preferredLanguage } : {}),
+        },
       });
       await accept(res);
       // A brand-new account has not done the KYC yet.
@@ -194,7 +219,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [accept, refreshOnboarding],
   );
 
+  const setInterfaceLanguage = useCallback((locale: SupportedLanguageCode) => {
+    const sequence = ++localeWriteSequence.current;
+    const operation = localeWriteQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        // A queued write can become obsolete after another locale choice,
+        // login or logout. Do not send it with a newer session's credentials.
+        if (sequence !== localeWriteSequence.current) return;
+        const updated = await api<AuthUser>('/auth/locale', {
+          method: 'PATCH',
+          body: { locale },
+        });
+        if (sequence !== localeWriteSequence.current) return;
+        setUser((current) => current?.id === updated.id ? updated : current);
+        await saveCachedAuthUser(updated);
+      });
+    localeWriteQueue.current = operation.catch(() => undefined);
+    return operation;
+  }, []);
+
   const logout = useCallback(async () => {
+    localeWriteSequence.current += 1;
     const session = await loadSession();
     if (session) {
       await api('/auth/logout', {
@@ -221,9 +267,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       verifyEmailOtp,
       login,
       verifyTwoFactor,
+      setInterfaceLanguage,
       logout,
     }),
-    [user, loading, offline, onboarded, refreshOnboarding, retry, register, verifyEmailOtp, login, verifyTwoFactor, logout],
+    [user, loading, offline, onboarded, refreshOnboarding, retry, register, verifyEmailOtp, login, verifyTwoFactor, setInterfaceLanguage, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

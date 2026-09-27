@@ -4,14 +4,15 @@ import type { PrismaService } from '../prisma/prisma.service';
 /**
  * Global Learning Locale (scalable i18n — drives the AI Professor's language).
  *
- * `Profile.preferredLanguage` is the SINGLE SOURCE OF TRUTH for the language of
- * everything Second Brain shows a given user: UI, and — crucially — every piece
- * of content the AI generates. No generator picks its own language; each reads
- * this locale and is told to produce output DIRECTLY in it (never translate).
+ * `Profile.preferredLanguage` is the source of truth for the language of
+ * general pedagogical explanations and AI-generated learning content. It is
+ * intentionally distinct from the UI locale stored in the evolution-safe
+ * onboarding `extra.interfaceLanguage` envelope. No generator picks its own
+ * language; each reads this locale and produces output directly in it.
  * The set of languages comes from the shared registry (25+), so adding one is a
  * single entry there — this engine never changes.
  *
- * The one exception is language-LEARNING content, where the target language (and
+ * Language-learning content is also separate: the target language (and
  * the immersion / code-switching rules) governs the pedagogical text. That path
  * does not use `localeDirective`; it uses the language engine's own rules.
  */

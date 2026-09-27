@@ -9,11 +9,12 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, type User } from '@prisma/client';
 import * as argon2 from 'argon2';
-import type {
-  AuthResponse,
-  AuthTokens,
-  AuthUser,
-  TwoFactorChallenge,
+import {
+  toSupportedLanguage,
+  type AuthResponse,
+  type AuthTokens,
+  type AuthUser,
+  type TwoFactorChallenge,
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { ARGON2_OPTIONS } from './argon2.options';
@@ -32,6 +33,10 @@ import {
 
 /** Identity claims needed to sign an access token. */
 type AccessSubject = Pick<User, 'id' | 'email'>;
+type AuthIdentity = User & {
+  profile?: { displayName?: string | null; preferredLanguage: string | null } | null;
+  onboardingProfile?: { extra: Prisma.JsonValue | null } | null;
+};
 
 @Injectable()
 export class AuthService {
@@ -47,6 +52,9 @@ export class AuthService {
   /** Create a new user (+ profile) and issue an initial token pair. */
   async register(dto: RegisterDto, ctx: SessionContext = {}): Promise<AuthResponse> {
     const email = this.normalizeEmail(dto.email);
+    // The DTO canonicalizes legacy/BCP 47 variants. Normalize once more here
+    // because this service is also called directly by unit and integration code.
+    const preferredLanguage = toSupportedLanguage(dto.preferredLanguage) ?? 'en';
     // Fail before password hashing, email issuance, user creation or session
     // creation when the private staging registration allowlist is active.
     this.privateBeta.assertRegistrationAllowed(email);
@@ -59,7 +67,16 @@ export class AuthService {
           email,
           passwordHash,
           profile: {
-            create: { displayName: dto.displayName ?? null },
+            create: {
+              displayName: dto.displayName ?? null,
+              preferredLanguage,
+            },
+          },
+          // The onboarding JSON envelope is explicitly evolution-safe. Keep
+          // the UI locale here so later menu changes never rewrite the
+          // pedagogical explanation locale in Profile.preferredLanguage.
+          onboardingProfile: {
+            create: { extra: { interfaceLanguage: preferredLanguage } },
           },
         },
       });
@@ -79,7 +96,15 @@ export class AuthService {
     await this.emailOtp.issue(user, 'email_verify');
 
     const tokens = await this.issueTokens(user, ctx);
-    return { user: this.toAuthUser(user, dto.displayName ?? null), tokens };
+    return {
+      user: this.toAuthUser(
+        user,
+        dto.displayName ?? null,
+        preferredLanguage,
+        preferredLanguage,
+      ),
+      tokens,
+    };
   }
 
   /** Confirm a signed-in user's email with the 6-digit OTP that was mailed on
@@ -89,7 +114,7 @@ export class AuthService {
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: { emailVerified: true },
-      include: { profile: true },
+      include: { profile: true, onboardingProfile: { select: { extra: true } } },
     });
     return this.toAuthUser(user, user.profile?.displayName ?? null);
   }
@@ -134,7 +159,11 @@ export class AuthService {
     const email = this.normalizeEmail(dto.email);
     const user = await this.prisma.user.findUnique({
       where: { email },
-      include: { profile: true, adminRoleAssignments: { where: { revokedAt: null }, select: { id: true } } },
+      include: {
+        profile: true,
+        onboardingProfile: { select: { extra: true } },
+        adminRoleAssignments: { where: { revokedAt: null }, select: { id: true } },
+      },
     });
 
     // Generic failure — never reveal whether the email exists.
@@ -183,7 +212,7 @@ export class AuthService {
   /** Build the full authenticated response (user + fresh tokens). Public so the
    *  2FA-verify flow can complete a login once the second factor is confirmed. */
   async issueLoginResponse(
-    user: User,
+    user: AuthIdentity,
     displayName: string | null,
     ctx: SessionContext = {},
     mfaVerified = false,
@@ -227,7 +256,7 @@ export class AuthService {
   async me(userId: string): Promise<AuthUser> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { profile: true },
+      include: { profile: true, onboardingProfile: { select: { extra: true } } },
     });
     if (!user) {
       // Token was valid but the account is gone.
@@ -237,13 +266,24 @@ export class AuthService {
     return this.toAuthUser(user, user.profile?.displayName ?? null);
   }
 
-  /** Set the learner's Learning Locale (single source of truth for UI + all
-   *  AI-generated content). Upserts the profile so it works before onboarding. */
+  /** Set only the account-scoped interface locale. The pedagogical explanation
+   * locale remains Profile.preferredLanguage and studied languages remain in
+   * LanguageProfile. No schema migration is needed because `extra` is the
+   * documented evolution-safe onboarding envelope. */
   async setLocale(userId: string, locale: string): Promise<AuthUser> {
-    await this.prisma.profile.upsert({
-      where: { userId },
-      create: { userId, preferredLanguage: locale },
-      update: { preferredLanguage: locale },
+    await this.prisma.$transaction(async (tx) => {
+      const lockKey = `onboarding-profile:${userId}`;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const existing = await tx.onboardingProfile.findUnique({
+        where: { userId },
+        select: { extra: true },
+      });
+      const extra = this.jsonObject(existing?.extra);
+      await tx.onboardingProfile.upsert({
+        where: { userId },
+        create: { userId, extra: { ...extra, interfaceLanguage: locale } },
+        update: { extra: { ...extra, interfaceLanguage: locale } },
+      });
     });
     return this.me(userId);
   }
@@ -261,65 +301,110 @@ export class AuthService {
       throw invalid;
     }
 
-    const session = await this.prisma.session.findUnique({
-      where: { id: parsed.sessionId },
-      include: { user: true },
+    const rotated = await this.prisma.$transaction(async (tx) => {
+      // Serialize every presentation of one refresh credential across API
+      // replicas. Without this row lock two concurrent requests can both verify
+      // the same secret before either revokes it and mint two descendants.
+      await tx.$queryRaw(
+        Prisma.sql`SELECT "id" FROM "sessions" WHERE "id" = ${parsed.sessionId} FOR UPDATE`,
+      );
+      const session = await tx.session.findUnique({
+        where: { id: parsed.sessionId },
+        include: { user: true },
+      });
+      if (!session || !(await argon2.verify(session.refreshTokenHash, parsed.secret))) {
+        throw invalid;
+      }
+      if (session.revokedAt) {
+        return { kind: 'reuse' as const, userId: session.userId };
+      }
+      if (session.expiresAt.getTime() <= Date.now()) throw invalid;
+
+      this.assertAccountActive(session.user);
+      try {
+        await this.privateBeta.assertNormalAccess(session.user.id, session.user.emailVerified);
+      } catch {
+        throw invalid;
+      }
+
+      const refreshTtl = this.config.getOrThrow<number>('auth.refreshTtl');
+      const { secret, hash } = await this.mintRefreshSecret();
+      await tx.session.update({
+        where: { id: session.id },
+        data: { revokedAt: new Date() },
+      });
+      const newSession = await tx.session.create({
+        data: {
+          userId: session.user.id,
+          refreshTokenHash: hash,
+          expiresAt: new Date(Date.now() + refreshTtl * 1000),
+          userAgent: ctx.userAgent ?? null,
+          ipAddress: ctx.ipAddress ?? null,
+          mfaVerifiedAt: session.mfaVerifiedAt,
+        },
+      });
+      return { kind: 'rotated' as const, user: session.user, session: newSession, secret };
     });
-    if (!session) {
-      throw invalid;
-    }
 
-    // Verify the secret against the stored hash before trusting the token at all.
-    const secretOk = await argon2.verify(session.refreshTokenHash, parsed.secret);
-    if (!secretOk) {
-      throw invalid;
-    }
-
-    // A valid secret for a revoked session means the token was already rotated
-    // or logged out — i.e. replayed. Revoke the whole family defensively.
-    if (session.revokedAt) {
-      await this.revokeAllSessions(session.userId);
+    if (rotated.kind === 'reuse') {
+      await this.revokeAllSessions(rotated.userId);
       throw new UnauthorizedException(
         'Refresh token reuse detected — all sessions have been revoked.',
       );
     }
-
-    if (session.expiresAt.getTime() <= Date.now()) {
-      throw invalid;
-    }
-
-    this.assertAccountActive(session.user);
-    try {
-      await this.privateBeta.assertNormalAccess(session.user.id, session.user.emailVerified);
-    } catch {
-      // Do not reveal private-beta state through the refresh credential.
-      throw invalid;
-    }
-
-    return this.rotate(session.id, session.user, ctx, session.mfaVerifiedAt);
+    const { token, expiresIn } = await this.signAccessToken(
+      rotated.user,
+      rotated.session.id,
+      rotated.session.mfaVerifiedAt,
+    );
+    return {
+      accessToken: token,
+      refreshToken: `${rotated.session.id}.${rotated.secret}`,
+      tokenType: 'Bearer',
+      expiresIn,
+    };
   }
 
-  /** Revoke the single session tied to a refresh token. Idempotent and silent —
-   *  a malformed/unknown/already-revoked token is a no-op so logout never leaks
-   *  whether a token was valid. */
+  /** Revoke the session tied to a refresh token. Idempotent and silent so
+   * logout never leaks token validity. If rotation won concurrently, revoke
+   * active descendants conservatively because the current schema has no
+   * explicit refresh-token lineage. */
   async logout(refreshToken: string): Promise<void> {
     const parsed = this.parseRefreshToken(refreshToken);
     if (!parsed) {
       return;
     }
-    const session = await this.prisma.session.findUnique({
-      where: { id: parsed.sessionId },
-    });
-    if (!session || session.revokedAt) {
-      return;
-    }
-    const secretOk = await argon2.verify(session.refreshTokenHash, parsed.secret);
-    if (!secretOk) {
-      return;
-    }
-    await this.prisma.session.update({
-      where: { id: session.id },
-      data: { revokedAt: new Date() },
+    await this.prisma.$transaction(async (tx) => {
+      // Use the same row lock as refresh rotation. If refresh wins, this read
+      // observes the old row as revoked and the freshly-created descendant.
+      // With no lineage column in the current schema, revoking every still-
+      // active session for that user is the only fail-closed way to ensure the
+      // rotated credential cannot survive logout. This does not grant a new
+      // capability to a stolen old token: presenting it to refresh already
+      // triggers the same all-sessions reuse response.
+      await tx.$queryRaw(
+        Prisma.sql`SELECT "id" FROM "sessions" WHERE "id" = ${parsed.sessionId} FOR UPDATE`,
+      );
+      const session = await tx.session.findUnique({
+        where: { id: parsed.sessionId },
+      });
+      if (!session) return;
+
+      const secretOk = await argon2.verify(session.refreshTokenHash, parsed.secret);
+      if (!secretOk) return;
+
+      const now = new Date();
+      if (session.revokedAt) {
+        await tx.session.updateMany({
+          where: { userId: session.userId, revokedAt: null },
+          data: { revokedAt: now },
+        });
+        return;
+      }
+      await tx.session.update({
+        where: { id: session.id },
+        data: { revokedAt: now },
+      });
     });
   }
 
@@ -480,12 +565,33 @@ export class AuthService {
     return { secret, hash };
   }
 
-  private toAuthUser(user: User, displayName: string | null): AuthUser {
+  private toAuthUser(
+    user: AuthIdentity,
+    displayName: string | null,
+    preferredLanguage: string | null | undefined = user.profile?.preferredLanguage,
+    interfaceLanguage: string | null | undefined = this.interfaceLanguage(user),
+  ): AuthUser {
     return {
       id: user.id,
       email: user.email,
       emailVerified: user.emailVerified,
       displayName: displayName ?? undefined,
+      interfaceLanguage:
+        toSupportedLanguage(interfaceLanguage) ??
+        toSupportedLanguage(preferredLanguage) ??
+        'en',
+      preferredLanguage: toSupportedLanguage(preferredLanguage) ?? 'en',
     };
+  }
+
+  private interfaceLanguage(user: AuthIdentity): string | undefined {
+    const value = this.jsonObject(user.onboardingProfile?.extra).interfaceLanguage;
+    return typeof value === 'string' ? value : undefined;
+  }
+
+  private jsonObject(value: Prisma.JsonValue | null | undefined): Prisma.JsonObject {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Prisma.JsonObject
+      : {};
   }
 }

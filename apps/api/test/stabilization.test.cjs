@@ -213,6 +213,7 @@ test('tutor: subject inference is local and provider failures release quota', as
       release: async () => { released += 1; },
     },
     {
+      findByTutorSession: async () => null,
       ensureTutorSession: async () => ({
         id: 'e1', currentStep: null,
         activeContexts: { version: 1, ownerUserId: 'u1', capturedAt: now.toISOString(), items: [] },
@@ -346,7 +347,9 @@ test('privacy: export covers domain data without selecting authentication secret
       return delegates.get(model);
     },
   });
-  const result = await new PrivacyService(prisma, {}).exportData('u1');
+  const result = await new PrivacyService(prisma, {}, {
+    exportUserMedia: async () => ({ avatar: null, scans: [] }),
+  }).exportData('u1');
   assert.ok(Object.hasOwn(result.data, 'documentChunks'));
   assert.ok(Object.hasOwn(result.data, 'learningDna'));
   assert.ok(Object.hasOwn(result.data, 'groupMemberships'));
@@ -358,20 +361,49 @@ test('privacy: export covers domain data without selecting authentication secret
 test('privacy: Qdrant failure prevents relational account deletion', async () => {
   const passwordHash = await argon2.hash('controlled-password');
   let sqlDeleted = false;
+  let accountStatus = 'active';
+  let updatedAt = new Date('2026-09-27T10:00:00.000Z');
   const service = new PrivacyService(
     {
       user: {
         findUnique: async () => ({ passwordHash }),
         delete: async () => { sqlDeleted = true; },
       },
+      $transaction: async (operation) => operation({
+        $queryRaw: async () => undefined,
+        accountDeletionRequest: { findFirst: async () => null },
+        user: {
+          findUnique: async () => ({
+            id: 'controlled-user',
+            accountStatus,
+            updatedAt,
+          }),
+          findFirst: async ({ where }) => (
+            where.accountStatus === accountStatus && where.updatedAt.getTime() === updatedAt.getTime()
+              ? { id: 'controlled-user' }
+              : null
+          ),
+          update: async ({ data }) => {
+            accountStatus = data.accountStatus;
+            updatedAt = new Date('2026-09-27T10:01:00.000Z');
+            return { updatedAt };
+          },
+          updateMany: async ({ data }) => {
+            accountStatus = data.accountStatus;
+            return { count: 1 };
+          },
+        },
+      }),
     },
     { deleteByUser: async () => { throw new Error('qdrant unavailable'); } },
+    {},
   );
   await assert.rejects(
     service.deleteAccount('controlled-user', 'controlled-password'),
     (error) => error instanceof ServiceUnavailableException,
   );
   assert.equal(sqlDeleted, false);
+  assert.equal(accountStatus, 'active');
 });
 
 test('privacy: Qdrant erasure uses the owner filter before SQL deletion', async () => {

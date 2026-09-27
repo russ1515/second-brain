@@ -1,9 +1,9 @@
 import { IsIn } from 'class-validator';
 import { SUPPORTED_LANGUAGE_CODES } from '@second-brain/shared';
 
-/** Learning Locale codes Second Brain supports (the shared 25+ registry). The UI
- *  ships full translations for some and falls back to English for the rest, but
- *  the AI Professor teaches in ANY of them — so all are accepted here. */
+/** Locale codes Second Brain supports (the shared registry). The learner UI
+ * only offers codes backed by a concrete catalog; the API still validates
+ * against the complete cross-product registry used by learning experiences. */
 export const SUPPORTED_LOCALES = SUPPORTED_LANGUAGE_CODES;
 
 export class SetLocaleDto {
