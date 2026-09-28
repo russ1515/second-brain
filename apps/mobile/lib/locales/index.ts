@@ -35,6 +35,13 @@ import './fi'; // Finnish
 import './id'; // Indonesian
 import './no'; // Norwegian Bokmål (`nb`; legacy file name)
 import './uk'; // Ukrainian
+import './ln'; // Lingala
+import './sw'; // Swahili
+import './wo'; // Wolof
+import './ha'; // Hausa
+import './he'; // Hebrew
+import './zh-Hant'; // Traditional Chinese
+import './bn'; // Bengali
 
 // Reviewed essentials are layered last so generated catalogs can be refreshed
 // safely without losing the controls required to select/recover a locale.

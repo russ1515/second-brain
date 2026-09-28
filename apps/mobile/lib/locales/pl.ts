@@ -3673,7 +3673,7 @@ const pl: Record<string, string> = {
   "scan.moveAfter": "Przesuń w prawo",
   "scan.rotate": "Obróć",
   "scan.crop": "Dostosuj przycięcie",
-  "scan.perspectiveLimit": "Dostępne są ustawienia wstępne wyśrodkowanego przycięcia. Regulowane krawędzie strony i korekcja perspektywy nie są jeszcze dostępne.",
+  "scan.perspectiveLimit": "Przeciągnij cztery narożniki do krawędzi strony. Perspektywa i czytelność zostaną skorygowane podczas zapisywania.",
   "learn5.capture.photo": "Zdjęcie",
   "learn5.capture.document": "Skanuj dokument",
   "learn5.capture.qr": "Odczytaj kod QR",

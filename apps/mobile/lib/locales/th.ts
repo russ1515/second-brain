@@ -3700,7 +3700,7 @@ const th: Record<string, string> = {
   "scan.moveAfter": "เลื่อนไปทางขวา",
   "scan.rotate": "หมุน",
   "scan.crop": "ปรับการครอบตัด",
-  "scan.perspectiveLimit": "มีค่าครอบตัดกึ่งกลางสำเร็จรูปให้ใช้ แต่ยังไม่สามารถปรับขอบหน้าและแก้ไขมุมมองเพอร์สเปกทีฟได้",
+  "scan.perspectiveLimit": "ลากมุมทั้งสี่ไปยังขอบหน้า ระบบจะแก้ไขมุมมองเพอร์สเปกทีฟและความชัดเจนเมื่อคุณบันทึก",
   "learn5.capture.photo": "รูปภาพ",
   "learn5.capture.document": "สแกนเอกสาร",
   "learn5.capture.qr": "อ่านคิวอาร์โค้ด",

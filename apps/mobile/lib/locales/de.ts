@@ -3673,7 +3673,7 @@ const de: Record<string, string> = {
   "scan.moveAfter": "Nach rechts verschieben",
   "scan.rotate": "Drehen",
   "scan.crop": "Zuschnitt anpassen",
-  "scan.perspectiveLimit": "Voreinstellungen für einen zentrierten Zuschnitt sind verfügbar. Anpassbare Seitenränder und Perspektivkorrektur sind noch nicht verfügbar.",
+  "scan.perspectiveLimit": "Ziehe die vier Ecken bis an die Seitenränder. Perspektive und Lesbarkeit werden beim Speichern korrigiert.",
   "learn5.capture.photo": "Foto",
   "learn5.capture.document": "Dokument scannen",
   "learn5.capture.qr": "QR-Code lesen",

@@ -3673,7 +3673,7 @@ const ko: Record<string, string> = {
   "scan.moveAfter": "오른쪽으로 이동",
   "scan.rotate": "회전",
   "scan.crop": "자르기 조정",
-  "scan.perspectiveLimit": "가운데 맞춤 자르기 사전 설정을 사용할 수 있습니다. 페이지 가장자리 직접 조정과 원근 보정은 아직 지원되지 않습니다.",
+  "scan.perspectiveLimit": "네 모서리를 페이지 가장자리로 드래그하세요. 저장할 때 원근과 가독성이 보정됩니다.",
   "learn5.capture.photo": "사진",
   "learn5.capture.document": "문서 스캔",
   "learn5.capture.qr": "QR 코드 읽기",

@@ -3672,7 +3672,7 @@ const it: Record<string, string> = {
   "scan.moveAfter": "Sposta a destra",
   "scan.rotate": "Ruota",
   "scan.crop": "Regola il ritaglio",
-  "scan.perspectiveLimit": "Sono disponibili ritagli predefiniti centrati. I bordi della pagina regolabili e la correzione della prospettiva non sono ancora disponibili.",
+  "scan.perspectiveLimit": "Trascina i quattro angoli fino ai bordi della pagina. Le correzioni della prospettiva e della leggibilità vengono applicate al salvataggio.",
   "learn5.capture.photo": "Foto",
   "learn5.capture.document": "Scansiona un documento",
   "learn5.capture.qr": "Leggi un codice QR",

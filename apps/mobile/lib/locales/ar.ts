@@ -3673,7 +3673,7 @@ const ar: Record<string, string> = {
   "scan.moveAfter": "تحريك إلى اليمين",
   "scan.rotate": "تدوير",
   "scan.crop": "ضبط الاقتصاص",
-  "scan.perspectiveLimit": "تتوفر إعدادات اقتصاص مسبقة في المنتصف. ولا يتوفر بعد ضبط حواف الصفحة أو تصحيح المنظور.",
+  "scan.perspectiveLimit": "اسحب الزوايا الأربع إلى حواف الصفحة. تُصحَّح المنظورية وقابلية القراءة عند الحفظ.",
   "learn5.capture.photo": "صورة",
   "learn5.capture.document": "مسح مستند",
   "learn5.capture.qr": "قراءة رمز QR",

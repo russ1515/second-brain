@@ -3700,7 +3700,7 @@ const tr: Record<string, string> = {
   "scan.moveAfter": "Sağa taşı",
   "scan.rotate": "Döndür",
   "scan.crop": "Kırpmayı ayarla",
-  "scan.perspectiveLimit": "Ortalanmış kırpma ön ayarları kullanılabilir. Ayarlanabilir sayfa kenarları ve perspektif düzeltme henüz kullanılamıyor.",
+  "scan.perspectiveLimit": "Dört köşeyi sayfanın kenarlarına sürükleyin. Kaydederken perspektif ve okunabilirlik düzeltilir.",
   "learn5.capture.photo": "Fotoğraf",
   "learn5.capture.document": "Belge tara",
   "learn5.capture.qr": "QR kodu oku",

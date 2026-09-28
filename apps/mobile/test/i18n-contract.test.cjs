@@ -160,13 +160,13 @@ function effectiveCatalog(resource) {
 test('the UI registry exposes 34 unique targets without fake empty runtime resources', () => {
   assert.equal(supported.size, 34);
   const resourceCodes = new Set(['en', 'fr', ...localeResources.map(({ code }) => code)]);
-  assert.equal(resourceCodes.size, 27);
+  assert.equal(resourceCodes.size, 34);
   assert.ok(resourceCodes.has('nb'));
   assert.ok(!resourceCodes.has('no'));
   for (const code of resourceCodes) assert.ok(supported.has(code), `${code} is not a supported language`);
   assert.deepEqual(
     [...supported].filter((code) => !resourceCodes.has(code)).sort(),
-    ['bn', 'ha', 'he', 'ln', 'sw', 'wo', 'zh-Hant'].sort(),
+    [],
   );
 
   const barrel = fs.readFileSync(path.join(LOCALES_DIR, 'index.ts'), 'utf8');
@@ -186,7 +186,7 @@ test('UI selectors expose only complete catalogs while learning selectors keep a
   assert.match(languagesScreen, /value=\{nativeCode\}[\s\S]{0,100}mode=['\"]learning['\"]/);
 });
 
-test('all 27 established UI catalogs are complete before the seven new resources are exposed', () => {
+test('all 34 UI catalogs are complete and exposed', () => {
   const complete = ['en', 'fr'];
   for (const resource of localeResources) {
     const translations = effectiveCatalog(resource);
@@ -200,7 +200,7 @@ test('all 27 established UI catalogs are complete before the seven new resources
     [
       'en', 'fr', 'es', 'de', 'it', 'pt', 'nl', 'pl', 'ru', 'zh', 'ja', 'ko',
       'ar', 'hi', 'tr', 'nb', 'sv', 'vi', 'th', 'el', 'cs', 'ro', 'hu', 'da',
-      'fi', 'id', 'uk',
+      'fi', 'id', 'uk', 'ln', 'sw', 'wo', 'ha', 'he', 'zh-Hant', 'bn',
     ].sort(),
   );
 });

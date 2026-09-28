@@ -3673,7 +3673,7 @@ const zh: Record<string, string> = {
   "scan.moveAfter": "向右移动",
   "scan.rotate": "旋转",
   "scan.crop": "调整裁剪",
-  "scan.perspectiveLimit": "目前可使用居中裁剪预设。可调页边和透视校正功能尚不可用。",
+  "scan.perspectiveLimit": "将四个角拖到页面边缘。保存时会应用透视和可读性校正。",
   "learn5.capture.photo": "照片",
   "learn5.capture.document": "扫描文档",
   "learn5.capture.qr": "读取二维码",

@@ -3720,7 +3720,7 @@ const ja: Record<string, string> = {
   "scan.moveAfter": "右へ移動",
   "scan.rotate": "回転",
   "scan.crop": "切り抜きを調整",
-  "scan.perspectiveLimit": "中央を基準にした切り抜きプリセットを利用できます。ページの各辺を個別に調整する機能と遠近補正は、まだ利用できません。",
+  "scan.perspectiveLimit": "4つの角をページの端までドラッグしてください。保存時に遠近感と読みやすさが補正されます。",
 };
 
 registerLocale('ja', "日本語", ja);

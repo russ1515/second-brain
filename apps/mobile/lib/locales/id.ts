@@ -3700,7 +3700,7 @@ const id: Record<string, string> = {
   ,"scan.moveAfter": "Geser ke kanan"
   ,"scan.rotate": "Putar"
   ,"scan.crop": "Sesuaikan potongan"
-  ,"scan.perspectiveLimit": "Preset pemotongan terpusat tersedia. Tepi halaman yang dapat disesuaikan dan koreksi perspektif belum tersedia."
+  ,"scan.perspectiveLimit": "Seret keempat sudut ke tepi halaman. Perspektif dan keterbacaan diperbaiki saat Anda menyimpan."
   ,"learn5.capture.photo": "Foto"
   ,"learn5.capture.document": "Pindai dokumen"
   ,"learn5.capture.qr": "Baca kode QR"

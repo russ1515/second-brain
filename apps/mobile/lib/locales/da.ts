@@ -3700,7 +3700,7 @@ const da: Record<string, string> = {
   ,"scan.moveAfter": "Flytt til høyre"
   ,"scan.rotate": "Roter"
   ,"scan.crop": "Juster beskjæring"
-  ,"scan.perspectiveLimit": "Forhåndsinnstillinger for sentrert beskjæring er tilgængelige. Justerbare sidekanter og perspektivkorrigering er ennå ikke tilgængelige."
+  ,"scan.perspectiveLimit": "Træk de fire hjørner til sidens kanter. Perspektiv og læsbarhed korrigeres, når du gemmer."
   ,"learn5.capture.photo": "Bilde"
   ,"learn5.capture.document": "Skann et dokument"
   ,"learn5.capture.qr": "Les en QR-kode"

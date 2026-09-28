@@ -3673,7 +3673,7 @@ const hi: Record<string, string> = {
   "scan.moveAfter": "दाईं ओर ले जाएँ",
   "scan.rotate": "घुमाएँ",
   "scan.crop": "क्रॉप समायोजित करें",
-  "scan.perspectiveLimit": "केंद्रित क्रॉप प्रीसेट उपलब्ध हैं। पेज के किनारों को समायोजित करना और परिप्रेक्ष्य सुधार अभी उपलब्ध नहीं हैं।",
+  "scan.perspectiveLimit": "चारों कोनों को पेज के किनारों तक खींचें। सेव करते समय परिप्रेक्ष्य और पठनीयता ठीक की जाती है।",
   "learn5.capture.photo": "फ़ोटो",
   "learn5.capture.document": "दस्तावेज़ स्कैन करें",
   "learn5.capture.qr": "QR कोड पढ़ें",

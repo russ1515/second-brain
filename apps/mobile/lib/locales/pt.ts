@@ -3672,7 +3672,7 @@ const pt: Record<string, string> = {
   "scan.moveAfter": "Mover para a direita",
   "scan.rotate": "Girar",
   "scan.crop": "Ajustar corte",
-  "scan.perspectiveLimit": "Há predefinições de corte centralizado disponíveis. Bordas de página ajustáveis e correção de perspectiva ainda não estão disponíveis.",
+  "scan.perspectiveLimit": "Arraste os quatro cantos até às margens da página. As correções de perspetiva e legibilidade são aplicadas ao guardar.",
   "learn5.capture.photo": "Foto",
   "learn5.capture.document": "Escanear um documento",
   "learn5.capture.qr": "Ler um código QR",

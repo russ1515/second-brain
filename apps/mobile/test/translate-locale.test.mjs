@@ -92,7 +92,7 @@ test('translation dry-run derives current catalog totals without a provider requ
   assert.equal(fs.existsSync(manifestPath), false);
 });
 
-test('catalog planning supports legacy filenames, missing resources and BCP 47 scripts', () => {
+test('catalog planning supports legacy filenames, complete resources and BCP 47 scripts', () => {
   const norwegian = localeCatalogDescriptor('nb');
   assert.equal(path.basename(norwegian.file), 'no.ts');
   assert.equal(norwegian.variableName, 'no');
@@ -103,10 +103,10 @@ test('catalog planning supports legacy filenames, missing resources and BCP 47 s
 
   const plan = buildPlan(['ln', 'zh-Hant'], 60);
   for (const locale of plan.locales) {
-    assert.equal(locale.baseKeyCount, 0);
-    assert.equal(locale.effectiveKeyCount, 0);
-    assert.equal(locale.missingKeyCount, plan.sourceKeyCount);
-    assert.equal(locale.persistedFileChecksum, null);
+    assert.equal(locale.baseKeyCount, plan.sourceKeyCount);
+    assert.equal(locale.effectiveKeyCount, plan.sourceKeyCount);
+    assert.equal(locale.missingKeyCount, 0);
+    assert.match(locale.persistedFileChecksum, /^[a-f0-9]{64}$/);
   }
 });
 

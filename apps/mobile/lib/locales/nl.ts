@@ -3673,7 +3673,7 @@ const nl: Record<string, string> = {
   "scan.moveAfter": "Naar rechts verplaatsen",
   "scan.rotate": "Draaien",
   "scan.crop": "Uitsnede aanpassen",
-  "scan.perspectiveLimit": "Voorinstellingen voor een gecentreerde uitsnede zijn beschikbaar. Aanpasbare paginaranden en perspectiefcorrectie zijn nog niet beschikbaar.",
+  "scan.perspectiveLimit": "Sleep de vier hoeken naar de paginaranden. Perspectief en leesbaarheid worden bij het opslaan gecorrigeerd.",
   "learn5.capture.photo": "Foto",
   "learn5.capture.document": "Een document scannen",
   "learn5.capture.qr": "Een QR-code lezen",

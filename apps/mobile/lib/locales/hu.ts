@@ -3700,7 +3700,7 @@ const hu: Record<string, string> = {
   "scan.moveAfter": "Mozgatás jobbra",
   "scan.rotate": "Forgatás",
   "scan.crop": "Vágás beállítása",
-  "scan.perspectiveLimit": "Középre igazított vágási beállítások érhetők el. Az állítható oldalszélek és a perspektívakorrekció még nem elérhető.",
+  "scan.perspectiveLimit": "Húzd a négy sarkot az oldal széleihez. Mentéskor a perspektíva és az olvashatóság javításra kerül.",
   "learn5.capture.photo": "Fénykép",
   "learn5.capture.document": "Dokumentum beolvasása",
   "learn5.capture.qr": "QR-kód beolvasása",

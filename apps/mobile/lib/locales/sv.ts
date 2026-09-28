@@ -3700,7 +3700,7 @@ const sv: Record<string, string> = {
   ,"scan.moveAfter": "Flytta åt höger"
   ,"scan.rotate": "Rotera"
   ,"scan.crop": "Justera beskärning"
-  ,"scan.perspectiveLimit": "Förinställda centrerade beskärningar är tillgängliga. Justerbara sidkanter och perspektivkorrigering är ännu inte tillgängliga."
+  ,"scan.perspectiveLimit": "Dra de fyra hörnen till sidans kanter. Perspektiv och läsbarhet korrigeras när du sparar."
   ,"learn5.capture.photo": "Foto"
   ,"learn5.capture.document": "Skanna ett dokument"
   ,"learn5.capture.qr": "Läs en QR-kod"

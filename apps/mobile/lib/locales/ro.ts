@@ -3700,7 +3700,7 @@ const ro: Record<string, string> = {
   "scan.moveAfter": "Mută la dreapta",
   "scan.rotate": "Rotește",
   "scan.crop": "Ajustează decuparea",
-  "scan.perspectiveLimit": "Sunt disponibile presetări de decupare centrată. Marginile ajustabile și corecția perspectivei nu sunt încă disponibile.",
+  "scan.perspectiveLimit": "Trage cele patru colțuri la marginile paginii. Perspectiva și lizibilitatea sunt corectate la salvare.",
   "learn5.capture.photo": "Fotografie",
   "learn5.capture.document": "Scanează un document",
   "learn5.capture.qr": "Citește un cod QR",

@@ -3700,7 +3700,7 @@ const vi: Record<string, string> = {
   "scan.moveAfter": "Di chuyển sang phải",
   "scan.rotate": "Xoay",
   "scan.crop": "Điều chỉnh cắt ảnh",
-  "scan.perspectiveLimit": "Có các kiểu cắt ở giữa đặt sẵn. Chưa hỗ trợ điều chỉnh cạnh trang và sửa phối cảnh.",
+  "scan.perspectiveLimit": "Kéo bốn góc tới các mép trang. Phối cảnh và độ dễ đọc sẽ được hiệu chỉnh khi bạn lưu.",
   "learn5.capture.photo": "Ảnh",
   "learn5.capture.document": "Quét tài liệu",
   "learn5.capture.qr": "Đọc mã QR",

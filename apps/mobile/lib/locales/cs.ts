@@ -3700,7 +3700,7 @@ const cs: Record<string, string> = {
   "scan.moveAfter": "Posunout doprava",
   "scan.rotate": "Otočit",
   "scan.crop": "Upravit oříznutí",
-  "scan.perspectiveLimit": "K dispozici jsou předvolby vystředěného ořezu. Nastavitelné okraje stránek a korekce perspektivy zatím nejsou dostupné.",
+  "scan.perspectiveLimit": "Přetáhněte čtyři rohy k okrajům stránky. Perspektiva a čitelnost se opraví při uložení.",
   "learn5.capture.photo": "Fotografie",
   "learn5.capture.document": "Naskenovat dokument",
   "learn5.capture.qr": "Načíst QR kód",

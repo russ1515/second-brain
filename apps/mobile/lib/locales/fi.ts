@@ -3700,7 +3700,7 @@ const fi: Record<string, string> = {
   ,"scan.moveAfter": "Siirrä oikealle"
   ,"scan.rotate": "Kierrä"
   ,"scan.crop": "Säädä rajausta"
-  ,"scan.perspectiveLimit": "Keskitetyt rajausasetukset ovat käytettävissä. Säädettävät sivun reunat ja perspektiivikorjaus eivät vielä ole."
+  ,"scan.perspectiveLimit": "Vedä neljä kulmaa sivun reunoille. Perspektiivi ja luettavuus korjataan tallennettaessa."
   ,"learn5.capture.photo": "Valokuva"
   ,"learn5.capture.document": "Skannaa asiakirja"
   ,"learn5.capture.qr": "Lue QR-koodi"
