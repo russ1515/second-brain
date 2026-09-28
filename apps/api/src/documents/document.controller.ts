@@ -37,6 +37,7 @@ import { CreateUrlDocumentDto } from './dto/create-url-document.dto';
 import { SearchDto } from './dto/search.dto';
 import { AskDto } from './dto/ask.dto';
 import type { UploadedFileLike } from './extraction/text-extraction.service';
+import { parseScanPageEdits } from '../media/scan-page-transform';
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
 /** Pages per scan. Mirrors ScanService's own cap. */
@@ -143,6 +144,7 @@ export class DocumentController {
     @CurrentUser() user: AuthenticatedUser,
     @UploadedFiles() images: UploadedFileLike[] | undefined,
     @Body('title') title?: string,
+    @Body('pageEdits') pageEdits?: string,
     @Headers('x-request-id') requestId?: string,
   ): Promise<DocumentDetail> {
     if (!images?.length) {
@@ -155,7 +157,8 @@ export class DocumentController {
     if (totalBytes > MAX_SCAN_TOTAL_BYTES) {
       throw new PayloadTooLargeException('The scan exceeds the 30 MB request safety limit.');
     }
-    return this.scan.fromImages(user.userId, images, title, requestId);
+    const edits = parseScanPageEdits(pageEdits, images.length);
+    return this.scan.fromImages(user.userId, images, title, requestId, edits);
   }
 
   /** Ingest a web page by URL (fetched and extracted server-side). */

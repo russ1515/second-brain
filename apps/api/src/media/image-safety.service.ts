@@ -5,6 +5,11 @@ import {
   UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import sharp from 'sharp';
+import {
+  isIdentityScanQuadrilateral,
+  warpPerspectiveRawInWorker,
+  type ScanPageEdit,
+} from './scan-page-transform';
 
 export interface ImageUpload {
   originalname: string;
@@ -52,11 +57,11 @@ export class ImageSafetyService {
     }
   }
 
-  async scanPage(file: ImageUpload): Promise<NormalizedImage> {
+  async scanPage(file: ImageUpload, edit?: ScanPageEdit): Promise<NormalizedImage> {
     this.assertByteLimit(file);
     const image = await this.decode(file);
     try {
-      const { data, info } = await image
+      const prepared = image
         .rotate()
         .resize({
           width: SCAN_MAX_EDGE,
@@ -65,6 +70,40 @@ export class ImageSafetyService {
           withoutEnlargement: true,
         })
         .flatten({ background: '#ffffff' })
+        .toColourspace('srgb');
+
+      if (!edit || isIdentityScanQuadrilateral(edit.corners)) {
+        const { data, info } = await prepared
+          .normalize()
+          .sharpen()
+          .jpeg({ quality: 90, mozjpeg: true })
+          .toBuffer({ resolveWithObject: true });
+        return { buffer: data, mimeType: 'image/jpeg', width: info.width, height: info.height };
+      }
+
+      // Arbitrary four-corner perspective is not an expo-image-manipulator or
+      // libvips primitive. Decode once into a bounded raw page, inverse-map it
+      // with the validated homography, then let sharp improve readability and
+      // strip metadata during the final JPEG encode.
+      const { data: raw, info: rawInfo } = await prepared
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      const corrected = await warpPerspectiveRawInWorker({
+        data: raw,
+        width: rawInfo.width,
+        height: rawInfo.height,
+        channels: rawInfo.channels,
+      }, edit.corners);
+      const { data, info } = await sharp(corrected.data, {
+        raw: {
+          width: corrected.width,
+          height: corrected.height,
+          channels: corrected.channels as 1 | 2 | 3 | 4,
+        },
+        sequentialRead: true,
+      })
+        .normalize()
+        .sharpen()
         .jpeg({ quality: 90, mozjpeg: true })
         .toBuffer({ resolveWithObject: true });
       return { buffer: data, mimeType: 'image/jpeg', width: info.width, height: info.height };

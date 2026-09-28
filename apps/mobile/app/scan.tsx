@@ -11,12 +11,17 @@ import { useTokens } from '../lib/design/theme';
 import { useI18n } from '../lib/i18n';
 import { classifyQrPayload, type QrPayload } from '../lib/capture/qr-safety';
 import { createObjectUrlLease } from '../lib/capture/object-url-lease';
+import {
+  defaultScanQuadrilateral,
+  isValidScanQuadrilateral,
+  type ScanQuadrilateral,
+} from '../lib/capture/scan-geometry';
 import type { CapturedImage } from '../lib/capture/types';
 import { CameraCapture } from '../components/capture/camera-capture';
+import { ScanCornerEditor } from '../components/capture/scan-corner-editor';
 import { Alert, Button, Card } from '../components/ds/core';
 
 const MAX_PAGES = 8;
-const CROP_STEPS = [0, 0.04, 0.08, 0.12] as const;
 
 interface ScanPage extends CapturedImage {
   /** Stable identity: async image transforms must not target a different page
@@ -26,7 +31,7 @@ interface ScanPage extends CapturedImage {
   originalWidth: number;
   originalHeight: number;
   rotation: 0 | 90 | 180 | 270;
-  cropStep: number;
+  corners: ScanQuadrilateral;
 }
 
 function first(value: string | string[] | undefined): string | undefined {
@@ -50,6 +55,7 @@ export default function ScanScreen() {
   const [qr, setQr] = useState<QrPayload | null>(null);
   const [qrAttempt, setQrAttempt] = useState(0);
   const [failedScanDocumentId, setFailedScanDocumentId] = useState<string | null>(null);
+  const [editingCorners, setEditingCorners] = useState(false);
   const uploadRequestId = useRef<string | null>(null);
   const objectUrls = useRef(createObjectUrlLease());
   const releaseObjectUrlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -85,12 +91,13 @@ export default function ScanScreen() {
     originalWidth: image.width,
     originalHeight: image.height,
     rotation: 0,
-    cropStep: 0,
+    corners: defaultScanQuadrilateral(),
   });
 
   const addCaptured = (image: CapturedImage) => {
     setPages((current) => [...current, makePage(image)].slice(0, MAX_PAGES));
     setSelected(pages.length);
+    setEditingCorners(true);
     setCameraOpen(false);
     uploadRequestId.current = null;
   };
@@ -107,6 +114,7 @@ export default function ScanScreen() {
     }));
     setPages((current) => [...current, ...next].slice(0, MAX_PAGES));
     if (next.length) setSelected(pages.length);
+    if (next.length) setEditingCorners(true);
     uploadRequestId.current = null;
   };
 
@@ -126,24 +134,14 @@ export default function ScanScreen() {
     }
   };
 
-  const transform = async (index: number, change: 'rotate' | 'crop') => {
+  const rotate = async (index: number) => {
     const page = pages[index];
     if (!page || busy) return;
     setBusy(true);
     setError(null);
     try {
-      const rotation = change === 'rotate' ? ((page.rotation + 90) % 360) as ScanPage['rotation'] : page.rotation;
-      const cropStep = change === 'crop' ? (page.cropStep + 1) % CROP_STEPS.length : page.cropStep;
-      const inset = CROP_STEPS[cropStep];
+      const rotation = ((page.rotation + 90) % 360) as ScanPage['rotation'];
       const actions: Action[] = [];
-      if (inset > 0) {
-        actions.push({ crop: {
-          originX: Math.round(page.originalWidth * inset),
-          originY: Math.round(page.originalHeight * inset),
-          width: Math.max(1, Math.round(page.originalWidth * (1 - inset * 2))),
-          height: Math.max(1, Math.round(page.originalHeight * (1 - inset * 2))),
-        } });
-      }
       if (rotation) actions.push({ rotate: rotation });
       const result = actions.length
         ? await manipulateAsync(page.originalUri, actions, { compress: 0.9, format: SaveFormat.JPEG })
@@ -157,14 +155,20 @@ export default function ScanScreen() {
         name: item.name.replace(/\.[^.]+$/, '.jpg'),
         file: undefined,
         rotation,
-        cropStep,
+        corners: defaultScanQuadrilateral(),
       } : item));
+      setEditingCorners(true);
       uploadRequestId.current = null;
     } catch {
       setError(t('scan.editError'));
     } finally {
       setBusy(false);
     }
+  };
+
+  const updateCorners = (pageId: string, corners: ScanQuadrilateral) => {
+    setPages((current) => current.map((page) => page.id === pageId ? { ...page, corners } : page));
+    uploadRequestId.current = null;
   };
 
   const move = (index: number, delta: -1 | 1) => {
@@ -177,6 +181,7 @@ export default function ScanScreen() {
       return copy;
     });
     setSelected(target);
+    setEditingCorners(true);
     uploadRequestId.current = null;
   };
 
@@ -184,16 +189,22 @@ export default function ScanScreen() {
     if (busy) return;
     setPages((current) => current.filter((_, itemIndex) => itemIndex !== index));
     setSelected((current) => Math.max(0, Math.min(current, pages.length - 2)));
+    setEditingCorners(true);
     uploadRequestId.current = null;
   };
 
   const upload = async () => {
     if (!pages.length) return;
+    if (pages.some((page) => !isValidScanQuadrilateral(page.corners))) {
+      setError(t('scan.editError'));
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const form = new FormData();
       for (const page of pages) await appendPickedDocument(form, 'images', page as PickedDocument);
+      form.append('pageEdits', JSON.stringify(pages.map((page) => ({ corners: page.corners }))));
       if (title.trim()) form.append('title', title.trim());
       const requestId = uploadRequestId.current ?? createClientRequestId('scan');
       uploadRequestId.current = requestId;
@@ -259,6 +270,7 @@ export default function ScanScreen() {
     setTitle('');
     setError(null);
     setFailedScanDocumentId(null);
+    setEditingCorners(false);
     uploadRequestId.current = null;
   };
 
@@ -388,23 +400,36 @@ export default function ScanScreen() {
       )}
       {activePage ? (
         <Card style={{ gap: spacing.sm }}>
-          <Image source={{ uri: activePage.uri }} resizeMode="contain" style={{ width: '100%', aspectRatio: 4 / 3, borderRadius: radius.sm, backgroundColor: c.surfaceSunken }} />
+          <View style={{ position: 'relative', width: '100%', aspectRatio: 4 / 3, borderRadius: radius.sm, backgroundColor: c.surfaceSunken }}>
+            <Image source={{ uri: activePage.uri }} resizeMode="contain" style={{ position: 'absolute', inset: 0, borderRadius: radius.sm }} />
+            {editingCorners ? (
+              <ScanCornerEditor
+                corners={activePage.corners}
+                imageWidth={activePage.width}
+                imageHeight={activePage.height}
+                color={c.aiAccent}
+                label={t('scan.crop')}
+                disabled={busy || Boolean(failedScanDocumentId)}
+                onChange={(corners) => updateCorners(activePage.id, corners)}
+              />
+            ) : null}
+          </View>
           <Text style={{ color: c.textSecondary }}>{t('scan.pagePosition').replace('{current}', String(selected + 1)).replace('{total}', String(pages.length))}</Text>
+          {editingCorners ? <Text style={{ color: c.textMuted, fontSize: 12 }}>{t('scan.perspectiveLimit')}</Text> : null}
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
             <Button size="sm" variant="secondary" label={t('scan.moveBefore')} disabled={selected === 0 || busy || Boolean(failedScanDocumentId)} onPress={() => move(selected, -1)} />
             <Button size="sm" variant="secondary" label={t('scan.moveAfter')} disabled={selected === pages.length - 1 || busy || Boolean(failedScanDocumentId)} onPress={() => move(selected, 1)} />
-            <Button size="sm" variant="secondary" label={t('scan.rotate')} loading={busy} disabled={Boolean(failedScanDocumentId)} onPress={() => void transform(selected, 'rotate')} />
-            <Button size="sm" variant="secondary" label={t('scan.crop')} loading={busy} disabled={Boolean(failedScanDocumentId)} onPress={() => void transform(selected, 'crop')} />
+            <Button size="sm" variant="secondary" label={t('scan.rotate')} loading={busy} disabled={Boolean(failedScanDocumentId)} onPress={() => void rotate(selected)} />
+            <Button size="sm" variant={editingCorners ? 'primary' : 'secondary'} label={t('scan.crop')} disabled={busy || Boolean(failedScanDocumentId)} onPress={() => setEditingCorners((value) => !value)} />
             <Button size="sm" variant="ghost" label={t('scan.remove')} disabled={busy || Boolean(failedScanDocumentId)} onPress={() => remove(selected)} />
           </View>
-          <Text style={{ color: c.textMuted, fontSize: 12 }}>{t('scan.perspectiveLimit')}</Text>
         </Card>
       ) : null}
       {pages.length ? (
         <View style={{ gap: spacing.sm }}>
           <Text style={{ color: c.textPrimary, fontWeight: '700' }}>{t('scan.pagesReady').replace('{n}', String(pages.length))}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
-            {pages.map((page, index) => <Button key={page.id} size="sm" variant={index === selected ? 'primary' : 'secondary'} label={`${index + 1}`} disabled={busy} onPress={() => setSelected(index)} />)}
+            {pages.map((page, index) => <Button key={page.id} size="sm" variant={index === selected ? 'primary' : 'secondary'} label={`${index + 1}`} disabled={busy} onPress={() => { setSelected(index); setEditingCorners(true); }} />)}
           </View>
           <TextInput
             value={title}
@@ -414,7 +439,7 @@ export default function ScanScreen() {
             placeholderTextColor={c.textMuted}
             style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.sm, padding: spacing.sm, color: c.textPrimary, backgroundColor: c.surface }}
           />
-          {!failedScanDocumentId ? <Button label={t('scan.readPages')} loading={busy} disabled={!pages.length || cameraOpen || busy} onPress={() => void upload()} /> : null}
+          {!failedScanDocumentId ? <Button testID="scan-submit" label={t('scan.readPages')} loading={busy} disabled={!pages.length || cameraOpen || busy} onPress={() => void upload()} /> : null}
         </View>
       ) : null}
     </ScrollView>

@@ -15,6 +15,7 @@ import type { UploadedFileLike } from './extraction/text-extraction.service';
 import { ImageSafetyService } from '../media/image-safety.service';
 import { PrivateMediaService } from '../media/private-media.service';
 import { randomUUID } from 'node:crypto';
+import type { ScanPageEdit } from '../media/scan-page-transform';
 
 const MAX_IMAGES = 8;
 const MIN_TEXT_CHARS = 20;
@@ -48,15 +49,16 @@ export class ScanService {
     files: UploadedFileLike[],
     title?: string,
     requestId?: string,
+    pageEdits?: ScanPageEdit[],
   ): Promise<DocumentDetail> {
-    this.assertFiles(files);
+    this.assertFiles(files, pageEdits);
     const operationId = requestId?.trim() || randomUUID();
     const sourceRef = `scan:${operationId}`;
     const key = `${userId}:${operationId}`;
     const active = this.inFlight.get(key);
     if (active) return active;
 
-    const pending = this.processIdempotent(userId, files, title, sourceRef)
+    const pending = this.processIdempotent(userId, files, title, sourceRef, pageEdits)
       .finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, pending);
     return pending;
@@ -147,6 +149,7 @@ export class ScanService {
     files: UploadedFileLike[],
     title: string | undefined,
     sourceRef: string,
+    pageEdits: ScanPageEdit[] | undefined,
   ): Promise<DocumentDetail> {
     const existing = await this.documents.findBySourceRef(userId, sourceRef);
     if (existing) {
@@ -175,7 +178,7 @@ export class ScanService {
 
     // Validate and normalize before creating a durable shell: invalid local
     // bytes have not consumed provider quota and can safely be corrected.
-    const images = await this.normalize(files);
+    const images = await this.normalize(files, pageEdits);
     const captureTitle = title?.trim() || this.captureTitle(files);
     const started = await this.documents.beginScan(userId, captureTitle, sourceRef);
     if (!started.created) return this.resolveExisting(userId, started.document);
@@ -254,7 +257,7 @@ export class ScanService {
     return existing;
   }
 
-  private assertFiles(files: UploadedFileLike[]): void {
+  private assertFiles(files: UploadedFileLike[], pageEdits?: ScanPageEdit[]): void {
     if (files.length === 0) {
       throw new BadRequestException('No images were uploaded (field "images").');
     }
@@ -263,17 +266,21 @@ export class ScanService {
         `Too many images (${files.length}); ${MAX_IMAGES} pages at a time is the limit.`,
       );
     }
+    if (pageEdits && pageEdits.length !== files.length) {
+      throw new BadRequestException('Scan page edits must match the uploaded page count.');
+    }
   }
 
   private async normalize(
     files: UploadedFileLike[],
+    pageEdits?: ScanPageEdit[],
   ): Promise<Array<LLMImagePart & { buffer: Buffer }>> {
     // Decode and re-encode every page. This validates the actual bytes instead
     // of trusting multipart MIME. Sequential work bounds decoded memory when a
     // scan contains several high-resolution pages.
     const images: Array<LLMImagePart & { buffer: Buffer }> = [];
-    for (const file of files) {
-      const image = await this.imageSafety.scanPage(file);
+    for (let index = 0; index < files.length; index += 1) {
+      const image = await this.imageSafety.scanPage(files[index], pageEdits?.[index]);
       images.push({
         mimeType: image.mimeType,
         data: image.buffer.toString('base64'),
