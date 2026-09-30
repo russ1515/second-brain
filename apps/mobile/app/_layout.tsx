@@ -70,11 +70,17 @@ function Navigator() {
     Boolean(metadata?.requiresAuth) &&
     !user;
 
+  const redirectToEmailVerification =
+    navigationReady &&
+    !loading &&
+    user?.emailVerified === false &&
+    metadata?.path !== '/sign-in';
+
   const redirectToOnboarding =
     navigationReady &&
     !loading &&
     shellEnabled &&
-    Boolean(user) &&
+    user?.emailVerified === true &&
     userExperience &&
     onboarded === false &&
     metadata?.path !== '/onboarding';
@@ -144,6 +150,10 @@ function Navigator() {
 
       {redirectToSignIn ? (
         <Redirect href={{ pathname: '/sign-in', params: { returnTo: pathname } }} />
+      ) : null}
+
+      {redirectToEmailVerification ? (
+        <Redirect href={{ pathname: '/sign-in', params: { mode: 'login', returnTo: pathname } }} />
       ) : null}
 
       {redirectToOnboarding ? (

@@ -28,7 +28,7 @@ test('logout shares the rotation lock and revokes a concurrently-created descend
   const user = {
     id: 'user-1',
     email: 'learner@example.test',
-    emailVerified: true,
+    emailVerified: false,
     accountStatus: 'active',
     suspendedAt: null,
     bannedAt: null,
@@ -103,7 +103,13 @@ test('logout shares the rotation lock and revokes a concurrently-created descend
   const jwt = {
     signAsync: async (payload) => `access-for-${payload.sessionId}`,
   };
-  const privateBeta = { assertNormalAccess: async () => undefined };
+  let privateBetaChecks = 0;
+  const privateBeta = {
+    assertNormalAccess: async () => {
+      privateBetaChecks += 1;
+      throw new Error('pending verification must not enter normal beta access');
+    },
+  };
   const service = new AuthService(
     prisma,
     jwt,
@@ -128,6 +134,64 @@ test('logout shares the rotation lock and revokes a concurrently-created descend
     [...rows.values()].filter((row) => row.userId === user.id && row.revokedAt === null).length,
     0,
   );
+  assert.equal(privateBetaChecks, 0);
+});
+
+test('pending verification is restorable but ordinary protected routes still use the beta gate', () => {
+  const controller = read('src/auth/auth.controller.ts');
+  const guard = read('src/auth/guards/jwt-access.guard.ts');
+  assert.match(
+    controller,
+    /@AllowPendingVerification\(\)\s+@UseGuards\(JwtAccessGuard\)\s+@Get\('me'\)/,
+  );
+  assert.match(guard, /if \(pendingVerificationAllowed && !user\.emailVerified\) return true/);
+  assert.match(guard, /if \(!user\.emailVerified\)[\s\S]*EMAIL_VERIFICATION_REQUIRED/);
+  assert.match(guard, /await this\.privateBeta\.assertNormalAccess\(user\.userId, user\.emailVerified\)/);
+});
+
+test('pending-route exception is limited to unverified identities at runtime', async () => {
+  const { JwtAccessGuard } = require('../dist/auth/guards/jwt-access.guard.js');
+  const passportGuardPrototype = Object.getPrototypeOf(JwtAccessGuard.prototype);
+  const originalCanActivate = passportGuardPrototype.canActivate;
+  passportGuardPrototype.canActivate = async () => true;
+
+  let pendingAllowed = false;
+  let betaChecks = 0;
+  let betaDenied = false;
+  const request = { user: { userId: 'user-1', emailVerified: false } };
+  const context = {
+    getHandler: () => function handler() {},
+    getClass: () => class Controller {},
+    switchToHttp: () => ({ getRequest: () => request }),
+  };
+  const guard = new JwtAccessGuard(
+    { getAllAndOverride: () => pendingAllowed },
+    {
+      assertNormalAccess: async () => {
+        betaChecks += 1;
+        if (betaDenied) throw new Error('beta denied');
+      },
+    },
+  );
+
+  try {
+    await assert.rejects(
+      () => guard.canActivate(context),
+      (error) => error?.getStatus?.() === 403 && error?.getResponse?.()?.code === 'EMAIL_VERIFICATION_REQUIRED',
+    );
+    assert.equal(betaChecks, 0);
+
+    pendingAllowed = true;
+    assert.equal(await guard.canActivate(context), true);
+    assert.equal(betaChecks, 0);
+
+    request.user.emailVerified = true;
+    betaDenied = true;
+    await assert.rejects(() => guard.canActivate(context), /beta denied/);
+    assert.equal(betaChecks, 1);
+  } finally {
+    passportGuardPrototype.canActivate = originalCanActivate;
+  }
 });
 
 test('logout source uses the same row lock and fail-closed descendant revocation', () => {

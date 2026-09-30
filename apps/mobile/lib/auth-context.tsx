@@ -52,13 +52,16 @@ interface AuthState {
    *  two-step verification enabled, so the UI can collect the TOTP/recovery code. */
   login: (email: string, password: string) => Promise<LoginOutcome>;
   /** Complete a 2FA challenge with a TOTP or recovery code. */
-  verifyTwoFactor: (challengeToken: string, code: string) => Promise<void>;
+  verifyTwoFactor: (challengeToken: string, code: string) => Promise<LoginOutcome>;
   /** Persist the account-scoped UI locale through the existing auth contract. */
   setInterfaceLanguage: (locale: SupportedLanguageCode) => Promise<void>;
   logout: () => Promise<void>;
 }
 
-export type LoginOutcome = { status: 'ok' } | { status: '2fa'; challengeToken: string };
+export type LoginOutcome =
+  | { status: 'ok' }
+  | { status: 'pending-verification' }
+  | { status: '2fa'; challengeToken: string };
 
 const AuthContext = createContext<AuthState | null>(null);
 
@@ -117,7 +120,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(me);
           void saveCachedAuthUser(me);
           setOffline(false);
-          void refreshOnboarding();
+          if (me.emailVerified) {
+            void refreshOnboarding();
+          } else {
+            setOnboarded(false);
+          }
         }
       } catch (e) {
         // ONLY a rejected session logs the learner out. A network blip (API
@@ -200,6 +207,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { status: '2fa', challengeToken: res.challengeToken };
       }
       await accept(res);
+      if (!res.user.emailVerified) {
+        setOnboarded(false);
+        return { status: 'pending-verification' };
+      }
       await refreshOnboarding();
       return { status: 'ok' };
     },
@@ -207,14 +218,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const verifyTwoFactor = useCallback(
-    async (challengeToken: string, code: string) => {
+    async (challengeToken: string, code: string): Promise<LoginOutcome> => {
       const res = await api<AuthResponse>('/auth/2fa/verify', {
         method: 'POST',
         anonymous: true,
         body: { challengeToken, code },
       });
       await accept(res);
+      if (!res.user.emailVerified) {
+        setOnboarded(false);
+        return { status: 'pending-verification' };
+      }
       await refreshOnboarding();
+      return { status: 'ok' };
     },
     [accept, refreshOnboarding],
   );

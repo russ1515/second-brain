@@ -1,4 +1,9 @@
-import { Injectable, type ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  type ExecutionContext,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
 import { PrivateBetaAccessService } from '../private-beta-access.service';
@@ -23,11 +28,16 @@ export class JwtAccessGuard extends AuthGuard('jwt-access') {
       ALLOW_PENDING_VERIFICATION_KEY,
       [context.getHandler(), context.getClass()],
     ) === true;
-    if (pendingVerificationAllowed) return true;
-
     const request = context.switchToHttp().getRequest<HttpRequestLike>();
     const user = request.user as AuthenticatedUser | undefined;
     if (!user) throw new UnauthorizedException();
+    if (pendingVerificationAllowed && !user.emailVerified) return true;
+    if (!user.emailVerified) {
+      throw new ForbiddenException({
+        code: 'EMAIL_VERIFICATION_REQUIRED',
+        message: 'Access is not available.',
+      });
+    }
     await this.privateBeta.assertNormalAccess(user.userId, user.emailVerified);
     return true;
   }

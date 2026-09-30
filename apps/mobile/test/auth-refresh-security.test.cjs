@@ -18,3 +18,23 @@ test('parallel 401 responses share one refresh and late results cannot replace a
   assert.match(storage, /enqueueSessionMutation/);
   assert.match(storage, /current !== expectedRefreshToken/);
 });
+
+test('pending email verification survives reload and cannot enter the learner shell', () => {
+  const auth = read('lib/auth-context.tsx');
+  const signIn = read('app/sign-in.tsx');
+  const layout = read('app/_layout.tsx');
+
+  assert.match(auth, /status: 'pending-verification'/);
+  assert.match(auth, /if \(!res\.user\.emailVerified\)[\s\S]*return \{ status: 'pending-verification' \}/);
+  assert.match(signIn, /user && !user\.emailVerified && step === 'credentials'/);
+  assert.match(signIn, /setEmail\(user\.email\)[\s\S]*setStep\('otp'\)/);
+  assert.match(signIn, /res\.status === 'pending-verification'[\s\S]*setStep\('otp'\)/);
+  assert.match(auth, /verifyTwoFactor[\s\S]*if \(!res\.user\.emailVerified\)[\s\S]*setOnboarded\(false\)[\s\S]*status: 'pending-verification'/);
+  assert.match(signIn, /verifyTwoFactor\(challengeToken, otp\.trim\(\)\)[\s\S]*result\.status === 'pending-verification'[\s\S]*setStep\('otp'\)/);
+  assert.match(signIn, /const changeAccount = async[\s\S]*await logout\(\)[\s\S]*setMode\('login'\)[\s\S]*setStep\('credentials'\)/);
+  assert.match(signIn, /onPress=\{\(\) => void changeAccount\(\)\}[\s\S]*t\('app\.signOut'\)/);
+  assert.match(layout, /const redirectToEmailVerification/);
+  assert.match(layout, /user\?\.emailVerified === false[\s\S]*metadata\?\.path !== '\/sign-in'/);
+  assert.match(layout, /user\?\.emailVerified === true &&\s+userExperience/);
+  assert.match(auth, /if \(me\.emailVerified\)[\s\S]*refreshOnboarding\(\)[\s\S]*setOnboarded\(false\)/);
+});

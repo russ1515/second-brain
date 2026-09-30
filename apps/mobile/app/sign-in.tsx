@@ -34,7 +34,7 @@ const EXPIRY_SECONDS = 300;
  * offers NO skip — verification is enforced server-side.
  */
 export default function SignInScreen() {
-  const { login, register, verifyEmailOtp, verifyTwoFactor } = useAuth();
+  const { user, login, register, verifyEmailOtp, verifyTwoFactor, logout } = useAuth();
   const { t, locale } = useI18n();
   const { colors: c, spacing, reducedMotion } = useTokens();
   const { width } = useResponsive();
@@ -67,6 +67,20 @@ export default function SignInScreen() {
       setStep('credentials');
     }
   }, [requestedModeValue]);
+
+  // A pending-verification session is deliberately restorable. Returning to
+  // this route after a reload must reopen the OTP step instead of stranding the
+  // learner on credentials with an already-created account.
+  useEffect(() => {
+    if (user && !user.emailVerified && step === 'credentials') {
+      setError(null);
+      setInfo(null);
+      setExpired(false);
+      setEmail(user.email);
+      setOtp('');
+      setStep('otp');
+    }
+  }, [step, user]);
 
   // Short fade/slide on mode/step change; fully static when reduced motion is requested.
   const anim = useRef(new Animated.Value(1)).current;
@@ -110,6 +124,12 @@ export default function SignInScreen() {
       } else {
         const res = await login(email.trim(), password);
         if (res.status === '2fa') { setChallengeToken(res.challengeToken); setStep('twofactor'); }
+        else if (res.status === 'pending-verification') {
+          setExpired(false);
+          setCooldown(0);
+          setOtp('');
+          setStep('otp');
+        }
         else router.replace(destination);
       }
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
@@ -139,9 +159,34 @@ export default function SignInScreen() {
 
   const verify2fa = async () => {
     setBusy(true); clear();
-    try { await verifyTwoFactor(challengeToken, otp.trim()); router.replace(destination); }
+    try {
+      const result = await verifyTwoFactor(challengeToken, otp.trim());
+      if (result.status === 'pending-verification') {
+        setChallengeToken('');
+        setExpired(false);
+        setCooldown(0);
+        setOtp('');
+        setStep('otp');
+      } else {
+        router.replace(destination);
+      }
+    }
     catch (e) { setError((e as Error).message || t('auth.otpError')); }
     finally { setBusy(false); }
+  };
+
+  const changeAccount = async () => {
+    setBusy(true); clear();
+    try {
+      await logout();
+    } finally {
+      setMode('login');
+      setChallengeToken('');
+      setOtp('');
+      setPassword('');
+      setStep('credentials');
+      setBusy(false);
+    }
   };
 
   const requestPasswordReset = async () => {
@@ -230,8 +275,8 @@ export default function SignInScreen() {
             <AuthButton label={t('auth.verify')} onPress={verifyOtp} busy={busy} disabled={otp.length < 6} />
             {resendRow(resendVerification)}
             {/* No skip: OTP verification is mandatory and enforced server-side (§2). */}
-            <Pressable onPress={() => { clear(); setStep('credentials'); }} style={{ alignSelf: 'center' }} accessibilityRole="button">
-              <Text style={{ color: c.textMuted, fontSize: 13 }}>{t('auth.back')}</Text>
+            <Pressable onPress={() => void changeAccount()} style={{ alignSelf: 'center' }} accessibilityRole="button">
+              <Text style={{ color: c.textMuted, fontSize: 13 }}>{t('app.signOut')}</Text>
             </Pressable>
           </View>
         ) : null}

@@ -272,8 +272,16 @@ test('private beta HTTP gate is opt-in and validates grant/revocation at the rea
     safeStatus(allowedRegistration, 201, 'allowlistedRegistrationAccepted');
     const pendingAccessToken = allowedRegistration.body?.tokens?.accessToken;
     assert.equal(typeof pendingAccessToken, 'string', 'allowlistedRegistrationAccessTokenRequired');
-    const pendingProtectedApi = await request(apiBase, '/auth/me', { accessToken: pendingAccessToken });
-    safeStatus(pendingProtectedApi, 401, 'unverifiedRegistrationProtectedApiDenied');
+    const pendingIdentity = await request(apiBase, '/auth/me', { accessToken: pendingAccessToken });
+    safeStatus(pendingIdentity, 200, 'unverifiedRegistrationIdentityRestorable');
+    assert.equal(pendingIdentity.body?.emailVerified, false, 'unverifiedRegistrationIdentityRemainsPending');
+    const pendingProtectedApi = await request(apiBase, '/onboarding', { accessToken: pendingAccessToken });
+    safeStatus(pendingProtectedApi, 403, 'unverifiedRegistrationProtectedApiDenied');
+    assert.equal(
+      pendingProtectedApi.body?.code,
+      'EMAIL_VERIFICATION_REQUIRED',
+      'unverifiedRegistrationProtectedApiCode',
+    );
 
     phase = 'fixtures';
     const fixtures = await createFixtures(prisma);

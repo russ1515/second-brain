@@ -182,7 +182,9 @@ export class AuthService {
 
     try {
       this.assertAccountActive(user);
-      await this.privateBeta.assertNormalAccess(user.id, user.emailVerified);
+      if (user.emailVerified) {
+        await this.privateBeta.assertNormalAccess(user.id, user.emailVerified);
+      }
     } catch (error) {
       if (this.isPotentialAdmin(user)) await this.recordAdminAuthEvent(user.id, 'ADMIN_LOGIN_FAILED_ACCOUNT_STATE', ctx, 'denied');
       // A beta denial must not reveal that a valid password was supplied.
@@ -218,7 +220,9 @@ export class AuthService {
     mfaVerified = false,
   ): Promise<AuthResponse> {
     this.assertAccountActive(user);
-    await this.privateBeta.assertNormalAccess(user.id, user.emailVerified);
+    if (user.emailVerified) {
+      await this.privateBeta.assertNormalAccess(user.id, user.emailVerified);
+    }
     const tokens = await this.issueTokens(user, ctx, mfaVerified);
     return { user: this.toAuthUser(user, displayName), tokens };
   }
@@ -321,10 +325,12 @@ export class AuthService {
       if (session.expiresAt.getTime() <= Date.now()) throw invalid;
 
       this.assertAccountActive(session.user);
-      try {
-        await this.privateBeta.assertNormalAccess(session.user.id, session.user.emailVerified);
-      } catch {
-        throw invalid;
+      if (session.user.emailVerified) {
+        try {
+          await this.privateBeta.assertNormalAccess(session.user.id, session.user.emailVerified);
+        } catch {
+          throw invalid;
+        }
       }
 
       const refreshTtl = this.config.getOrThrow<number>('auth.refreshTtl');

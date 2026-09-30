@@ -213,6 +213,7 @@ export class AuthController {
     return this.twoFactor.stepUp(user.userId, user.sessionId, dto.code);
   }
 
+  @AllowPendingVerification()
   @UseGuards(JwtAccessGuard)
   @Get('me')
   me(@CurrentUser() user: AuthenticatedUser): Promise<AuthUser> {

@@ -178,3 +178,65 @@ test('private beta: login stays generic when a correct password lacks access', a
     (error) => error instanceof UnauthorizedException && error.message === 'Invalid email or password.',
   );
 });
+
+test('private beta: a password-authenticated pending account can resume verification only', async () => {
+  const passwordHash = await argon2.hash('controlled-password');
+  let betaAccessChecks = 0;
+  let createdSession = null;
+  const privateBeta = {
+    assertRegistrationAllowed: () => undefined,
+    assertNormalAccess: async () => {
+      betaAccessChecks += 1;
+      throw new UnauthorizedException({ code: 'PRIVATE_BETA_ACCESS_REQUIRED' });
+    },
+  };
+  const auth = new AuthService(
+    {
+      user: {
+        findUnique: async () => ({
+          id: 'pending-user',
+          email: 'pending@example.test',
+          passwordHash,
+          emailVerified: false,
+          accountStatus: 'active',
+          suspendedAt: null,
+          bannedAt: null,
+          isAdmin: false,
+          twoFactorEnabled: false,
+          profile: null,
+          onboardingProfile: null,
+          adminRoleAssignments: [],
+        }),
+      },
+      session: {
+        create: async ({ data }) => {
+          createdSession = data;
+          return { id: 'pending-session', mfaVerifiedAt: null };
+        },
+      },
+    },
+    { signAsync: async () => 'pending-access-token' },
+    {
+      getOrThrow: (key) => ({
+        'auth.refreshTtl': 3600,
+        'auth.accessTtl': 900,
+        'auth.accessSecret': 'controlled-access-secret-at-least-32-bytes',
+      })[key],
+    },
+    {},
+    {},
+    privateBeta,
+  );
+  auth.mintRefreshSecret = async () => ({ secret: 'pending-refresh-secret', hash: 'pending-refresh-hash' });
+
+  const result = await auth.login({
+    email: 'pending@example.test',
+    password: 'controlled-password',
+  });
+
+  assert.equal(result.user.emailVerified, false);
+  assert.equal(result.tokens.accessToken, 'pending-access-token');
+  assert.equal(result.tokens.refreshToken, 'pending-session.pending-refresh-secret');
+  assert.equal(createdSession.userId, 'pending-user');
+  assert.equal(betaAccessChecks, 0);
+});
