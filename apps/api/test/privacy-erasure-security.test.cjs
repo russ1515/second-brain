@@ -72,7 +72,7 @@ function accountDeletionFixture(passwordHash, {
       assert.deepEqual(options, { timeout: 60_000 });
       try {
         const value = await operation({
-          $queryRaw: async (_strings, lockKey) => { events.push(`lock:${lockKey}`); },
+          $executeRaw: async (_strings, lockKey) => { events.push(`lock:${lockKey}`); },
           accountDeletionRequest: {
             findFirst: async () => administrativeRequest ? { id: 'admin-request' } : null,
           },

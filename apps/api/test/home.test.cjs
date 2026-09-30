@@ -194,6 +194,20 @@ test('French Home copy is static while learner-authored session titles stay unto
   assert.equal(overview.nextBestAction.primaryAction.label, 'Reprendre');
   assert.equal(translateStaticCopy('Review what is due', 'fr'), 'Réviser les éléments dus');
   assert.equal(translateStaticCopy('2 reviews are due now.', 'fr'), '2 révisions sont dues maintenant.');
+  assert.equal(
+    translateStaticCopy(
+      'At your current pace, the dropout risk is estimated at 85%. Several days without studying.',
+      'fr',
+    ),
+    'À ton rythme actuel, le risque d’abandon est estimé à 85 %. Plusieurs jours sans étudier.',
+  );
+  assert.equal(
+    translateStaticCopy(
+      'At your current pace, the dropout risk is estimated at 85%. Several days without studying.',
+      'en',
+    ),
+    'At your current pace, the dropout risk is estimated at 85%. Several days without studying.',
+  );
 });
 
 test('Mobile Home consumes one aggregate endpoint and keeps the compact content order', () => {

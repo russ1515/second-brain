@@ -152,6 +152,10 @@ const FR_EXACT: Readonly<Record<string, string>> = {
   "You're in a good place across the board — let's keep the momentum and aim higher.":
     'Ta situation est bonne sur tous les plans : gardons cet élan et visons plus haut.',
   'Your review load is light right now.': 'Ta charge de révision est légère actuellement.',
+  'Several days without studying.': 'Plusieurs jours sans étudier.',
+  'Fatigue from an overloaded plan.': 'Fatigue liée à un programme surchargé.',
+  'Several days without studying + fatigue from an overloaded plan.':
+    'Plusieurs jours sans étudier et fatigue liée à un programme surchargé.',
   "I'll trim today's plan and spread the reviews over several days.":
     'Je vais alléger le programme du jour et répartir les révisions sur plusieurs jours.',
   'No change needed — the load is manageable.':
@@ -226,7 +230,7 @@ const FR_RULES: readonly Rule[] = [
   [/^This is your current (daily|weekly|monthly) goal\.$/, (period) => `Il s’agit de ton objectif ${period === 'daily' ? 'quotidien' : period === 'weekly' ? 'hebdomadaire' : 'mensuel'} actuel.`],
   [/^The goal “(.+)” is still in progress\.$/, (title) => `L’objectif « ${title} » est toujours en cours.`],
   [/^(\d+) flashcards?$/, (n) => `${n} carte${n === '1' ? '' : 's'} mémoire`],
-  [/^At your current pace, the (dropout|difficulty|overload|motivation|forgetting) risk is estimated at (\d+)%\. (.+)$/, (kind, probability, cause) => `À ton rythme actuel, le risque ${kind === 'dropout' ? 'd’abandon' : kind === 'difficulty' ? 'de difficulté' : kind === 'overload' ? 'de surcharge' : kind === 'motivation' ? 'de démotivation' : 'd’oubli'} est estimé à ${probability} %. ${cause}`],
+  [/^At your current pace, the (dropout|difficulty|overload|motivation|forgetting) risk is estimated at (\d+)%\. (.+)$/, (kind, probability, cause) => `À ton rythme actuel, le risque ${kind === 'dropout' ? 'd’abandon' : kind === 'difficulty' ? 'de difficulté' : kind === 'overload' ? 'de surcharge' : kind === 'motivation' ? 'de démotivation' : 'd’oubli'} est estimé à ${probability} %. ${translateStaticCopy(cause, 'fr')}`],
   [/^Estimated probability: (\d+)%\. (.+)$/, (probability, evidence) => `Probabilité estimée : ${probability} %. ${evidence}`],
   [/^You retain (\d+)% of what you review — spaced repetition works very well for you\.$/, (p) => `Tu retiens ${p} % de ce que tu révises : la répétition espacée fonctionne très bien pour toi.`],
   [/^You retain (\d+)% across reviews — spacing helps, with the occasional refresher\.$/, (p) => `Tu retiens ${p} % au fil des révisions : l’espacement aide, avec quelques rappels ponctuels.`],

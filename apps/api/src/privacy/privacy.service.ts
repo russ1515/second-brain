@@ -76,7 +76,7 @@ export class PrivacyService {
     // cannot overwrite a concurrent Admin account-state workflow.
     const deletion = await this.prisma.$transaction(async (tx) => {
       const lockKey = accountDataLockKey(userId);
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const current = await tx.user.findUnique({
         where: { id: userId },
         select: { id: true, accountStatus: true, updatedAt: true },
@@ -113,7 +113,7 @@ export class PrivacyService {
     // this transaction exists only to own the advisory lock.
     const purged = await this.prisma.$transaction(async (tx) => {
       const lockKey = accountDataLockKey(userId);
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
 
       const staged = await tx.user.findFirst({
         where: {

@@ -371,7 +371,7 @@ test('privacy: Qdrant failure prevents relational account deletion', async () =>
         delete: async () => { sqlDeleted = true; },
       },
       $transaction: async (operation) => operation({
-        $queryRaw: async () => undefined,
+        $executeRaw: async () => undefined,
         accountDeletionRequest: { findFirst: async () => null },
         user: {
           findUnique: async () => ({

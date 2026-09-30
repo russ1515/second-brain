@@ -336,7 +336,7 @@ export class PrivateMediaService implements OnModuleInit {
   private withOwnerLock<T>(userId: string, operation: () => Promise<T>): Promise<T> {
     return this.prisma.$transaction(async (tx) => {
       const lockKey = `private-media:${userId}`;
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       return operation();
     }, { timeout: 30_000 });
   }

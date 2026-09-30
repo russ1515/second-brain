@@ -48,7 +48,7 @@ test('private avatar paths are owner-scoped and deletion is idempotent', async (
   try {
     const images = new ImageSafetyService();
     const config = { get: (_key, fallback) => directory || fallback };
-    const tx = { $queryRaw: async () => undefined };
+    const tx = { $executeRaw: async () => undefined };
     const prisma = {
       $transaction: async (callback) => callback(tx),
       user: { findUnique: async () => ({ id: 'owner' }) },
@@ -73,7 +73,7 @@ test('GDPR media export includes the owned avatar and normalized scan pages', as
   try {
     const images = new ImageSafetyService();
     const config = { get: (_key, fallback) => directory || fallback };
-    const tx = { $queryRaw: async () => undefined };
+    const tx = { $executeRaw: async () => undefined };
     const prisma = {
       $transaction: async (callback) => callback(tx),
       user: { findUnique: async () => ({ id: 'owner-a' }) },
@@ -106,7 +106,7 @@ test('scan page replacement publishes one complete directory without staging art
   const directory = await mkdtemp(path.join(os.tmpdir(), 'second-brain-media-scan-'));
   try {
     const config = { get: (_key, fallback) => directory || fallback };
-    const tx = { $queryRaw: async () => undefined };
+    const tx = { $executeRaw: async () => undefined };
     const prisma = {
       $transaction: async (callback) => callback(tx),
       user: { findUnique: async () => ({ id: 'owner-a' }) },
@@ -136,7 +136,7 @@ test('destructive private-media finalizers restore tombstones on failure and pur
   try {
     const images = new ImageSafetyService();
     const config = { get: (_key, fallback) => directory || fallback };
-    const tx = { $queryRaw: async () => undefined };
+    const tx = { $executeRaw: async () => undefined };
     const prisma = {
       $transaction: async (callback) => callback(tx),
       user: { findUnique: async () => ({ id: 'owner-a' }) },
