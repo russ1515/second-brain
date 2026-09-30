@@ -31,6 +31,7 @@ const { LlmService } = require('../dist/llm/llm.service.js');
 const { SpeechService } = require('../dist/speech/speech.service.js');
 const { PrivacyService } = require('../dist/privacy/privacy.service.js');
 const { QdrantService } = require('../dist/qdrant/qdrant.service.js');
+const { OnboardingService } = require('../dist/onboarding/onboarding.service.js');
 const {
   AppleIapProvider,
   GooglePlayProvider,
@@ -420,4 +421,56 @@ test('privacy: Qdrant erasure uses the owner filter before SQL deletion', async 
     match: { value: 'controlled-user' },
   });
   assert.equal(calls[0].options.wait, true);
+});
+
+test('onboarding: advisory locks execute without deserializing PostgreSQL void', async () => {
+  const now = new Date('2026-09-30T00:00:00.000Z');
+  const baseRow = {
+    id: 'onboarding-1',
+    userId: 'user-1',
+    status: 'not_started',
+    category: null,
+    currentStep: 'welcome',
+    identity: null,
+    education: null,
+    languages: null,
+    languageLearner: null,
+    goals: null,
+    subjects: null,
+    preferences: null,
+    teacher: null,
+    academicSupport: null,
+    assessment: null,
+    extra: null,
+    completedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  let locks = 0;
+  const tx = {
+    $executeRaw: async () => { locks += 1; return 1; },
+    onboardingProfile: {
+      findUnique: async () => null,
+      findUniqueOrThrow: async () => baseRow,
+      upsert: async ({ create }) => ({ ...baseRow, ...create, updatedAt: now }),
+      update: async ({ data }) => ({ ...baseRow, ...data, updatedAt: now }),
+    },
+  };
+  const prisma = {
+    onboardingProfile: { findUnique: async () => baseRow },
+    $transaction: async (operation) => operation(tx),
+  };
+  const service = new OnboardingService(prisma, {});
+
+  const saved = await service.save('user-1', {
+    currentStep: 'category',
+    answers: {},
+  });
+  assert.equal(saved.currentStep, 'category');
+  assert.equal(locks, 1);
+
+  const completed = await service.complete('user-1');
+  assert.equal(completed.state.status, 'completed');
+  assert.equal(completed.state.currentStep, 'done');
+  assert.equal(locks, 2);
 });

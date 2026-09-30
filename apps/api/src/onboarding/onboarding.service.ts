@@ -79,7 +79,10 @@ export class OnboardingService {
   ): Promise<OnboardingState> {
     return this.prisma.$transaction(async (tx) => {
       const lockKey = `onboarding-profile:${userId}`;
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      // The advisory-lock function returns PostgreSQL `void`. `$queryRaw`
+      // attempts to deserialize that column and fails with Prisma P2010;
+      // `$executeRaw` is the correct seam for a side-effect-only statement.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const current = await tx.onboardingProfile.findUnique({
         where: { userId },
       });
@@ -259,7 +262,7 @@ export class OnboardingService {
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const lockKey = `onboarding-profile:${userId}`;
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const latest = await tx.onboardingProfile.findUniqueOrThrow({ where: { userId } });
       return tx.onboardingProfile.update({
         where: { userId },
