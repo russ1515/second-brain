@@ -23,6 +23,7 @@ const I18N_FILE = path.join(ROOT, 'apps/mobile/lib/i18n.tsx');
 const LOCALES_DIR = path.join(ROOT, 'apps/mobile/lib/locales');
 const ESSENTIAL_FILE = path.join(LOCALES_DIR, 'essential.ts');
 const REVIEW_FILE = path.join(LOCALES_DIR, 'review.ts');
+const AUTH_ERRORS_FILE = path.join(LOCALES_DIR, 'auth-errors.ts');
 
 export const ALL_LOCALE_CODES = Object.freeze(['en', 'fr', ...SUPPORTED_CODES]);
 export const PROTECTED_BRANDS = Object.freeze([
@@ -289,6 +290,7 @@ export function auditRepository() {
   const french = readCatalog(I18N_FILE, 'fr');
   const essentials = readNestedCatalog(ESSENTIAL_FILE, 'essential');
   const reviews = readNestedCatalog(REVIEW_FILE, 'review');
+  const authErrors = readNestedCatalog(AUTH_ERRORS_FILE, 'authErrors');
   const catalogs = new Map([
     ['en', english],
     ['fr', french],
@@ -306,11 +308,13 @@ export function auditRepository() {
     const base = fs.existsSync(file) ? readCatalog(file, variableName) : new Map();
     const essential = essentials.get(code) ?? new Map();
     const review = reviews.get(code) ?? new Map();
-    catalogs.set(code, new Map([...base, ...essential, ...review]));
+    const authError = authErrors.get(code) ?? new Map();
+    catalogs.set(code, new Map([...base, ...essential, ...review, ...authError]));
     layersByLocale.set(code, [
       { name: path.relative(LOCALES_DIR, file).replaceAll('\\', '/'), entries: base },
       { name: 'essential.ts', entries: essential },
       { name: 'review.ts', entries: review },
+      { name: 'auth-errors.ts', entries: authError },
     ]);
   }
 

@@ -167,7 +167,10 @@ export class AuthService {
     });
 
     // Generic failure — never reveal whether the email exists.
-    const invalid = new UnauthorizedException('Invalid email or password.');
+    const invalid = new UnauthorizedException({
+      code: 'INVALID_CREDENTIALS',
+      message: 'Invalid email or password.',
+    });
     if (!user) {
       // Hash a throwaway value so timing does not leak account existence.
       await argon2.hash(dto.password, ARGON2_OPTIONS).catch(() => undefined);
@@ -264,7 +267,10 @@ export class AuthService {
     });
     if (!user) {
       // Token was valid but the account is gone.
-      throw new UnauthorizedException('Account no longer exists.');
+      throw new UnauthorizedException({
+        code: 'SESSION_INVALID',
+        message: 'Session is no longer valid.',
+      });
     }
     this.assertAccountActive(user);
     return this.toAuthUser(user, user.profile?.displayName ?? null);
@@ -298,7 +304,14 @@ export class AuthService {
    *  belonging to an *already-revoked* session is presented, it is treated as a
    *  leak/replay and every session for that user is revoked. */
   async refresh(refreshToken: string, ctx: SessionContext = {}): Promise<AuthTokens> {
-    const invalid = new UnauthorizedException('Invalid or expired refresh token.');
+    const invalid = new UnauthorizedException({
+      code: 'SESSION_INVALID',
+      message: 'Session is no longer valid.',
+    });
+    const expired = new UnauthorizedException({
+      code: 'SESSION_EXPIRED',
+      message: 'Session expired.',
+    });
 
     const parsed = this.parseRefreshToken(refreshToken);
     if (!parsed) {
@@ -322,7 +335,7 @@ export class AuthService {
       if (session.revokedAt) {
         return { kind: 'reuse' as const, userId: session.userId };
       }
-      if (session.expiresAt.getTime() <= Date.now()) throw invalid;
+      if (session.expiresAt.getTime() <= Date.now()) throw expired;
 
       this.assertAccountActive(session.user);
       if (session.user.emailVerified) {
@@ -354,9 +367,10 @@ export class AuthService {
 
     if (rotated.kind === 'reuse') {
       await this.revokeAllSessions(rotated.userId);
-      throw new UnauthorizedException(
-        'Refresh token reuse detected — all sessions have been revoked.',
-      );
+      throw new UnauthorizedException({
+        code: 'SESSION_REVOKED',
+        message: 'Session was revoked.',
+      });
     }
     const { token, expiresIn } = await this.signAccessToken(
       rotated.user,

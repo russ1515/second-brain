@@ -18,6 +18,12 @@ function config(values) {
   return { get: (key) => values[key] };
 }
 
+function unauthorizedResponse(error) {
+  assert.ok(error instanceof UnauthorizedException);
+  assert.equal(error.getStatus(), 401);
+  return error.getResponse();
+}
+
 test('private beta and SMTP security booleans reject ambiguous environment values', () => {
   const base = {
     NODE_ENV: 'test', API_PORT: '3000', DATABASE_URL: 'postgresql://test',
@@ -175,8 +181,68 @@ test('private beta: login stays generic when a correct password lacks access', a
   );
   await assert.rejects(
     auth.login({ email: 'controlled@example.test', password: 'controlled-password' }),
-    (error) => error instanceof UnauthorizedException && error.message === 'Invalid email or password.',
+    (error) => {
+      assert.deepEqual(unauthorizedResponse(error), {
+        code: 'INVALID_CREDENTIALS',
+        message: 'Invalid email or password.',
+      });
+      return true;
+    },
   );
+});
+
+test('login gives unknown email and wrong password the same generic 401 payload', async () => {
+  const passwordHash = await argon2.hash('controlled-password');
+  const knownUser = {
+    id: 'controlled-user',
+    email: 'controlled@example.test',
+    passwordHash,
+    emailVerified: true,
+    accountStatus: 'active',
+    suspendedAt: null,
+    bannedAt: null,
+    isAdmin: false,
+    twoFactorEnabled: false,
+    profile: null,
+    onboardingProfile: null,
+    adminRoleAssignments: [],
+  };
+  const auth = new AuthService(
+    {
+      user: {
+        findUnique: async ({ where }) => where.email === knownUser.email ? knownUser : null,
+      },
+    },
+    {},
+    {},
+    {},
+    {},
+    { assertNormalAccess: async () => undefined },
+  );
+
+  async function rejectedResponse(credentials) {
+    try {
+      await auth.login(credentials);
+      assert.fail('login should reject invalid credentials');
+    } catch (error) {
+      return unauthorizedResponse(error);
+    }
+  }
+
+  const unknownEmail = await rejectedResponse({
+    email: 'unknown@example.test',
+    password: 'controlled-password',
+  });
+  const wrongPassword = await rejectedResponse({
+    email: knownUser.email,
+    password: 'controlled-wrong-password',
+  });
+
+  assert.deepEqual(unknownEmail, {
+    code: 'INVALID_CREDENTIALS',
+    message: 'Invalid email or password.',
+  });
+  assert.deepEqual(wrongPassword, unknownEmail);
 });
 
 test('private beta: a password-authenticated pending account can resume verification only', async () => {

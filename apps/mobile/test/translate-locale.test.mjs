@@ -102,8 +102,22 @@ test('catalog planning supports legacy filenames, complete resources and BCP 47 
   assert.equal(traditionalChinese.variableName, 'zhHant');
 
   const plan = buildPlan(['ln', 'zh-Hant'], 60);
+  const reviewedOverlayOnlyKeys = [
+    'auth.emailVerificationRequired',
+    'auth.invalidCredentials',
+    'error.accountBanned',
+    'error.accountSuspended',
+    'error.sessionEnded',
+    'error.sessionExpired',
+  ];
   for (const locale of plan.locales) {
-    assert.equal(locale.baseKeyCount, plan.sourceKeyCount);
+    // Reviewed overlays may supply newly introduced safety copy before the
+    // generated base catalog is refreshed. Runtime completeness is measured
+    // against the effective layered catalog, not the base file alone.
+    assert.deepEqual(
+      [...plan.english.keys()].filter((key) => !locale.base.has(key)).sort(),
+      reviewedOverlayOnlyKeys,
+    );
     assert.equal(locale.effectiveKeyCount, plan.sourceKeyCount);
     assert.equal(locale.missingKeyCount, 0);
     assert.match(locale.persistedFileChecksum, /^[a-f0-9]{64}$/);

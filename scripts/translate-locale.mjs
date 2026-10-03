@@ -18,6 +18,7 @@ const I18N = path.join(ROOT, 'apps/mobile/lib/i18n.tsx');
 const OUT_DIR = path.join(ROOT, 'apps/mobile/lib/locales');
 const ESSENTIAL_FILE = path.join(OUT_DIR, 'essential.ts');
 const REVIEW_FILE = path.join(OUT_DIR, 'review.ts');
+const AUTH_ERRORS_FILE = path.join(OUT_DIR, 'auth-errors.ts');
 const PROGRESS_DIR = path.join(OUT_DIR, '.translation-progress');
 const DEFAULT_MANIFEST = path.join(PROGRESS_DIR, 'manifest.json');
 const JOB_LOCK = path.join(PROGRESS_DIR, 'apply.lock');
@@ -220,6 +221,7 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
   const english = readCatalog(I18N, 'en');
   const essentials = readNestedCatalog(ESSENTIAL_FILE, 'essential');
   const reviews = readNestedCatalog(REVIEW_FILE, 'review');
+  const authErrors = readNestedCatalog(AUTH_ERRORS_FILE, 'authErrors');
   const locales = [];
 
   for (const code of codes) {
@@ -228,7 +230,8 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
     const base = fs.existsSync(file) ? readCatalog(file, variableName) : new Map();
     const essential = essentials.get(code) ?? new Map();
     const review = reviews.get(code) ?? new Map();
-    const effective = new Map([...base, ...essential, ...review]);
+    const authError = authErrors.get(code) ?? new Map();
+    const effective = new Map([...base, ...essential, ...review, ...authError]);
     const missingKeys = [...english.keys()].filter((key) => !effective.has(key));
 
     for (const key of effective.keys()) {

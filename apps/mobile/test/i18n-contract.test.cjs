@@ -117,7 +117,8 @@ const french = catalog(I18N_FILE, 'fr');
 const supported = objectKeys(SHARED_LANGUAGES_FILE, 'SUPPORTED_LANGUAGES');
 const essentials = nestedCatalog(path.join(LOCALES_DIR, 'essential.ts'), 'essential');
 const reviewCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'review.ts'), 'review');
-const overlayFiles = new Set(['essential.ts', 'index.ts', 'review.ts']);
+const authErrorCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'auth-errors.ts'), 'authErrors');
+const overlayFiles = new Set(['auth-errors.ts', 'essential.ts', 'index.ts', 'review.ts']);
 
 function registeredLocale(file) {
   const source = sourceFile(path.join(LOCALES_DIR, file));
@@ -154,6 +155,7 @@ function effectiveCatalog(resource) {
     ...catalog(path.join(LOCALES_DIR, file), variableName),
     ...(essentials.get(code) ?? new Map()),
     ...(reviewCatalogs.get(code) ?? new Map()),
+    ...(authErrorCatalogs.get(code) ?? new Map()),
   ]);
 }
 

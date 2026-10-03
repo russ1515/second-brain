@@ -40,11 +40,20 @@ export class JwtAccessStrategy extends PassportStrategy(Strategy, 'jwt-access') 
         select: { userId: true, revokedAt: true, expiresAt: true, mfaVerifiedAt: true },
       }),
     ]);
-    if (
-      !user || !session || session.userId !== payload.sub || session.revokedAt ||
-      session.expiresAt <= now || user.accountStatus !== 'active' || user.suspendedAt || user.bannedAt
-    ) {
-      throw new UnauthorizedException({ code: 'SESSION_OR_ACCOUNT_INACTIVE' });
+    if (!user || !session || session.userId !== payload.sub) {
+      throw new UnauthorizedException({ code: 'SESSION_INVALID' });
+    }
+    if (user.accountStatus === 'banned' || user.bannedAt) {
+      throw new UnauthorizedException({ code: 'ACCOUNT_BANNED' });
+    }
+    if (user.accountStatus !== 'active' || user.suspendedAt) {
+      throw new UnauthorizedException({ code: 'ACCOUNT_SUSPENDED' });
+    }
+    if (session.revokedAt) {
+      throw new UnauthorizedException({ code: 'SESSION_REVOKED' });
+    }
+    if (session.expiresAt <= now) {
+      throw new UnauthorizedException({ code: 'SESSION_EXPIRED' });
     }
     this.requestContext.authenticate(payload.sub, payload.sessionId);
     return {

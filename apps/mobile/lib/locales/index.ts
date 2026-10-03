@@ -47,3 +47,4 @@ import './bn'; // Bengali
 // safely without losing the controls required to select/recover a locale.
 import './essential';
 import './review';
+import './auth-errors';

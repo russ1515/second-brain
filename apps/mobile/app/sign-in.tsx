@@ -129,6 +129,7 @@ export default function SignInScreen() {
           setCooldown(0);
           setOtp('');
           setStep('otp');
+          setInfo(t('auth.emailVerificationRequired'));
         }
         else router.replace(destination);
       }
@@ -167,6 +168,7 @@ export default function SignInScreen() {
         setCooldown(0);
         setOtp('');
         setStep('otp');
+        setInfo(t('auth.emailVerificationRequired'));
       } else {
         router.replace(destination);
       }

@@ -149,6 +149,23 @@ test('pending verification is restorable but ordinary protected routes still use
   assert.match(guard, /await this\.privateBeta\.assertNormalAccess\(user\.userId, user\.emailVerified\)/);
 });
 
+test('access-token validation preserves distinct session and account states', () => {
+  const strategy = read('src/auth/strategies/jwt-access.strategy.ts');
+  const guard = read('src/auth/guards/jwt-access.guard.ts');
+
+  assert.match(strategy, /!user \|\| !session \|\| session\.userId !== payload\.sub[\s\S]*code: 'SESSION_INVALID'/);
+  assert.match(strategy, /user\.accountStatus === 'banned' \|\| user\.bannedAt[\s\S]*code: 'ACCOUNT_BANNED'/);
+  assert.match(strategy, /user\.accountStatus !== 'active' \|\| user\.suspendedAt[\s\S]*code: 'ACCOUNT_SUSPENDED'/);
+  assert.match(strategy, /session\.revokedAt[\s\S]*code: 'SESSION_REVOKED'/);
+  assert.match(strategy, /session\.expiresAt <= now[\s\S]*code: 'SESSION_EXPIRED'/);
+  assert.doesNotMatch(strategy, /SESSION_OR_ACCOUNT_INACTIVE/);
+
+  assert.match(guard, /if \(error\) throw error/);
+  assert.match(guard, /name === 'TokenExpiredError'[\s\S]*code: 'SESSION_EXPIRED'/);
+  assert.match(guard, /if \(!user\)[\s\S]*code: 'SESSION_INVALID'/);
+  assert.doesNotMatch(guard, /SESSION_OR_ACCOUNT_INACTIVE/);
+});
+
 test('pending-route exception is limited to unverified identities at runtime', async () => {
   const { JwtAccessGuard } = require('../dist/auth/guards/jwt-access.guard.js');
   const passportGuardPrototype = Object.getPrototypeOf(JwtAccessGuard.prototype);

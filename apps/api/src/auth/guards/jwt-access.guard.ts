@@ -20,6 +20,34 @@ export class JwtAccessGuard extends AuthGuard('jwt-access') {
     super();
   }
 
+  override handleRequest<TUser = AuthenticatedUser>(
+    error: unknown,
+    user: TUser | false | null,
+    info: unknown,
+    _context: ExecutionContext,
+  ): TUser {
+    // Preserve the precise account/session error emitted by the strategy.
+    if (error) throw error;
+    if (
+      info &&
+      typeof info === 'object' &&
+      'name' in info &&
+      (info as { name?: unknown }).name === 'TokenExpiredError'
+    ) {
+      throw new UnauthorizedException({
+        code: 'SESSION_EXPIRED',
+        message: 'Session expired.',
+      });
+    }
+    if (!user) {
+      throw new UnauthorizedException({
+        code: 'SESSION_INVALID',
+        message: 'Session is no longer valid.',
+      });
+    }
+    return user;
+  }
+
   override async canActivate(context: ExecutionContext): Promise<boolean> {
     const authenticated = await super.canActivate(context);
     if (!authenticated) return false;

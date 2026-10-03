@@ -79,16 +79,51 @@ async function fetchWithTimeout(
   }
 }
 
+interface ErrorMessageContext {
+  path?: string;
+  authenticated?: boolean;
+}
+
+function errorCode(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const topLevel = payload as Record<string, unknown>;
+  if (typeof topLevel.code === 'string') return topLevel.code;
+  const nested = topLevel.message;
+  if (nested && typeof nested === 'object') {
+    const nestedCode = (nested as Record<string, unknown>).code;
+    if (typeof nestedCode === 'string') return nestedCode;
+  }
+  return null;
+}
+
 /** Read the API's error shape without pretending we know it exactly. Server-side
  *  failures (5xx) — including the AI services' "temporarily unavailable" — carry
  *  English backend text, so we replace them with a LOCALIZED generic message so
  *  the UI never shows a raw, wrong-language error (§24 / one-language rule). */
-function messageFrom(payload: unknown, status: number, fallback: string): string {
+function messageFrom(
+  payload: unknown,
+  status: number,
+  fallback: string,
+  context: ErrorMessageContext = {},
+): string {
   if (status >= 500) return tr('error.serverBusy');
   if (isQuotaError(payload)) return tr('state.quota-limited');
+  const code = errorCode(payload);
+  if (code === 'INVALID_CREDENTIALS') return tr('auth.invalidCredentials');
+  if (code === 'EMAIL_VERIFICATION_REQUIRED') return tr('auth.emailVerificationRequired');
+  if (code === 'ACCOUNT_SUSPENDED') return tr('error.accountSuspended');
+  if (code === 'ACCOUNT_BANNED' || code === 'ACCOUNT_BLOCKED') return tr('error.accountBanned');
+  if (code === 'SESSION_EXPIRED') return tr('error.sessionExpired');
+  if (
+    code === 'SESSION_REVOKED' ||
+    code === 'SESSION_INVALID' ||
+    code === 'SESSION_OR_ACCOUNT_INACTIVE'
+  ) return tr('error.sessionEnded');
   // API error prose is untrusted transport data: it can contain a provider
   // detail, a document fragment, or a secret.  Keep validation feedback on
   // the server/auditable channels and never render that prose in the client.
+  if (status === 401 && context.path === '/auth/login') return tr('auth.invalidCredentials');
+  if (status === 401 && context.authenticated) return tr('error.sessionEnded');
   if (status === 401) return tr('error.unauthorized');
   if (status === 403) return tr('error.forbidden');
   if (status === 404) return tr('error.notFound');
@@ -136,7 +171,10 @@ async function refreshOnce(): Promise<string | null> {
     }
     throw new ApiError(
       res.status,
-      messageFrom(payload, res.status, tr('error.detail')),
+      messageFrom(payload, res.status, tr('error.detail'), {
+        path: '/auth/refresh',
+        authenticated: true,
+      }),
       payload,
     );
   }
@@ -200,7 +238,15 @@ export async function apiUpload<T>(
 
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new ApiError(res.status, messageFrom(payload, res.status, tr('error.upload')), payload, uploadRequestId);
+    throw new ApiError(
+      res.status,
+      messageFrom(payload, res.status, tr('error.upload'), {
+        path,
+        authenticated: Boolean(session),
+      }),
+      payload,
+      uploadRequestId,
+    );
   }
   return payload as T;
 }
@@ -219,7 +265,15 @@ export async function apiBinary(path: string): Promise<BinaryResponse | null> {
   if (res.status === 404) return null;
   if (!res.ok) {
     const payload = await res.json().catch(() => null);
-    throw new ApiError(res.status, messageFrom(payload, res.status, tr('error.download')), payload, requestId);
+    throw new ApiError(
+      res.status,
+      messageFrom(payload, res.status, tr('error.download'), {
+        path,
+        authenticated: Boolean(session),
+      }),
+      payload,
+      requestId,
+    );
   }
   return {
     data: await res.arrayBuffer(),
@@ -243,7 +297,15 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
 
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new ApiError(res.status, messageFrom(payload, res.status, tr('error.detail')), payload, requestId);
+    throw new ApiError(
+      res.status,
+      messageFrom(payload, res.status, tr('error.detail'), {
+        path,
+        authenticated: !options.anonymous && Boolean(session),
+      }),
+      payload,
+      requestId,
+    );
   }
   return payload as T;
 }
