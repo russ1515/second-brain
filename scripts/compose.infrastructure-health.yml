@@ -7,6 +7,9 @@
 services:
   api:
     environment:
+      # Required by the audited authentication runtime. This only forwards the
+      # existing private P1 value; it never stores or generates a secret here.
+      OTP_HMAC_SECRET: ${OTP_HMAC_SECRET:?OTP_HMAC_SECRET is required}
       SYSTEM_HEALTH_SNAPSHOT_PATH: /run/second-brain/system-health/snapshot.json
       SYSTEM_HEALTH_SNAPSHOT_MAX_AGE_SECONDS: ${SYSTEM_HEALTH_SNAPSHOT_MAX_AGE_SECONDS:-300}
     volumes:

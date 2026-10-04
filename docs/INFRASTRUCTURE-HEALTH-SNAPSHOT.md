@@ -100,6 +100,11 @@ SYSTEM_HEALTH_SNAPSHOT_HOST_PATH=/var/lib/second-brain/system-health/snapshot.js
 SYSTEM_HEALTH_SNAPSHOT_MAX_AGE_SECONDS=300
 ```
 
+The same private P1 environment must already contain its audited
+`OTP_HMAC_SECRET`. The override forwards that required runtime secret to the
+API without recording, generating, or displaying its value. A missing value is
+a fail-closed deployment configuration error, not a health state.
+
 Then merge the override with the existing private Compose file during the API
 recreate. The override mounts exactly one file at
 `/run/second-brain/system-health/snapshot.json` read-only. It does **not** mount
