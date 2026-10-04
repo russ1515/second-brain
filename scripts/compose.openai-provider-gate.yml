@@ -7,6 +7,9 @@ services:
       LLM_PROVIDER: openai
       OPENAI_MODEL: ${OPENAI_MODEL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # The base P1 compose predates strict OTP validation for one-off `run`
+      # containers. Reuse the existing private value for normal MFA login.
+      OTP_HMAC_SECRET: ${OTP_HMAC_SECRET:-}
       # This server-only mode is read by LlmService only for an OpenAI Tutor
       # request. It disables retries and caps output in the one-off container.
       OPENAI_PROVIDER_GATE_MODE: single-bounded
