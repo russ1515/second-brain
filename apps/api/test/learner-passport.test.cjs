@@ -9,10 +9,16 @@ const {
   LearnerPassportService,
 } = require('../dist/onboarding/learner-passport.service.js');
 const {
+  OnboardingService,
+} = require('../dist/onboarding/onboarding.service.js');
+const {
   StudyPlannerService,
 } = require('../dist/planner/study-planner.service.js');
 const { TutorService } = require('../dist/tutor/tutor.service.js');
-const { selectStrategy } = require('../dist/tutor/teaching-strategy.js');
+const {
+  resolveAgeTeachingPolicy,
+  selectStrategy,
+} = require('../dist/tutor/teaching-strategy.js');
 const { resolveTeacherPolicy } = require('@second-brain/shared');
 
 const updatedAt = new Date('2026-09-30T10:00:00.000Z');
@@ -88,12 +94,54 @@ test('GET projection keeps declared, observed and verified provenance separate',
   });
 });
 
+test('Onboarding persists the existing ageBand field and a fresh service instance reloads it', async () => {
+  const now = new Date('2026-10-04T12:00:00.000Z');
+  let stored = null;
+  const table = {
+    findUnique: async () => stored,
+    upsert: async ({ create, update }) => {
+      stored = stored
+        ? { ...stored, ...update, updatedAt: now }
+        : {
+            id: 'onboarding-age', userId: 'u1', status: 'not_started', category: null,
+            currentStep: 'welcome', identity: null, education: null, languages: null,
+            languageLearner: null, goals: null, subjects: null, preferences: null,
+            teacher: null, academicSupport: null, assessment: null, extra: null,
+            completedAt: null, createdAt: now, updatedAt: now, ...create,
+          };
+      return stored;
+    },
+  };
+  const prisma = {
+    onboardingProfile: table,
+    $transaction: async (operation) => operation({
+      $executeRaw: async () => 1,
+      onboardingProfile: table,
+    }),
+  };
+
+  const firstRequest = new OnboardingService(prisma, {});
+  const saved = await firstRequest.save('u1', {
+    currentStep: 'category',
+    answers: { identity: { ageBand: '18to25' } },
+  });
+  assert.equal(saved.answers.identity.ageBand, '18to25');
+  assert.equal(stored.identity.ageBand, '18to25');
+
+  // A new service instance represents a later authenticated request: no age
+  // value is kept in process/session state.
+  const laterRequest = new OnboardingService(prisma, {});
+  const reloaded = await laterRequest.get('u1');
+  assert.equal(reloaded.answers.identity.ageBand, '18to25');
+});
+
 test('Tutor context adapts age/languages but explicitly preserves assessment rules', async () => {
   const service = new LearnerPassportService(readPrisma(), { profile: async () => null });
   const context = await service.tutorContext('u1', true);
 
   assert.equal(context.nativeOrPrimaryLanguage, 'fr');
   assert.equal(context.teachingLanguage, 'en');
+  assert.equal(context.ageBand, '12to15');
   assert.deepEqual(context.learningPreferences, ['visual']);
   assert.match(context.directive, /adolescent/i);
   assert.match(context.directive, /General explanation language: fr/);
@@ -104,40 +152,70 @@ test('Tutor context adapts age/languages but explicitly preserves assessment rul
   assert.match(context.directive, /must never lower, change or bypass.*assessment rubric/i);
 });
 
-test('Tutor composes distinct child, adolescent and adult Passport directives after trusted policy', async () => {
+test('Persisted Passport age maps to a distinct ITE policy and final Teacher Context', async () => {
   const tutor = new TutorService({}, {}, {}, {}, {}, {}, {}, {});
   const policy = resolveTeacherPolicy(
     { automaticAdaptation: true },
     { mode: 'conversation', intent: 'learn' },
   );
   const cases = [
-    ['under12', /child.*simple vocabulary.*short steps.*concrete examples/is],
-    ['12to15', /adolescent.*school-relevant examples.*exam preparation/is],
-    ['18to25', /adult\/university.*denser explanations.*academic or professional terminology/is],
+    ['under12', 'child', 'simple_concrete', /accessible vocabulary.*short guided steps.*concrete familiar examples/is],
+    ['12to15', 'adolescent', 'school_exam', /school-level vocabulary.*growing autonomy.*exam-preparation/is],
+    ['18to25', 'adult', 'academic_professional', /denser academic or technical vocabulary.*greater learner autonomy/is],
   ];
 
-  for (const [ageBand, expected] of cases) {
+  for (const [ageBand, audience, style, expectedMethod] of cases) {
     const passport = new LearnerPassportService(
       readPrisma({}, ageBand),
       { profile: async () => null },
     );
     const context = await passport.tutorContext('u1', true);
+    assert.equal(context.ageBand, ageBand);
+    const selected = selectStrategy({
+      subject: 'Informatique',
+      isLanguage: false,
+      mastery: null,
+      learningStyle: context.learningPreferences.join(' '),
+      ageBand: context.ageBand,
+    });
+    assert.deepEqual(selected.agePolicy, { sourceAgeBand: ageBand, audience, style });
     const prompt = tutor.systemPrompt(
       undefined,
       undefined,
       undefined,
       undefined,
-      null,
+      selected.strategy,
       'fr',
       undefined,
       policy,
       context.directive,
+      selected.agePolicy,
     );
 
-    assert.match(prompt, expected);
+    assert.match(prompt, new RegExp(`Age-adaptive ITE policy: audience=${audience}; style=${style}`));
+    assert.match(prompt, expectedMethod);
     assert.match(prompt, /declared Learner Passport settings.*permitted inputs.*not verified mastery/is);
-    assert.match(prompt, /never use them to lower an assessment rubric, assistance rule or grading standard/i);
+    assert.match(prompt, /never lower, change or bypass an announced assessment rubric, assistance rule or grading standard/i);
   }
+});
+
+test('Every existing age band maps explicitly and missing or legacy formats never get a silent default', () => {
+  assert.equal(resolveAgeTeachingPolicy('under12').style, 'simple_concrete');
+  assert.equal(resolveAgeTeachingPolicy('12to15').style, 'school_exam');
+  assert.equal(resolveAgeTeachingPolicy('16to18').style, 'school_exam');
+  assert.equal(resolveAgeTeachingPolicy('18to25').style, 'academic_professional');
+  assert.equal(resolveAgeTeachingPolicy('25to40').style, 'academic_professional');
+  assert.equal(resolveAgeTeachingPolicy('over40').style, 'academic_professional');
+  assert.equal(resolveAgeTeachingPolicy(null), null);
+  assert.equal(resolveAgeTeachingPolicy('18-25'), null);
+});
+
+test('Tutor does not silently replace a failed Passport read with an unadapted default', async () => {
+  const failure = new Error('controlled Passport read failure');
+  const tutor = new TutorService({}, {}, {}, {}, {}, {}, {}, {
+    tutorContext: async () => { throw failure; },
+  });
+  await assert.rejects(() => tutor.loadPassportContext('u1', true), failure);
 });
 
 test('Passport learning preferences steer the existing ITE without a new engine', () => {

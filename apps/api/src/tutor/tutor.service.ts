@@ -44,8 +44,10 @@ import { LearningPathService } from '../concepts/learning-path.service';
 // depends on this module for conversation).
 import { languageSystemPrompt } from '../languages/language-modes';
 import {
+  agePolicyDirective,
   selectStrategy,
   strategyDirective,
+  type AgeTeachingPolicy,
 } from './teaching-strategy';
 import { localeDirective, resolveLocale } from '../common/learning-locale';
 import { UsageService } from '../usage/usage.service';
@@ -522,15 +524,18 @@ export class TutorService {
     // on the session so the approach stays coherent across turns.
     let strategy = session.strategy as TeachingStrategy | null;
     let strategyReason = session.strategyReason;
-    if (adaptationEnabled && !strategy) {
-      const sel = selectStrategy({
+    const strategySelection = adaptationEnabled
+      ? selectStrategy({
         subject,
         isLanguage: !!language,
         mastery: focus?.mastery ?? null,
         learningStyle: passport.learningPreferences.join(' '),
-      });
-      strategy = sel.strategy;
-      strategyReason = sel.reason;
+        ageBand: passport.ageBand,
+      })
+      : null;
+    if (!strategy && strategySelection) {
+      strategy = strategySelection.strategy;
+      strategyReason = strategySelection.reason;
     }
 
     const historyDescending = await this.prisma.tutorMessage.findMany({
@@ -604,6 +609,7 @@ export class TutorService {
           personalization.directive,
           teacherPolicy,
           passport.directive,
+          strategySelection?.agePolicy,
         ),
       },
       ...history.map((m) => ({ role: m.role, content: m.content })),
@@ -834,6 +840,7 @@ export class TutorService {
     personalization?: string,
     teacherPolicy?: TeacherPolicySnapshot,
     passportDirective?: string,
+    agePolicy?: AgeTeachingPolicy | null,
   ): string {
     // A language session swaps the persona; everything else is unchanged. With
     // no language profile this returns exactly the pre-language-engine prompt.
@@ -886,6 +893,9 @@ export class TutorService {
     if (teacherPolicy) {
       prompt += teacherPolicyDirective(teacherPolicy);
     }
+    if (agePolicy && teacherPolicy?.automaticAdaptation !== false) {
+      prompt += agePolicyDirective(agePolicy);
+    }
     if (passportDirective && teacherPolicy?.automaticAdaptation !== false) {
       prompt += DECLARED_PASSPORT_ADAPTATION_RULE;
     }
@@ -907,12 +917,9 @@ export class TutorService {
     userId: string,
     includeAdaptiveSignals: boolean,
   ): Promise<LearnerPassportTutorContext> {
-    return this.learnerPassport.tutorContext(userId, includeAdaptiveSignals).catch(() => ({
-      directive: '',
-      nativeOrPrimaryLanguage: null,
-      teachingLanguage: null,
-      learningPreferences: [],
-    }));
+    // Passport state is authoritative for declared adaptation. Failing closed
+    // avoids silently replacing a persisted age band with an unadapted default.
+    return this.learnerPassport.tutorContext(userId, includeAdaptiveSignals);
   }
 
   /**

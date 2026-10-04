@@ -1,4 +1,4 @@
-import type { TeachingStrategy } from '@second-brain/shared';
+import type { LearnerAgeBand, TeachingStrategy } from '@second-brain/shared';
 
 /**
  * Teaching Strategy Engine (Sprint 7.9, ITE Engine).
@@ -20,12 +20,69 @@ export interface StrategyContext {
   mastery: number | null;
   /** Optional learner learning-style hint (pluggable; unused → ignored). */
   learningStyle?: string | null;
+  /** Self-declared Passport age band. It shapes delivery, never mastery or the
+   * assessment standard. */
+  ageBand?: LearnerAgeBand | null;
+}
+
+export type AgeTeachingStyle =
+  | 'simple_concrete'
+  | 'school_exam'
+  | 'academic_professional';
+
+export interface AgeTeachingPolicy {
+  sourceAgeBand: LearnerAgeBand;
+  audience: 'child' | 'adolescent' | 'adult';
+  style: AgeTeachingStyle;
 }
 
 export interface StrategySelection {
   strategy: TeachingStrategy;
   /** Learner-facing reason, kept short. */
   reason: string;
+  /** Server-derived delivery policy from the persisted Passport age band. */
+  agePolicy: AgeTeachingPolicy | null;
+}
+
+/** Map the repository's existing age bands to a bounded delivery policy. This
+ * is part of the ITE: it changes method and density, never measured mastery or
+ * an assessment rubric. Unknown/missing legacy values deliberately map to null
+ * rather than a silent default. */
+export function resolveAgeTeachingPolicy(
+  ageBand?: LearnerAgeBand | null,
+): AgeTeachingPolicy | null {
+  if (ageBand === 'under12') {
+    return { sourceAgeBand: ageBand, audience: 'child', style: 'simple_concrete' };
+  }
+  if (ageBand === '12to15' || ageBand === '16to18') {
+    return { sourceAgeBand: ageBand, audience: 'adolescent', style: 'school_exam' };
+  }
+  if (ageBand === '18to25' || ageBand === '25to40' || ageBand === 'over40') {
+    return { sourceAgeBand: ageBand, audience: 'adult', style: 'academic_professional' };
+  }
+  return null;
+}
+
+/** Concrete method directive for the policy selected by the ITE. Stable codes
+ * make the decision auditable without exposing private Passport values. */
+export function agePolicyDirective(policy: AgeTeachingPolicy): string {
+  const prefix =
+    ` Age-adaptive ITE policy: audience=${policy.audience}; style=${policy.style}.`;
+  const assessmentInvariant =
+    ' This policy changes delivery only: never lower, change or bypass an announced assessment rubric, assistance rule or grading standard.';
+  if (policy.style === 'simple_concrete') {
+    return prefix +
+      ' Use accessible vocabulary, one idea at a time, short guided steps and concrete familiar examples. Model the first step, then let the learner try with patient, specific encouragement.' +
+      assessmentInvariant;
+  }
+  if (policy.style === 'school_exam') {
+    return prefix +
+      ' Use school-level vocabulary and examples, support growing autonomy, then use a short exercise or exam-preparation check when relevant. Guide without taking over the learner\'s work.' +
+      assessmentInvariant;
+  }
+  return prefix +
+    ' Use denser academic or technical vocabulary, concise scaffolding and greater learner autonomy. Prefer rigorous disciplinary examples and do not default to child-like simplification unless observed difficulty requires it.' +
+    assessmentInvariant;
 }
 
 /** How the teacher runs each strategy — the METHOD half of the directive. */
@@ -94,85 +151,88 @@ export function selectStrategy(ctx: StrategyContext): StrategySelection {
   const learningStyle = (ctx.learningStyle ?? '').toLowerCase();
   const low = ctx.mastery !== null && ctx.mastery < 0.35;
   const high = ctx.mastery !== null && ctx.mastery >= 0.75;
+  const agePolicy = resolveAgeTeachingPolicy(ctx.ageBand);
+  const selection = (
+    strategy: TeachingStrategy,
+    reason: string,
+  ): StrategySelection => ({ strategy, reason, agePolicy });
 
   // Languages are inherently communicative → action-oriented (approche actionnelle).
   if (ctx.isLanguage) {
-    return {
-      strategy: 'task_based',
-      reason:
-        'A language is learned by using it, so the teacher builds the session around real communicative tasks.',
-    };
+    return selection(
+      'task_based',
+      'A language is learned by using it, so the teacher builds the session around real communicative tasks.',
+    );
   }
 
   // A shaky foundation needs modelling before independence, whatever the subject.
   if (low) {
-    return {
-      strategy: 'guided_demonstration',
-      reason:
-        'Your mastery here is still forming, so the teacher demonstrates worked examples first and hands over gradually.',
-    };
+    return selection(
+      'guided_demonstration',
+      'Your mastery here is still forming, so the teacher demonstrates worked examples first and hands over gradually.',
+    );
   }
 
   // A learner-declared Passport preference may steer the existing ITE, but it
   // never overrides language pedagogy or low-mastery scaffolding above.
   if (/project|projet/.test(learningStyle)) {
-    return {
-      strategy: 'project_based',
-      reason: 'Your declared preference is to learn through projects, so the session is organised around a concrete artefact.',
-    };
+    return selection(
+      'project_based',
+      'Your declared preference is to learn through projects, so the session is organised around a concrete artefact.',
+    );
   }
   if (/visual|demonstrat|worked example|exemple/.test(learningStyle)) {
-    return {
-      strategy: 'guided_demonstration',
-      reason: 'Your declared preference is for visual or worked demonstrations, so the teacher models an example before handing over.',
-    };
+    return selection(
+      'guided_demonstration',
+      'Your declared preference is for visual or worked demonstrations, so the teacher models an example before handing over.',
+    );
   }
   if (/hands.on|practical|pratique|experien/.test(learningStyle)) {
-    return {
-      strategy: 'experiential',
-      reason: 'Your declared preference is to learn by doing, so the teacher uses concrete experience and reflection.',
-    };
+    return selection(
+      'experiential',
+      'Your declared preference is to learn by doing, so the teacher uses concrete experience and reflection.',
+    );
   }
 
   if (matches(subject, CODING)) {
-    return {
-      strategy: 'project_based',
-      reason: 'Programming sticks when you build something, so the session is organised around a small project.',
-    };
+    return selection(
+      'project_based',
+      'Programming sticks when you build something, so the session is organised around a small project.',
+    );
   }
   if (matches(subject, STEM_PROBLEM)) {
-    return {
-      strategy: 'problem_solving',
-      reason: 'This is a problem-driven subject, so the teacher works through problems with you step by step.',
-    };
+    return selection(
+      'problem_solving',
+      'This is a problem-driven subject, so the teacher works through problems with you step by step.',
+    );
   }
   if (matches(subject, CASE_SUBJECTS)) {
-    return {
-      strategy: 'case_study',
-      reason: 'This subject lives in real cases, so the teacher anchors it in a concrete scenario to analyse.',
-    };
+    return selection(
+      'case_study',
+      'This subject lives in real cases, so the teacher anchors it in a concrete scenario to analyse.',
+    );
   }
 
   // Strong learners are pushed into applying and experiencing rather than being told.
   if (high) {
-    return {
-      strategy: 'experiential',
-      reason: 'You already have a solid grasp, so the teacher pushes you to apply it and reflect on the experience.',
-    };
+    return selection(
+      'experiential',
+      'You already have a solid grasp, so the teacher pushes you to apply it and reflect on the experience.',
+    );
   }
 
   if (matches(subject, HUMANITIES)) {
-    return {
-      strategy: 'socratic',
-      reason: 'This is a discussion-driven subject, so the teacher leads with guiding questions.',
-    };
+    return selection(
+      'socratic',
+      'This is a discussion-driven subject, so the teacher leads with guiding questions.',
+    );
   }
 
   // Sensible universal default: question-led teaching.
-  return {
-    strategy: 'socratic',
-    reason: 'The teacher leads with guiding questions so you reason your way to understanding.',
-  };
+  return selection(
+    'socratic',
+    'The teacher leads with guiding questions so you reason your way to understanding.',
+  );
 }
 
 /** The full strategy directive injected into the tutor system prompt. */

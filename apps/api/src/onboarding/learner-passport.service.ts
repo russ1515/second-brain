@@ -315,6 +315,7 @@ export class LearnerPassportService {
     lines.push('This context may adapt wording, examples and scaffolding. It must never lower, change or bypass an announced assessment rubric, assistance rule or grading standard.');
     return {
       directive: ` ${lines.join(' ')}`,
+      ageBand: declared.ageBand,
       nativeOrPrimaryLanguage: declared.nativeOrPrimaryLanguage,
       teachingLanguage: declared.teachingLanguage,
       learningPreferences: includeAdaptiveSignals ? declared.learningPreferences : [],

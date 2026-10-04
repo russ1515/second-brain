@@ -125,6 +125,9 @@ export interface UpdateLearnerPassportRequest {
 
 export interface LearnerPassportTutorContext {
   directive: string;
+  /** Persisted declaration forwarded as data to the existing ITE. The ITE,
+   * not the client or the Passport projection, derives pedagogical policy. */
+  ageBand: LearnerAgeBand | null;
   nativeOrPrimaryLanguage: SupportedLanguageCode | null;
   teachingLanguage: SupportedLanguageCode | null;
   learningPreferences: string[];
