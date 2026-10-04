@@ -237,6 +237,21 @@ test('Sprint 6 Infrastructure HTTP route is MFA/RBAC-protected, read-only, and r
       && techOpsAllowed.body?.alerts?.some((alert) => alert?.key === 'latency_threshold' && alert?.state === 'BUSINESS_DECISION_REQUIRED'));
     observedCorrelationCount = Array.isArray(techOpsAllowed.body?.correlations) ? techOpsAllowed.body.correlations.length : 0;
     mark('incident_correlation_contract_redacted', Array.isArray(techOpsAllowed.body?.correlations) && scanResponse(techOpsAllowed.body.correlations));
+    const infrastructureReadAudits = await prisma.auditLog.findMany({
+      where: {
+        action: 'infrastructure.overview.read',
+        requestId: { startsWith: `sprint6-infra-${runId}-` },
+      },
+      select: { action: true, targetType: true, targetId: true, result: true, metadata: true },
+    });
+    mark('infrastructure_reads_audited', infrastructureReadAudits.length >= 2 && infrastructureReadAudits.every((entry) => (
+      entry.action === 'infrastructure.overview.read'
+      && entry.targetType === 'Infrastructure'
+      && entry.targetId === 'system-health'
+      && entry.result === 'success'
+      && typeof entry.metadata === 'object'
+      && entry.metadata !== null
+    )));
     const readOnlyCountsAfter = await Promise.all([
       prisma.providerUsageOperation.count(), prisma.providerUsageAttempt.count(),
       prisma.errorEvent.count(), prisma.bugGroup.count(), prisma.incident.count(),
