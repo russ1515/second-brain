@@ -11,5 +11,10 @@ import { QdrantHealthIndicator } from './indicators/qdrant.health';
     RedisHealthIndicator,
     QdrantHealthIndicator,
   ],
+  exports: [
+    PrismaHealthIndicator,
+    RedisHealthIndicator,
+    QdrantHealthIndicator,
+  ],
 })
 export class HealthModule {}

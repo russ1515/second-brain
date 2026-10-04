@@ -72,6 +72,15 @@ class EnvironmentVariables {
   @IsString()
   QDRANT_API_KEY?: string;
 
+  /** Read-only path to an allowlisted host-health snapshot, never a Docker socket. */
+  @IsOptional()
+  @IsString()
+  SYSTEM_HEALTH_SNAPSHOT_PATH?: string;
+
+  @IsOptional()
+  @IsInt()
+  SYSTEM_HEALTH_SNAPSHOT_MAX_AGE_SECONDS?: number;
+
   @IsString()
   LLM_PROVIDER!: string;
 

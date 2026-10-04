@@ -34,6 +34,14 @@ export default () => ({
     url: process.env.QDRANT_URL ?? 'http://localhost:6333',
     apiKey: process.env.QDRANT_API_KEY,
   },
+  infrastructure: {
+    // A host-side collector may place one allowlisted, root-owned snapshot here.
+    // The API only reads it; it never gets Docker or host-control privileges.
+    hostSnapshotPath: process.env.SYSTEM_HEALTH_SNAPSHOT_PATH,
+    hostSnapshotMaxAgeSeconds: parseInfrastructureSnapshotMaxAge(
+      process.env.SYSTEM_HEALTH_SNAPSHOT_MAX_AGE_SECONDS,
+    ),
+  },
   llm: {
     provider: process.env.LLM_PROVIDER ?? 'gemini',
     // OpenAI keeps its own server-only model selector so switching the
@@ -157,4 +165,10 @@ function parseProviderGateMaxOutputTokens(value: string | undefined): number {
   const parsed = Number.parseInt(value ?? '32', 10);
   if (!Number.isSafeInteger(parsed)) return 32;
   return Math.min(128, Math.max(1, parsed));
+}
+
+function parseInfrastructureSnapshotMaxAge(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? '300', 10);
+  if (!Number.isSafeInteger(parsed)) return 300;
+  return Math.min(3_600, Math.max(30, parsed));
 }

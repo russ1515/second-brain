@@ -1,0 +1,16 @@
+# Merge this file with the private P1 staging Compose file only. It grants the
+# API read access to one already-sanitized snapshot file; it never grants Docker
+# socket access or a host-control capability.
+#
+# Required operator environment (kept outside Git):
+#   SYSTEM_HEALTH_SNAPSHOT_HOST_PATH=/var/lib/second-brain/system-health/snapshot.json
+services:
+  api:
+    environment:
+      SYSTEM_HEALTH_SNAPSHOT_PATH: /run/second-brain/system-health/snapshot.json
+      SYSTEM_HEALTH_SNAPSHOT_MAX_AGE_SECONDS: ${SYSTEM_HEALTH_SNAPSHOT_MAX_AGE_SECONDS:-300}
+    volumes:
+      - type: bind
+        source: ${SYSTEM_HEALTH_SNAPSHOT_HOST_PATH:?SYSTEM_HEALTH_SNAPSHOT_HOST_PATH is required}
+        target: /run/second-brain/system-health/snapshot.json
+        read_only: true

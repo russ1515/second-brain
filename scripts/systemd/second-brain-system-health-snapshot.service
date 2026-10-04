@@ -1,0 +1,13 @@
+[Unit]
+Description=Second Brain aggregate system-health snapshot
+
+[Service]
+Type=oneshot
+Environment=SYSTEM_HEALTH_SNAPSHOT_PATH=/var/lib/second-brain/system-health/snapshot.json
+Environment=SYSTEM_HEALTH_DISK_PATH=/var/lib/second-brain
+ExecStart=/usr/local/sbin/second-brain-system-health-snapshot
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/second-brain/system-health

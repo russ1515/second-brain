@@ -3,6 +3,8 @@ import { SkipThrottle } from '@nestjs/throttler';
 import type { MonitoringSnapshot } from '@second-brain/shared';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import { AdminGuard } from '../admin/admin.guard';
+import { CapabilityGuard } from '../admin/capability.guard';
+import { RequireAdminCapabilities } from '../admin/admin-rbac';
 import { MetricsService } from './metrics.service';
 
 /** Prometheus scrape endpoint (Sprint 10.4). Public + un-throttled, per the
@@ -21,7 +23,8 @@ export class MetricsController {
 }
 
 /** Internal Monitoring Dashboard data (Sprint 10.4). Admin-only. */
-@UseGuards(JwtAccessGuard, AdminGuard)
+@UseGuards(JwtAccessGuard, AdminGuard, CapabilityGuard)
+@RequireAdminCapabilities('infrastructure.read')
 @Controller('monitoring')
 export class MonitoringController {
   constructor(private readonly metrics: MetricsService) {}
