@@ -275,6 +275,27 @@ export class LearnerPassportService {
         `Teaching language: ${declared.teachingLanguage}. Preserve necessary technical terms in that language and, when useful, give a short example in it; keep explanations in the general explanation language.`,
       );
     }
+    if (declared.knownLanguages.length) {
+      lines.push(
+        `Declared known languages and levels: ${declared.knownLanguages
+          .slice(0, 12)
+          .map((item) => `${this.promptValue(item.language)}=${item.level ? this.promptValue(item.level) : 'unassessed'}`)
+          .join(', ')}. Treat these levels as self-declared until observed evidence confirms them.`,
+      );
+    }
+    if (declared.languageGoals.targetLanguage) {
+      const levels = [
+        declared.languageGoals.currentLevel
+          ? `current=${declared.languageGoals.currentLevel}`
+          : null,
+        declared.languageGoals.targetLevel
+          ? `target=${declared.languageGoals.targetLevel}`
+          : null,
+      ].filter((value): value is string => Boolean(value));
+      lines.push(
+        `Declared learning language goal: ${declared.languageGoals.targetLanguage}${levels.length ? ` (${levels.join(', ')})` : ''}.`,
+      );
+    }
     if (base.languages.length) {
       lines.push(`Active learning languages and declared levels: ${base.languages.slice(0, 5).map((row) => `${this.promptValue(row.language)}=${this.cefr(row.cefrLevel) ?? 'unassessed'}`).join(', ')}. Increase immersion only from these recorded levels or real observed evidence.`);
     }

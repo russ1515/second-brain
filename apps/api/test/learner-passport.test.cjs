@@ -96,6 +96,8 @@ test('Tutor context adapts age/languages but explicitly preserves assessment rul
   assert.match(context.directive, /adolescent/i);
   assert.match(context.directive, /General explanation language: fr/);
   assert.match(context.directive, /Teaching language: en/);
+  assert.match(context.directive, /Declared known languages and levels: en=B1/);
+  assert.match(context.directive, /Declared learning language goal: en \(current=B1, target=C1\)/);
   assert.match(context.directive, /Observed Learning DNA signals/);
   assert.match(context.directive, /must never lower, change or bypass.*assessment rubric/i);
 });
