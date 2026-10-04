@@ -19,5 +19,7 @@ services:
     volumes:
       - type: bind
         source: ${P1_REPO}/scripts/openai-provider-gate-client.cjs
-        target: /p1/openai-provider-gate-client.cjs
+        # Keep the entrypoint next to the production node_modules directory so
+        # Node resolves Prisma, argon2 and otplib without a global NODE_PATH.
+        target: /app/openai-provider-gate-client.cjs
         read_only: true

@@ -114,4 +114,4 @@ docker exec \
   -e "P1_PROVIDER_GATE_RUN_ID=$RUN_ID" \
   -e "P1_PROVIDER_GATE_SOURCE_SHA=$SOURCE_SHA" \
   -e "P1_PROVIDER_GATE_EVIDENCE_DIR=/p1/evidence" \
-  "$CONTAINER" node /p1/openai-provider-gate-client.cjs
+  "$CONTAINER" node /app/openai-provider-gate-client.cjs
