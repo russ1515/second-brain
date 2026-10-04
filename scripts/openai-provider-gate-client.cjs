@@ -299,15 +299,16 @@ async function main() {
     body: { content: 'Reply only with OK.' },
   });
 
-  const operation = await prisma.providerUsageOperation.findFirst({
-    where: { requestId },
+  const matchingOperations = await prisma.providerUsageOperation.findMany({
+    where: { requestId, attempts: { some: { provider: 'openai' } } },
     include: {
       attempts: { orderBy: { attemptNumber: 'asc' } },
       quotaReservation: { include: { ledger: { orderBy: { createdAt: 'asc' } } } },
     },
   });
+  const operation = matchingOperations[0];
   const attempt = operation?.attempts?.[0];
-  if (!operation || !attempt || operation.attempts.length !== 1) {
+  if (matchingOperations.length !== 1 || !operation || !attempt || operation.attempts.length !== 1) {
     throw gateError('OPENAI_LEDGER_SINGLE_ATTEMPT_MISSING');
   }
   if (
