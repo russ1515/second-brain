@@ -190,7 +190,7 @@ test('Sprint 6 Infrastructure HTTP route is MFA/RBAC-protected, read-only, and r
 
     const users = await prisma.user.findMany({
       where: { email: { in: Object.values(fixtureEmails) }, emailVerified: true, accountStatus: 'active' },
-      select: { email: true, twoFactorEnabled: true, adminRoleAssignments: { where: { revokedAt: null }, select: { role: true } } },
+      select: { id: true, email: true, twoFactorEnabled: true, adminRoleAssignments: { where: { revokedAt: null }, select: { role: true } } },
     });
     const learner = assertFixture(users, fixtureEmails.learner, null);
     const superAdmin = assertFixture(users, fixtureEmails.superAdmin, 'SUPER_ADMIN');
@@ -198,6 +198,10 @@ test('Sprint 6 Infrastructure HTTP route is MFA/RBAC-protected, read-only, and r
     const support = assertFixture(users, fixtureEmails.support, 'SUPPORT');
     const finance = assertFixture(users, fixtureEmails.finance, 'FINANCE');
     mark('technical_fixture_manifest_verified', true);
+    const infrastructureAuditActors = [techOps.id, superAdmin.id];
+    const infrastructureAuditCountBefore = await prisma.auditLog.count({
+      where: { action: 'infrastructure.overview.read', actorId: { in: infrastructureAuditActors } },
+    });
 
     const learnerSession = await loginTechnical(learner.email, false);
     const supportSession = await loginTechnical(support.email, true);
@@ -240,18 +244,31 @@ test('Sprint 6 Infrastructure HTTP route is MFA/RBAC-protected, read-only, and r
     const infrastructureReadAudits = await prisma.auditLog.findMany({
       where: {
         action: 'infrastructure.overview.read',
-        requestId: { startsWith: `sprint6-infra-${runId}-` },
+        actorId: { in: infrastructureAuditActors },
       },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
       select: { action: true, targetType: true, targetId: true, result: true, metadata: true },
     });
-    mark('infrastructure_reads_audited', infrastructureReadAudits.length >= 2 && infrastructureReadAudits.every((entry) => (
+    const infrastructureAuditCountAfter = await prisma.auditLog.count({
+      where: { action: 'infrastructure.overview.read', actorId: { in: infrastructureAuditActors } },
+    });
+    const auditedRanges = new Set(infrastructureReadAudits.map((entry) => (
+      typeof entry.metadata === 'object' && entry.metadata !== null && !Array.isArray(entry.metadata)
+        ? entry.metadata.range
+        : null
+    )));
+    mark('infrastructure_reads_audited', infrastructureAuditCountAfter >= infrastructureAuditCountBefore + 2
+      && infrastructureReadAudits.some((entry) => (
       entry.action === 'infrastructure.overview.read'
       && entry.targetType === 'Infrastructure'
       && entry.targetId === 'system-health'
       && entry.result === 'success'
       && typeof entry.metadata === 'object'
       && entry.metadata !== null
-    )));
+      ))
+      && auditedRanges.has('1h')
+      && auditedRanges.has('24h'));
     const readOnlyCountsAfter = await Promise.all([
       prisma.providerUsageOperation.count(), prisma.providerUsageAttempt.count(),
       prisma.errorEvent.count(), prisma.bugGroup.count(), prisma.incident.count(),
