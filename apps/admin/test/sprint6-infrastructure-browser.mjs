@@ -18,6 +18,7 @@ const evidenceDirectory = process.env.SPRINT6_INFRA_EVIDENCE_DIR ?? '';
 const checks = [];
 let currentCheck = 'INITIALIZATION';
 let browser;
+let safePresentationEvidence = null;
 
 function safeIdentifier(value) {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{1,96}$/u.test(value) ? value : null;
@@ -86,6 +87,7 @@ function writeEvidence(status, failureCheck = null) {
     sourceSha,
     failureCheck,
     checks,
+    presentation: safePresentationEvidence,
   }), { mode: 0o600, flag: 'wx' });
 }
 
@@ -208,7 +210,21 @@ async function main() {
     const nonObservedRow = expectedNonObservedRow(overview);
     assert.ok(nonObservedRow, 'EXPECTED_NOT_INSTRUMENTED_OR_UNKNOWN_STATE');
     const row = page.getByTestId(nonObservedRow.selector);
-    await row.getByText(nonObservedRow.status, { exact: true }).waitFor();
+    const [rowCount, stateCount, renderedRows] = await Promise.all([
+      row.count(),
+      row.getByText(nonObservedRow.status, { exact: true }).count(),
+      page.locator('[data-testid^="system-health-component-"], [data-testid^="system-health-provider-"], [data-testid="system-health-resources"]')
+        .evaluateAll((elements) => elements.map((element) => element.getAttribute('data-testid')).filter((value) => typeof value === 'string').slice(0, 32)),
+    ]);
+    safePresentationEvidence = {
+      expectedSelector: nonObservedRow.selector,
+      expectedStatus: nonObservedRow.status,
+      rowCount,
+      stateCount,
+      renderedRows,
+    };
+    assert.equal(rowCount, 1, 'NON_OBSERVED_STATUS_ROW_MISSING');
+    assert.ok(stateCount >= 1, 'NON_OBSERVED_STATUS_TEXT_MISSING');
     const visibleText = await page.locator('body').innerText();
     assert.doesNotMatch(visibleText, /(?:sk-[A-Za-z0-9]|bearer\s+|postgres(?:ql)?:\/\/|-----BEGIN|password\s*=|api[_-]?key\s*=)/iu);
     record(currentCheck);
