@@ -44,6 +44,7 @@ import { LearningPathService } from '../concepts/learning-path.service';
 // depends on this module for conversation).
 import { languageSystemPrompt } from '../languages/language-modes';
 import {
+  adaptiveInstructionPriorityDirective,
   agePolicyDirective,
   selectStrategy,
   strategyDirective,
@@ -893,9 +894,6 @@ export class TutorService {
     if (teacherPolicy) {
       prompt += teacherPolicyDirective(teacherPolicy);
     }
-    if (agePolicy && teacherPolicy?.automaticAdaptation !== false) {
-      prompt += agePolicyDirective(agePolicy);
-    }
     if (passportDirective && teacherPolicy?.automaticAdaptation !== false) {
       prompt += DECLARED_PASSPORT_ADAPTATION_RULE;
     }
@@ -904,6 +902,10 @@ export class TutorService {
     // CEFR, immersion, code-switching) governs their language instead.
     if (!language && locale) {
       prompt += localeDirective(locale);
+    }
+    if (agePolicy && teacherPolicy?.automaticAdaptation !== false) {
+      prompt += agePolicyDirective(agePolicy);
+      prompt += adaptiveInstructionPriorityDirective(agePolicy);
     }
     prompt +=
       ' When structure helps the learner, use short Markdown sections with clear' +

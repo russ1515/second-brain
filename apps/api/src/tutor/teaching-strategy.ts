@@ -85,6 +85,26 @@ export function agePolicyDirective(policy: AgeTeachingPolicy): string {
     assessmentInvariant;
 }
 
+/** Resolve the final precedence between the subject method, age delivery,
+ * assessment context and learner languages. Keeping this directive last in the
+ * Teacher Context makes the hierarchy unambiguous without creating a second
+ * teaching engine or weakening any assessment rule. */
+export function adaptiveInstructionPriorityDirective(
+  policy: AgeTeachingPolicy,
+): string {
+  const examPriority = policy.style === 'school_exam'
+    ? ' The active school_exam context remains in force throughout the response. The subject teaching strategy is a method used inside that exam-oriented policy, not a replacement for it.'
+    : ' The subject teaching strategy operates inside this age-adaptive delivery policy, not in place of it.';
+  return (
+    ' Adaptive Teacher Context instruction priority:' +
+    ' (1) any active assessment or exam context and its rubric remain authoritative;' +
+    examPriority +
+    ' (2) use the declared explanation language for explanatory prose;' +
+    ' (3) preserve relevant academic and technical terminology in the declared teaching language when it is useful. This is an intentional exception to single-language prose and does not switch the explanation language;' +
+    ' (4) age adaptation changes scaffolding, pacing and presentation only. It must never lower the expected level, grading standard or assistance rules.'
+  );
+}
+
 /** How the teacher runs each strategy — the METHOD half of the directive. */
 const STRATEGY_METHOD: Record<TeachingStrategy, string> = {
   socratic:

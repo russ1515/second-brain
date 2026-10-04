@@ -210,6 +210,65 @@ test('Every existing age band maps explicitly and missing or legacy formats neve
   assert.equal(resolveAgeTeachingPolicy('18-25'), null);
 });
 
+test('Adolescent school_exam policy outranks subject method and locale wording in final Teacher Context', async () => {
+  const tutor = new TutorService({}, {}, {}, {}, {}, {}, {}, {});
+  const passport = new LearnerPassportService(
+    readPrisma({
+      onboardingProfile: {
+        findUnique: async () => ({
+          identity: { ageBand: '12to15' },
+          education: { category: 'school', level: 'secondary' },
+          languages: {
+            native: 'fr', explanation: 'fr', teaching: 'de',
+            known: [{ language: 'de', level: 'A2' }],
+          },
+          goals: ['Prepare an assessment'],
+          subjects: ['Informatique'],
+          preferences: ['project'],
+          teacher: { learningSupport: 'balanced' },
+          extra: { interfaceLanguage: 'fr' },
+          category: 'school',
+          updatedAt,
+        }),
+      },
+    }, '12to15'),
+    { profile: async () => null },
+  );
+  const context = await passport.tutorContext('u1', true);
+  const selected = selectStrategy({
+    subject: 'Informatique',
+    isLanguage: false,
+    mastery: null,
+    learningStyle: context.learningPreferences.join(' '),
+    ageBand: context.ageBand,
+  });
+  assert.equal(selected.strategy, 'project_based');
+  assert.equal(selected.agePolicy.style, 'school_exam');
+
+  const prompt = tutor.systemPrompt(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    selected.strategy,
+    'fr',
+    undefined,
+    resolveTeacherPolicy(
+      { automaticAdaptation: true },
+      { mode: 'conversation', intent: 'learn' },
+    ),
+    context.directive,
+    selected.agePolicy,
+  );
+  const priorityAt = prompt.indexOf('Adaptive Teacher Context instruction priority:');
+  assert.ok(priorityAt > prompt.indexOf('Teaching strategy: Project-based learning'));
+  assert.ok(priorityAt > prompt.indexOf('All pedagogical content must be written'));
+  assert.match(prompt.slice(priorityAt), /school_exam context remains in force throughout.*subject teaching strategy.*inside that exam-oriented policy/is);
+  assert.match(prompt.slice(priorityAt), /explanation language for explanatory prose.*academic and technical terminology.*declared teaching language.*intentional exception/is);
+  assert.match(prompt.slice(priorityAt), /never lower the expected level, grading standard or assistance rules/i);
+  assert.doesNotMatch(prompt.slice(priorityAt), /Germany|German|Deutsch|verkettet/i);
+});
+
 test('Tutor does not silently replace a failed Passport read with an unadapted default', async () => {
   const failure = new Error('controlled Passport read failure');
   const tutor = new TutorService({}, {}, {}, {}, {}, {}, {}, {
