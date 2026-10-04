@@ -138,6 +138,32 @@ function RestrictedProfileSummary({ locale, theme, data }: { locale: 'fr' | 'en'
   return <View style={{ marginTop: 10, gap: 8, padding: 12, borderRadius: 8, backgroundColor: theme.mutedSurface }}><Text style={{ color: theme.text, fontSize: 12, fontWeight: '800' }}>{u(locale, classification === 'HIGHLY_RESTRICTED' ? 'highlyRestricted' : 'restricted')}</Text>{values.map((entry) => <View key={entry.label}><Text style={{ color: theme.muted, fontSize: 10, fontWeight: '800' }}>{u(locale, entry.label)}</Text><Text selectable numberOfLines={4} style={{ color: theme.text, marginTop: 3, fontSize: 12 }}>{entry.value}</Text></View>)}</View>;
 }
 
+/** Safe Passport projection returned by the existing learner-profile endpoint.
+ * Raw identity answers and arbitrary pedagogical JSON remain hidden. */
+function LearnerPassportSummary({ locale, theme, data }: { locale: 'fr' | 'en'; theme: Theme; data: UnknownRecord | undefined }) {
+  const passport = nestedRecord(data, ['learnerPassport']);
+  if (!passport) return null;
+  const observed = nestedRecord(passport, ['observed']);
+  const verified = nestedRecord(passport, ['verified']);
+  const evidence = [
+    recordString(passport, ['source']),
+    recordString(observed, ['source']),
+    recordValue(verified, ['available']) === false ? 'VERIFIED: unavailable' : undefined,
+  ].filter((value): value is string => Boolean(value));
+  return <View style={{ marginTop: 10, gap: 9 }}><Text style={{ color: theme.text, fontSize: 14, fontWeight: '800' }}>{u(locale, 'learnerPassport')}</Text><KeyValueGrid locale={locale} theme={theme} fields={[
+    { label: 'ageBand', value: recordValue(passport, ['ageBand']) },
+    { label: 'countryOfOrigin', value: recordValue(passport, ['countryOfOrigin']) },
+    { label: 'currentCountry', value: recordValue(passport, ['currentCountry']) },
+    { label: 'nativeLanguage', value: recordValue(passport, ['nativeOrPrimaryLanguage']) },
+    { label: 'teachingLanguage', value: recordValue(passport, ['teachingLanguage']) },
+    { label: 'educationSystem', value: recordValue(passport, ['educationSystem']) },
+    { label: 'educationDomain', value: recordValue(passport, ['educationDomain']) },
+    { label: 'timezone', value: recordValue(passport, ['timezone']) },
+    { label: 'activeLanguageProfiles', value: recordValue(observed, ['activeLanguageProfiles']) },
+    { label: 'passportEvidence', value: evidence.join(' · ') },
+  ]} /></View>;
+}
+
 function SmallTable({ locale, theme, columns, rows }: { locale: 'fr' | 'en'; theme: Theme; columns: { label: UserCopyKey; value(row: UnknownRecord): unknown; kind?: 'date' | 'status' | 'percent' | 'masked' }[]; rows: UnknownRecord[] }) {
   if (!rows.length) return <Text style={{ color: theme.muted }}>{u(locale, 'noData')}</Text>;
   return <ScrollView horizontal><View style={{ minWidth: Math.max(520, columns.length * 135), borderWidth: 1, borderColor: theme.border, borderRadius: 8, overflow: 'hidden' }}><View style={{ flexDirection: 'row', backgroundColor: theme.mutedSurface }}>{columns.map((column) => <View key={column.label} style={{ minWidth: 135, flex: 1, padding: 9 }}><Text style={{ color: theme.muted, fontSize: 10, fontWeight: '800' }}>{u(locale, column.label)}</Text></View>)}</View>{rows.map((row, rowIndex) => <View key={String(recordValue(row, ['id', 'eventId', 'createdAt']) ?? rowIndex)} style={{ flexDirection: 'row', borderTopWidth: 1, borderColor: theme.border }}>{columns.map((column) => <View key={column.label} style={{ minWidth: 135, flex: 1, padding: 9 }}><Text selectable numberOfLines={2} style={{ color: theme.text, fontSize: 12 }}>{formatValue(locale, column.value(row), column.kind)}</Text></View>)}</View>)}</View></ScrollView>;
@@ -350,6 +376,7 @@ export function UserControlCenter({ userId }: { userId: string }) {
     {activeTab === 'account' && <Panel title={u(locale, 'account')} section={detail} theme={theme} locale={locale} onRetry={() => void load()}><KeyValueGrid locale={locale} theme={theme} fields={[{ label: 'accountStatus', value: recordValue(accountOverview, ['accountStatus']) ?? accountStatus, kind: 'status' }, { label: 'emailVerified', value: recordValue(accountOverview, ['emailVerified', 'isEmailVerified']) }, { label: 'interfaceLanguage', value: recordValue(accountOverview, ['interfaceLanguage', 'locale']) }, { label: 'createdAt', value: recordString(accountOverview, ['createdAt']) ?? recordString(user, ['createdAt']), kind: 'date' }, { label: 'lastActive', value: recordString(accountOverview, ['lastActiveAt', 'lastActive']) ?? recordString(user, ['lastActiveAt', 'lastActive']), kind: 'date' }]} /><View style={{ marginTop: 5, padding: 12, borderRadius: 8, backgroundColor: theme.mutedSurface }}><Text style={{ color: theme.muted, fontSize: 10, fontWeight: '800' }}>{u(locale, 'identityVerification')}</Text><Text style={{ color: theme.text, marginTop: 4, fontWeight: '800' }}>{identityVerification === undefined ? u(locale, 'identityNotImplemented') : userStatusLabel(locale, identityVerification)}</Text></View></Panel>}
     {activeTab === 'profile' && <Panel title={u(locale, 'learnerProfile')} section={profile} theme={theme} locale={locale} onRetry={() => void fetchSection('learner-profile')}>
       <KeyValueGrid locale={locale} theme={theme} fields={[{ label: 'educationLevel', value: recordValue(profileSummary, ['educationLevel', 'level']) }, { label: 'curriculum', value: recordValue(profileSummary, ['curriculum', 'track']) }, { label: 'subjects', value: recordValue(profileSummary, ['subjects']) }, { label: 'nativeLanguage', value: recordValue(profileSummary, ['nativeLanguage']) ?? (nativeLanguages.length ? nativeLanguages : undefined) }, { label: 'interfaceLanguage', value: recordValue(profileSummary, ['interfaceLanguage', 'locale']) }, { label: 'studyLanguage', value: recordValue(profileSummary, ['studyLanguage', 'targetLanguage']) ?? (studyLanguages.length ? studyLanguages : undefined) }, { label: 'cefr', value: recordValue(profileSummary, ['cefr', 'cefrLevel']) ?? (cefrLevels.length ? cefrLevels : undefined) }]} />
+      <LearnerPassportSummary locale={locale} theme={theme} data={profileData} />
       <RestrictedProfileSummary locale={locale} theme={theme} data={profileData} />
       <View style={{ marginTop: 4, gap: 8, padding: 12, borderRadius: 8, backgroundColor: theme.mutedSurface }}><Text style={{ color: theme.text, fontSize: 13, fontWeight: '800' }}>{u(locale, 'profileClassification')}</Text><Text style={{ color: theme.muted, fontSize: 12 }}>{u(locale, 'standard')} · {u(locale, 'restricted')} · {u(locale, 'highlyRestricted')}</Text><Text style={{ color: theme.muted, fontSize: 12 }}>{u(locale, 'sensitiveAccessHint')}</Text><TextInput accessibilityLabel={u(locale, 'sensitiveReason')} value={profileReason} onChangeText={setProfileReason} placeholder={u(locale, 'sensitiveReason')} placeholderTextColor={theme.muted} multiline style={{ color: theme.text, borderWidth: 1, borderColor: theme.border, borderRadius: 7, padding: 9, backgroundColor: theme.surface }} />{profileAccessError && <Text accessibilityRole="alert" style={{ color: theme.danger, fontSize: 12 }}>{profileAccessError}</Text>}<Pressable accessibilityRole="button" accessibilityState={{ disabled: profileReason.trim().length < 5 || profileAccessBusy }} disabled={profileReason.trim().length < 5 || profileAccessBusy} onPress={() => void requestSensitiveProfile()} style={{ alignSelf: 'flex-start', opacity: profileReason.trim().length < 5 || profileAccessBusy ? .45 : 1, backgroundColor: theme.primary, borderRadius: 7, paddingHorizontal: 10, paddingVertical: 8 }}>{profileAccessBusy ? <ActivityIndicator color="#fff" /> : <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>{u(locale, 'requestSensitiveAccess')}</Text>}</Pressable></View>
     </Panel>}

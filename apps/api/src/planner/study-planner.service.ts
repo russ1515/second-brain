@@ -10,6 +10,9 @@ import type {
 import { LearningPathService } from '../concepts/learning-path.service';
 import { LearnerProfileService } from '../concepts/learner-profile.service';
 import { RevisionEngineService } from '../revision/revision-engine.service';
+import { LearnerPassportService } from '../onboarding/learner-passport.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { localDate, localDateString, localMinuteOfDay } from '../journey/local-time';
 
 /** Where each focus window puts the start of the study day (local hour). */
 const WINDOW_START: Record<FocusWindow, number> = {
@@ -28,6 +31,12 @@ interface BlockSpec {
   needsSubject?: boolean;
 }
 
+interface RealTarget {
+  subject: string;
+  route: string;
+  adaptivePath: boolean;
+}
+
 /**
  * AI Study Planner (task 5.2) — the conductor.
  *
@@ -44,6 +53,8 @@ export class StudyPlannerService {
     private readonly learningPath: LearningPathService,
     private readonly profile: LearnerProfileService,
     private readonly revision: RevisionEngineService,
+    private readonly learnerPassport: LearnerPassportService,
+    private readonly prisma: PrismaService,
   ) {}
 
   /** The plan for today, starting from the learner's focus window. */
@@ -61,27 +72,53 @@ export class StudyPlannerService {
   private async build(userId: string, from: Date | null): Promise<DayPlan> {
     const now = from ?? new Date();
 
-    const [profile, path, due] = await Promise.all([
+    const passport = await this.learnerPassport.planningSignals(userId).catch(() => ({
+      timezone: 'UTC',
+      subjects: [],
+      academicGoals: [],
+      languageProfiles: [],
+    }));
+    const timezone = passport.timezone;
+    const dayStart = localDate(now, timezone);
+    const horizon = new Date(dayStart.getTime() + 14 * 86_400_000);
+    const [profile, path, due, exam, calendarEvent] = await Promise.all([
       this.profile.profile(userId).catch(() => null),
       this.learningPath.next(userId).catch(() => ({ items: [] })),
       this.revision.due(userId).catch(() => []),
+      this.prisma.exam.findFirst({
+        where: { userId, date: { gte: dayStart, lt: horizon } },
+        orderBy: [{ date: 'asc' }, { priority: 'desc' }],
+        select: { subject: true },
+      }).catch(() => null),
+      this.prisma.calendarEvent.findFirst({
+        where: { userId, date: { gte: dayStart, lt: horizon } },
+        orderBy: { date: 'asc' },
+        select: { title: true },
+      }).catch(() => null),
     ]);
 
     // Adaptive Path (already prerequisite-aware via the Knowledge Graph): the
     // most actionable concept to study today.
-    const target = path.items.find((i) =>
+    const pathTarget = path.items.find((i) =>
       ['at_risk', 'ready', 'in_progress'].includes(i.status),
     );
-    const subject = target?.name ?? null;
+    const commitment = this.cleanSubject(exam?.subject ?? calendarEvent?.title);
+    const target = this.realTarget(
+      pathTarget?.name ?? null,
+      commitment,
+      passport.subjects[0] ?? null,
+      passport.languageProfiles,
+    );
+    const subject = target?.subject ?? null;
     const rhythm: WorkRhythm = profile?.workRhythm ?? 'regular';
     const focus: FocusWindow = profile?.focusWindow ?? 'morning';
 
     // Start time: the focus-window hour, or the current time on a live replan.
     const startMinutes = from
-      ? from.getHours() * 60 + from.getMinutes()
+      ? localMinuteOfDay(from, timezone)
       : WINDOW_START[focus] * 60;
 
-    const specs = this.blockSpecs(due.length, rhythm, subject);
+    const specs = this.blockSpecs(due.length, rhythm, subject, target?.route ?? '/tutor');
 
     const blocks: PlanBlock[] = [];
     let cursor = startMinutes;
@@ -100,16 +137,21 @@ export class StudyPlannerService {
     blocks.push({ start: this.hhmm(cursor), minutes: 0, kind: 'end', subject: null, route: null });
 
     return {
-      date: this.dateKey(now),
+      date: localDateString(now, timezone),
       startsAt: this.hhmm(startMinutes),
       blocks,
-      sources: this.sources(due.length, !!subject),
+      sources: this.sources(due.length, Boolean(profile), target?.adaptivePath ?? false),
       live: from !== null,
     };
   }
 
   /** The ordered activities of the day, scaled to how hard the learner works. */
-  private blockSpecs(dueCount: number, rhythm: WorkRhythm, subject: string | null): BlockSpec[] {
+  private blockSpecs(
+    dueCount: number,
+    rhythm: WorkRhythm,
+    subject: string | null,
+    subjectRoute: string,
+  ): BlockSpec[] {
     const specs: BlockSpec[] = [];
 
     // 1) Revision of what's due (FSRS) — sized to the queue.
@@ -123,11 +165,11 @@ export class StudyPlannerService {
 
     if (subject) {
       // 2) Lesson → 3) Discussion, always when there's something to learn.
-      specs.push({ kind: 'lesson', minutes: 20, route: '/tutor', needsSubject: true });
-      specs.push({ kind: 'discussion', minutes: 15, route: '/tutor', needsSubject: true });
+      specs.push({ kind: 'lesson', minutes: 20, route: subjectRoute, needsSubject: true });
+      specs.push({ kind: 'discussion', minutes: 15, route: subjectRoute, needsSubject: true });
       // 4) Practical + 5) Quiz — only when the learner has the appetite for it.
       if (rhythm !== 'occasional') {
-        specs.push({ kind: 'practical', minutes: 15, route: '/tutor', needsSubject: true });
+        specs.push({ kind: 'practical', minutes: 15, route: subjectRoute, needsSubject: true });
         specs.push({ kind: 'quiz', minutes: 10, route: '/revision-engine', needsSubject: true });
       }
       // 6) Summary to close the learning loop.
@@ -141,11 +183,53 @@ export class StudyPlannerService {
     return `${dueCount}`;
   }
 
-  private sources(dueCount: number, hasSubject: boolean): PlanSource[] {
-    const out: PlanSource[] = ['digitalTwin', 'learningMemory'];
-    if (dueCount > 0) out.unshift('fsrs');
-    if (hasSubject) out.push('adaptivePath', 'knowledgeGraph', 'conceptMastery');
+  private sources(dueCount: number, hasProfile: boolean, hasAdaptiveTarget: boolean): PlanSource[] {
+    const out: PlanSource[] = [];
+    if (dueCount > 0) out.push('fsrs', 'learningMemory');
+    if (hasProfile) out.push('digitalTwin');
+    if (hasAdaptiveTarget) out.push('adaptivePath', 'knowledgeGraph', 'conceptMastery');
     return out;
+  }
+
+  /** Prefer a real dated commitment, then the prerequisite-aware path, a
+   * declared Passport subject, and finally an existing language profile. No
+   * topic, deadline or language is fabricated. */
+  private realTarget(
+    adaptiveName: string | null,
+    commitment: string | null,
+    declaredSubject: string | null,
+    languages: Array<{ id: string; language: string; goal: string | null }>,
+  ): RealTarget | null {
+    if (commitment) {
+      const sameAdaptiveTarget = adaptiveName
+        && this.normalized(commitment).includes(this.normalized(adaptiveName));
+      return {
+        subject: sameAdaptiveTarget ? adaptiveName : commitment,
+        route: '/tutor',
+        adaptivePath: Boolean(sameAdaptiveTarget),
+      };
+    }
+    if (adaptiveName) return { subject: adaptiveName, route: '/tutor', adaptivePath: true };
+    const passportSubject = this.cleanSubject(declaredSubject);
+    if (passportSubject) return { subject: passportSubject, route: '/tutor', adaptivePath: false };
+    const language = languages[0];
+    if (!language) return null;
+    const goal = this.cleanSubject(language.goal);
+    return {
+      subject: goal ? `${language.language} — ${goal}` : language.language,
+      route: `/languages/${language.id}`,
+      adaptivePath: false,
+    };
+  }
+
+  private normalized(value: string): string {
+    return value.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+  }
+
+  private cleanSubject(value: string | null | undefined): string | null {
+    if (!value) return null;
+    const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+    return cleaned ? cleaned.slice(0, 200) : null;
   }
 
   private hhmm(totalMinutes: number): string {
@@ -153,12 +237,6 @@ export class StudyPlannerService {
     const h = Math.floor(m / 60);
     const min = m % 60;
     return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
-  }
-
-  private dateKey(d: Date): string {
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-      d.getDate(),
-    ).padStart(2, '0')}`;
   }
 
   private clamp(v: number, min: number, max: number): number {

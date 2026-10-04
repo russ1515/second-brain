@@ -37,10 +37,13 @@ export default function OnboardingScreen() {
   const { colors: c } = useTokens();
   const { t } = useI18n();
   const router = useRouter();
-  const { returnTo } = useLocalSearchParams<{ returnTo?: string | string[] }>();
+  const { returnTo, edit } = useLocalSearchParams<{
+    returnTo?: string | string[];
+    edit?: string | string[];
+  }>();
   const destination = safeReturnPath(returnTo);
   const { refreshOnboarding } = useAuth();
-  const ctrl = useOnboarding();
+  const ctrl = useOnboarding(edit === 'passport' ? 'twin' : undefined);
   const [entering, setEntering] = useState(false);
 
   if (ctrl.loading) return <Loading label={t('onboarding.preparing')} />;

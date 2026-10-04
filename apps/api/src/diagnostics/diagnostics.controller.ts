@@ -9,8 +9,11 @@ import {
   Post,
   Query,
   Req,
+  Res,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import type { AuthenticatedUser } from '../auth/auth.types';
@@ -32,6 +35,7 @@ import {
   UpdateSupportCaseDto,
 } from './dto/diagnostics.dto';
 import { BugCenterService } from './bug-center.service';
+import { PrivateMediaService } from '../media/private-media.service';
 
 type AdminRequest = {
   user?: AuthenticatedUser;
@@ -150,13 +154,44 @@ export class DiagnosticsController {
 @UseGuards(JwtAccessGuard, AdminGuard, CapabilityGuard)
 @Controller('admin/support')
 export class SupportCenterController {
-  constructor(private readonly bugs: BugCenterService) {}
+  constructor(
+    private readonly bugs: BugCenterService,
+    private readonly media: PrivateMediaService,
+    private readonly audit: AdminAuditService,
+  ) {}
 
   @Get('cases')
   @Header('Cache-Control', 'no-store')
   @RequireAdminCapabilities('support.read')
   list(@Query() query: SupportCaseListQueryDto, @Req() req: AdminRequest) {
     return this.bugs.listSupport(query, req.adminIdentity?.userId);
+  }
+
+  @Get('reports/:id/screenshot')
+  @Header('Cache-Control', 'private, no-store')
+  @RequireAdminCapabilities('support.read')
+  @UseGuards(AdminStepUpGuard)
+  async reportScreenshot(
+    @Param('id') reportId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: AdminRequest,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<StreamableFile> {
+    const screenshot = await this.media.getReportScreenshotForAdmin(reportId);
+    await this.audit.record(this.auditContext(actor, req), {
+      action: 'SUPPORT_REPORT_SCREENSHOT_VIEWED',
+      targetType: 'report',
+      targetId: reportId,
+      after: { mediaType: 'support_screenshot' },
+    });
+    response.set({
+      'Content-Type': screenshot.mimeType,
+      'Cache-Control': 'private, no-store',
+      'Content-Disposition': 'inline; filename="support-screenshot.webp"',
+      'Last-Modified': screenshot.modifiedAt.toUTCString(),
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return new StreamableFile(screenshot.buffer);
   }
 
   @Post('cases')

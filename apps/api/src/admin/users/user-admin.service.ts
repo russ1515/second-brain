@@ -549,15 +549,31 @@ export class UserAdminService {
     const [items, total] = await Promise.all([
       this.prisma.report.findMany({
         where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
-        select: { id: true, category: true, status: true, createdAt: true, reviewedAt: true },
+        select: {
+          id: true, category: true, status: true, createdAt: true, reviewedAt: true,
+          supportCases: {
+            orderBy: { updatedAt: 'desc' }, take: 1,
+            select: { id: true, status: true, priority: true, updatedAt: true },
+          },
+        },
       }),
       this.prisma.report.count({ where }),
     ]);
     return {
-      items: items.map((item) => ({
-        id: item.id, category: item.category, status: item.status,
-        createdAt: item.createdAt.toISOString(), reviewedAt: iso(item.reviewedAt),
-      })),
+      items: items.map((item) => {
+        const supportCase = item.supportCases[0];
+        return {
+          id: item.id,
+          trackingId: `SB-REPORT-${item.id.replace(/[^a-z0-9]/gi, '').toUpperCase()}`,
+          supportCaseId: supportCase?.id ?? null,
+          category: item.category,
+          status: supportCase?.status ?? item.status,
+          priority: supportCase?.priority ?? null,
+          createdAt: item.createdAt.toISOString(),
+          updatedAt: (supportCase?.updatedAt ?? item.createdAt).toISOString(),
+          reviewedAt: iso(item.reviewedAt),
+        };
+      }),
       page, pageSize, total, totalPages: Math.ceil(total / pageSize),
       incidents: { status: 'NOT_INSTRUMENTED' },
     };
@@ -585,6 +601,7 @@ export class UserAdminService {
         onboardingProfile: {
           select: {
             status: true, category: true, completedAt: true,
+            identity: true,
             education: true, languages: true, languageLearner: true, goals: true,
             subjects: true, preferences: true, teacher: true, academicSupport: true,
             assessment: true, extra: true,
@@ -621,6 +638,20 @@ export class UserAdminService {
         }
         : null,
       identityVerification: { status: 'NOT_IMPLEMENTED' },
+      learnerPassport: {
+        source: 'DECLARED',
+        ageBand: jsonString(onboarding?.identity, ['ageBand']),
+        nativeOrPrimaryLanguage: jsonString(onboarding?.languages, ['native']),
+        teachingLanguage: jsonString(onboarding?.languages, ['teaching', 'study']),
+        educationSystem: jsonString(onboarding?.education, ['system']),
+        educationDomain: jsonString(onboarding?.education, ['domain', 'field']),
+        timezone: user.profile?.timezone ?? 'UTC',
+        observed: {
+          source: 'OBSERVED',
+          activeLanguageProfiles: user.languageProfiles.length,
+        },
+        verified: { source: 'VERIFIED', available: false },
+      },
     };
     if (access === 'standard') return standard;
 
@@ -631,6 +662,11 @@ export class UserAdminService {
       preferences: onboarding?.preferences ?? null,
       teacherPreferences: onboarding?.teacher ?? null,
       languageGoals: user.languageProfiles.map((language) => ({ language: language.language, goal: language.goal })),
+      learnerPassport: {
+        ...standard.learnerPassport,
+        countryOfOrigin: jsonString(onboarding?.identity, ['countryOfOrigin', 'country']),
+        currentCountry: jsonString(onboarding?.identity, ['currentCountry']),
+      },
     };
     if (access === 'restricted') return restricted;
 

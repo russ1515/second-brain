@@ -320,9 +320,17 @@ export class BugCenterService {
   async listSupport(query: SupportCaseListQueryDto, actorId?: string) {
     if (query.view === 'reports') return this.listUserReports(query);
     const status = this.supportStatus(query.status);
+    const search = query.search?.trim();
     const where: Prisma.SupportCaseWhereInput = {
       ...(status ? { status } : {}),
+      ...(query.priority ? { priority: query.priority } : {}),
       ...(query.assignee === 'me' && actorId ? { assignedToId: actorId } : {}),
+      ...(search ? {
+        OR: [
+          { id: { contains: search, mode: 'insensitive' } },
+          { report: { is: { category: { contains: search, mode: 'insensitive' } } } },
+        ],
+      } : {}),
     };
     const page = query.page;
     const pageSize = query.pageSize;
@@ -339,8 +347,21 @@ export class BugCenterService {
 
   private async listUserReports(query: SupportCaseListQueryDto) {
     const reportStatuses = ['open', 'reviewed', 'dismissed'] as const;
-    const status = reportStatuses.includes(query.status as typeof reportStatuses[number]) ? query.status as typeof reportStatuses[number] : undefined;
-    const where = status ? { status } : {};
+    const reportStatus = reportStatuses.includes(query.status as typeof reportStatuses[number]) ? query.status as typeof reportStatuses[number] : undefined;
+    const supportStatus = this.supportStatus(query.status);
+    const search = query.search?.trim();
+    const supportCaseFilter: Prisma.SupportCaseWhereInput = {
+      ...(supportStatus ? { status: supportStatus } : {}),
+      ...(query.priority ? { priority: query.priority } : {}),
+    };
+    const where: Prisma.ReportWhereInput = {
+      ...(reportStatus ? { status: reportStatus } : {}),
+      ...(Object.keys(supportCaseFilter).length ? { supportCases: { some: supportCaseFilter } } : {}),
+      ...(search ? { OR: [
+        { id: { contains: search, mode: 'insensitive' } },
+        { category: { contains: search, mode: 'insensitive' } },
+      ] } : {}),
+    };
     const [total, reports] = await this.prisma.$transaction([
       this.prisma.report.count({ where }),
       this.prisma.report.findMany({
@@ -352,23 +373,36 @@ export class BugCenterService {
           id: true, reporterId: true, category: true, status: true, createdAt: true, reviewedAt: true,
           correlationStatus: true, correlationConfidence: true, bugGroupId: true,
           bugGroup: { select: { id: true, title: true, status: true, severity: true } },
+          supportCases: {
+            orderBy: { updatedAt: 'desc' }, take: 1,
+            select: { id: true, status: true, priority: true, assignedToId: true, updatedAt: true },
+          },
         },
       }),
     ]);
-    const items = reports.map((report) => ({
-      id: report.id,
-      displayId: `REPORT-${report.id.slice(-8).toUpperCase()}`,
-      reporter: this.redact.maskedIdentity(report.reporterId),
-      category: report.category,
-      status: report.status,
-      createdAt: report.createdAt.toISOString(),
-      reviewedAt: report.reviewedAt?.toISOString() ?? null,
-      correlationStatus: report.correlationStatus,
-      correlationConfidence: report.correlationConfidence,
-      bugGroup: report.bugGroup ? { id: report.bugGroup.id, title: this.redact.text(report.bugGroup.title, 180), status: report.bugGroup.status, severity: report.bugGroup.severity } : report.bugGroupId ? { id: report.bugGroupId } : null,
-      untrusted: true,
-      content: 'REDACTED',
-    }));
+    const items = reports.map((report) => {
+      const supportCase = report.supportCases[0];
+      return {
+        id: report.id,
+        recordType: 'REPORT',
+        displayId: `SB-REPORT-${report.id.replace(/[^a-z0-9]/gi, '').toUpperCase()}`,
+        supportCaseId: supportCase?.id ?? null,
+        caseDisplayId: supportCase ? `CASE-${supportCase.id.slice(-8).toUpperCase()}` : null,
+        reporter: this.redact.maskedIdentity(report.reporterId),
+        category: report.category,
+        status: supportCase?.status ?? report.status,
+        priority: supportCase?.priority ?? null,
+        assignedTo: this.redact.maskedIdentity(supportCase?.assignedToId),
+        createdAt: report.createdAt.toISOString(),
+        updatedAt: (supportCase?.updatedAt ?? report.createdAt).toISOString(),
+        reviewedAt: report.reviewedAt?.toISOString() ?? null,
+        correlationStatus: report.correlationStatus,
+        correlationConfidence: report.correlationConfidence,
+        bugGroup: report.bugGroup ? { id: report.bugGroup.id, title: this.redact.text(report.bugGroup.title, 180), status: report.bugGroup.status, severity: report.bugGroup.severity } : report.bugGroupId ? { id: report.bugGroupId } : null,
+        untrusted: true,
+        content: 'REDACTED',
+      };
+    });
     return { items, reports: items, total, page: query.page, pageSize: query.pageSize };
   }
 
@@ -381,6 +415,22 @@ export class BugCenterService {
     }
     if (dto.bugGroupId) await this.ensureBug(dto.bugGroupId);
     const supportCase = await this.prisma.$transaction(async (tx) => {
+      if (dto.reportId) {
+        // Historic clients may still ask Admin to create the case after the
+        // learner submission already did so. Serialize that legacy path too,
+        // otherwise concurrent retries could create multiple cases because
+        // the current schema intentionally has no reportId uniqueness change.
+        const lockKey = `support-case:${dto.userId}:${dto.reportId}`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+        const existing = await tx.supportCase.findFirst({
+          where: { reportId: dto.reportId, userId: dto.userId },
+          include: {
+            report: { select: { id: true, category: true, status: true, createdAt: true } },
+            bugGroup: { select: { id: true, title: true, status: true, severity: true } },
+          },
+        });
+        if (existing) return existing;
+      }
       const created = await tx.supportCase.create({ data: { userId: dto.userId, reportId: dto.reportId ?? null, bugGroupId: dto.bugGroupId ?? null, priority: dto.priority ?? 'medium' } });
       await tx.auditLog.create({ data: this.audit.auditData(context, {
         action: 'SUPPORT_CASE_CREATED', targetType: 'support_case', targetId: created.id,
@@ -536,6 +586,9 @@ export class BugCenterService {
   }) {
     return {
       id: item.id,
+      supportCaseId: item.id,
+      recordType: 'SUPPORT_CASE',
+      displayId: `CASE-${item.id.slice(-8).toUpperCase()}`,
       user: this.redact.maskedIdentity(item.userId),
       reportId: item.reportId,
       bugGroup: item.bugGroup ? { id: item.bugGroup.id, title: this.redact.text(item.bugGroup.title, 180), status: item.bugGroup.status, severity: item.bugGroup.severity } : item.bugGroupId ? { id: item.bugGroupId } : null,

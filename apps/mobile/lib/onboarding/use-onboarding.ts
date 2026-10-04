@@ -19,7 +19,7 @@ type Section = keyof OnboardingAnswers;
  * is ADAPTIVE (2, "parcours adaptatif"): it recomputes from the chosen category
  * so a language learner never sees the university questions.
  */
-export function useOnboarding() {
+export function useOnboarding(resumeAt?: OnboardingStep) {
   const [answers, setAnswers] = useState<OnboardingAnswers>({});
   const [stepIndex, setStepIndex] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -53,11 +53,11 @@ export function useOnboarding() {
   // Once answers are loaded, resolve the resume step against the adaptive order.
   useEffect(() => {
     if (loading) return;
-    const idx = stepsFor(answers).indexOf(loadedStep.current);
+    const idx = stepsFor(answers).indexOf(resumeAt ?? loadedStep.current);
     if (idx > 0) setStepIndex(idx);
     // Only on first load — subsequent navigation is manual.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading]);
+  }, [loading, resumeAt]);
 
   const patch = useCallback((section: Section, value: unknown) => {
     setAnswers((prev) => ({ ...prev, [section]: value }));

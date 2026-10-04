@@ -289,6 +289,8 @@ export function auditRepository() {
   const english = readCatalog(I18N_FILE, 'en');
   const french = readCatalog(I18N_FILE, 'fr');
   const essentials = readNestedCatalog(ESSENTIAL_FILE, 'essential');
+  const learnerPassportEssentials = readNestedCatalog(ESSENTIAL_FILE, 'learnerPassportEssential');
+  const supportBridgeEssentials = readNestedCatalog(ESSENTIAL_FILE, 'supportBridgeEssential');
   const reviews = readNestedCatalog(REVIEW_FILE, 'review');
   const authErrors = readNestedCatalog(AUTH_ERRORS_FILE, 'authErrors');
   const catalogs = new Map([
@@ -307,12 +309,23 @@ export function auditRepository() {
     // resource merely to make the registry look complete.
     const base = fs.existsSync(file) ? readCatalog(file, variableName) : new Map();
     const essential = essentials.get(code) ?? new Map();
+    const learnerPassportEssential = learnerPassportEssentials.get(code) ?? new Map();
+    const supportBridgeEssential = supportBridgeEssentials.get(code) ?? new Map();
     const review = reviews.get(code) ?? new Map();
     const authError = authErrors.get(code) ?? new Map();
-    catalogs.set(code, new Map([...base, ...essential, ...review, ...authError]));
+    catalogs.set(code, new Map([
+      ...base,
+      ...essential,
+      ...learnerPassportEssential,
+      ...supportBridgeEssential,
+      ...review,
+      ...authError,
+    ]));
     layersByLocale.set(code, [
       { name: path.relative(LOCALES_DIR, file).replaceAll('\\', '/'), entries: base },
       { name: 'essential.ts', entries: essential },
+      { name: 'essential.ts:learnerPassportEssential', entries: learnerPassportEssential },
+      { name: 'essential.ts:supportBridgeEssential', entries: supportBridgeEssential },
       { name: 'review.ts', entries: review },
       { name: 'auth-errors.ts', entries: authError },
     ]);

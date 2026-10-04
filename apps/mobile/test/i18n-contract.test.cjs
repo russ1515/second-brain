@@ -116,6 +116,8 @@ const english = catalog(I18N_FILE, 'en');
 const french = catalog(I18N_FILE, 'fr');
 const supported = objectKeys(SHARED_LANGUAGES_FILE, 'SUPPORTED_LANGUAGES');
 const essentials = nestedCatalog(path.join(LOCALES_DIR, 'essential.ts'), 'essential');
+const learnerPassportEssentials = nestedCatalog(path.join(LOCALES_DIR, 'essential.ts'), 'learnerPassportEssential');
+const supportBridgeEssentials = nestedCatalog(path.join(LOCALES_DIR, 'essential.ts'), 'supportBridgeEssential');
 const reviewCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'review.ts'), 'review');
 const authErrorCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'auth-errors.ts'), 'authErrors');
 const overlayFiles = new Set(['auth-errors.ts', 'essential.ts', 'index.ts', 'review.ts']);
@@ -154,6 +156,8 @@ function effectiveCatalog(resource) {
   return new Map([
     ...catalog(path.join(LOCALES_DIR, file), variableName),
     ...(essentials.get(code) ?? new Map()),
+    ...(learnerPassportEssentials.get(code) ?? new Map()),
+    ...(supportBridgeEssentials.get(code) ?? new Map()),
     ...(reviewCatalogs.get(code) ?? new Map()),
     ...(authErrorCatalogs.get(code) ?? new Map()),
   ]);
@@ -254,6 +258,75 @@ test('all locales translate the language selector and global recovery controls',
     const { code } = resource;
     const translations = effectiveCatalog(resource);
     for (const key of criticalKeys) assert.ok(translations.has(key), `${code} is missing critical key ${key}`);
+  }
+});
+
+test('all 34 locales translate the bounded Learner Passport surface', () => {
+  const keys = [
+    'passport.title',
+    'passport.detail',
+    'passport.originCountry',
+    'passport.currentCountry',
+    'passport.teachingLanguage',
+    'passport.knownLanguages',
+    'passport.timezone',
+    'passport.progression',
+    'passport.source.declared',
+    'passport.source.observed',
+    'landing12.passport.kicker',
+    'landing12.passport.title',
+    'landing12.passport.lead',
+    'landing12.passport.demo',
+  ];
+  for (const code of ['en', 'fr', ...localeResources.map((resource) => resource.code)]) {
+    const resource = localeResources.find((candidate) => candidate.code === code);
+    const translations = code === 'en'
+      ? english
+      : code === 'fr'
+        ? french
+        : effectiveCatalog(resource);
+    for (const key of keys) {
+      assert.ok(translations.has(key), `${code} is missing Learner Passport key ${key}`);
+      assert.deepEqual(placeholders(translations.get(key)), placeholders(english.get(key)), `${code}.${key}`);
+    }
+  }
+});
+
+test('all 34 locales translate the 20 newly referenced learner support keys', () => {
+  const keys = [
+    'report.category.bug',
+    'report.category.usage_problem',
+    'report.category.account',
+    'report.category.ai_teacher',
+    'report.category.document_scan',
+    'report.category.language_translation',
+    'report.captureSelected',
+    'report.captureRemove',
+    'report.captureRetry',
+    'report.captureUploadError',
+    'report.tracking',
+    'report.myReports',
+    'report.myReportsEmpty',
+    'report.myReportsError',
+    'report.refresh',
+    'report.status.RECEIVED',
+    'report.status.IN_REVIEW',
+    'report.status.NEEDS_INFORMATION',
+    'report.status.RESOLVED',
+    'report.status.CLOSED',
+  ];
+  assert.equal(supportBridgeEssentials.size, 32);
+  for (const code of ['en', 'fr', ...localeResources.map((resource) => resource.code)]) {
+    const resource = localeResources.find((candidate) => candidate.code === code);
+    const translations = code === 'en'
+      ? english
+      : code === 'fr'
+        ? french
+        : effectiveCatalog(resource);
+    for (const key of keys) {
+      assert.ok(translations.has(key), `${code} is missing learner support key ${key}`);
+      assert.deepEqual(placeholders(translations.get(key)), placeholders(english.get(key)), `${code}.${key}`);
+    }
   }
 });
 

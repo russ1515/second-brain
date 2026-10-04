@@ -31,6 +31,14 @@ export interface PortablePrivateMedia {
       modifiedAt: string;
     }>;
   }>;
+  reportScreenshots: Array<{
+    reportId: string;
+    fileName: 'screenshot.webp';
+    mimeType: 'image/webp';
+    encoding: 'base64';
+    data: string;
+    modifiedAt: string;
+  }>;
 }
 
 /** Files are intentionally outside the public bundle and addressed only after
@@ -86,6 +94,54 @@ export class PrivateMediaService implements OnModuleInit {
 
   async deleteAvatar(userId: string): Promise<void> {
     await this.withOwnerLock(userId, () => rm(this.avatarPath(userId), { force: true }));
+  }
+
+  async putReportScreenshot(
+    userId: string,
+    reportId: string,
+    file: ImageUpload,
+  ): Promise<{ modifiedAt: string }> {
+    return this.withOwnerLock(userId, async () => {
+      await this.requireOwnedReport(userId, reportId);
+      const normalized = await this.images.supportScreenshot(file);
+      const target = this.reportScreenshotPath(userId, reportId);
+      await this.atomicWrite(target, normalized.buffer);
+      const info = await stat(target);
+      return { modifiedAt: info.mtime.toISOString() };
+    });
+  }
+
+  async getReportScreenshot(userId: string, reportId: string): Promise<StoredPrivateMedia> {
+    await this.requireOwnedReport(userId, reportId);
+    return this.readReportScreenshot(userId, reportId);
+  }
+
+  /** Admin authorization remains in the guarded controller. This method only
+   * resolves the report owner server-side; callers can never supply it. */
+  async getReportScreenshotForAdmin(reportId: string): Promise<StoredPrivateMedia> {
+    const report = await this.prisma.report.findUnique({
+      where: { id: reportId },
+      select: { reporterId: true },
+    });
+    if (!report?.reporterId) throw new NotFoundException('Support screenshot not found.');
+    return this.readReportScreenshot(report.reporterId, reportId);
+  }
+
+  async hasReportScreenshot(userId: string, reportId: string): Promise<boolean> {
+    try {
+      await stat(this.reportScreenshotPath(userId, reportId));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
+      throw error;
+    }
+  }
+
+  async deleteReportScreenshot(userId: string, reportId: string): Promise<void> {
+    await this.withOwnerLock(userId, async () => {
+      await this.requireOwnedReport(userId, reportId);
+      await rm(this.reportScreenshotPath(userId, reportId), { force: true });
+    });
   }
 
   async deleteUserMedia(userId: string): Promise<void> {
@@ -153,7 +209,29 @@ export class PrivateMediaService implements OnModuleInit {
         }
         if (pages.length > 0) scans.push({ documentId, pages });
       }
-      return { avatar, scans };
+
+      const reports = await this.prisma.report.findMany({
+        where: { reporterId: userId },
+        select: { id: true },
+      });
+      const reportScreenshots: PortablePrivateMedia['reportScreenshots'] = [];
+      for (const report of reports) {
+        try {
+          const target = this.reportScreenshotPath(userId, report.id);
+          const [buffer, info] = await Promise.all([readFile(target), stat(target)]);
+          reportScreenshots.push({
+            reportId: report.id,
+            fileName: 'screenshot.webp',
+            mimeType: 'image/webp',
+            encoding: 'base64',
+            data: buffer.toString('base64'),
+            modifiedAt: info.mtime.toISOString(),
+          });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+        }
+      }
+      return { avatar, scans, reportScreenshots };
     });
   }
 
@@ -303,6 +381,32 @@ export class PrivateMediaService implements OnModuleInit {
 
   private avatarPath(userId: string): string {
     return join(this.userDirectory(userId), 'avatar.webp');
+  }
+
+  private reportScreenshotPath(userId: string, reportId: string): string {
+    const opaqueReport = createHash('sha256').update(reportId).digest('hex');
+    return join(this.userDirectory(userId), 'reports', `${opaqueReport}.webp`);
+  }
+
+  private async readReportScreenshot(userId: string, reportId: string): Promise<StoredPrivateMedia> {
+    const target = this.reportScreenshotPath(userId, reportId);
+    try {
+      const [buffer, info] = await Promise.all([readFile(target), stat(target)]);
+      return { buffer, mimeType: 'image/webp', modifiedAt: info.mtime };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        throw new NotFoundException('Support screenshot not found.');
+      }
+      throw error;
+    }
+  }
+
+  private async requireOwnedReport(userId: string, reportId: string): Promise<void> {
+    const report = await this.prisma.report.findFirst({
+      where: { id: reportId, reporterId: userId },
+      select: { id: true },
+    });
+    if (!report) throw new NotFoundException('Report not found.');
   }
 
   private userDirectory(userId: string): string {

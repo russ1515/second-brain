@@ -221,6 +221,14 @@ test('tutor: subject inference is local and provider failures release quota', as
       }),
       updateState: async () => undefined,
     },
+    {
+      tutorContext: async () => ({
+        directive: '',
+        nativeOrPrimaryLanguage: null,
+        teachingLanguage: null,
+        learningPreferences: [],
+      }),
+    },
   );
 
   await assert.rejects(service.sendMessage('u1', 's1', 'mathématiques'));
@@ -349,7 +357,7 @@ test('privacy: export covers domain data without selecting authentication secret
     },
   });
   const result = await new PrivacyService(prisma, {}, {
-    exportUserMedia: async () => ({ avatar: null, scans: [] }),
+    exportUserMedia: async () => ({ avatar: null, scans: [], reportScreenshots: [] }),
   }).exportData('u1');
   assert.ok(Object.hasOwn(result.data, 'documentChunks'));
   assert.ok(Object.hasOwn(result.data, 'learningDna'));

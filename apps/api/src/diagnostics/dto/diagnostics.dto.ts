@@ -430,6 +430,21 @@ export class CreateUserReportDto {
   consentAdditionalDiagnostics?: boolean;
 }
 
+export class UserReportListQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  pageSize = 20;
+}
+
 export class SupportCaseListQueryDto {
   @IsOptional()
   @IsIn(['open', 'in_progress', 'waiting_for_user', 'waiting_for_engineering', 'resolved', 'closed', 'reviewed', 'dismissed'])
@@ -443,6 +458,15 @@ export class SupportCaseListQueryDto {
   @IsOptional()
   @IsIn(['me'])
   assignee?: 'me';
+
+  @IsOptional()
+  @IsEnum(SupportCasePriority)
+  priority?: SupportCasePriority;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  search?: string;
 
   @IsOptional()
   @Type(() => Number)

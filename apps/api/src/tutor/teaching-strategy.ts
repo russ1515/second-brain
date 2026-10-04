@@ -91,6 +91,7 @@ function matches(subject: string, needles: string[]): boolean {
 
 export function selectStrategy(ctx: StrategyContext): StrategySelection {
   const subject = (ctx.subject ?? '').toLowerCase();
+  const learningStyle = (ctx.learningStyle ?? '').toLowerCase();
   const low = ctx.mastery !== null && ctx.mastery < 0.35;
   const high = ctx.mastery !== null && ctx.mastery >= 0.75;
 
@@ -109,6 +110,27 @@ export function selectStrategy(ctx: StrategyContext): StrategySelection {
       strategy: 'guided_demonstration',
       reason:
         'Your mastery here is still forming, so the teacher demonstrates worked examples first and hands over gradually.',
+    };
+  }
+
+  // A learner-declared Passport preference may steer the existing ITE, but it
+  // never overrides language pedagogy or low-mastery scaffolding above.
+  if (/project|projet/.test(learningStyle)) {
+    return {
+      strategy: 'project_based',
+      reason: 'Your declared preference is to learn through projects, so the session is organised around a concrete artefact.',
+    };
+  }
+  if (/visual|demonstrat|worked example|exemple/.test(learningStyle)) {
+    return {
+      strategy: 'guided_demonstration',
+      reason: 'Your declared preference is for visual or worked demonstrations, so the teacher models an example before handing over.',
+    };
+  }
+  if (/hands.on|practical|pratique|experien/.test(learningStyle)) {
+    return {
+      strategy: 'experiential',
+      reason: 'Your declared preference is to learn by doing, so the teacher uses concrete experience and reflection.',
     };
   }
 

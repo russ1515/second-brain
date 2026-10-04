@@ -17,6 +17,7 @@ import type {
   LanguageMode,
   ImmersionIntensity,
   LanguageCorrectionIntensity,
+  LearnerPassportTutorContext,
   LLMMessage,
   SendTutorMessageResponse,
   TeacherPolicySnapshot,
@@ -56,6 +57,7 @@ import {
 } from '../teaching/teacher-role';
 import type { CreateTutorSessionDto } from './dto/create-tutor-session.dto';
 import { ExperienceSessionService } from '../experience-sessions/experience-session.service';
+import { LearnerPassportService } from '../onboarding/learner-passport.service';
 
 const HISTORY_LIMIT = 12;
 const CONTEXT_LIMIT = 5;
@@ -162,6 +164,7 @@ export class TutorService {
     private readonly learningPath: LearningPathService,
     private readonly usage: UsageService,
     private readonly experienceSessions: ExperienceSessionService,
+    private readonly learnerPassport: LearnerPassportService,
   ) {}
 
   async createSession(
@@ -226,6 +229,7 @@ export class TutorService {
     };
     const { block, citations } = await this.retrieveContext(userId, target.name);
     const focusLocale = await resolveLocale(this.prisma, userId);
+    const passport = await this.loadPassportContext(userId, teacherPolicy.automaticAdaptation);
     const opening = await this.callLlm([
       {
         role: 'system',
@@ -238,6 +242,7 @@ export class TutorService {
           focusLocale,
           undefined,
           teacherPolicy,
+          passport.directive,
         ),
       },
       {
@@ -331,6 +336,7 @@ export class TutorService {
         `and ask what they would like to learn or work on today. 1-2 sentences.`;
 
     const resumeLocale = await resolveLocale(this.prisma, userId);
+    const passport = await this.loadPassportContext(userId, teacherPolicy.automaticAdaptation);
     const opening = await this.callLlm([
       {
         role: 'system',
@@ -343,6 +349,7 @@ export class TutorService {
           resumeLocale,
           undefined,
           teacherPolicy,
+          passport.directive,
         ),
       },
       { role: 'user', content: userPrompt },
@@ -477,8 +484,14 @@ export class TutorService {
       }
     }
 
+    const passport = await this.loadPassportContext(userId, adaptationEnabled);
     // Language steering: language-practice sessions get the Professor role.
-    const language = await this.loadLanguage(userId, session.languageProfileId, experience);
+    const language = await this.loadLanguage(
+      userId,
+      session.languageProfileId,
+      experience,
+      passport.nativeOrPrimaryLanguage,
+    );
     const personalization = adaptationEnabled
       ? await this.loadPersonalization(userId)
       : { directive: '' };
@@ -507,6 +520,7 @@ export class TutorService {
         subject,
         isLanguage: !!language,
         mastery: focus?.mastery ?? null,
+        learningStyle: passport.learningPreferences.join(' '),
       });
       strategy = sel.strategy;
       strategyReason = sel.reason;
@@ -582,6 +596,7 @@ export class TutorService {
           locale,
           personalization.directive,
           teacherPolicy,
+          passport.directive,
         ),
       },
       ...history.map((m) => ({ role: m.role, content: m.content })),
@@ -676,6 +691,7 @@ export class TutorService {
     userId: string,
     languageProfileId: string | null,
     experience?: ExperienceSession,
+    nativeLanguageFallback?: string | null,
   ): Promise<LanguageInfo | undefined> {
     if (!languageProfileId) return undefined;
     const profile = await this.prisma.languageProfile.findFirst({
@@ -740,7 +756,7 @@ export class TutorService {
     ].filter((value): value is string => value !== null);
     return {
       language: profile.language,
-      nativeLanguage: profile.nativeLanguage,
+      nativeLanguage: profile.nativeLanguage ?? nativeLanguageFallback ?? null,
       mode: profile.mode as LanguageMode,
       goal: profile.goal,
       cefrLevel: typeof courseLevel === 'string' && /^(A1|A2|B1|B2|C1|C2)$/.test(courseLevel)
@@ -810,6 +826,7 @@ export class TutorService {
     locale?: string,
     personalization?: string,
     teacherPolicy?: TeacherPolicySnapshot,
+    passportDirective?: string,
   ): string {
     // A language session swaps the persona; everything else is unchanged. With
     // no language profile this returns exactly the pre-language-engine prompt.
@@ -856,6 +873,9 @@ export class TutorService {
     if (personalization && teacherPolicy?.automaticAdaptation !== false) {
       prompt += personalization;
     }
+    if (passportDirective) {
+      prompt += passportDirective;
+    }
     if (teacherPolicy) {
       prompt += teacherPolicyDirective(teacherPolicy);
     }
@@ -871,6 +891,18 @@ export class TutorService {
       ' Next step. Do not force every heading into every response and do not reveal' +
       ' hidden reasoning or chain-of-thought.';
     return prompt;
+  }
+
+  private async loadPassportContext(
+    userId: string,
+    includeAdaptiveSignals: boolean,
+  ): Promise<LearnerPassportTutorContext> {
+    return this.learnerPassport.tutorContext(userId, includeAdaptiveSignals).catch(() => ({
+      directive: '',
+      nativeOrPrimaryLanguage: null,
+      teachingLanguage: null,
+      learningPreferences: [],
+    }));
   }
 
   /**

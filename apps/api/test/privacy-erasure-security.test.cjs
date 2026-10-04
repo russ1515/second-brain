@@ -33,7 +33,7 @@ test('privacy export omits persisted answer keys and grading rubrics', async () 
   const service = new PrivacyService(prisma, {}, {
     exportUserMedia: async (_userId, documentIds) => {
       exportedDocuments = documentIds;
-      return { avatar: null, scans: [] };
+      return { avatar: null, scans: [], reportScreenshots: [] };
     },
   });
   const result = await service.exportData('owner-1');
@@ -44,7 +44,7 @@ test('privacy export omits persisted answer keys and grading rubrics', async () 
   assert.equal(captured.readingExercise.select.questions, undefined);
   assert.equal(captured.readingExercise.select.result, true);
   assert.deepEqual(exportedDocuments, []);
-  assert.deepEqual(result.data.privateMedia, { avatar: null, scans: [] });
+  assert.deepEqual(result.data.privateMedia, { avatar: null, scans: [], reportScreenshots: [] });
 });
 
 function accountDeletionFixture(passwordHash, {

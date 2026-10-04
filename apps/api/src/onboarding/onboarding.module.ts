@@ -1,17 +1,20 @@
 import { Module } from '@nestjs/common';
+import { ConceptModule } from '../concepts/concept.module';
+import { LearnerPassportController } from './learner-passport.controller';
+import { LearnerPassportService } from './learner-passport.service';
 import { OnboardingController } from './onboarding.controller';
 import { OnboardingService } from './onboarding.service';
 
 /**
- * Universal KYC / Onboarding (UI/UX Sprint 2). Depends only on the global
- * Prisma + LLM modules; the completion step seeds Profile / LanguageProfile /
- * Concept rows directly (dedup-safe), so it needs no other module and nothing
- * can form a cycle around it. Exported so AuthModule can surface
- * `onboardingCompleted` on `/auth/me`.
+ * Universal KYC / Onboarding (UI/UX Sprint 2). The Passport reuses the same
+ * stored answers and the existing observed learner profile from ConceptModule;
+ * it does not introduce a parallel learner identity store. Exported for Auth,
+ * Tutor and Planner consumers.
  */
 @Module({
-  controllers: [OnboardingController],
-  providers: [OnboardingService],
-  exports: [OnboardingService],
+  imports: [ConceptModule],
+  controllers: [OnboardingController, LearnerPassportController],
+  providers: [OnboardingService, LearnerPassportService],
+  exports: [OnboardingService, LearnerPassportService],
 })
 export class OnboardingModule {}

@@ -1,4 +1,4 @@
-import { api, type ApiProblem } from './api';
+import { api, apiBinary, type ApiProblem } from './api';
 
 /**
  * Transport helpers for the operational diagnostic surfaces.
@@ -225,6 +225,10 @@ export async function getIncidents(params: Record<string, string | number | unde
 
 export async function getSupportCases(params: Record<string, string | number | undefined> = {}): Promise<PageData> {
   return pageData(await api<unknown>(`/admin/support/cases${query(params)}`), ['items', 'cases', 'reports', 'rows']);
+}
+
+export function getSupportReportScreenshot(reportId: string): Promise<Blob> {
+  return apiBinary(`/admin/support/reports/${encodeURIComponent(reportId)}/screenshot`);
 }
 
 /**

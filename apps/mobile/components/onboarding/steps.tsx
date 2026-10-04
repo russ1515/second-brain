@@ -4,6 +4,7 @@ import type {
   GenerateAssessmentResponse,
   KycAssessmentItem,
   KycMasteryLevel,
+  KnownLanguageLevel,
   OnboardingAnswers,
   OnboardingStep,
   SystemConfiguration,
@@ -32,6 +33,7 @@ import {
 } from '../../lib/onboarding/catalog';
 import { MultiChoice, PrivacyNote, SingleChoice, StepScaffold } from './kit';
 import { LanguageSelector } from '../ds/language';
+import { LanguageBadge } from '../ds/language';
 
 /**
  * The KYC steps (UI/UX Sprint 2). Each step is a self-contained body rendered by
@@ -109,7 +111,18 @@ export function StepIdentity({ progress, answers, patchField, onNext, onBack, on
           <SingleChoice choices={AGE_BANDS} value={id.ageBand} onChange={(v) => patchField('identity', { ageBand: v, isMinor: v === 'under12' || v === '12to15' || v === '16to18' })} />
           <PrivacyNote why={t('onb.identity.ageWhy')} />
         </View>
-        <Input label={t('onb.identity.country')} placeholder={t('onb.identity.countryPh')} value={id.country ?? ''} onChangeText={(v) => patchField('identity', { country: v })} />
+        <Input
+          label={t('passport.originCountry')}
+          placeholder={t('onb.identity.countryPh')}
+          value={id.countryOfOrigin ?? id.country ?? ''}
+          onChangeText={(v) => patchField('identity', { countryOfOrigin: v })}
+        />
+        <Input
+          label={t('passport.currentCountry')}
+          placeholder={t('onb.identity.countryPh')}
+          value={id.currentCountry ?? ''}
+          onChangeText={(v) => patchField('identity', { currentCountry: v })}
+        />
       </View>
     </StepScaffold>
   );
@@ -212,8 +225,25 @@ export function StepSubjects({ progress, answers, patch, onNext, onBack, onSkip 
 
 // ── Languages (2.7) ──────────────────────────────────────────────────────────
 export function StepLanguages({ progress, answers, patchField, onNext, onBack, onSkip }: StepProps) {
+  const { colors: c } = useTokens();
   const { t } = useI18n();
   const l = answers.languages ?? {};
+  const known = l.known ?? [];
+  const [knownLanguage, setKnownLanguage] = useState<string | null>(null);
+  const [knownLevel, setKnownLevel] = useState<KnownLanguageLevel>('A1');
+  const addKnownLanguage = () => {
+    if (!knownLanguage || known.some((item) => item.language === knownLanguage)) return;
+    patchField('languages', {
+      known: [...known, { language: knownLanguage, level: knownLevel }],
+    });
+    setKnownLanguage(null);
+    setKnownLevel('A1');
+  };
+  const removeKnownLanguage = (language: string) => {
+    patchField('languages', {
+      known: known.filter((item) => item.language !== language),
+    });
+  };
   return (
     <StepScaffold
       progress={progress}
@@ -251,11 +281,52 @@ export function StepLanguages({ progress, answers, patchField, onNext, onBack, o
         <View style={{ gap: 8 }}>
           <LanguageSelector
             mode="learning"
-            label={t('onb.languages.study')}
-            value={l.study ?? null}
-            onChange={(v) => patchField('languages', { study: v })}
+            label={t('passport.teachingLanguage')}
+            value={l.teaching ?? l.study ?? null}
+            onChange={(v) => patchField('languages', { teaching: v, study: v })}
           />
           <PrivacyNote why={t('onb.languages.studyWhy')} />
+        </View>
+        <View style={{ gap: 10 }}>
+          <Label text={t('passport.knownLanguages')} />
+          {known.map((item) => (
+            <View
+              key={item.language}
+              style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}
+            >
+              <LanguageBadge code={item.language} />
+              {item.level ? <Text style={{ color: c.textSecondary, fontSize: 13, fontWeight: '700' }}>{item.level}</Text> : null}
+              <Pressable
+                onPress={() => removeKnownLanguage(item.language)}
+                accessibilityRole="button"
+                accessibilityLabel={t('app.dismiss')}
+                hitSlop={8}
+                style={{ minWidth: 36, minHeight: 36, alignItems: 'center', justifyContent: 'center' }}
+              >
+                <Text accessible={false} style={{ color: c.textMuted, fontSize: 20 }}>×</Text>
+              </Pressable>
+            </View>
+          ))}
+          <LanguageSelector
+            mode="learning"
+            label={t('passport.knownLanguages')}
+            value={knownLanguage}
+            onChange={setKnownLanguage}
+          />
+          <View style={{ gap: 8 }}>
+            <Label text={t('onb.ll.currentLevel')} />
+            <SingleChoice
+              choices={CEFR_LEVELS}
+              value={knownLevel}
+              onChange={(value) => setKnownLevel(value as KnownLanguageLevel)}
+            />
+          </View>
+          <Button
+            label={t('onb.subjects.addBtn')}
+            variant="secondary"
+            disabled={!knownLanguage || known.some((item) => item.language === knownLanguage)}
+            onPress={addKnownLanguage}
+          />
         </View>
       </View>
     </StepScaffold>
@@ -527,12 +598,22 @@ export function StepTwin({
       <View style={{ gap: 12 }}>
         <TwinRow icon="🎓" title={tr('onb.twin.profile')} value={`${tr(categoryLabel(answers.education?.category) as TranslationKey)}${answers.education?.field ? ' — ' + answers.education.field : ''}`} onEdit={() => onEdit('category')} />
         <TwinRow
+          icon="⌖"
+          title={tr('passport.title')}
+          value={
+            [id.countryOfOrigin ?? id.country, id.currentCountry]
+              .filter(Boolean)
+              .join(' → ') || '—'
+          }
+          onEdit={() => onEdit('identity')}
+        />
+        <TwinRow
           icon="🌍"
           title={tr('onb.twin.langs')}
           value={
             answers.education?.category === 'language'
               ? `${tr('onb.twin.target')} : ${ll.targetLanguage ?? '—'}${ll.currentLevel ? ' (' + ll.currentLevel + ')' : ''}`
-              : `${l.native ?? '—'} → ${tr('onb.twin.native')}${l.study ? `, ${l.study} → ${tr('onb.twin.study')}` : ''}`
+              : `${l.native ?? '—'} → ${tr('onb.twin.native')}${(l.teaching ?? l.study) ? `, ${l.teaching ?? l.study} → ${tr('passport.teachingLanguage')}` : ''}`
           }
           onEdit={() => onEdit(answers.education?.category === 'language' ? 'language_learner' : 'languages')}
         />

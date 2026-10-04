@@ -78,5 +78,42 @@ export async function api<T>(path: string, init: RequestInit = {}, retry = true)
   }
 }
 
+/** Authenticated binary read for explicitly attached private support media.
+ * The blob is kept in browser memory; no bearer token is placed in a URL. */
+export async function apiBinary(path: string, retry = true): Promise<Blob> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+  try {
+    const response = await fetch(`${API_URL}${path}`, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        'X-Request-Id': requestId,
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+    });
+    const returnedRequestId = response.headers.get('x-request-id') ?? requestId;
+    if (!response.ok) {
+      const body = await response.json().catch(() => undefined);
+      const problem = new Error(safeFailureMessage(response.status)) as ApiProblem;
+      problem.status = response.status;
+      problem.code = safeErrorCode(body);
+      problem.requestId = returnedRequestId;
+      if (response.status === 401) setAccessToken(null);
+      throw problem;
+    }
+    return response.blob();
+  } catch (error) {
+    if (retry && !(error as ApiProblem).status) return apiBinary(path, false);
+    const problem = error as ApiProblem;
+    problem.code ??= problem.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR';
+    problem.requestId ??= requestId;
+    throw problem;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export const adminEnvironment = (process.env.EXPO_PUBLIC_ADMIN_ENVIRONMENT ?? 'DEVELOPMENT').toUpperCase();
 export { API_URL };

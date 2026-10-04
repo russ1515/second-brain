@@ -17,6 +17,7 @@ import { LangPill } from '../auth/kit';
 import { CapabilityExperience, PersonalIntelligenceSection } from './feature-experience';
 import { LandingHero } from './hero-section';
 import { LanguageExperience } from './language-experience';
+import { LearnerPassportLandingSection } from './learner-passport-section';
 import {
   HEADER_NAV_ITEMS,
   ContactSection,
@@ -104,6 +105,7 @@ export function LandingPage() {
         <LandingHero onStart={start} onHow={() => scrollTo('product')} onDownload={() => scrollTo('download')} />
         <Anchor id="product" onAnchor={onAnchor}><ProductStory /></Anchor>
         <Anchor id="features" onAnchor={onAnchor}><CapabilityExperience /></Anchor>
+        <LearnerPassportLandingSection />
         <Anchor id="languages" onAnchor={onAnchor}><LanguageExperience onStart={start} /></Anchor>
         <Anchor id="how" onAnchor={onAnchor}><HowItWorksSection /></Anchor>
         <Anchor id="brain" onAnchor={onAnchor}><PersonalIntelligenceSection /></Anchor>

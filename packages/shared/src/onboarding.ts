@@ -45,14 +45,27 @@ export const ACADEMIC_CATEGORIES: LearningCategory[] = [
 
 // ── Sections of the LearnerProfile (2.21) ───────────────────────────────────
 
+export type LearnerAgeBand =
+  | 'under12'
+  | '12to15'
+  | '16to18'
+  | '18to25'
+  | '25to40'
+  | 'over40';
+
 export interface KycIdentity {
   firstName?: string;
   lastName?: string;
   /** A single emoji stands in for a photo without collecting an image. */
   avatarEmoji?: string;
   /** Age band, not an exact date — enough to adapt tone, never more than needed. */
-  ageBand?: 'under12' | '12to15' | '16to18' | '18to25' | '25to40' | 'over40';
+  ageBand?: LearnerAgeBand;
+  /** Legacy single-country answer. New reads treat it as country of origin. */
   country?: string;
+  /** Declared origin. Kept separate from where the learner currently studies. */
+  countryOfOrigin?: string;
+  /** Current residence / study country. */
+  currentCountry?: string;
   /** Minor-friendly mode: reduce data collection + simplify the experience. */
   isMinor?: boolean;
 }
@@ -68,12 +81,27 @@ export interface KycEducation {
   year?: string; // année / niveau
 }
 
+export const KNOWN_LANGUAGE_LEVELS = [
+  'native', 'A1', 'A2', 'B1', 'B2', 'C1', 'C2',
+] as const;
+
+export type KnownLanguageLevel = (typeof KNOWN_LANGUAGE_LEVELS)[number];
+
+export interface KnownLanguage {
+  language: string;
+  level?: KnownLanguageLevel;
+}
+
 export interface KycLanguages {
   native?: string; // langue maternelle
   interface?: string; // langue de l'interface
   explanation?: string; // langue des explications générales du Professeur
   study?: string; // langue d'étude principale
+  /** Explicit language used by the school/university/course. */
+  teaching?: string;
   others?: string[];
+  /** Other known languages with an optional self-declared level. */
+  known?: KnownLanguage[];
   /** International mobility (2.7): studying in a non-native language. */
   studyingInForeignLanguage?: boolean;
 }

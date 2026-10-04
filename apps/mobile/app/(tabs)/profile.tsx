@@ -5,6 +5,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import type {
   OnboardingAnswers,
   OnboardingState,
+  LearnerPassportView,
   StrengthsWeaknesses,
   SubscriptionView,
   TwinOverview,
@@ -18,10 +19,10 @@ import { Alert, Badge, Button, Card } from '../../components/ds/core';
 import { Sheet } from '../../components/ds/overlays';
 import { Page, PageHeader, ResponsiveSplit, Section } from '../../components/ds/layout';
 import { SmartLoadingState, SmartState } from '../../components/ds/states';
-import { categoryLabel } from '../../lib/onboarding/catalog';
 import { LocalePicker } from '../../components/locale-picker';
 import { clearAvatarPhoto, loadAvatarPhoto, pickPhoto, saveAvatarPhoto } from '../../lib/profile/photo';
 import { AdaptiveTeacherConfig, ProfilePhoto } from '../../components/profile/components';
+import { LearnerPassportCard } from '../../components/profile/learner-passport';
 import { CameraCapture } from '../../components/capture/camera-capture';
 import type { CapturedImage } from '../../lib/capture/types';
 import {
@@ -44,6 +45,7 @@ export default function ProfileScreen() {
   const { scheme, setScheme } = useTheme();
 
   const [kyc, setKyc] = useState<OnboardingState | null>(null);
+  const [passport, setPassport] = useState<LearnerPassportView | null>(null);
   const [twin, setTwin] = useState<TwinOverview | null>(null);
   const [sw, setSw] = useState<StrengthsWeaknesses | null>(null);
   const [subscription, setSubscription] = useState<SubscriptionView | null>(null);
@@ -87,14 +89,16 @@ export default function ProfileScreen() {
         api<StrengthsWeaknesses>('/twin/strengths'),
         api<SubscriptionView>('/subscription'),
         api<UsageView>('/usage'),
+        api<LearnerPassportView>('/learner-passport'),
       ]);
     if (!active()) return;
-    const [kycResult, twinResult, strengthsResult, subscriptionResult, usageResult] = results;
+    const [kycResult, twinResult, strengthsResult, subscriptionResult, usageResult, passportResult] = results;
     if (kycResult.status === 'fulfilled') setKyc(kycResult.value);
     if (twinResult.status === 'fulfilled') setTwin(twinResult.value);
     if (strengthsResult.status === 'fulfilled') setSw(strengthsResult.value);
     if (subscriptionResult.status === 'fulfilled') setSubscription(subscriptionResult.value);
     if (usageResult.status === 'fulfilled') setUsage(usageResult.value);
+    if (passportResult.status === 'fulfilled') setPassport(passportResult.value);
     setPartial(results.some((result) => result.status === 'rejected'));
     setLoading(false);
   }, []);
@@ -107,10 +111,8 @@ export default function ProfileScreen() {
 
   const answers = kyc?.answers ?? {};
   const identity = answers.identity ?? {};
-  const education = (answers.education ?? {}) as OnboardingAnswers['education'] & { faculty?: string; option?: string };
   const languages = answers.languages ?? {};
-  const teacher = answers.teacher ?? {};
-  const goals = (answers.goals ?? []) as string[];
+  const teacher = passport?.declared.teacher ?? answers.teacher ?? {};
 
   /** PATCH a KYC section (object merge or list replace) + refresh (task 1.8). */
   const patch = useCallback(
@@ -258,15 +260,6 @@ export default function ProfileScreen() {
 
   const name = [identity.firstName, identity.lastName].filter(Boolean).join(' ');
   const strengths = (sw?.strengths ?? []).map((s) => s.name);
-  // KYC completeness (§20): the core answers that tailor the twin/teacher.
-  const kycComplete = Boolean(identity.firstName && education?.category && goals.length > 0);
-  const langLine = languages.native
-    ? `${languages.native}${languages.study ? ` → ${languages.study}` : ''}`
-    : '—';
-  const pathLine =
-    (education?.category ? t(categoryLabel(education.category) as TranslationKey) : '—') +
-    (education?.field ? ` — ${education.field}` : '');
-
   const photoHeader = (
     <View style={{ alignItems: 'center', gap: 6, marginTop: 6 }}>
       <ProfilePhoto photoUri={photo} avatarEmoji={identity.avatarEmoji} name={name} busy={busy} onPick={onPick} onChooseAvatar={onChooseAvatar} onRemove={onRemove} />
@@ -277,24 +270,7 @@ export default function ProfileScreen() {
     </View>
   );
 
-  const kycCard = (
-    <Card>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-        <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: '800' }}>{t('profile.kyc.title')}</Text>
-        <Badge tone={kycComplete ? 'success' : 'warning'} label={kycComplete ? t('profile.kyc.complete') : t('profile.kyc.incomplete')} />
-      </View>
-      <Text style={{ color: c.textMuted, fontSize: 13, marginBottom: 12 }}>{t('profile.kyc.detail')}</Text>
-      <View style={{ gap: 8, marginBottom: 14 }}>
-        <SummaryRow c={c} label={t('profile.kyc.name')} value={name || (user?.email?.split('@')[0] ?? '—')} />
-        <SummaryRow c={c} label={t('profile.kyc.path')} value={pathLine} />
-        <SummaryRow c={c} label={t('profile.kyc.languagesRow')} value={langLine} />
-        <SummaryRow c={c} label={t('profile.kyc.goalsRow')} value={`${goals.length} ${t('profile.kyc.goalsN')}`} />
-      </View>
-      <Button label={t('profile.edit')} variant="secondary" icon="→" onPress={() => router.push('/onboarding')} />
-    </Card>
-  );
-
-  if (loading && !kyc && !subscription && !usage) {
+  if (loading && !kyc && !passport && !subscription && !usage) {
     return <SmartLoadingState title={t('state.loading')} />;
   }
 
@@ -314,7 +290,13 @@ export default function ProfileScreen() {
               <Section title={t('profile.section.myProfile')} description={t('profile.section.myProfileDetail')}>
                 <View style={{ gap: 16 }}>
                   {photoHeader}
-                  {kycCard}
+                  <LearnerPassportCard
+                    passport={passport}
+                    onEdit={() => router.push({
+                      pathname: '/onboarding',
+                      params: { edit: 'passport', returnTo: '/profile' },
+                    })}
+                  />
                 </View>
               </Section>
 
@@ -340,7 +322,7 @@ export default function ProfileScreen() {
                   <Card><LocalePicker /></Card>
                   <LanguageExperienceCard
                     nativeLanguage={languages.native}
-                    learningLanguage={languages.study}
+                    learningLanguage={languages.teaching ?? languages.study}
                     onOpen={() => router.push('/languages')}
                   />
                 </View>
@@ -422,17 +404,5 @@ export default function ProfileScreen() {
         <Text style={{ color: c.textMuted, fontSize: 12, textAlign: 'center' }}>{t('profile.footer')}</Text>
       </Page>
     </ScrollView>
-  );
-}
-
-/** One read-only "label — value" line inside the compact KYC card. */
-function SummaryRow({ c, label, value }: { c: { textMuted: string; textPrimary: string }; label: string; value: string }) {
-  return (
-    <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
-      <Text style={{ color: c.textMuted, fontSize: 13 }}>{label}</Text>
-      <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: '600', flexShrink: 1, textAlign: 'right' }} numberOfLines={1}>
-        {value}
-      </Text>
-    </View>
   );
 }

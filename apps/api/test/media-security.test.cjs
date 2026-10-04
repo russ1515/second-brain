@@ -43,6 +43,64 @@ test('scan pages are orientation-normalized, metadata-free and size-bounded', as
   assert.equal(metadata.exif, undefined);
 });
 
+test('support screenshots are metadata-free and size-bounded', async () => {
+  const service = new ImageSafetyService();
+  const input = await sharp({ create: { width: 2600, height: 1800, channels: 3, background: '#112233' } })
+    .withMetadata({ orientation: 6 })
+    .jpeg()
+    .toBuffer();
+  const normalized = await service.supportScreenshot({
+    originalname: 'support.jpg', mimetype: 'image/jpeg', size: input.length, buffer: input,
+  });
+  const metadata = await sharp(normalized.buffer).metadata();
+  assert.equal(normalized.mimeType, 'image/webp');
+  assert.ok(Math.max(metadata.width, metadata.height) <= 1600);
+  assert.equal(metadata.exif, undefined);
+});
+
+test('support screenshot storage is private, owner-scoped and exportable', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'second-brain-support-media-'));
+  try {
+    const config = { get: (_key, fallback) => directory || fallback };
+    const tx = { $executeRaw: async () => undefined };
+    const reports = [{ id: 'report-a', reporterId: 'owner-a' }];
+    const prisma = {
+      $transaction: async (callback) => callback(tx),
+      user: { findUnique: async () => ({ id: 'owner-a' }) },
+      document: { findFirst: async () => ({ id: 'document-a' }) },
+      report: {
+        findFirst: async ({ where }) => reports.find((row) => row.id === where.id && row.reporterId === where.reporterId) ?? null,
+        findUnique: async ({ where }) => reports.find((row) => row.id === where.id) ?? null,
+        findMany: async ({ where }) => reports.filter((row) => row.reporterId === where.reporterId),
+      },
+    };
+    const media = new PrivateMediaService(config, new ImageSafetyService(), prisma);
+    await media.onModuleInit();
+    const input = await sharp({ create: { width: 80, height: 60, channels: 3, background: '#445566' } })
+      .withMetadata({ orientation: 6 })
+      .png()
+      .toBuffer();
+    await media.putReportScreenshot('owner-a', 'report-a', {
+      originalname: 'capture.png', mimetype: 'image/png', size: input.length, buffer: input,
+    });
+
+    assert.equal(await media.hasReportScreenshot('owner-a', 'report-a'), true);
+    assert.ok((await media.getReportScreenshot('owner-a', 'report-a')).buffer.length > 0);
+    assert.ok((await media.getReportScreenshotForAdmin('report-a')).buffer.length > 0);
+    await assert.rejects(media.getReportScreenshot('owner-b', 'report-a'), /not found/i);
+
+    const exported = await media.exportUserMedia('owner-a', []);
+    assert.equal(exported.reportScreenshots.length, 1);
+    assert.equal(exported.reportScreenshots[0].reportId, 'report-a');
+    assert.equal(exported.reportScreenshots[0].mimeType, 'image/webp');
+
+    await media.deleteReportScreenshot('owner-a', 'report-a');
+    assert.equal(await media.hasReportScreenshot('owner-a', 'report-a'), false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('private avatar paths are owner-scoped and deletion is idempotent', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'second-brain-media-'));
   try {
@@ -78,6 +136,7 @@ test('GDPR media export includes the owned avatar and normalized scan pages', as
       $transaction: async (callback) => callback(tx),
       user: { findUnique: async () => ({ id: 'owner-a' }) },
       document: { findFirst: async () => ({ id: 'document-a' }) },
+      report: { findMany: async () => [] },
     };
     const media = new PrivateMediaService(config, images, prisma);
     await media.onModuleInit();

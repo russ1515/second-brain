@@ -32,6 +32,10 @@ const MAX_INPUT_PIXELS = 40_000_000;
 // BUSINESS_DECISION_REQUIRED: output size balances a crisp avatar with private
 // storage and bandwidth. It is deliberately not exposed as a quota or plan rule.
 const AVATAR_EDGE = 512;
+// BUSINESS_DECISION_REQUIRED: support captures are intentionally bounded and
+// re-encoded before private storage. Product/security still need to ratify the
+// long-term retention and exact resolution policy.
+const SUPPORT_SCREENSHOT_MAX_EDGE = 1600;
 // BUSINESS_DECISION_REQUIRED: enough detail for page OCR while bounding the
 // decoded provider payload and base64 expansion.
 const SCAN_MAX_EDGE = 2400;
@@ -109,6 +113,29 @@ export class ImageSafetyService {
       return { buffer: data, mimeType: 'image/jpeg', width: info.width, height: info.height };
     } catch {
       throw new BadRequestException('A scan page could not be processed.');
+    }
+  }
+
+  /** Normalize an explicitly attached support capture without treating it as
+   * a document. Re-encoding strips EXIF/GPS and preserves the aspect ratio. */
+  async supportScreenshot(file: ImageUpload): Promise<NormalizedImage> {
+    this.assertByteLimit(file);
+    const image = await this.decode(file);
+    try {
+      const { data, info } = await image
+        .rotate()
+        .resize({
+          width: SUPPORT_SCREENSHOT_MAX_EDGE,
+          height: SUPPORT_SCREENSHOT_MAX_EDGE,
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .toColourspace('srgb')
+        .webp({ quality: 82 })
+        .toBuffer({ resolveWithObject: true });
+      return { buffer: data, mimeType: 'image/webp', width: info.width, height: info.height };
+    } catch {
+      throw new BadRequestException('The support screenshot could not be processed.');
     }
   }
 

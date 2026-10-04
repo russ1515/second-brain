@@ -240,6 +240,9 @@ test('authenticated reports use explicit consent, exact correlation, redaction, 
   assert.equal(typeof first.body?.id, 'string');
   assert.equal(first.body?.correlationStatus, 'linked');
   assert.equal(first.body?.correlationConfidence, 'high');
+  assert.equal(first.body?.status, 'RECEIVED');
+  assert.equal(first.body?.trackingId, `SB-REPORT-${first.body.id.toUpperCase()}`);
+  assert.equal(first.body?.screenshotAvailable, false);
   assert.equal(first.body?.additionalDiagnostics, 'NOT_INSTRUMENTED');
   assert.equal(JSON.stringify(first.body).includes(marker), false);
   reportIds.add(first.body.id);
@@ -264,6 +267,13 @@ test('authenticated reports use explicit consent, exact correlation, redaction, 
   const retry = await api('/reports', { method: 'POST', token: learnerToken, requestId: reportSubmissionRequestId, body: reportInput });
   assert.equal(retry.status, 201);
   assert.equal(retry.body?.id, first.body.id, 'A same-user request retry must return the original report.');
+  assert.equal(await prisma.supportCase.count({ where: { reportId: first.body.id } }), 1,
+    'Report creation and retry must converge to one SupportCase.');
+
+  const ownReports = await api('/reports?page=1&pageSize=20', { token: learnerToken });
+  assert.equal(ownReports.status, 200);
+  assert.equal(ownReports.body?.items?.some((item) => item.trackingId === first.body.trackingId), true);
+  assert.equal(JSON.stringify(ownReports.body).includes(marker), false, 'Learner tracking never returns report message content.');
 
   const concurrentRequestId = `${runId}-concurrent-report-${randomUUID()}`;
   const concurrent = await Promise.all(Array.from({ length: 4 }, () => api('/reports', {
@@ -275,6 +285,8 @@ test('authenticated reports use explicit consent, exact correlation, redaction, 
   assert.equal(new Set(concurrentIds).size, 1, 'Concurrent same-request retries must converge to one report.');
   reportIds.add(concurrentIds[0]);
   assert.equal(await prisma.report.count({ where: { reporterId: learner.id, requestId: concurrentRequestId } }), 1);
+  assert.equal(await prisma.supportCase.count({ where: { reportId: concurrentIds[0] } }), 1,
+    'Concurrent report retries must converge to one SupportCase.');
 });
 
 test('admin diagnostics and support contracts enforce MFA RBAC, redaction, human review, and step-up', {
@@ -329,6 +341,7 @@ test('admin diagnostics and support contracts enforce MFA RBAC, redaction, human
   const listedReport = safeReportList.body?.items?.find((item) => item.id === userReport.body.id);
   assert.equal(listedReport?.untrusted, true);
   assert.equal(listedReport?.content, 'REDACTED');
+  assert.equal(listedReport?.supportCaseId, supportCase.body.id, 'Admin report rows expose the actual SupportCase mutation target.');
 
   const techOpsToken = await loginAdmin(techOps.email);
   const sensitive = await api(`/admin/bugs/${bugId}/events/sensitive`, { token: techOpsToken });

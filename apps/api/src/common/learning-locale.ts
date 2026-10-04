@@ -56,9 +56,10 @@ Rules:
 1. ALL generated pedagogical content (lessons, quizzes, reviews, explanations,
    corrections) must be written directly in ${english} — never write in another
    language and translate, and never mix languages in one response.
-2. If the learner is studying a FOREIGN language, provide that language's
-   practice/examples as needed, but keep your explanations and guidance in
-   ${english}.
+2. If the learner is studying a FOREIGN language or follows a course in another
+   teaching language, preserve necessary course terms and provide short
+   practice/examples in that language as needed, but keep explanations and
+   guidance in ${english}.
 3. Keep a natural, encouraging, highly educational tone in ${english}.
 ======================================================================
 `.trimEnd();

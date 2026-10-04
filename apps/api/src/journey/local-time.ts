@@ -44,6 +44,7 @@ interface LocalParts {
   month: number;
   day: number;
   hour: number;
+  minute: number;
 }
 
 function partsIn(instant: Date, timezone: string): LocalParts {
@@ -53,6 +54,7 @@ function partsIn(instant: Date, timezone: string): LocalParts {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
+    minute: '2-digit',
     hourCycle: 'h23',
   });
   const parts = Object.fromEntries(
@@ -63,12 +65,19 @@ function partsIn(instant: Date, timezone: string): LocalParts {
     month: Number(parts.month),
     day: Number(parts.day),
     hour: Number(parts.hour),
+    minute: Number(parts.minute),
   };
 }
 
 /** The learner's local hour (0-23) at `instant`. */
 export function localHour(instant: Date, timezone: string): number {
   return partsIn(instant, timezone).hour;
+}
+
+/** Minutes elapsed since midnight in the learner's local timezone. */
+export function localMinuteOfDay(instant: Date, timezone: string): number {
+  const { hour, minute } = partsIn(instant, timezone);
+  return hour * 60 + minute;
 }
 
 /**
