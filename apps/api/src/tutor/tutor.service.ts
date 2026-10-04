@@ -111,6 +111,13 @@ const GROUNDING_RULES = [
  *  the prompt this service used before the language engine existed. */
 const TUTOR_SYSTEM = `${TUTOR_PERSONA} ${GROUNDING_RULES}`;
 
+const DECLARED_PASSPORT_ADAPTATION_RULE =
+  ' Explicitly declared Learner Passport settings, including age band, languages,' +
+  ' education and goals, are permitted inputs for adapting wording, explanation' +
+  ' density, examples, pacing and scaffolding. Treat them as learner-provided' +
+  ' context, not verified mastery, and never use them to lower an assessment' +
+  ' rubric, assistance rule or grading standard.';
+
 /** What the tutor knows about the focused concept + the learner's grasp of it. */
 interface FocusInfo {
   name: string;
@@ -878,6 +885,9 @@ export class TutorService {
     }
     if (teacherPolicy) {
       prompt += teacherPolicyDirective(teacherPolicy);
+    }
+    if (passportDirective && teacherPolicy?.automaticAdaptation !== false) {
+      prompt += DECLARED_PASSPORT_ADAPTATION_RULE;
     }
     // Global Learning Locale: general sessions answer in the learner's locale.
     // Language-practice sessions are the exception — the language engine (mode,

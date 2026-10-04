@@ -11,16 +11,18 @@ const {
 const {
   StudyPlannerService,
 } = require('../dist/planner/study-planner.service.js');
+const { TutorService } = require('../dist/tutor/tutor.service.js');
 const { selectStrategy } = require('../dist/tutor/teaching-strategy.js');
+const { resolveTeacherPolicy } = require('@second-brain/shared');
 
 const updatedAt = new Date('2026-09-30T10:00:00.000Z');
 
-function readPrisma(overrides = {}) {
+function readPrisma(overrides = {}, ageBand = '12to15') {
   return {
     onboardingProfile: {
       findUnique: async () => ({
         identity: {
-          ageBand: '12to15',
+          ageBand,
           countryOfOrigin: 'SN',
           currentCountry: 'FR',
         },
@@ -100,6 +102,42 @@ test('Tutor context adapts age/languages but explicitly preserves assessment rul
   assert.match(context.directive, /Declared learning language goal: en \(current=B1, target=C1\)/);
   assert.match(context.directive, /Observed Learning DNA signals/);
   assert.match(context.directive, /must never lower, change or bypass.*assessment rubric/i);
+});
+
+test('Tutor composes distinct child, adolescent and adult Passport directives after trusted policy', async () => {
+  const tutor = new TutorService({}, {}, {}, {}, {}, {}, {}, {});
+  const policy = resolveTeacherPolicy(
+    { automaticAdaptation: true },
+    { mode: 'conversation', intent: 'learn' },
+  );
+  const cases = [
+    ['under12', /child.*simple vocabulary.*short steps.*concrete examples/is],
+    ['12to15', /adolescent.*school-relevant examples.*exam preparation/is],
+    ['18to25', /adult\/university.*denser explanations.*academic or professional terminology/is],
+  ];
+
+  for (const [ageBand, expected] of cases) {
+    const passport = new LearnerPassportService(
+      readPrisma({}, ageBand),
+      { profile: async () => null },
+    );
+    const context = await passport.tutorContext('u1', true);
+    const prompt = tutor.systemPrompt(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      null,
+      'fr',
+      undefined,
+      policy,
+      context.directive,
+    );
+
+    assert.match(prompt, expected);
+    assert.match(prompt, /declared Learner Passport settings.*permitted inputs.*not verified mastery/is);
+    assert.match(prompt, /never use them to lower an assessment rubric, assistance rule or grading standard/i);
+  }
 });
 
 test('Passport learning preferences steer the existing ITE without a new engine', () => {
