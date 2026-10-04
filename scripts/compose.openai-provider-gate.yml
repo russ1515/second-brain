@@ -5,7 +5,7 @@ services:
   api:
     environment:
       LLM_PROVIDER: openai
-      LLM_MODEL: ${LLM_MODEL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # This server-only mode is read by LlmService only for an OpenAI Tutor
       # request. It disables retries and caps output in the one-off container.

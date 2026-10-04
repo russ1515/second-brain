@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   MinLength,
+  ValidateIf,
   validateSync,
 } from 'class-validator';
 
@@ -74,8 +75,9 @@ class EnvironmentVariables {
   @IsString()
   LLM_PROVIDER!: string;
 
+  @ValidateIf((env: EnvironmentVariables) => env.LLM_PROVIDER !== 'openai' || !env.OPENAI_MODEL)
   @IsString()
-  LLM_MODEL!: string;
+  LLM_MODEL?: string;
 
   @IsOptional()
   @IsString()
@@ -84,6 +86,10 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   OPENAI_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  OPENAI_MODEL?: string;
 
   /** Isolated, one-call staging validation only; never enables OpenAI itself. */
   @IsOptional()

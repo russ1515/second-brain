@@ -36,7 +36,12 @@ export default () => ({
   },
   llm: {
     provider: process.env.LLM_PROVIDER ?? 'gemini',
-    model: process.env.LLM_MODEL ?? 'gemini-flash-latest',
+    // OpenAI keeps its own server-only model selector so switching the
+    // provider never reuses an Echo/Gemini model by accident. LLM_MODEL stays
+    // as a compatibility fallback for deployments created before this seam.
+    model: (process.env.LLM_PROVIDER ?? 'gemini') === 'openai'
+      ? process.env.OPENAI_MODEL ?? process.env.LLM_MODEL ?? ''
+      : process.env.LLM_MODEL ?? 'gemini-flash-latest',
     geminiApiKey: process.env.GEMINI_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
     // This is intentionally off unless a temporary, isolated provider-gate

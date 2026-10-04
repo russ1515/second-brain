@@ -1,3 +1,5 @@
+require('reflect-metadata');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -7,6 +9,21 @@ const {
 } = require('../dist/llm/providers/openai.provider.js');
 const { AiOrchestratorService } = require('../dist/llm/ai-orchestrator.service.js');
 const { LlmService, normalizeLlmMeasurement } = require('../dist/llm/llm.service.js');
+const configuration = require('../dist/config/configuration.js').default;
+const { validateEnv } = require('../dist/config/env.validation.js');
+
+function validEnvironment(overrides = {}) {
+  return {
+    NODE_ENV: 'test', API_PORT: '3000', DATABASE_URL: 'postgresql://test',
+    REDIS_HOST: 'localhost', REDIS_PORT: '6379', QDRANT_URL: 'http://localhost:6333',
+    LLM_PROVIDER: 'echo', LLM_MODEL: 'echo',
+    JWT_ACCESS_SECRET: 'controlled-access-secret',
+    JWT_REFRESH_SECRET: 'controlled-refresh-secret',
+    OTP_HMAC_SECRET: 'controlled-otp-hmac-secret-at-least-32-chars',
+    JWT_ACCESS_TTL: '900', JWT_REFRESH_TTL: '3600',
+    ...overrides,
+  };
+}
 
 function jsonResponse(payload, status = 200) {
   return {
@@ -15,6 +32,46 @@ function jsonResponse(payload, status = 200) {
     json: async () => payload,
   };
 }
+
+test('OpenAI model selection is dedicated, validated, and backward compatible', () => {
+  assert.doesNotThrow(() => validateEnv(validEnvironment({
+    LLM_PROVIDER: 'openai', LLM_MODEL: undefined, OPENAI_MODEL: 'gpt-4.1-mini-2025-04-14',
+  })));
+  assert.doesNotThrow(() => validateEnv(validEnvironment({ LLM_PROVIDER: 'openai' })));
+  assert.throws(() => validateEnv(validEnvironment({
+    LLM_PROVIDER: 'openai', LLM_MODEL: undefined, OPENAI_MODEL: undefined,
+  })));
+  assert.throws(() => validateEnv(validEnvironment({
+    LLM_PROVIDER: 'echo', LLM_MODEL: undefined, OPENAI_MODEL: 'must-not-configure-echo',
+  })));
+
+  const previous = {
+    provider: process.env.LLM_PROVIDER,
+    legacyModel: process.env.LLM_MODEL,
+    openaiModel: process.env.OPENAI_MODEL,
+  };
+  try {
+    process.env.LLM_PROVIDER = 'openai';
+    process.env.LLM_MODEL = 'legacy-openai-model';
+    process.env.OPENAI_MODEL = 'dedicated-openai-model';
+    assert.equal(configuration().llm.model, 'dedicated-openai-model');
+
+    delete process.env.OPENAI_MODEL;
+    assert.equal(configuration().llm.model, 'legacy-openai-model');
+
+    process.env.LLM_PROVIDER = 'gemini';
+    process.env.LLM_MODEL = 'gemini-model';
+    process.env.OPENAI_MODEL = 'must-not-leak';
+    assert.equal(configuration().llm.model, 'gemini-model');
+  } finally {
+    if (previous.provider === undefined) delete process.env.LLM_PROVIDER;
+    else process.env.LLM_PROVIDER = previous.provider;
+    if (previous.legacyModel === undefined) delete process.env.LLM_MODEL;
+    else process.env.LLM_MODEL = previous.legacyModel;
+    if (previous.openaiModel === undefined) delete process.env.OPENAI_MODEL;
+    else process.env.OPENAI_MODEL = previous.openaiModel;
+  }
+});
 
 test('OpenAI Responses adapter serializes safely and canonicalizes separately priced usage', async () => {
   const calls = [];

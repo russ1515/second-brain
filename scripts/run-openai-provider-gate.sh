@@ -54,7 +54,15 @@ read_private_env() {
 }
 
 read_private_env OPENAI_API_KEY
-read_private_env LLM_MODEL
+if grep -q '^OPENAI_MODEL=' "$PRIVATE_ENV"; then
+  read_private_env OPENAI_MODEL
+else
+  # Legacy private gate files used LLM_MODEL. Normalize it into the dedicated
+  # OpenAI selector without ever echoing either value.
+  read_private_env LLM_MODEL
+  OPENAI_MODEL="$LLM_MODEL"
+  export OPENAI_MODEL
+fi
 if grep -q '^OPENAI_PROVIDER_GATE_MAX_OUTPUT_TOKENS=' "$PRIVATE_ENV"; then
   read_private_env OPENAI_PROVIDER_GATE_MAX_OUTPUT_TOKENS
 else
@@ -67,7 +75,7 @@ case "$OPENAI_PROVIDER_GATE_MAX_OUTPUT_TOKENS" in
 esac
 [ "$OPENAI_PROVIDER_GATE_MAX_OUTPUT_TOKENS" -ge 1 ] && [ "$OPENAI_PROVIDER_GATE_MAX_OUTPUT_TOKENS" -le 128 ] || refuse "OPENAI_PROVIDER_GATE_OUTPUT_CAP_INVALID"
 
-case "$LLM_MODEL" in
+case "$OPENAI_MODEL" in
   *$'\n'*|*$'\r'*) refuse "OPENAI_MODEL_INVALID" ;;
 esac
 
