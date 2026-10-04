@@ -243,9 +243,11 @@ async function main() {
     record(currentCheck);
 
     currentCheck = 'LOGOUT_INVALIDATES_SERVER_SESSION';
-    const logoutResponse = page.waitForResponse((candidate) => candidate.url() === `${apiBase}/auth/logout-all` && candidate.request().method() === 'POST');
-    await page.getByRole('button', { name: 'Logout', exact: true }).click();
-    assert.equal((await logoutResponse).status(), 204);
+    const logoutResponse = page.waitForResponse((candidate) => candidate.url() === `${apiBase}/auth/logout-all` && candidate.request().method() === 'POST').catch(() => null);
+    await page.getByRole('button', { name: 'Déconnexion', exact: true }).click();
+    const logout = await logoutResponse;
+    assert.ok(logout, 'LOGOUT_RESPONSE_MISSING');
+    assert.equal(logout.status(), 204);
     await page.waitForURL(/\/login(?:\?.*)?$/u);
     const [oldAccessStatus, oldRefreshStatus] = await Promise.all([
       requestWithSession(page, '/admin/session', tokens.tokens.accessToken),
