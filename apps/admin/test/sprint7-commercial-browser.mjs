@@ -82,9 +82,9 @@ async function main() {
     for (const state of states) assert.ok(visible.includes(state), `QUOTA_STATE_GUIDANCE_NOT_RENDERED:${state}`); record(currentCheck);
 
     currentCheck = 'SUPER_ADMIN_PRICING_DIALOG';
-    const edit = superPage.getByRole('button', { name: /^Edit pricing /u }).first(); await edit.waitFor(); await edit.click();
-    await superPage.getByRole('heading', { name: 'Official active pricing', exact: true }).waitFor(); await superPage.getByText(/step-up MFA/u).waitFor();
-    assert.equal(pricingMutationRequests, 0, 'PRICING_MUTATION_MUST_REQUIRE_EXPLICIT_SAVE'); await superPage.getByRole('button', { name: 'Close', exact: true }).click(); record(currentCheck);
+    const edit = superPage.getByRole('button', { name: /^(?:Edit pricing|Modifier les tarifs)\b/u }).first(); await edit.waitFor(); await edit.click();
+    await superPage.getByRole('heading', { name: /^(?:Official active pricing|Tarification active officielle)$/u }).waitFor(); await superPage.getByText(/(?:step-up MFA|MFA step-up)/u).waitFor();
+    assert.equal(pricingMutationRequests, 0, 'PRICING_MUTATION_MUST_REQUIRE_EXPLICIT_SAVE'); await superPage.getByRole('button', { name: /^(?:Close|Fermer)$/u }).click(); record(currentCheck);
     currentCheck = 'SENTINEL_STATUS_PRESERVED';
     await superPage.route(`${apiBase}/admin/commercial/usage`, async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ plan: 'FREE', feature: 'documents', status: 'NOT_CONFIGURED', quotaState: 'BLOCKED' }] }) }));
     await superPage.getByRole('button', { name: 'Usage', exact: true }).click(); await superPage.waitForURL(/\/usage(?:\?.*)?$/u); await superPage.getByText('NOT_CONFIGURED', { exact: true }).waitFor();
