@@ -187,7 +187,7 @@ async function main() {
     await superPage.close();
     record(currentCheck);
 
-    currentCheck = 'FINANCE_LEAST_PRIVILEGE';
+    currentCheck = 'FINANCE_RBAC_LEAST_PRIVILEGE';
     const financePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     financePage.setDefaultTimeout(20_000);
     await restrictNetwork(financePage);
@@ -197,6 +197,9 @@ async function main() {
     assert.ok(safeResponse(denied), 'COPILOT_DENIAL_RESPONSE_REDACTED');
     assert.equal(denied.status, 'ACCESS_DENIED', 'COPILOT_FINANCE_CANNOT_READ_INFRASTRUCTURE');
     assert.ok(denied.sources?.some((source) => source.status === 'ACCESS_DENIED'), 'COPILOT_DENIAL_SOURCE_EXPLICIT');
+    record(currentCheck);
+
+    currentCheck = 'FINANCE_MOBILE_LAYOUT';
     const layout = await financePage.evaluate(() => ({ html: document.documentElement.scrollWidth, body: document.body.scrollWidth, viewport: window.innerWidth }));
     assert.ok(layout.html <= layout.viewport + 1 && layout.body <= layout.viewport + 1, 'COPILOT_MOBILE_LAYOUT_OVERFLOW');
     await financePage.close();
