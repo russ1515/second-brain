@@ -57,18 +57,24 @@ async function main() {
   assert.ok(runId, 'P1_RUN_ID_REQUIRED'); assert.ok(sourceSha, 'P1_STAGING_SHA_REQUIRED'); assert.equal(path.resolve(evidenceDirectory), '/p1/evidence', 'SPRINT7_COMMERCIAL_EVIDENCE_DIR_MUST_BE_P1_EVIDENCE');
   browser = await chromium.launch({ headless: true });
   try {
-    currentCheck = 'SUPER_ADMIN_CATALOG_PRICING_RENDER';
     const superContext = await browser.newContext(); const superPage = await superContext.newPage({ viewport: { width: 1440, height: 960 } }); superPage.setDefaultTimeout(20_000); await restrictNetwork(superPage);
     let pricingMutationRequests = 0; superPage.on('request', (request) => { if (request.method() === 'PUT' && /\/admin\/commercial\/plans\/[^/]+\/pricing$/u.test(new URL(request.url()).pathname)) pricingMutationRequests += 1; });
-    await login(superPage, superAdmin, superTotp); const catalogResponse = await navigatePlans(superPage); assert.equal(catalogResponse.status(), 200); const catalog = await catalogResponse.json(); assert.ok(Array.isArray(catalog?.items), 'COMMERCIAL_PLANS_ITEMS_REQUIRED'); assert.ok(responseIsRedacted(catalog), 'COMMERCIAL_CATALOG_RESPONSE_MUST_BE_REDACTED');
+    currentCheck = 'SUPER_ADMIN_LOGIN';
+    await login(superPage, superAdmin, superTotp); record(currentCheck);
+
+    currentCheck = 'SUPER_ADMIN_PLANS_HTTP';
+    const catalogResponse = await navigatePlans(superPage); assert.equal(catalogResponse.status(), 200); const catalog = await catalogResponse.json(); assert.ok(Array.isArray(catalog?.items), 'COMMERCIAL_PLANS_ITEMS_REQUIRED'); assert.ok(responseIsRedacted(catalog), 'COMMERCIAL_CATALOG_RESPONSE_MUST_BE_REDACTED'); record(currentCheck);
+
+    currentCheck = 'SUPER_ADMIN_CATALOG_RENDER';
     await superPage.getByRole('heading', { name: 'Commercial Control Center', exact: true }).waitFor();
     const visible = await superPage.locator('body').innerText();
     for (const amount of ['$0.00', '$4.99', '$49.00', '$15.00', '$150.00']) assert.ok(visible.includes(amount), `ACTIVE_PRICE_NOT_RENDERED:${amount}`);
-    for (const state of ['PRIMARY', 'FALLBACK', 'BLOCKED']) assert.ok(visible.includes(state), `QUOTA_STATE_GUIDANCE_NOT_RENDERED:${state}`);
+    for (const state of ['PRIMARY', 'FALLBACK', 'BLOCKED']) assert.ok(visible.includes(state), `QUOTA_STATE_GUIDANCE_NOT_RENDERED:${state}`); record(currentCheck);
+
+    currentCheck = 'SUPER_ADMIN_PRICING_DIALOG';
     const edit = superPage.getByRole('button', { name: /^Edit pricing /u }).first(); await edit.waitFor(); await edit.click();
     await superPage.getByRole('heading', { name: 'Official active pricing', exact: true }).waitFor(); await superPage.getByText(/step-up MFA/u).waitFor();
-    assert.equal(pricingMutationRequests, 0, 'PRICING_MUTATION_MUST_REQUIRE_EXPLICIT_SAVE');
-    await superPage.getByRole('button', { name: 'Close', exact: true }).click(); record(currentCheck);
+    assert.equal(pricingMutationRequests, 0, 'PRICING_MUTATION_MUST_REQUIRE_EXPLICIT_SAVE'); await superPage.getByRole('button', { name: 'Close', exact: true }).click(); record(currentCheck);
     currentCheck = 'SENTINEL_STATUS_PRESERVED';
     await superPage.route(`${apiBase}/admin/commercial/usage`, async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ plan: 'FREE', feature: 'documents', status: 'NOT_CONFIGURED', quotaState: 'BLOCKED' }] }) }));
     await superPage.getByRole('button', { name: 'Usage', exact: true }).click(); await superPage.waitForURL(/\/usage(?:\?.*)?$/u); await superPage.getByText('NOT_CONFIGURED', { exact: true }).waitFor();
