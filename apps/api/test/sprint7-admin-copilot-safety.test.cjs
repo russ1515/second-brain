@@ -7,6 +7,9 @@ const apiRoot = path.resolve(__dirname, '..');
 const serviceSource = read('src/admin/copilot/admin-copilot.service.ts');
 const controllerSource = read('src/admin/copilot/admin-copilot.controller.ts');
 const dtoSource = read('src/admin/copilot/admin-copilot.dto.ts');
+const providerGateSource = fs.readFileSync(path.resolve(apiRoot, '../../scripts/admin-copilot-provider-gate-client.cjs'), 'utf8');
+const verificationClientSource = fs.readFileSync(path.resolve(apiRoot, '../../scripts/admin-copilot-cost-trace-verify-client.cjs'), 'utf8');
+const verificationComposeSource = fs.readFileSync(path.resolve(apiRoot, '../../scripts/compose.admin-copilot-cost-trace-verify.yml'), 'utf8');
 
 function read(relativePath) {
   return fs.readFileSync(path.join(apiRoot, relativePath), 'utf8');
@@ -70,4 +73,15 @@ test('Admin Copilot code lookup is confined to the read-only source mount allowl
   assert.match(serviceSource, /if \(!inside\(root, candidate\)\) continue;/u);
   assert.match(serviceSource, /async function searchRepository\(root: string, terms: string\[\]\)/u);
   assert.match(serviceSource, /Keep classifications only—not prompts, evidence, credentials or an[\s\S]*?authorization decision/u);
+});
+
+test('Admin Copilot provider evidence joins its redacted audit safely and verification never invokes Copilot', () => {
+  assert.match(providerGateSource, /targetType: 'AdminCopilotConversation', targetId: copilot\.conversationId/u);
+  assert.match(providerGateSource, /requestId !== '\[REDACTED\]'/u);
+  assert.match(providerGateSource, /promptStored !== false/u);
+  assert.doesNotMatch(verificationClientSource, /request\('\/admin\/copilot\/query'/u);
+  assert.match(verificationClientSource, /providerRequestsTriggered: 0/u);
+  assert.match(verificationClientSource, /requestId !== '\[REDACTED\]'/u);
+  assert.match(verificationComposeSource, /LLM_PROVIDER: echo/u);
+  assert.match(verificationComposeSource, /OPENAI_API_KEY: ''/u);
 });

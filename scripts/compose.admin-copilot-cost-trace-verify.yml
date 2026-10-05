@@ -1,0 +1,15 @@
+# Merge only with the private P1 Compose file. This launches a disposable API
+# in echo/fake mode for reconciliation; it has no OpenAI credential and the
+# verification client contains no Admin Copilot query request.
+services:
+  api:
+    environment:
+      LLM_PROVIDER: echo
+      EMBEDDINGS_PROVIDER: fake
+      OPENAI_PROVIDER_GATE_MODE: ''
+      OPENAI_API_KEY: ''
+    volumes:
+      - type: bind
+        source: ${P1_REPO}/scripts/admin-copilot-cost-trace-verify-client.cjs
+        target: /app/admin-copilot-cost-trace-verify-client.cjs
+        read_only: true

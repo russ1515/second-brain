@@ -268,6 +268,7 @@ async function main() {
   }
   if (
     copilot?.status !== 'AVAILABLE'
+    || typeof copilot?.conversationId !== 'string'
     || !copilot?.sources?.some((source) => source?.kind === 'system_health' && source?.status === 'AVAILABLE')
     || copilot?.trace?.provider !== 'openai'
     || copilot?.trace?.model !== model
@@ -327,9 +328,19 @@ async function main() {
   }
 
   const auditRows = await prisma.auditLog.findMany({
-    where: { requestId, action: 'admin.copilot.query' }, select: { action: true, metadata: true, result: true },
+    // Request IDs are deliberately redacted by AdminAuditService because the
+    // HTTP header is caller-controlled.  The server-generated conversation
+    // target is the privacy-safe audit join for this one response.
+    where: {
+      action: 'admin.copilot.query', targetType: 'AdminCopilotConversation', targetId: copilot.conversationId,
+    },
+    select: { requestId: true, action: true, metadata: true, result: true },
   });
-  if (auditRows.length !== 1 || auditRows[0]?.result !== 'success' || metadataSource(auditRows[0]?.metadata) !== 'ADMIN_COPILOT') {
+  if (
+    auditRows.length !== 1 || auditRows[0]?.requestId !== '[REDACTED]' ||
+    auditRows[0]?.result !== String(copilot.status).toLowerCase() ||
+    metadataSource(auditRows[0]?.metadata) !== 'ADMIN_COPILOT' || auditRows[0]?.metadata?.promptStored !== false
+  ) {
     throw gateError('ADMIN_COPILOT_AUDIT_SOURCE_INVALID');
   }
 
@@ -385,7 +396,7 @@ async function main() {
       featureAmountDeltaUsd: decimalDelta(afterFeature.cost?.knownSubtotalUsd, beforeFeature?.cost?.knownSubtotalUsd),
       costStatus: afterFeature.cost?.costStatus,
     },
-    audit: { source: 'ADMIN_COPILOT', queryAuditEntries: 1 },
+    audit: { source: 'ADMIN_COPILOT', queryAuditEntries: 1, requestIdRedacted: true, promptStored: false },
     safety: { rbacAuthenticatedSuperAdmin: true, responseRedactionChecked: true, mutationExecuted: false },
   });
 }
