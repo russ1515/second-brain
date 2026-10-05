@@ -30,22 +30,26 @@ function evidencePath() { return path.join('/p1/evidence', `sprint7-commercial-b
 function writeEvidence(status, failureCheck = null) { mkdirSync('/p1/evidence', { recursive: true, mode: 0o700 }); writeFileSync(evidencePath(), JSON.stringify({ gate: 'SPRINT7_COMMERCIAL_BROWSER', status, runId, sourceSha, failureCheck, checks }), { mode: 0o600, flag: 'wx' }); }
 function responseIsRedacted(value, seen = new Set()) { if (value === null || value === undefined) return true; if (typeof value === 'string') return !/(?:sk-[A-Za-z0-9]|bearer\s+|postgres(?:ql)?:\/\/|-----BEGIN|password\s*=|api[_-]?key\s*=|eyJ[A-Za-z0-9_-]{8,}\.)/iu.test(value); if (typeof value !== 'object' || seen.has(value)) return true; seen.add(value); return Object.values(value).every((child) => responseIsRedacted(child, seen)); }
 function assertLoopback(url) { const parsed = new URL(url); assert.equal(parsed.protocol, 'http:', 'BROWSER_REQUEST_PROTOCOL_MUST_BE_HTTP_LOOPBACK'); assert.equal(parsed.hostname, '127.0.0.1', 'BROWSER_REQUEST_HOST_MUST_BE_LOOPBACK'); assert.ok([new URL(adminBase).port, new URL(apiBase).port].includes(parsed.port), 'BROWSER_REQUEST_PORT_NOT_ALLOWED'); }
+function isAdminApiResponse(response, pathname, method) { const url = new URL(response.url()); return url.protocol === 'http:' && url.hostname === '127.0.0.1' && [new URL(adminBase).port, new URL(apiBase).port].includes(url.port) && url.pathname === `/api${pathname}` && response.request().method() === method; }
 async function restrictNetwork(page) { await page.route('**/*', async (route) => { try { assertLoopback(route.request().url()); await route.continue(); } catch { await route.abort('blockedbyclient'); } }); page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) assertLoopback(frame.url()); }); }
 
 async function login(page, email, totp) {
   await page.goto(`${adminBase}/login`, { waitUntil: 'networkidle' });
   await page.getByLabel('Email').fill(email); await page.getByLabel('Password').fill(password);
-  const loginResponse = page.waitForResponse((response) => response.url() === `${apiBase}/auth/login` && response.request().method() === 'POST');
+  const loginResponse = page.waitForResponse((response) => isAdminApiResponse(response, '/auth/login', 'POST'));
   await page.getByRole('button', { name: 'Continue', exact: true }).click(); assert.equal((await loginResponse).status(), 200);
   await page.getByLabel('Authentication code').fill(authenticator.generate(totp));
-  const verified = page.waitForResponse((response) => response.url() === `${apiBase}/auth/2fa/verify` && response.request().method() === 'POST');
+  const verified = page.waitForResponse((response) => isAdminApiResponse(response, '/auth/2fa/verify', 'POST'));
   await page.getByRole('button', { name: 'Verify MFA', exact: true }).click(); assert.equal((await verified).status(), 200);
   await page.waitForURL(/\/dashboard(?:\?.*)?$/u);
 }
 
 async function navigatePlans(page) {
-  const response = page.waitForResponse((candidate) => candidate.url() === `${apiBase}/admin/commercial/plans` && candidate.request().method() === 'GET');
   await page.getByRole('button', { name: 'Plans', exact: true }).click(); await page.waitForURL(/\/plans(?:\?.*)?$/u);
+  // The protected shell can eagerly fetch the first section. Refresh after
+  // navigation so this test observes a concrete, browser-originated response.
+  const response = page.waitForResponse((candidate) => isAdminApiResponse(candidate, '/admin/commercial/plans', 'GET'));
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   return response;
 }
 
@@ -54,7 +58,7 @@ async function main() {
   browser = await chromium.launch({ headless: true });
   try {
     currentCheck = 'SUPER_ADMIN_CATALOG_PRICING_RENDER';
-    const superPage = await browser.newPage({ viewport: { width: 1440, height: 960 } }); superPage.setDefaultTimeout(20_000); await restrictNetwork(superPage);
+    const superContext = await browser.newContext(); const superPage = await superContext.newPage({ viewport: { width: 1440, height: 960 } }); superPage.setDefaultTimeout(20_000); await restrictNetwork(superPage);
     let pricingMutationRequests = 0; superPage.on('request', (request) => { if (request.method() === 'PUT' && /\/admin\/commercial\/plans\/[^/]+\/pricing$/u.test(new URL(request.url()).pathname)) pricingMutationRequests += 1; });
     await login(superPage, superAdmin, superTotp); const catalogResponse = await navigatePlans(superPage); assert.equal(catalogResponse.status(), 200); const catalog = await catalogResponse.json(); assert.ok(Array.isArray(catalog?.items), 'COMMERCIAL_PLANS_ITEMS_REQUIRED'); assert.ok(responseIsRedacted(catalog), 'COMMERCIAL_CATALOG_RESPONSE_MUST_BE_REDACTED');
     await superPage.getByRole('heading', { name: 'Commercial Control Center', exact: true }).waitFor();
@@ -68,16 +72,16 @@ async function main() {
     currentCheck = 'SENTINEL_STATUS_PRESERVED';
     await superPage.route(`${apiBase}/admin/commercial/usage`, async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ plan: 'FREE', feature: 'documents', status: 'NOT_CONFIGURED', quotaState: 'BLOCKED' }] }) }));
     await superPage.getByRole('button', { name: 'Usage', exact: true }).click(); await superPage.waitForURL(/\/usage(?:\?.*)?$/u); await superPage.getByText('NOT_CONFIGURED', { exact: true }).waitFor();
-    assert.equal(pricingMutationRequests, 0, 'SENTINEL_RENDER_MUST_NOT_MUTATE_PRICING'); await superPage.close(); record(currentCheck);
+    assert.equal(pricingMutationRequests, 0, 'SENTINEL_RENDER_MUST_NOT_MUTATE_PRICING'); await superPage.close(); await superContext.close(); record(currentCheck);
 
     currentCheck = 'FINANCE_CATALOG_READ';
-    const financePage = await browser.newPage({ viewport: { width: 1024, height: 768 } }); financePage.setDefaultTimeout(20_000); await restrictNetwork(financePage); await login(financePage, finance, financeTotp);
-    const financeResponse = await navigatePlans(financePage); assert.equal(financeResponse.status(), 200); await financePage.getByRole('heading', { name: 'Commercial Control Center', exact: true }).waitFor(); await financePage.close(); record(currentCheck);
+    const financeContext = await browser.newContext(); const financePage = await financeContext.newPage({ viewport: { width: 1024, height: 768 } }); financePage.setDefaultTimeout(20_000); await restrictNetwork(financePage); await login(financePage, finance, financeTotp);
+    const financeResponse = await navigatePlans(financePage); assert.equal(financeResponse.status(), 200); await financePage.getByRole('heading', { name: 'Commercial Control Center', exact: true }).waitFor(); await financePage.close(); await financeContext.close(); record(currentCheck);
 
     currentCheck = 'TECH_OPS_COMMERCIAL_CATALOG_DENIED';
-    const techOpsPage = await browser.newPage({ viewport: { width: 390, height: 844 } }); techOpsPage.setDefaultTimeout(20_000); await restrictNetwork(techOpsPage); await login(techOpsPage, techOps, techOpsTotp);
+    const techOpsContext = await browser.newContext(); const techOpsPage = await techOpsContext.newPage({ viewport: { width: 390, height: 844 } }); techOpsPage.setDefaultTimeout(20_000); await restrictNetwork(techOpsPage); await login(techOpsPage, techOps, techOpsTotp);
     const denied = await navigatePlans(techOpsPage); assert.equal(denied.status(), 403); await techOpsPage.getByText('This commercial section is not available for your role.', { exact: true }).waitFor();
-    const layout = await techOpsPage.evaluate(() => ({ html: document.documentElement.scrollWidth, body: document.body.scrollWidth, viewport: window.innerWidth })); assert.ok(layout.html <= layout.viewport + 1 && layout.body <= layout.viewport + 1, 'TECH_OPS_FORBIDDEN_LAYOUT_OVERFLOW'); await techOpsPage.close(); record(currentCheck);
+    const layout = await techOpsPage.evaluate(() => ({ html: document.documentElement.scrollWidth, body: document.body.scrollWidth, viewport: window.innerWidth })); assert.ok(layout.html <= layout.viewport + 1 && layout.body <= layout.viewport + 1, 'TECH_OPS_FORBIDDEN_LAYOUT_OVERFLOW'); await techOpsPage.close(); await techOpsContext.close(); record(currentCheck);
   } finally { await browser.close(); browser = undefined; }
 }
 
