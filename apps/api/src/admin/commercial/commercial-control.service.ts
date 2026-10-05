@@ -466,8 +466,8 @@ export class CommercialControlService {
           priceMonthly: input.priceMonthly,
           priceYearly: input.priceYearly,
           currency: plan.currency,
-          quotas: plan.quotas,
-          features: plan.features,
+          quotas: inputJson(plan.quotas),
+          features: inputJson(plan.features),
           fallbackRatio: plan.fallbackRatio,
           effectiveFrom: now,
           publishedAt: now,
@@ -584,6 +584,12 @@ function jsonRecord(value: Prisma.JsonValue): JsonRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as JsonRecord
     : {};
+}
+
+/** Preserve a JSON null in the immutable plan snapshot rather than converting
+ * it into a database NULL or manufacturing an empty entitlement object. */
+function inputJson(value: Prisma.JsonValue): Prisma.InputJsonValue | typeof Prisma.JsonNull {
+  return value === null ? Prisma.JsonNull : value as Prisma.InputJsonValue;
 }
 
 function numericQuota(value: unknown): number | null {
