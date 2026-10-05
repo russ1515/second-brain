@@ -26,6 +26,8 @@ function safeSha(value) { return typeof value === 'string' && /^[a-f0-9]{7,64}$/
 function technical(value, name, role) { assert.ok(typeof value === 'string' && value === `p1-browser-${role}@example.test`, `${name}_MUST_BE_TECHNICAL_FIXTURE`); return value; }
 function localOrigin(value, name) { assert.ok(typeof value === 'string', `${name}_REQUIRED`); const url = new URL(value); assert.equal(url.protocol, 'http:', `${name}_MUST_USE_HTTP_LOOPBACK`); assert.equal(url.hostname, '127.0.0.1', `${name}_MUST_USE_IPV4_LOOPBACK`); assert.ok(/^[1-9][0-9]{0,4}$/u.test(url.port), `${name}_PORT_REQUIRED`); assert.ok(url.pathname === '/' || url.pathname === '', `${name}_PATH_NOT_ALLOWED`); return url.origin; }
 function localApiBase(value) { assert.ok(typeof value === 'string', 'P1_API_BASE_REQUIRED'); const url = new URL(value); assert.equal(url.protocol, 'http:', 'P1_API_BASE_MUST_USE_HTTP_LOOPBACK'); assert.equal(url.hostname, '127.0.0.1', 'P1_API_BASE_MUST_USE_IPV4_LOOPBACK'); assert.equal(url.pathname.replace(/\/+$/, ''), '/api', 'P1_API_BASE_MUST_END_IN_API'); return url.toString().replace(/\/$/u, ''); }
+function renderedUsd(minor) { return ['en', 'fr'].map((locale) => new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(minor / 100)); }
+function hasRenderedUsd(text, minor) { return renderedUsd(minor).some((formatted) => text.includes(formatted)); }
 function record(name) { checks.push({ name, status: 'PASS' }); }
 function evidencePath() { return path.join('/p1/evidence', `sprint7-commercial-browser-${runId}.json`); }
 function writeEvidence(status, failureCheck = null) { mkdirSync('/p1/evidence', { recursive: true, mode: 0o700 }); writeFileSync(evidencePath(), JSON.stringify({ gate: 'SPRINT7_COMMERCIAL_BROWSER', status, runId, sourceSha, failureCheck, checks, superRenderProbe }), { mode: 0o600, flag: 'wx' }); }
@@ -68,14 +70,14 @@ async function main() {
 
     currentCheck = 'SUPER_ADMIN_CATALOG_RENDER';
     const visible = await superPage.locator('body').innerText();
-    const amounts = ['$0.00', '$4.99', '$49.00', '$15.00', '$150.00']; const states = ['PRIMARY', 'FALLBACK', 'BLOCKED'];
+    const amounts = [0, 499, 4900, 1500, 15000]; const states = ['PRIMARY', 'FALLBACK', 'BLOCKED'];
     superRenderProbe = {
       headingPresent: await superPage.getByRole('heading', { name: 'Commercial Control Center', exact: true }).count() > 0,
-      amounts: Object.fromEntries(amounts.map((amount) => [amount, visible.includes(amount)])),
+      amounts: Object.fromEntries(amounts.map((amount) => [String(amount), hasRenderedUsd(visible, amount)])),
       states: Object.fromEntries(states.map((state) => [state, visible.includes(state)])),
     };
     assert.equal(superRenderProbe.headingPresent, true, 'COMMERCIAL_HEADING_NOT_RENDERED');
-    for (const amount of amounts) assert.ok(visible.includes(amount), `ACTIVE_PRICE_NOT_RENDERED:${amount}`);
+    for (const amount of amounts) assert.ok(hasRenderedUsd(visible, amount), `ACTIVE_PRICE_NOT_RENDERED:${amount}`);
     for (const state of states) assert.ok(visible.includes(state), `QUOTA_STATE_GUIDANCE_NOT_RENDERED:${state}`); record(currentCheck);
 
     currentCheck = 'SUPER_ADMIN_PRICING_DIALOG';
