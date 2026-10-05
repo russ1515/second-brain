@@ -20,6 +20,7 @@ const evidenceDirectory = process.env.SPRINT7_COPILOT_E2E_EVIDENCE_DIR ?? '';
 const checks = [];
 let currentCheck = 'INITIALIZATION';
 let browser;
+let financeProbe = null;
 
 function required(value, name) {
   assert.ok(typeof value === 'string' && value.length > 0, `${name}_REQUIRED`);
@@ -68,7 +69,7 @@ function writeEvidence(status, failureCheck = null) {
   mkdirSync('/p1/evidence', { recursive: true, mode: 0o700 });
   writeFileSync(evidencePath(), JSON.stringify({
     gate: 'SPRINT7_ADMIN_COPILOT_E2E', status, runId, sourceSha, failureCheck,
-    checks, providerCalls: 'NONE', mutations: 'NONE', promptsStored: false,
+    checks, financeProbe, providerCalls: 'NONE', mutations: 'NONE', promptsStored: false,
   }), { mode: 0o600, flag: 'wx' });
 }
 
@@ -194,6 +195,15 @@ async function main() {
     await login(financePage, finance, financeTotp);
     await openCopilot(financePage);
     const denied = await ask(financePage, 'Quels services sont dégradés ?');
+    financeProbe = {
+      status: typeof denied.status === 'string' ? denied.status : null,
+      sources: Array.isArray(denied.sources)
+        ? denied.sources.slice(0, 4).map((source) => ({
+          kind: typeof source.kind === 'string' ? source.kind : null,
+          status: typeof source.status === 'string' ? source.status : null,
+        }))
+        : [],
+    };
     assert.ok(safeResponse(denied), 'COPILOT_DENIAL_RESPONSE_REDACTED');
     assert.equal(denied.status, 'ACCESS_DENIED', 'COPILOT_FINANCE_CANNOT_READ_INFRASTRUCTURE');
     assert.ok(denied.sources?.some((source) => source.status === 'ACCESS_DENIED'), 'COPILOT_DENIAL_SOURCE_EXPLICIT');
