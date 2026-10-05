@@ -51,7 +51,7 @@ const sentinel = new Set(['NOT_CONFIGURED', 'NOT_AVAILABLE', 'NOT_SUPPORTED', 'B
 
 const fieldsByTab: Record<CommercialTab, readonly string[]> = {
   overview: ['status', 'plan', 'activeSubscriptions', 'currency', 'configuredAt', 'updatedAt'],
-  plans: ['code', 'slug', 'name', 'status', 'priceMonthly', 'priceYearly', 'currency', 'version', 'configuredAt', 'updatedAt', 'entitlements', 'quotas', 'fallback'],
+  plans: ['code', 'slug', 'name', 'status', 'priceMonthly', 'priceYearly', 'currency', 'version', 'configurationVersion', 'configuredAt', 'updatedAt', 'entitlements', 'quotas', 'fallback'],
   subscriptions: ['user', 'email', 'plan', 'status', 'interval', 'cycleStart', 'cycleEnd', 'nextRenewal', 'cancellation', 'expiry', 'entitlementState', 'quotaState'],
   payments: ['status', 'providerReference', 'amount', 'currency', 'plan', 'user', 'email', 'purchaseType', 'occurredAt'],
   usage: ['user', 'email', 'plan', 'feature', 'provider', 'model', 'period', 'used', 'limit', 'quotaState', 'status'],
@@ -104,7 +104,7 @@ function safeText(value: unknown, depth = 0): string | undefined {
 
 function labelFor(locale: 'en' | 'fr', key: string): string {
   const labels: Record<string, Parameters<typeof cc>[1]> = {
-    code: 'code', slug: 'code', name: 'name', plan: 'plan', user: 'user', status: 'status', currency: 'currency', version: 'version',
+    code: 'code', slug: 'code', name: 'name', plan: 'plan', user: 'user', status: 'status', currency: 'currency', version: 'version', configurationVersion: 'version',
     configuredAt: 'configuredAt', updatedAt: 'configuredAt', priceMonthly: 'monthlyPrice', priceMonthlyCents: 'monthlyPrice', monthlyPrice: 'monthlyPrice',
     priceYearly: 'annualPrice', priceYearlyCents: 'annualPrice', yearlyPrice: 'annualPrice', entitlements: 'entitlements', quotas: 'quotas', fallback: 'fallback',
     quotaState: 'quotaState', entitlementState: 'entitlementState', interval: 'interval', cycleStart: 'cycleStart', cycleStartAt: 'cycleStart', cycleEnd: 'cycleEnd', cycleEndAt: 'cycleEnd',
@@ -219,7 +219,7 @@ function PlanCards({ rows, locale, theme, canManage, onEdit }: { rows: Commercia
     const currency = planCurrency(row);
     const monthly = commercialNumber(row, ['priceMonthly', 'priceMonthlyCents', 'monthlyPrice']);
     const yearly = commercialNumber(row, ['priceYearly', 'priceYearlyCents', 'yearlyPrice']);
-    const version = commercialNumber(row, ['expectedVersion', 'version']);
+    const version = commercialNumber(row, ['expectedVersion', 'version', 'configurationVersion']);
     const slug = planSlug(row);
     const status = commercialString(row, ['status', 'state']);
     const quotaStates = [commercialString(row, ['primaryState']), commercialString(row, ['fallbackState']), commercialString(row, ['blockedState'])].filter((value): value is string => Boolean(value));
@@ -290,7 +290,7 @@ export function CommercialControlCenter({ initialSection }: { initialSection: Co
   };
   const closePricing = () => { if (!mutationBusy) { setSelectedPlan(null); setPricingError(null); } };
   const pricingPayload = (): PricingUpdate | null => {
-    const priceMonthly = usdToMinor(monthly); const priceYearly = usdToMinor(yearly); const expectedVersion = commercialNumber(selectedPlan ?? undefined, ['expectedVersion', 'version']);
+    const priceMonthly = usdToMinor(monthly); const priceYearly = usdToMinor(yearly); const expectedVersion = commercialNumber(selectedPlan ?? undefined, ['expectedVersion', 'version', 'configurationVersion']);
     if (priceMonthly === undefined || priceYearly === undefined) { setPricingError(cc(locale, 'invalidPrice')); return null; }
     if (typeof expectedVersion !== 'number' || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) { setPricingError(cc(locale, 'invalidVersion')); return null; }
     if (!reason.trim()) { setPricingError(cc(locale, 'invalidReason')); return null; }
