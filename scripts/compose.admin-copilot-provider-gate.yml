@@ -1,0 +1,25 @@
+# Merge only with the out-of-repository P1 Compose file via
+# run-admin-copilot-provider-gate.sh. This changes a disposable API container
+# and never recreates the long-running echo/fake staging API.
+services:
+  api:
+    environment:
+      LLM_PROVIDER: openai
+      # The provider's actual selector and the Admin Copilot selector must be
+      # the same private, explicitly provisioned model. No model is hardcoded.
+      OPENAI_MODEL: ${ADMIN_COPILOT_MODEL:-}
+      ADMIN_COPILOT_MODEL: ${ADMIN_COPILOT_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Reuse the existing isolated one-call provider-gate mode; the service
+      # decides whether the Admin Copilot operation is eligible for it.
+      OPENAI_PROVIDER_GATE_MODE: single-bounded
+      OPENAI_PROVIDER_GATE_MAX_OUTPUT_TOKENS: ${OPENAI_PROVIDER_GATE_MAX_OUTPUT_TOKENS:-32}
+      # The real-provider Copilot validation does not enable embeddings.
+      EMBEDDINGS_PROVIDER: fake
+      # Kept server-side to allow the normal authenticated MFA fixture path.
+      OTP_HMAC_SECRET: ${OTP_HMAC_SECRET:-}
+    volumes:
+      - type: bind
+        source: ${P1_REPO}/scripts/admin-copilot-provider-gate-client.cjs
+        target: /app/admin-copilot-provider-gate-client.cjs
+        read_only: true

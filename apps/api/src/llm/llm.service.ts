@@ -155,9 +155,9 @@ export class LlmService {
     maxOutputTokens: number;
   } {
     const gate = this.openAiProviderGate();
-    if (provider === 'openai' && operation === 'tutor' && gate.enabled) {
+    if (provider === 'openai' && (operation === 'tutor' || operation === 'admin-copilot') && gate.enabled) {
       // Applied only in a disposable staging gate container. It makes the
-      // learner Tutor route a hard one-attempt, small-output validation path.
+      // validation operation a hard one-attempt, small-output path.
       return { timeoutMs: 30_000, retries: 0, backoffMs: 0, maxOutputTokens: gate.maxOutputTokens };
     }
     if (operation === 'classification') {

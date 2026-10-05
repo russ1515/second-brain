@@ -32,8 +32,14 @@ test('Admin Copilot bounds every selected tool by the current Admin capabilities
   assert.match(serviceSource, /Toute action doit passer par la route Admin officielle/u);
 });
 
-test('Admin Copilot has no provider, SQL execution, Prisma mutation, or filesystem write path', () => {
-  assert.doesNotMatch(serviceSource, /\bLlmService\b|\bOpenAI\b|\bfetch\(|\baxios\b|\bchild_process\b|\bexec\(|\bspawn\(/u);
+test('Admin Copilot permits only the single-bounded metered provider seam, never direct provider access or mutation', () => {
+  assert.match(serviceSource, /private readonly llm: LlmService/u);
+  assert.match(serviceSource, /this\.providerGateEnabled\(\)/u);
+  assert.match(serviceSource, /this\.llm\.generate\(/u);
+  assert.match(serviceSource, /operation: 'admin-copilot'/u);
+  assert.match(serviceSource, /selected\[0\] !== 'health'/u);
+  assert.match(serviceSource, /this\.providerGateConsumed = true/u);
+  assert.doesNotMatch(serviceSource, /\bOpenAIProvider\b|\bfetch\(|\baxios\b|\bchild_process\b|\bexec\(|\bspawn\(/u);
   assert.doesNotMatch(
     serviceSource,
     /this\.prisma(?:\.[A-Za-z][A-Za-z0-9_]*)?\.(?:create|createMany|update|updateMany|delete|deleteMany|upsert|\$executeRaw|\$queryRaw|\$transaction)\s*\(/u,
@@ -42,6 +48,7 @@ test('Admin Copilot has no provider, SQL execution, Prisma mutation, or filesyst
   assert.match(serviceSource, /provider: 'NOT_CONFIGURED'/u);
   assert.match(serviceSource, /costStatus: 'NOT_INSTRUMENTED'/u);
   assert.match(serviceSource, /this\.config\.get<string>\('admin\.copilotModel'\)/u);
+  assert.match(controllerSource, /\['x-request-id'\]/u);
 });
 
 test('Admin Copilot redacts untrusted sensitive prompts and audits only safe metadata', () => {

@@ -22,7 +22,10 @@ type CopilotRequest = {
   user?: { sessionId?: string };
   id?: string;
   ip?: string;
-  headers?: { ['user-agent']?: string | string[] | undefined };
+  headers?: {
+    ['user-agent']?: string | string[] | undefined;
+    ['x-request-id']?: string | string[] | undefined;
+  };
 };
 
 /**
@@ -55,7 +58,11 @@ export class AdminCopilotController {
     return {
       actorId: identity.userId,
       actorRole: identity.roles.join(','),
-      requestId: req.id,
+      // main.ts validates or generates this header and RequestContextService
+      // persists the same identifier on ProviderUsageOperation.
+      requestId: typeof req.headers?.['x-request-id'] === 'string'
+        ? req.headers['x-request-id']
+        : req.id,
       sessionId: req.user?.sessionId,
       ip: req.ip,
       userAgent: Array.isArray(userAgent) ? userAgent[0] : userAgent,
