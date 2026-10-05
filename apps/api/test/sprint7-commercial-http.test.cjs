@@ -269,7 +269,7 @@ test('Sprint 7 commercial control is catalog-consistent, safe, RBAC-gated, and r
     ]);
 
     const [userPlans, learnerDenied, financeOverview, financePlans, financeSubscriptions, financePayments, financeUsage, financeAudit,
-      financeFeaturesDenied, financeSettingsDenied, supportSubscriptions, supportPricingDenied, techOpsFeatures, techOpsPricingDenied,
+      financeFeaturesDenied, financeSettingsDenied, supportSubscriptions, supportPricingDenied, techOpsFeatures, techOpsPlansDenied, techOpsPricingDenied,
       superOverview, superPlans, superSubscriptions, superPayments, superUsage, superFeatures, superSettings, superAudit,
     ] = await Promise.all([
       request('/plans', { token: learnerSession.accessToken }),
@@ -285,6 +285,7 @@ test('Sprint 7 commercial control is catalog-consistent, safe, RBAC-gated, and r
       request('/admin/commercial/subscriptions', { token: supportSession.accessToken }),
       request('/admin/commercial/plans/pro/pricing', { method: 'PUT', token: supportSession.accessToken, body: { expectedVersion: 1 } }),
       request('/admin/commercial/features', { token: techOpsSession.accessToken }),
+      request('/admin/commercial/plans', { token: techOpsSession.accessToken }),
       request('/admin/commercial/plans/pro/pricing', { method: 'PUT', token: techOpsSession.accessToken, body: { expectedVersion: 1 } }),
       request('/admin/commercial/overview', { token: superAdminSession.accessToken }),
       request('/admin/commercial/plans', { token: superAdminSession.accessToken }),
@@ -303,6 +304,7 @@ test('Sprint 7 commercial control is catalog-consistent, safe, RBAC-gated, and r
     mark('finance_feature_and_settings_denied', financeFeaturesDenied.status === 403 && financeSettingsDenied.status === 403);
     mark('support_subscription_read_only', supportSubscriptions.status === 200 && supportPricingDenied.status === 403);
     mark('tech_ops_feature_read_only', techOpsFeatures.status === 200 && techOpsPricingDenied.status === 403);
+    mark('tech_ops_commercial_catalog_denied', techOpsPlansDenied.status === 403);
     mark('super_admin_all_commercial_reads_allowed', [superOverview, superPlans, superSubscriptions, superPayments, superUsage, superFeatures, superSettings, superAudit]
       .every((response) => response.status === 200));
     mark('commercial_cache_control_no_store', [financeOverview, financePlans, financeSubscriptions, financePayments, financeUsage, financeAudit, superSettings]

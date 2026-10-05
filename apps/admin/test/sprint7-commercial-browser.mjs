@@ -98,8 +98,15 @@ async function main() {
     const techOpsContext = await browser.newContext(); const techOpsPage = await techOpsContext.newPage({ viewport: { width: 390, height: 844 } }); techOpsPage.setDefaultTimeout(20_000); await restrictNetwork(techOpsPage); await login(techOpsPage, techOps, techOpsTotp);
     currentCheck = 'TECH_OPS_LOGIN'; record(currentCheck);
 
-    currentCheck = 'TECH_OPS_COMMERCIAL_CATALOG_DENIED';
-    const denied = await navigatePlans(techOpsPage); techOpsProbe = { responseStatus: denied.status() }; assert.equal(denied.status(), 403); record(currentCheck);
+    currentCheck = 'TECH_OPS_CLIENT_CATALOG_GUARD';
+    let techOpsPlansRequests = 0;
+    techOpsPage.on('request', (request) => {
+      const url = new URL(request.url());
+      if (request.method() === 'GET' && url.pathname === '/api/admin/commercial/plans') techOpsPlansRequests += 1;
+    });
+    await techOpsPage.getByRole('button', { name: 'Plans', exact: true }).click(); await techOpsPage.waitForURL(/\/plans(?:\?.*)?$/u);
+    techOpsProbe = { clientPlansRequests: techOpsPlansRequests };
+    assert.equal(techOpsPlansRequests, 0, 'TECH_OPS_CLIENT_MUST_NOT_REQUEST_COMMERCIAL_CATALOG'); record(currentCheck);
 
     currentCheck = 'TECH_OPS_DENIAL_RENDER';
     const deniedBody = await techOpsPage.locator('body').innerText();
