@@ -350,7 +350,7 @@ test('Sprint 7 commercial control is catalog-consistent, safe, RBAC-gated, and r
       && new Set(officialPricingAudit.map((entry) => entry.targetId)).size === 2
       && officialPricingAudit.every((entry) => changedPaidPlanIds.has(entry.targetId ?? ''))
       && officialPricingAudit.every((entry) => entry.result === 'success'
-        && entry.reason === 'Sprint 7 official pricing activation'
+        && entry.reason === 'Sprint 7 official public pricing activation'
         && safeResponse(entry.before) && safeResponse(entry.after)
         && entry.createdAt instanceof Date));
 
