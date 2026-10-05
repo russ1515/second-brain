@@ -612,7 +612,10 @@ function selectTools(categories: string[]): CopilotTool[] {
 }
 
 function isActionRequest(question: string): boolean {
-  return matches(question, /\b(delete|supprim|drop|update|modif|change|suspend|ban|revoke|restart|red[ée]marr|deploy|d[ée]plo|fix|r[ée]pare|upgrade|downgrade|activate|d[ée]sactive)\b/);
+  // Match common French and English verb inflections conservatively. A false
+  // positive only produces a proposal; a false negative could otherwise make
+  // an action-shaped request look like an ordinary read request.
+  return matches(question, /\b(?:delete|supprim|drop|update|modif|change|suspend|ban|revoke|restart|red[ée]marr|deploy|d[ée]plo|fix|r[ée]pare|upgrade|downgrade|activate|d[ée]sactive)\p{L}*/u);
 }
 
 function responseStatus(results: ToolResult[], actionRequested: boolean): CopilotStatus {
