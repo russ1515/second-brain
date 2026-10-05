@@ -9,7 +9,9 @@ P1_DIR="${P1_DIR:?P1_DIR is required}"
 REPO="${P1_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 BASE_COMPOSE="$P1_DIR/compose.p1.yml"
 BASE_ENV="$P1_DIR/p1.env"
-SOURCE_EVIDENCE="${P1_ADMIN_COPILOT_GATE_EVIDENCE:?P1_ADMIN_COPILOT_GATE_EVIDENCE is required}"
+SOURCE_EVIDENCE="${P1_ADMIN_COPILOT_GATE_EVIDENCE:-}"
+DIRECT_CORRELATION_ID="${P1_ADMIN_COPILOT_GATE_CORRELATION_ID:-}"
+DIRECT_ORIGINAL_RUN_ID="${P1_ADMIN_COPILOT_GATE_ORIGINAL_RUN_ID:-}"
 OVERRIDE="$REPO/scripts/compose.admin-copilot-cost-trace-verify.yml"
 CLIENT="$REPO/scripts/admin-copilot-cost-trace-verify-client.cjs"
 EVIDENCE_DIR="$P1_DIR/evidence"
@@ -33,12 +35,10 @@ refuse() {
   exit 2
 }
 
-for required in "$BASE_COMPOSE" "$BASE_ENV" "$SOURCE_EVIDENCE" "$OVERRIDE" "$CLIENT"; do
+for required in "$BASE_COMPOSE" "$BASE_ENV" "$OVERRIDE" "$CLIENT"; do
   [ -f "$required" ] || refuse "REQUIRED_FILE_MISSING"
 done
 
-[ "$(stat -c '%a' "$SOURCE_EVIDENCE")" = '600' ] || refuse "SOURCE_EVIDENCE_MODE_INVALID"
-command -v jq >/dev/null 2>&1 || refuse "JQ_REQUIRED_FOR_PRIVATE_EVIDENCE_PARSE"
 git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 || refuse "STAGING_SOURCE_REPOSITORY_INVALID"
 [ -z "$(git -C "$REPO" status --porcelain)" ] || refuse "STAGING_SOURCE_WORKTREE_DIRTY"
 
@@ -48,12 +48,26 @@ read_evidence_field() {
     || refuse "SOURCE_EVIDENCE_FIELD_INVALID"
 }
 
-CORRELATION_ID="$(read_evidence_field correlationId)"
-ORIGINAL_RUN_ID="$(read_evidence_field runId)"
+if [ -n "$DIRECT_CORRELATION_ID" ] || [ -n "$DIRECT_ORIGINAL_RUN_ID" ]; then
+  [ -n "$DIRECT_CORRELATION_ID" ] && [ -n "$DIRECT_ORIGINAL_RUN_ID" ] || refuse "DIRECT_REFERENCE_INCOMPLETE"
+  # A correlation ID is a non-secret immutable ledger locator. It is accepted
+  # only as a paired run reference and is never echoed by this runner.
+  CORRELATION_ID="$DIRECT_CORRELATION_ID"
+  ORIGINAL_RUN_ID="$DIRECT_ORIGINAL_RUN_ID"
+else
+  [ -n "$SOURCE_EVIDENCE" ] && [ -f "$SOURCE_EVIDENCE" ] || refuse "SOURCE_EVIDENCE_REQUIRED"
+  [ "$(stat -c '%a' "$SOURCE_EVIDENCE")" = '600' ] || refuse "SOURCE_EVIDENCE_MODE_INVALID"
+  command -v jq >/dev/null 2>&1 || refuse "JQ_REQUIRED_FOR_PRIVATE_EVIDENCE_PARSE"
+  CORRELATION_ID="$(read_evidence_field correlationId)"
+  ORIGINAL_RUN_ID="$(read_evidence_field runId)"
+fi
 case "$CORRELATION_ID" in
   ''|*[!A-Za-z0-9:_-]*) refuse "SOURCE_EVIDENCE_CORRELATION_INVALID" ;;
 esac
 [ "${#CORRELATION_ID}" -ge 8 ] && [ "${#CORRELATION_ID}" -le 128 ] || refuse "SOURCE_EVIDENCE_CORRELATION_INVALID"
+case "$ORIGINAL_RUN_ID" in
+  ''|*[!A-Za-z0-9:_-]*) refuse "SOURCE_EVIDENCE_RUN_ID_INVALID" ;;
+esac
 
 SOURCE_SHA="$(git -C "$REPO" rev-parse HEAD)"
 
