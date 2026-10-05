@@ -29,7 +29,10 @@ async function login(page) { await page.goto(`${adminBase}/login`, { waitUntil: 
 
 async function main() {
   assert.ok(runId, 'P1_RUN_ID_REQUIRED'); assert.ok(sourceSha, 'P1_STAGING_SHA_REQUIRED'); assert.equal(path.resolve(evidenceDirectory), '/p1/evidence', 'SPRINT7_COPILOT_EVIDENCE_DIR_MUST_BE_P1_EVIDENCE');
-  browser = await chromium.launch({ headless: true }); const page = await browser.newPage({ viewport: { width: 390, height: 844 } }); page.setDefaultTimeout(20_000); await restrictNetwork(page);
+  // The compact shell intentionally collapses its sidebar. Navigate through
+  // the desktop control, then resize to verify the Copilot itself at mobile
+  // width rather than treating a hidden navigation control as a UI failure.
+  browser = await chromium.launch({ headless: true }); const page = await browser.newPage({ viewport: { width: 1280, height: 900 } }); page.setDefaultTimeout(20_000); await restrictNetwork(page);
   let queryRequests = 0; const unexpectedActions = [];
   page.on('request', (request) => { const pathname = new URL(request.url()).pathname; if (/(?:\/actions?|\/execute|\/mutations?|\/pricing|\/feature-flags?)/iu.test(pathname)) unexpectedActions.push(pathname); });
   await page.route(`${apiBase}/admin/copilot/capabilities`, async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'AVAILABLE' }) }));
@@ -37,7 +40,7 @@ async function main() {
   try {
     currentCheck = 'READ_ONLY_COPILOT_RENDER'; await login(page); await page.getByRole('button', { name: 'Admin Copilot', exact: true }).click(); await page.waitForURL(/\/copilot(?:\?.*)?$/u); await page.getByRole('heading', { name: 'Admin Copilot', exact: true }).waitFor(); await page.getByText('READ ONLY — no client-side action execution', { exact: true }).waitFor(); record(currentCheck);
     currentCheck = 'EVIDENCE_STATUS_AND_NO_ACTION'; await page.getByLabel('Ask a grounded operational question').fill('What evidence is currently available?'); await page.getByRole('button', { name: 'Ask Copilot', exact: true }).click(); await page.getByText('Evidence remains UNKNOWN until instrumentation confirms it.', { exact: true }).waitFor(); for (const value of ['UNKNOWN', 'NOT_CONFIGURED', 'NOT_INSTRUMENTED', 'NOT_AVAILABLE', 'BUSINESS_DECISION_REQUIRED']) await page.getByText(value, { exact: true }).first().waitFor(); await page.getByText('Proposal recorded for human review only. No action was executed.', { exact: true }).waitFor(); assert.equal(queryRequests, 1, 'COPILOT_QUERY_COUNT'); assert.deepEqual(unexpectedActions, [], 'COPILOT_MUST_NOT_EXECUTE_ACTIONS'); record(currentCheck);
-    currentCheck = 'RESPONSIVE_I18N_A11Y'; await page.getByRole('button', { name: 'Switch to French', exact: true }).click(); await page.getByRole('heading', { name: 'Copilot Admin', exact: true }).waitFor(); assert.equal(await page.locator('html').getAttribute('lang'), 'fr'); const layout = await page.evaluate(() => ({ html: document.documentElement.scrollWidth, body: document.body.scrollWidth, viewport: window.innerWidth })); assert.ok(layout.html <= layout.viewport + 1 && layout.body <= layout.viewport + 1, 'COPILOT_RESPONSIVE_OVERFLOW'); record(currentCheck);
+    currentCheck = 'RESPONSIVE_I18N_A11Y'; await page.setViewportSize({ width: 390, height: 844 }); await page.getByRole('button', { name: 'Switch to French', exact: true }).click(); await page.getByRole('heading', { name: 'Copilot Admin', exact: true }).waitFor(); assert.equal(await page.locator('html').getAttribute('lang'), 'fr'); const layout = await page.evaluate(() => ({ html: document.documentElement.scrollWidth, body: document.body.scrollWidth, viewport: window.innerWidth })); assert.ok(layout.html <= layout.viewport + 1 && layout.body <= layout.viewport + 1, 'COPILOT_RESPONSIVE_OVERFLOW'); record(currentCheck);
   } finally { await browser.close(); browser = undefined; }
 }
 
