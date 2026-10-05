@@ -89,6 +89,15 @@ function assertAllowedLoopback(url) {
   assert.ok([new URL(adminBase).port, new URL(apiBase).port].includes(parsed.port), 'BROWSER_REQUEST_PORT_NOT_ALLOWED');
 }
 
+function isAdminApiResponse(response, pathname, method) {
+  const url = new URL(response.url());
+  return url.protocol === 'http:'
+    && url.hostname === '127.0.0.1'
+    && [new URL(adminBase).port, new URL(apiBase).port].includes(url.port)
+    && url.pathname === `/api${pathname}`
+    && response.request().method() === method;
+}
+
 async function restrictNetwork(page) {
   await page.route('**/*', async (route) => {
     try {
@@ -107,18 +116,18 @@ async function login(page, email, totp) {
   await page.goto(`${adminBase}/login`, { waitUntil: 'networkidle' });
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill(password);
-  const loginResponse = page.waitForResponse((response) => response.url() === `${apiBase}/auth/login` && response.request().method() === 'POST');
+  const loginResponse = page.waitForResponse((response) => isAdminApiResponse(response, '/auth/login', 'POST'));
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
   assert.equal((await loginResponse).status(), 200, 'ADMIN_LOGIN_STATUS');
   await page.getByLabel('Authentication code').fill(authenticator.generate(totp));
-  const verified = page.waitForResponse((response) => response.url() === `${apiBase}/auth/2fa/verify` && response.request().method() === 'POST');
+  const verified = page.waitForResponse((response) => isAdminApiResponse(response, '/auth/2fa/verify', 'POST'));
   await page.getByRole('button', { name: 'Verify MFA', exact: true }).click();
   assert.equal((await verified).status(), 200, 'ADMIN_MFA_STATUS');
   await page.waitForURL(/\/dashboard(?:\?.*)?$/u);
 }
 
 async function openCopilot(page) {
-  const capabilities = page.waitForResponse((response) => response.url() === `${apiBase}/admin/copilot/capabilities` && response.request().method() === 'GET');
+  const capabilities = page.waitForResponse((response) => isAdminApiResponse(response, '/admin/copilot/capabilities', 'GET'));
   await page.getByRole('button', { name: 'Admin Copilot', exact: true }).click();
   await page.waitForURL(/\/copilot(?:\?.*)?$/u);
   const response = await capabilities;
@@ -128,7 +137,7 @@ async function openCopilot(page) {
 }
 
 async function ask(page, query) {
-  const response = page.waitForResponse((candidate) => candidate.url() === `${apiBase}/admin/copilot/query` && candidate.request().method() === 'POST');
+  const response = page.waitForResponse((candidate) => isAdminApiResponse(candidate, '/admin/copilot/query', 'POST'));
   await page.getByLabel('Ask a grounded operational question').fill(query);
   await page.getByRole('button', { name: 'Ask Copilot', exact: true }).click();
   const result = await response;
