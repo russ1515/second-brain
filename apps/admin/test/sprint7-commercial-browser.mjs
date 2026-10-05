@@ -96,7 +96,7 @@ async function main() {
 
     currentCheck = 'TECH_OPS_COMMERCIAL_CATALOG_DENIED';
     const techOpsContext = await browser.newContext(); const techOpsPage = await techOpsContext.newPage({ viewport: { width: 390, height: 844 } }); techOpsPage.setDefaultTimeout(20_000); await restrictNetwork(techOpsPage); await login(techOpsPage, techOps, techOpsTotp);
-    const denied = await navigatePlans(techOpsPage); assert.equal(denied.status(), 403); await techOpsPage.getByText('This commercial section is not available for your role.', { exact: true }).waitFor();
+    const denied = await navigatePlans(techOpsPage); assert.equal(denied.status(), 403); await techOpsPage.getByText(/^(?:This commercial section is not available for your role\.|Cette section commerciale n[’']est pas disponible pour votre rôle\.)$/u).waitFor();
     const layout = await techOpsPage.evaluate(() => ({ html: document.documentElement.scrollWidth, body: document.body.scrollWidth, viewport: window.innerWidth })); assert.ok(layout.html <= layout.viewport + 1 && layout.body <= layout.viewport + 1, 'TECH_OPS_FORBIDDEN_LAYOUT_OVERFLOW'); await techOpsPage.close(); await techOpsContext.close(); record(currentCheck);
   } finally { await browser.close(); browser = undefined; }
 }
