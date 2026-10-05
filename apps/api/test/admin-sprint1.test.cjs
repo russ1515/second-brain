@@ -289,8 +289,10 @@ test('Audit V2 recursively redacts secrets', async () => {
 test('commercial source locks official prices and avoids boot overwrite', () => {
   const constants = fs.readFileSync(path.join(__dirname, '../src/subscription/plan.constants.ts'), 'utf8');
   const service = fs.readFileSync(path.join(__dirname, '../src/subscription/plan.service.ts'), 'utf8');
-  assert.match(constants, /priceMonthly: 1999/); assert.match(constants, /priceYearly: 19900/);
-  assert.match(constants, /priceMonthly: 4999/); assert.match(constants, /priceYearly: 49900/);
+  // Sprint 7's official public schedule is versioned by the additive
+  // migration; these defaults are only for a newly-created catalog row.
+  assert.match(constants, /priceMonthly: 499/); assert.match(constants, /priceYearly: 4900/);
+  assert.match(constants, /priceMonthly: 1500/); assert.match(constants, /priceYearly: 15000/);
   assert.match(service, /update: \{\}/); assert.doesNotMatch(service, /update:\s*\{[^}]*quotas/s);
 });
 
