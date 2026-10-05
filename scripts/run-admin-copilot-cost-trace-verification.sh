@@ -38,12 +38,13 @@ for required in "$BASE_COMPOSE" "$BASE_ENV" "$SOURCE_EVIDENCE" "$OVERRIDE" "$CLI
 done
 
 [ "$(stat -c '%a' "$SOURCE_EVIDENCE")" = '600' ] || refuse "SOURCE_EVIDENCE_MODE_INVALID"
+command -v jq >/dev/null 2>&1 || refuse "JQ_REQUIRED_FOR_PRIVATE_EVIDENCE_PARSE"
 git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 || refuse "STAGING_SOURCE_REPOSITORY_INVALID"
 [ -z "$(git -C "$REPO" status --porcelain)" ] || refuse "STAGING_SOURCE_WORKTREE_DIRTY"
 
 read_evidence_field() {
   local field="$1"
-  node -e 'const fs=require("node:fs"); const data=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const value=data[process.argv[2]]; if (typeof value !== "string" || !value) process.exit(2); process.stdout.write(value);' "$SOURCE_EVIDENCE" "$field" \
+  jq -er --arg field "$field" '.[$field] | select(type == "string" and length > 0)' "$SOURCE_EVIDENCE" \
     || refuse "SOURCE_EVIDENCE_FIELD_INVALID"
 }
 
