@@ -61,7 +61,8 @@ export class LlmService {
     return this.deduplicate(key, () => this.metering?.executeWithAttempts(
       {
         provider: provider.name, model: bounded.model, feature: this.costFeatureFor(operation),
-        resource: this.resourceFor(operation), units: 1, metadata: { operation },
+        resource: this.resourceFor(operation), units: 1,
+        metadata: { operation, source: operation === 'admin-copilot' ? 'ADMIN_COPILOT' : undefined },
         measure: (result) => this.llmMeasurement(result),
       },
       (attempts) => this.execute(provider, operation, () => provider.generate(messages, bounded), attempts),
@@ -161,6 +162,11 @@ export class LlmService {
     }
     if (operation === 'classification') {
       return { timeoutMs: 8_000, retries: 0, backoffMs: 250, maxOutputTokens: 96 };
+    }
+    // The internal Copilot is explicitly bounded and never retried
+    // automatically: an administrator can decide whether to ask again.
+    if (operation === 'admin-copilot') {
+      return { timeoutMs: 30_000, retries: 0, backoffMs: 0, maxOutputTokens: 600 };
     }
     if (operation === 'document-metadata') {
       return { timeoutMs: 12_000, retries: 0, backoffMs: 250, maxOutputTokens: 600 };
@@ -319,6 +325,7 @@ export class LlmService {
   /** Stable Cost Center feature keys; raw operation names stay only in metadata. */
   private costFeatureFor(operation: string): string {
     if (operation === 'tutor') return 'TUTOR_TEXT';
+    if (operation === 'admin-copilot') return 'ADMIN_COPILOT';
     if (operation === 'language-content' || operation === 'language-writing' || operation === 'language-skills' || operation === 'language-grading' || operation === 'language-tutor' || operation === 'conversation') return 'LANGUAGE_TEXT';
     if (operation === 'research') return 'FREE_SEARCH';
     if (operation === 'deep-research') return 'DEEP_RESEARCH';

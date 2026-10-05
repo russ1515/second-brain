@@ -6,7 +6,7 @@ import { t } from '../lib/i18n';
 import { useAuth } from '../contexts/auth';
 import { useAdminUi } from '../contexts/admin-ui';
 
-export const SECTIONS = ['dashboard', 'users', 'plans', 'usage', 'costs', 'bugs', 'incidents', 'support', 'infrastructure', 'payments', 'emails', 'documents', 'security', 'analytics', 'settings'] as const;
+export const SECTIONS = ['dashboard', 'users', 'plans', 'subscriptions', 'usage', 'costs', 'bugs', 'incidents', 'support', 'infrastructure', 'payments', 'features', 'emails', 'documents', 'security', 'analytics', 'settings', 'copilot'] as const;
 export type Section = (typeof SECTIONS)[number];
 
 export function AdminShell({ children }: PropsWithChildren) {

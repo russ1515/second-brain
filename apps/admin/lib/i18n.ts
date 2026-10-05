@@ -2,7 +2,7 @@ export type Locale = 'fr' | 'en';
 
 const copy = {
   fr: {
-    dashboard: 'Vue d’ensemble', users: 'Utilisateurs', plans: 'Plans', usage: 'Usage', costs: 'Coûts',
+    dashboard: 'Vue d’ensemble', users: 'Utilisateurs', plans: 'Plans', usage: 'Usage', features: 'Fonctionnalités', copilot: 'Copilot Admin', costs: 'Coûts',
     bugs: 'Bugs', incidents: 'Incidents', support: 'Support', infrastructure: 'Infrastructure', payments: 'Paiements', emails: 'Emails',
     documents: 'Documents', security: 'Sécurité', analytics: 'Analytique', settings: 'Paramètres',
     search: 'Rechercher…', logout: 'Déconnexion', empty: 'Fondation prête', emptyDetail: 'Les workflows métier détaillés arrivent au Sprint 2.',
@@ -53,7 +53,7 @@ const copy = {
     open: 'Ouverts', resolvedToday: 'Résolus aujourd’hui',
   },
   en: {
-    dashboard: 'Overview', users: 'Users', plans: 'Plans', usage: 'Usage', costs: 'Costs', bugs: 'Bugs', incidents: 'Incidents',
+    dashboard: 'Overview', users: 'Users', plans: 'Plans', usage: 'Usage', features: 'Feature control', copilot: 'Admin Copilot', costs: 'Costs', bugs: 'Bugs', incidents: 'Incidents',
     support: 'Support', infrastructure: 'Infrastructure', payments: 'Payments', emails: 'Emails', documents: 'Documents',
     security: 'Security', analytics: 'Analytics', settings: 'Settings', search: 'Search…', logout: 'Sign out',
     controlCenter: 'CONTROL CENTER', primaryNavigation: 'Primary navigation', adminBreadcrumb: 'Administration', searchPlaceholder: 'Search unavailable', notificationsUnavailable: 'Notifications unavailable',

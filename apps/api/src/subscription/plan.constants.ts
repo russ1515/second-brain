@@ -1,16 +1,15 @@
 import type { PlanAudience, PlanSlug } from '@second-brain/shared';
 
-/** The six seeded plans (Sprint 8.1). Names are PROVISIONAL and editable later;
- *  quotas/features are intentionally empty — per-plan limits and benefits are
- *  defined in a later task. The seed is idempotent (upsert by slug), so changing
- *  a name here updates the row without wiping quotas/features set elsewhere. */
+/** Defaults used only when a catalog row is created. Existing commercial
+ *  configuration is immutable at boot and changes through versioned, audited
+ *  workflows or additive migrations. */
 export interface PlanSeed {
   slug: PlanSlug;
   name: string;
   tier: number;
   audience: PlanAudience;
-  /** Example quota limits (Sprint 8.3). Keys match the usage metric catalog;
-   *  -1 = unlimited. These are DATA — tune freely; they seed each boot for now. */
+  /** Legacy compatibility quota limits. They seed new rows only; existing plan
+   *  quotas are never replaced during application boot. */
   quotas: Record<string, number>;
   priceMonthly: number | null;
   priceYearly: number | null;
@@ -40,8 +39,8 @@ export const PLAN_SEED: readonly PlanSeed[] = [
     tier: 10,
     audience: 'individual',
     quotas: { documents: 1000, storage: 100 * GB, ai_questions: 10000, voice_minutes: 3000 },
-    priceMonthly: 1999,
-    priceYearly: 19900,
+    priceMonthly: 499,
+    priceYearly: 4900,
     currency: 'usd',
     publicV1: true,
     fallbackRatio: 0.5,
@@ -52,8 +51,8 @@ export const PLAN_SEED: readonly PlanSeed[] = [
     tier: 20,
     audience: 'individual',
     quotas: { documents: 5000, storage: 500 * GB, ai_questions: 50000, voice_minutes: 10000 },
-    priceMonthly: 4999,
-    priceYearly: 49900,
+    priceMonthly: 1500,
+    priceYearly: 15000,
     currency: 'usd',
     publicV1: true,
     fallbackRatio: 0.5,

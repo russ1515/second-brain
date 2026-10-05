@@ -1,0 +1,21 @@
+# Merge this overlay with the private P1 staging Compose file only. It gives the
+# Admin Copilot a deliberately narrow, read-only view of reviewed source code.
+# It does not mount .git, .env files, node_modules, Docker, host credentials or
+# the full repository. P1_REPO is the already checked-out staging release.
+services:
+  api:
+    environment:
+      ADMIN_COPILOT_REPOSITORY_ROOT: /opt/second-brain-repository
+    volumes:
+      - type: bind
+        source: ${P1_REPO:?P1_REPO is required}/apps/api/src
+        target: /opt/second-brain-repository/apps/api/src
+        read_only: true
+      - type: bind
+        source: ${P1_REPO:?P1_REPO is required}/apps/admin
+        target: /opt/second-brain-repository/apps/admin
+        read_only: true
+      - type: bind
+        source: ${P1_REPO:?P1_REPO is required}/packages/shared
+        target: /opt/second-brain-repository/packages/shared
+        read_only: true

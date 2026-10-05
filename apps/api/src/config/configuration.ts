@@ -22,6 +22,9 @@ export default () => ({
     environment: process.env.ADMIN_ENVIRONMENT ?? process.env.NODE_ENV ?? 'development',
     stepUpTtl: parseInt(process.env.ADMIN_STEP_UP_TTL ?? '600', 10),
     sessionMaxTtl: parseInt(process.env.ADMIN_SESSION_MAX_TTL ?? '28800', 10),
+    // A server-side selector only. The Copilot never exposes this value as a
+    // credential and never enables a provider by itself.
+    copilotModel: process.env.ADMIN_COPILOT_MODEL?.trim() || undefined,
   },
   database: {
     url: process.env.DATABASE_URL as string,

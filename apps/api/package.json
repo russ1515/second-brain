@@ -23,6 +23,8 @@
     "test:sprint5": "pnpm run test:sprint5:postgres && pnpm run test:sprint5:http",
     "test:sprint6": "pnpm run build && node --test test/health-monitoring-security.test.cjs test/sprint6-infrastructure.test.cjs",
     "test:sprint6:http": "node --test test/sprint6-infrastructure-http.cjs",
+    "test:sprint7": "pnpm run build && node --test test/sprint7-commercial.unit.test.cjs",
+    "test:sprint7:http": "node --test test/sprint7-commercial-http.test.cjs",
     "test:private-beta:http": "node --test test/private-beta-http.integration.test.cjs",
     "test:staging-quota-cap:http": "node test/staging-quota-cap-http.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",

@@ -20,14 +20,18 @@ import { SafeTelemetryModule } from '../diagnostics/safe-telemetry.module';
 import { HealthModule } from '../health/health.module';
 import { InfrastructureController } from './infrastructure/infrastructure.controller';
 import { SystemHealthService } from './infrastructure/system-health.service';
+import { CommercialControlController } from './commercial/commercial-control.controller';
+import { CommercialControlService } from './commercial/commercial-control.service';
+import { AdminCopilotController } from './copilot/admin-copilot.controller';
+import { AdminCopilotService } from './copilot/admin-copilot.service';
 
 /** Platform back office (Sprint 8.5). Superadmin dashboard across all tenants +
  *  the user-facing report endpoint. Reuses the Subscription engine to change a
  *  user's plan. Prisma is @Global. */
 @Module({
   imports: [AuthModule, SubscriptionModule, UsageModule, SafeTelemetryModule, HealthModule],
-  controllers: [AdminController, ReportsController, DashboardController, CostCenterController, InfrastructureController],
-  providers: [AdminService, AnalyticsService, DashboardService, UserAdminService, CostCenterService, SystemHealthService, AdminGuard, AdminIdentityService, CapabilityGuard, AdminStepUpGuard, AdminAuditService],
+  controllers: [AdminController, ReportsController, DashboardController, CostCenterController, InfrastructureController, CommercialControlController, AdminCopilotController],
+  providers: [AdminService, AnalyticsService, DashboardService, UserAdminService, CostCenterService, SystemHealthService, CommercialControlService, AdminCopilotService, AdminGuard, AdminIdentityService, CapabilityGuard, AdminStepUpGuard, AdminAuditService],
   exports: [AdminService, AdminAuditService, AdminIdentityService, AdminGuard, CapabilityGuard, AdminStepUpGuard],
 })
 export class AdminModule {}
