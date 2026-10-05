@@ -12,8 +12,9 @@ no runtime application logic or staging image.
 - The work was performed only on the isolated OVH P1 staging stack.
 - PostgreSQL is not publicly exposed. All browser gates used technical
   `@example.test` fixtures over VPS loopback.
-- No production deployment, external payment operation, provider call, or
-  OpenAI activation was performed.
+- No production deployment, external payment operation, or persistent OpenAI
+  activation was performed. One explicitly authorized, bounded OpenAI call was
+  made only in a disposable Admin Copilot gate; it was not retried.
 - Existing Linux/P1 evidence, containers, volumes and backups were preserved.
 - Non-empty PostgreSQL sample password and connection-URL components found in
   `.env.example` were replaced with explicit local-only placeholders; runtime
@@ -86,11 +87,32 @@ resolution, Audit Log metadata and the protected Admin session. The live
 browser E2E proved that a SUPER_ADMIN receives real-source answers while a
 FINANCE Admin receives `ACCESS_DENIED` for infrastructure evidence.
 
-The current staging configuration remains intentionally non-billable:
-`LLM_PROVIDER=echo`, `EMBEDDINGS_PROVIDER=fake`, and no Admin Copilot model is
-configured. The Copilot therefore returns truthful trace sentinels
-(`NOT_CONFIGURED` / `NOT_INSTRUMENTED`) and does not represent an echo response
-as a provider answer.
+The persistent P1 staging configuration remains intentionally non-billable:
+`LLM_PROVIDER=echo` and `EMBEDDINGS_PROVIDER=fake`. The normal Copilot surface
+therefore returns truthful trace sentinels (`NOT_CONFIGURED` /
+`NOT_INSTRUMENTED`) and never represents an echo response as a provider answer.
+
+### Real provider / Cost Center trace
+
+The authorized disposable gate made exactly one short, read-only health
+question using the private `ADMIN_COPILOT_MODEL` selector. It did not enable
+OpenAI on the long-running staging API and it made no retry. The immutable
+Provider Usage Ledger recorded one `ADMIN_COPILOT` / `AI_TEXT` operation and
+one successful OpenAI attempt, attributed to a user, subscription and plan,
+with a finalized single-unit quota reservation.
+
+The recorded provider model was `gpt-4.1-mini-2025-04-14`. Provider-measured
+usage was 109 input tokens, 0 cached input tokens and 16 output tokens. The
+immutable measured cost was `$0.000069200000`. The owner-only evidence retains
+the correlation identifier and confirms the provider request identifier exists
+without recording either identifier in this tracked report.
+
+The authenticated Admin Cost Center was reconciled against the exact attempt
+window: its model and `ADMIN_COPILOT` feature rows each report one provider
+call, the same token totals, `MEASURED`, and the same amount. Audit metadata
+records `source=ADMIN_COPILOT`, `promptStored=false`, and the intentionally
+redacted caller-controlled request ID. The verification-only process ran in
+echo/fake mode, made zero provider requests, and executed no mutation.
 
 ## Evidence retained on OVH
 
@@ -102,8 +124,10 @@ only check names and redacted/safe metadata.
 | Commercial HTTP | PASS, 52 checks | `/home/ubuntu/.config/second-brain/sb-ovh-p1-http-20260923163756-0a803ec4/evidence/sprint7-commercial-http-sprint7-commercial-http-final-20261005T073056Z.json` |
 | Commercial browser | PASS, 10 checks | `/home/ubuntu/.config/second-brain/sb-ovh-p1-http-20260923163756-0a803ec4/evidence/sprint7-commercial-browser-sprint7-commercial-browser-final-20261005T073222Z.json` |
 | Copilot HTTP | PASS, 21 checks | `/home/ubuntu/.config/second-brain/sb-ovh-p1-http-20260923163756-0a803ec4/evidence/sprint7-admin-copilot-http-sprint7-copilot-http-final-20261005T073128Z.json` |
+| Copilot HTTP final replay | PASS, 21 checks, provider calls `NONE`, mutations `NONE` | `/home/ubuntu/.config/second-brain/sb-ovh-p1-http-20260923163756-0a803ec4/evidence/sprint7-admin-copilot-http-sprint7-copilot-final-20261005T123927Z-9ede480d.json` |
 | Copilot real-source browser E2E | PASS, 5 checks | `/home/ubuntu/.config/second-brain/sb-ovh-p1-http-20260923163756-0a803ec4/evidence/sprint7-admin-copilot-e2e-sprint7-copilot-e2e-final-20261005T073255Z.json` |
 | Copilot UI/i18n/responsive mock contract | PASS, 3 checks; explicitly synthetic replies | `/home/ubuntu/.config/second-brain/sb-ovh-p1-http-20260923163756-0a803ec4/evidence/sprint7-admin-copilot-browser-sprint7-copilot-browser-20261005T072916Z.json` |
+| Copilot real provider / Cost Center trace | PASS, one bounded provider attempt; verification itself made zero provider calls | `/home/ubuntu/.config/second-brain/sb-ovh-p1-http-20260923163756-0a803ec4/evidence/admin-copilot-provider-trace-verification-admin-copilot-cost-trace-verify-existing-api-20261005T123547Z-75f89dc8.json` |
 | API Linux image | PASS | `/home/ubuntu/second-brain-evidence/sprint7-api-build-b3c8d807682a7f556d45c629a94a0048f46dbc89.log` |
 | Admin Linux web export | PASS | `/home/ubuntu/second-brain-evidence/sprint7-admin-build-b3c8d807682a7f556d45c629a94a0048f46dbc89.log` |
 
@@ -124,6 +148,9 @@ a runtime pricing, RBAC or Copilot data-access defect.
 - API unit regressions: **206/206 PASS** (five deterministic groups).
 - Shared regressions: **75/75 PASS**.
 - Sprint 7 commercial/Copilot static tests: **7/7 PASS**.
+- Post-trace Copilot safety tests: **6/6 PASS**.
+- Final Copilot HTTP replay: **21/21 PASS**, explicitly echo/fake with no
+  provider calls or mutations.
 - Linux API image build: PASS.
 - Linux Admin web export: PASS.
 - `git diff --check`: PASS at validation checkpoints.
@@ -132,8 +159,8 @@ a runtime pricing, RBAC or Copilot data-access defect.
 
 ## Business decisions required
 
-- Any paid provider/model selection, provider tariff source, maximum spend,
-  and the authorization for a bounded real Copilot provider call.
+- Any persistent paid-provider activation, maximum spend, and additional
+  user-facing paid Copilot sessions.
 - Repricing an already-paid external subscription, refunds, cancellation
   behavior and upgrade/downgrade proration.
 - Any new numeric quota/resource policy beyond the existing authoritative
@@ -141,8 +168,6 @@ a runtime pricing, RBAC or Copilot data-access defect.
 
 ## Not verified / not configured
 
-- A real Admin Copilot provider call with provider, model, tokens, cost,
-  correlation and Cost Center evidence. No such call was authorized or made.
 - Actual payment-provider/webhook processing; no PSP is configured for this
   staging validation.
 - A provider-backed embedding/Qdrant operation for the Copilot; the staging
@@ -151,7 +176,7 @@ a runtime pricing, RBAC or Copilot data-access defect.
 ## Required status lines
 
 ```text
-SPRINT 7: FAIL
+SPRINT 7: PASS
 PLANS & PRICING: PASS
 ACTIVE PRICING: FREE $0 | PRO $4.99/mo $49/yr | PRO MAX $15/mo $150/yr — PASS
 QUOTA POLICY: PASS
@@ -166,7 +191,7 @@ RBAC/STEP-UP: PASS
 USER ↔ ADMIN CONSISTENCY: PASS
 API TESTS: 206/206 PASS
 ADMIN TESTS: Commercial browser 10/10 PASS; Copilot real-source E2E 5/5 PASS; UI contract 3/3 PASS
-SHA: deployed API/Admin b3c8d807682a7f556d45c629a94a0048f46dbc89
+SHA: staging source 4dde5f31e3d83ae34573dc0feeff8cb186b2f296; deployed API/Admin b3c8d807682a7f556d45c629a94a0048f46dbc89
 API IMAGE: second-brain-p1-api:sprint7-b3c8d807682a7f556d45c629a94a0048f46dbc89
 ADMIN IMAGE: second-brain-p1-admin:sprint7-b3c8d807682a7f556d45c629a94a0048f46dbc89
 PUBLIC USER BETA: PASS
@@ -177,13 +202,12 @@ ADMIN COPILOT DATA ACCESS: PASS
 ADMIN COPILOT CODE READ: PASS
 ADMIN COPILOT RBAC: PASS
 ADMIN COPILOT REDACTION: PASS
-ADMIN COPILOT COST TRACE: FAIL
+ADMIN COPILOT COST TRACE: PASS
 ADMIN COPILOT MUTATION SAFETY: PASS
-BUSINESS_DECISIONS_REQUIRED: paid provider/model/budget; provider tariffs; paid-plan repricing/refunds/proration; new numeric quota policy
-NOT_VERIFIED: real Copilot provider/model/token/cost/correlation/Cost Center trace; real payment provider/webhook; provider-backed embeddings/Qdrant
+BUSINESS_DECISIONS_REQUIRED: persistent paid-provider activation/budget; paid-plan repricing/refunds/proration; new numeric quota policy
+NOT_VERIFIED: real payment provider/webhook; provider-backed embeddings/Qdrant
 ```
 
-`SPRINT 7: FAIL` is deliberate: a Cost Center trace for a **real** Copilot
-provider call cannot be inferred from deterministic read-only tests, and no
-billable call is permitted without a separate authorization. Sprint 8 has not
-been started.
+`SPRINT 7: PASS` is supported by the bounded, provider-measured Cost Center
+trace above as well as the pre-existing functional gates. Persistent staging
+remains in echo/fake mode. Sprint 8 has not been started.
