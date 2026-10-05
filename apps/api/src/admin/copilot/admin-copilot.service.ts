@@ -242,14 +242,19 @@ export class AdminCopilotService {
     const components = overview.components ?? [];
     const degraded = components
       .filter((component) => !['HEALTHY', 'NOT_AVAILABLE', 'NOT_INSTRUMENTED'].includes(component.status))
-      .map((component) => component.name)
+      .map((component) => component.key)
       .slice(0, 8);
-    const status: CopilotStatus = overview.overall === 'UNKNOWN' ? 'UNKNOWN' : 'AVAILABLE';
+    const overall = overview.overall.status;
+    const status: CopilotStatus = overview.overall.dataStatus === 'NOT_INSTRUMENTED'
+      ? 'NOT_INSTRUMENTED'
+      : overall === 'UNKNOWN'
+        ? 'UNKNOWN'
+        : 'AVAILABLE';
     return {
       source: { kind: 'system_health', label: 'System Health', status },
       fact: degraded.length
-        ? `System Health: ${overview.overall}. Composants nécessitant une attention: ${degraded.join(', ')}.`
-        : `System Health: ${overview.overall}. Aucun composant dégradé n'a été retourné par le relevé courant.`,
+        ? `System Health: ${overall}. Composants nécessitant une attention: ${degraded.join(', ')}.`
+        : `System Health: ${overall}. Aucun composant dégradé n'a été retourné par le relevé courant.`,
       status,
     };
   }
