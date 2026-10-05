@@ -36,10 +36,17 @@ function jsonResponse(payload, status = 200) {
 test('OpenAI model selection is dedicated, validated, and backward compatible', () => {
   assert.doesNotThrow(() => validateEnv(validEnvironment({
     LLM_PROVIDER: 'openai', LLM_MODEL: undefined, OPENAI_MODEL: 'gpt-4.1-mini-2025-04-14',
+    OPENAI_API_KEY: 'controlled-openai-key',
   })));
-  assert.doesNotThrow(() => validateEnv(validEnvironment({ LLM_PROVIDER: 'openai' })));
+  assert.doesNotThrow(() => validateEnv(validEnvironment({
+    LLM_PROVIDER: 'openai', OPENAI_API_KEY: 'controlled-openai-key',
+  })));
   assert.throws(() => validateEnv(validEnvironment({
     LLM_PROVIDER: 'openai', LLM_MODEL: undefined, OPENAI_MODEL: undefined,
+    OPENAI_API_KEY: 'controlled-openai-key',
+  })));
+  assert.throws(() => validateEnv(validEnvironment({
+    LLM_PROVIDER: 'openai', OPENAI_API_KEY: undefined,
   })));
   assert.throws(() => validateEnv(validEnvironment({
     LLM_PROVIDER: 'echo', LLM_MODEL: undefined, OPENAI_MODEL: 'must-not-configure-echo',

@@ -92,8 +92,9 @@ class EnvironmentVariables {
   @IsString()
   GEMINI_API_KEY?: string;
 
-  @IsOptional()
+  @ValidateIf((env: EnvironmentVariables) => env.LLM_PROVIDER === 'openai')
   @IsString()
+  @MinLength(1)
   OPENAI_API_KEY?: string;
 
   @IsOptional()

@@ -1,0 +1,11 @@
+# Persistent beta runtime overlay. Merge it with the private P1 Compose file and
+# pass provider-real.env as an additional --env-file. The credential remains on
+# the VPS; Compose fails before recreation if either required value is missing.
+services:
+  api:
+    command: ["node", "dist/main.js"]
+    environment:
+      LLM_PROVIDER: openai
+      LLM_MODEL: ${OPENAI_MODEL:?OPENAI_MODEL is required}
+      OPENAI_MODEL: ${OPENAI_MODEL:?OPENAI_MODEL is required}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}

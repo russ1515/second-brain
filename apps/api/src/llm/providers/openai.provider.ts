@@ -43,8 +43,9 @@ export class OpenAIProvider implements LLMProvider {
     fetcher?: OpenAIFetch,
   ) {
     if (!apiKey) {
-      // Fail at call time so health checks and offline staging can boot, just
-      // like the existing Gemini seam. The log never contains a credential.
+      // Normal application bootstrap rejects this state in env.validation.
+      // Keep a defensive call-time guard for direct provider construction in
+      // isolated tests. The log never contains a credential.
       this.logger.warn('OPENAI_API_KEY is not set; OpenAI calls will fail until it is.');
     }
     this.fetcher = fetcher ?? (globalThis.fetch as unknown as OpenAIFetch);

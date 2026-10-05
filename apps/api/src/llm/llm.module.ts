@@ -1,4 +1,4 @@
-import { Global, Module, Provider } from '@nestjs/common';
+import { Global, Logger, Module, Provider } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LLM_PROVIDER } from './llm.constants';
 import type { LLMProvider } from './llm-provider.interface';
@@ -12,6 +12,8 @@ import { LlmService } from './llm.service';
 import { UsageModule } from '../usage/usage.module';
 import { AdminModule } from '../admin/admin.module';
 
+const llmStartupLogger = new Logger('LlmModule');
+
 /**
  * Binds the concrete LLM provider selected by LLM_PROVIDER in the environment.
  * This factory is the ONLY place that knows about concrete SDKs. To add OpenAI,
@@ -24,6 +26,13 @@ const llmProviderFactory: Provider = {
   useFactory: (config: ConfigService): LLMProvider => {
     const provider = config.getOrThrow<string>('llm.provider');
     const model = config.getOrThrow<string>('llm.model');
+    const openAiApiKey = config.get<string>('llm.openaiApiKey') ?? '';
+
+    llmStartupLogger.log(
+      `LLM runtime configuration: LLM_PROVIDER=${provider}; ` +
+        `MODEL=${model.trim() || 'MISSING'}; ` +
+        `OPENAI_API_KEY=${openAiApiKey.trim() ? 'SET' : 'MISSING'}`,
+    );
 
     switch (provider) {
       case 'gemini':
@@ -39,7 +48,7 @@ const llmProviderFactory: Provider = {
         return new EchoProvider();
       case 'openai':
         return new OpenAIProvider(
-          config.get<string>('llm.openaiApiKey') ?? '',
+          openAiApiKey,
           model,
         );
       default:
