@@ -18,6 +18,7 @@ const financeTotp = required(process.env.P1_FINANCE_TOTP_SECRET ?? process.env.P
 const techOpsTotp = required(process.env.P1_TECH_OPS_TOTP_SECRET ?? process.env.P1_BROWSER_TOTP_SECRET, 'P1_TECH_OPS_TOTP_SECRET');
 const runId = safeIdentifier(process.env.P1_RUN_ID); const sourceSha = safeSha(process.env.P1_STAGING_SHA); const evidenceDirectory = process.env.SPRINT7_COMMERCIAL_EVIDENCE_DIR ?? '';
 const checks = []; let currentCheck = 'INITIALIZATION'; let browser;
+let superRenderProbe = null;
 
 function required(value, name) { assert.ok(typeof value === 'string' && value.length > 0, `${name}_REQUIRED`); return value; }
 function safeIdentifier(value) { return typeof value === 'string' && /^[A-Za-z0-9_-]{1,96}$/u.test(value) ? value : null; }
@@ -27,7 +28,7 @@ function localOrigin(value, name) { assert.ok(typeof value === 'string', `${name
 function localApiBase(value) { assert.ok(typeof value === 'string', 'P1_API_BASE_REQUIRED'); const url = new URL(value); assert.equal(url.protocol, 'http:', 'P1_API_BASE_MUST_USE_HTTP_LOOPBACK'); assert.equal(url.hostname, '127.0.0.1', 'P1_API_BASE_MUST_USE_IPV4_LOOPBACK'); assert.equal(url.pathname.replace(/\/+$/, ''), '/api', 'P1_API_BASE_MUST_END_IN_API'); return url.toString().replace(/\/$/u, ''); }
 function record(name) { checks.push({ name, status: 'PASS' }); }
 function evidencePath() { return path.join('/p1/evidence', `sprint7-commercial-browser-${runId}.json`); }
-function writeEvidence(status, failureCheck = null) { mkdirSync('/p1/evidence', { recursive: true, mode: 0o700 }); writeFileSync(evidencePath(), JSON.stringify({ gate: 'SPRINT7_COMMERCIAL_BROWSER', status, runId, sourceSha, failureCheck, checks }), { mode: 0o600, flag: 'wx' }); }
+function writeEvidence(status, failureCheck = null) { mkdirSync('/p1/evidence', { recursive: true, mode: 0o700 }); writeFileSync(evidencePath(), JSON.stringify({ gate: 'SPRINT7_COMMERCIAL_BROWSER', status, runId, sourceSha, failureCheck, checks, superRenderProbe }), { mode: 0o600, flag: 'wx' }); }
 function responseIsRedacted(value, seen = new Set()) { if (value === null || value === undefined) return true; if (typeof value === 'string') return !/(?:sk-[A-Za-z0-9]|bearer\s+|postgres(?:ql)?:\/\/|-----BEGIN|password\s*=|api[_-]?key\s*=|eyJ[A-Za-z0-9_-]{8,}\.)/iu.test(value); if (typeof value !== 'object' || seen.has(value)) return true; seen.add(value); return Object.values(value).every((child) => responseIsRedacted(child, seen)); }
 function assertLoopback(url) { const parsed = new URL(url); assert.equal(parsed.protocol, 'http:', 'BROWSER_REQUEST_PROTOCOL_MUST_BE_HTTP_LOOPBACK'); assert.equal(parsed.hostname, '127.0.0.1', 'BROWSER_REQUEST_HOST_MUST_BE_LOOPBACK'); assert.ok([new URL(adminBase).port, new URL(apiBase).port].includes(parsed.port), 'BROWSER_REQUEST_PORT_NOT_ALLOWED'); }
 function isAdminApiResponse(response, pathname, method) { const url = new URL(response.url()); return url.protocol === 'http:' && url.hostname === '127.0.0.1' && [new URL(adminBase).port, new URL(apiBase).port].includes(url.port) && url.pathname === `/api${pathname}` && response.request().method() === method; }
@@ -66,10 +67,16 @@ async function main() {
     const catalogResponse = await navigatePlans(superPage); assert.equal(catalogResponse.status(), 200); const catalog = await catalogResponse.json(); assert.ok(Array.isArray(catalog?.items), 'COMMERCIAL_PLANS_ITEMS_REQUIRED'); assert.ok(responseIsRedacted(catalog), 'COMMERCIAL_CATALOG_RESPONSE_MUST_BE_REDACTED'); record(currentCheck);
 
     currentCheck = 'SUPER_ADMIN_CATALOG_RENDER';
-    await superPage.getByRole('heading', { name: 'Commercial Control Center', exact: true }).waitFor();
     const visible = await superPage.locator('body').innerText();
-    for (const amount of ['$0.00', '$4.99', '$49.00', '$15.00', '$150.00']) assert.ok(visible.includes(amount), `ACTIVE_PRICE_NOT_RENDERED:${amount}`);
-    for (const state of ['PRIMARY', 'FALLBACK', 'BLOCKED']) assert.ok(visible.includes(state), `QUOTA_STATE_GUIDANCE_NOT_RENDERED:${state}`); record(currentCheck);
+    const amounts = ['$0.00', '$4.99', '$49.00', '$15.00', '$150.00']; const states = ['PRIMARY', 'FALLBACK', 'BLOCKED'];
+    superRenderProbe = {
+      headingPresent: await superPage.getByRole('heading', { name: 'Commercial Control Center', exact: true }).count() > 0,
+      amounts: Object.fromEntries(amounts.map((amount) => [amount, visible.includes(amount)])),
+      states: Object.fromEntries(states.map((state) => [state, visible.includes(state)])),
+    };
+    assert.equal(superRenderProbe.headingPresent, true, 'COMMERCIAL_HEADING_NOT_RENDERED');
+    for (const amount of amounts) assert.ok(visible.includes(amount), `ACTIVE_PRICE_NOT_RENDERED:${amount}`);
+    for (const state of states) assert.ok(visible.includes(state), `QUOTA_STATE_GUIDANCE_NOT_RENDERED:${state}`); record(currentCheck);
 
     currentCheck = 'SUPER_ADMIN_PRICING_DIALOG';
     const edit = superPage.getByRole('button', { name: /^Edit pricing /u }).first(); await edit.waitFor(); await edit.click();
