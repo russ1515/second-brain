@@ -188,12 +188,20 @@ async function main() {
     await superPage.close();
     record(currentCheck);
 
-    currentCheck = 'FINANCE_RBAC_LEAST_PRIVILEGE';
-    const financePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const financeContext = await browser.newContext();
+    const financePage = await financeContext.newPage({ viewport: { width: 390, height: 844 } });
     financePage.setDefaultTimeout(20_000);
     await restrictNetwork(financePage);
+
+    currentCheck = 'FINANCE_LOGIN';
     await login(financePage, finance, financeTotp);
+    record(currentCheck);
+
+    currentCheck = 'FINANCE_CAPABILITIES';
     await openCopilot(financePage);
+    record(currentCheck);
+
+    currentCheck = 'FINANCE_RBAC_LEAST_PRIVILEGE';
     const denied = await ask(financePage, 'Quels services sont dégradés ?');
     financeProbe = {
       status: typeof denied.status === 'string' ? denied.status : null,
@@ -213,6 +221,7 @@ async function main() {
     const layout = await financePage.evaluate(() => ({ html: document.documentElement.scrollWidth, body: document.body.scrollWidth, viewport: window.innerWidth }));
     assert.ok(layout.html <= layout.viewport + 1 && layout.body <= layout.viewport + 1, 'COPILOT_MOBILE_LAYOUT_OVERFLOW');
     await financePage.close();
+    await financeContext.close();
     record(currentCheck);
   } finally {
     if (browser) await browser.close();
