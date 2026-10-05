@@ -69,6 +69,7 @@ async function main() {
     const catalogResponse = await navigatePlans(superPage); assert.equal(catalogResponse.status(), 200); const catalog = await catalogResponse.json(); assert.ok(Array.isArray(catalog?.items), 'COMMERCIAL_PLANS_ITEMS_REQUIRED'); assert.ok(responseIsRedacted(catalog), 'COMMERCIAL_CATALOG_RESPONSE_MUST_BE_REDACTED'); record(currentCheck);
 
     currentCheck = 'SUPER_ADMIN_CATALOG_RENDER';
+    await superPage.waitForFunction((values) => values.some((value) => document.body.innerText.includes(value)), renderedUsd(499));
     const visible = await superPage.locator('body').innerText();
     const amounts = [0, 499, 4900, 1500, 15000]; const states = ['PRIMARY', 'FALLBACK', 'BLOCKED'];
     superRenderProbe = {
