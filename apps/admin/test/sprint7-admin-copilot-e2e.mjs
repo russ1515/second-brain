@@ -127,9 +127,13 @@ async function login(page, email, totp) {
 }
 
 async function openCopilot(page) {
-  const capabilities = page.waitForResponse((response) => isAdminApiResponse(response, '/admin/copilot/capabilities', 'GET'));
   await page.getByRole('button', { name: 'Admin Copilot', exact: true }).click();
   await page.waitForURL(/\/copilot(?:\?.*)?$/u);
+  // The protected shell may prefetch this read-only route while the dashboard
+  // mounts. Refresh after navigation so the assertion always observes the
+  // concrete browser request, not a race with that harmless prefetch.
+  const capabilities = page.waitForResponse((response) => isAdminApiResponse(response, '/admin/copilot/capabilities', 'GET'));
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   const response = await capabilities;
   assert.equal(response.status(), 200, 'COPILOT_CAPABILITIES_STATUS');
   assert.equal(response.headers()['cache-control'], 'no-store', 'COPILOT_CAPABILITIES_NO_STORE');
