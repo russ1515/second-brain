@@ -1,0 +1,7 @@
+# Merge with a private staging Compose file only. This forwards an already
+# provisioned runtime secret without storing, generating, or printing it.
+# The value must remain in the operator-owned env file, never in Git.
+services:
+  api:
+    environment:
+      OTP_HMAC_SECRET: ${OTP_HMAC_SECRET:?OTP_HMAC_SECRET is required}
