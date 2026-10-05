@@ -19,6 +19,7 @@ const techOpsTotp = required(process.env.P1_TECH_OPS_TOTP_SECRET ?? process.env.
 const runId = safeIdentifier(process.env.P1_RUN_ID); const sourceSha = safeSha(process.env.P1_STAGING_SHA); const evidenceDirectory = process.env.SPRINT7_COMMERCIAL_EVIDENCE_DIR ?? '';
 const checks = []; let currentCheck = 'INITIALIZATION'; let browser;
 let superRenderProbe = null;
+let techOpsProbe = null;
 
 function required(value, name) { assert.ok(typeof value === 'string' && value.length > 0, `${name}_REQUIRED`); return value; }
 function safeIdentifier(value) { return typeof value === 'string' && /^[A-Za-z0-9_-]{1,96}$/u.test(value) ? value : null; }
@@ -30,7 +31,7 @@ function renderedUsd(minor) { return ['en', 'fr'].map((locale) => new Intl.Numbe
 function hasRenderedUsd(text, minor) { return renderedUsd(minor).some((formatted) => text.includes(formatted)); }
 function record(name) { checks.push({ name, status: 'PASS' }); }
 function evidencePath() { return path.join('/p1/evidence', `sprint7-commercial-browser-${runId}.json`); }
-function writeEvidence(status, failureCheck = null) { mkdirSync('/p1/evidence', { recursive: true, mode: 0o700 }); writeFileSync(evidencePath(), JSON.stringify({ gate: 'SPRINT7_COMMERCIAL_BROWSER', status, runId, sourceSha, failureCheck, checks, superRenderProbe }), { mode: 0o600, flag: 'wx' }); }
+function writeEvidence(status, failureCheck = null) { mkdirSync('/p1/evidence', { recursive: true, mode: 0o700 }); writeFileSync(evidencePath(), JSON.stringify({ gate: 'SPRINT7_COMMERCIAL_BROWSER', status, runId, sourceSha, failureCheck, checks, superRenderProbe, techOpsProbe }), { mode: 0o600, flag: 'wx' }); }
 function responseIsRedacted(value, seen = new Set()) { if (value === null || value === undefined) return true; if (typeof value === 'string') return !/(?:sk-[A-Za-z0-9]|bearer\s+|postgres(?:ql)?:\/\/|-----BEGIN|password\s*=|api[_-]?key\s*=|eyJ[A-Za-z0-9_-]{8,}\.)/iu.test(value); if (typeof value !== 'object' || seen.has(value)) return true; seen.add(value); return Object.values(value).every((child) => responseIsRedacted(child, seen)); }
 function assertLoopback(url) { const parsed = new URL(url); assert.equal(parsed.protocol, 'http:', 'BROWSER_REQUEST_PROTOCOL_MUST_BE_HTTP_LOOPBACK'); assert.equal(parsed.hostname, '127.0.0.1', 'BROWSER_REQUEST_HOST_MUST_BE_LOOPBACK'); assert.ok([new URL(adminBase).port, new URL(apiBase).port].includes(parsed.port), 'BROWSER_REQUEST_PORT_NOT_ALLOWED'); }
 function isAdminApiResponse(response, pathname, method) { const url = new URL(response.url()); return url.protocol === 'http:' && url.hostname === '127.0.0.1' && [new URL(adminBase).port, new URL(apiBase).port].includes(url.port) && url.pathname === `/api${pathname}` && response.request().method() === method; }
@@ -94,9 +95,19 @@ async function main() {
     const financeContext = await browser.newContext(); const financePage = await financeContext.newPage({ viewport: { width: 1024, height: 768 } }); financePage.setDefaultTimeout(20_000); await restrictNetwork(financePage); await login(financePage, finance, financeTotp);
     const financeResponse = await navigatePlans(financePage); assert.equal(financeResponse.status(), 200); await financePage.getByRole('heading', { name: 'Commercial Control Center', exact: true }).waitFor(); await financePage.close(); await financeContext.close(); record(currentCheck);
 
-    currentCheck = 'TECH_OPS_COMMERCIAL_CATALOG_DENIED';
     const techOpsContext = await browser.newContext(); const techOpsPage = await techOpsContext.newPage({ viewport: { width: 390, height: 844 } }); techOpsPage.setDefaultTimeout(20_000); await restrictNetwork(techOpsPage); await login(techOpsPage, techOps, techOpsTotp);
-    const denied = await navigatePlans(techOpsPage); assert.equal(denied.status(), 403); await techOpsPage.getByText(/^(?:This commercial section is not available for your role\.|Cette section commerciale n[’']est pas disponible pour votre rôle\.)$/u).waitFor();
+    currentCheck = 'TECH_OPS_LOGIN'; record(currentCheck);
+
+    currentCheck = 'TECH_OPS_COMMERCIAL_CATALOG_DENIED';
+    const denied = await navigatePlans(techOpsPage); techOpsProbe = { responseStatus: denied.status() }; assert.equal(denied.status(), 403); record(currentCheck);
+
+    currentCheck = 'TECH_OPS_DENIAL_RENDER';
+    const deniedBody = await techOpsPage.locator('body').innerText();
+    const denialMessages = ['This commercial section is not available for your role.', 'Cette section commerciale n’est pas disponible pour votre rôle.', "Cette section commerciale n'est pas disponible pour votre rôle."];
+    techOpsProbe = { ...techOpsProbe, denialMessages: Object.fromEntries(denialMessages.map((message) => [message.startsWith('This ') ? 'en' : message.includes('’') ? 'fr_typographic' : 'fr_ascii', deniedBody.includes(message)])) };
+    assert.ok(Object.values(techOpsProbe.denialMessages).some(Boolean), 'TECH_OPS_DENIAL_MESSAGE_NOT_RENDERED'); record(currentCheck);
+
+    currentCheck = 'TECH_OPS_MOBILE_LAYOUT';
     const layout = await techOpsPage.evaluate(() => ({ html: document.documentElement.scrollWidth, body: document.body.scrollWidth, viewport: window.innerWidth })); assert.ok(layout.html <= layout.viewport + 1 && layout.body <= layout.viewport + 1, 'TECH_OPS_FORBIDDEN_LAYOUT_OVERFLOW'); await techOpsPage.close(); await techOpsContext.close(); record(currentCheck);
   } finally { await browser.close(); browser = undefined; }
 }
