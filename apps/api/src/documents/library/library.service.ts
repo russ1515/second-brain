@@ -192,7 +192,7 @@ export class LibraryService {
     // and requires deletedAt=null, so an upsert cannot land after this point.
     await this.prisma.$transaction(async (tx) => {
       const lockKey = accountDataLockKey(userId);
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const doc = await tx.document.findFirst({ where: { id, userId } });
       if (!doc) throw new NotFoundException('Document not found.');
       if (doc.stage === 'deleting') {
@@ -213,7 +213,7 @@ export class LibraryService {
     // the document remains safely hidden in Trash and this call is retryable.
     const updated = await this.prisma.$transaction(async (tx) => {
       const lockKey = accountDataLockKey(userId);
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const doc = await tx.document.findFirst({
         where: { id, userId, deletedAt: { not: null } },
       });
@@ -230,7 +230,7 @@ export class LibraryService {
   async restore(userId: string, id: string): Promise<LibraryDocument> {
     const result = await this.prisma.$transaction(async (tx) => {
       const lockKey = accountDataLockKey(userId);
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const doc = await tx.document.findFirst({ where: { id, userId } });
       if (!doc) throw new NotFoundException('Document not found.');
       if (!doc.deletedAt) return { document: doc, restored: false };

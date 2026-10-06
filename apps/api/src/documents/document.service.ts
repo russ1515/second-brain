@@ -86,7 +86,7 @@ export class DocumentService {
     // The lock is released automatically on commit/rollback.
     return this.prisma.$transaction(async (tx) => {
       const lockKey = `document-scan:${userId}:${sourceRef}`;
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
 
       const existing = await tx.document.findFirst({
         where: { userId, sourceRef, deletedAt: null },
@@ -488,7 +488,7 @@ export class DocumentService {
     // this transaction. A cleanup failure leaves a hidden row safe to retry.
     await this.prisma.$transaction(async (tx) => {
       const lockKey = accountDataLockKey(userId);
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const owned = await tx.document.findFirst({
         where: { id, userId },
         select: { id: true, deletedAt: true },
@@ -513,7 +513,7 @@ export class DocumentService {
     // mutation that could roll that deletion back.
     await this.prisma.$transaction(async (tx) => {
       const lockKey = accountDataLockKey(userId);
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const staged = await tx.document.findFirst({
         where: { id, userId, deletedAt: { not: null }, stage: 'deleting' },
         select: { id: true },
@@ -532,7 +532,7 @@ export class DocumentService {
   async reindex(userId: string, id: string): Promise<DocumentDetail> {
     const doc = await this.prisma.$transaction(async (tx) => {
       const lockKey = accountDataLockKey(userId);
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const owned = await tx.document.findFirst({
         where: {
           id,

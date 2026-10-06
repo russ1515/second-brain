@@ -340,6 +340,8 @@ test('durable scan creation is serialized across API replicas', () => {
     'utf8',
   );
   assert.match(source, /\$transaction\(async \(tx\)/);
+  assert.match(source, /\$executeRaw`SELECT pg_advisory_xact_lock/);
+  assert.doesNotMatch(source, /\$queryRaw`SELECT pg_advisory_xact_lock/);
   assert.match(source, /pg_advisory_xact_lock\(hashtextextended/);
   assert.match(source, /where: \{ userId, sourceRef, deletedAt: null \}/);
 });

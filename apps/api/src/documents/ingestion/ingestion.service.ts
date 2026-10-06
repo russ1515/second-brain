@@ -66,8 +66,8 @@ export class IngestionService implements OnModuleInit {
         if (!candidate) return null;
         const accountLock = accountDataLockKey(candidate.userId);
         const documentLock = `document-ingestion:${documentId}`;
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${accountLock}, 0))`;
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${documentLock}, 0))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${accountLock}, 0))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${documentLock}, 0))`;
         const writable = await tx.document.findFirst({
           where: {
             id: documentId,
@@ -138,8 +138,8 @@ export class IngestionService implements OnModuleInit {
       await this.prisma.$transaction(async (tx) => {
         const accountLock = accountDataLockKey(doc.userId);
         const documentLock = `document-ingestion:${documentId}`;
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${accountLock}, 0))`;
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${documentLock}, 0))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${accountLock}, 0))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${documentLock}, 0))`;
         const writable = await tx.document.findFirst({
           where: {
             id: documentId,
