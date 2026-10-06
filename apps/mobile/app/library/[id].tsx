@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { createElement } from 'react';
+import { Image, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import {
   createContext,
   type Collection,
   type CompareResponse,
   type ContextItem,
+  type DocumentContentType,
   type DocumentPrerequisites,
   type KnowledgeIntegration,
   type LibraryDocument,
@@ -16,7 +18,7 @@ import {
   type UnderstandMode,
   type UnderstandResponse,
 } from '@second-brain/shared';
-import { api } from '../../lib/client';
+import { api, apiBinary } from '../../lib/client';
 import { useAuth } from '../../lib/auth-context';
 import { useTokens } from '../../lib/design/theme';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
@@ -36,6 +38,16 @@ function resourceLabelKey(type: StudyResourceType): TranslationKey {
   if (type === 'open_questions') return 'lib.r.openQuestions';
   if (type === 'course_plan') return 'lib.r.coursePlan';
   return `lib.r.${type}` as TranslationKey;
+}
+
+function contentTypeLabel(type: DocumentContentType, t: (key: TranslationKey) => string): string {
+  if (type === 'PDF') return 'PDF';
+  if (type === 'PHOTO') return t('learn5.capture.photo');
+  if (type === 'SCAN') return t('library7.scan');
+  if (type === 'NOTEBOOK') return t('libraryV1.type.notebook');
+  if (type === 'NOTE') return t('library7.import.text');
+  if (type === 'LESSON_AI') return t('reco.kind.lesson');
+  return t('library7.import.file');
 }
 
 export default function DocumentIntelligenceScreen() {
@@ -63,7 +75,7 @@ export default function DocumentIntelligenceScreen() {
     try {
       const next = await api<LibraryDocumentDetail>(`/library/documents/${id}`);
       setDocument(next); setError(null);
-      if (next.status === 'ready') {
+      if (next.status === 'ready' || next.status === 'partial') {
         const results = await Promise.allSettled([
           api<DocumentPrerequisites>(`/library/documents/${id}/prerequisites`),
           api<KnowledgeIntegration>(`/library/documents/${id}/integration`),
@@ -130,13 +142,24 @@ export default function DocumentIntelligenceScreen() {
   if (!document && error) return <SmartErrorState detail={error} retryable onRetry={() => void load()} />;
   if (!document) return <SmartLoadingState title={t('library7.document.loading')} />;
 
-  if (document.status !== 'ready') {
+  if (document.status !== 'ready' && document.status !== 'partial') {
     const emptyOcrScan = document.sourceRef?.startsWith('scan:') === true && document.charCount === 0;
     const failedOcrScan = emptyOcrScan && document.status === 'failed';
     const staleOcrScan = emptyOcrScan && document.status === 'processing' &&
       Date.now() - Date.parse(document.updatedAt) > 5 * 60_000;
     const retryableOcrScan = emptyOcrScan &&
       (document.status === 'pending' || failedOcrScan || staleOcrScan);
+    const retryableFileExtraction = document.source === 'file' &&
+      document.charCount === 0 && document.status === 'failed';
+    const failureDetail = document.error === 'ORIGINAL_STORAGE_FAILED'
+      ? t('libraryV1.error.storage')
+      : document.error === 'FILE_EXTRACTION_FAILED' || document.error === 'FILE_EXTRACTION_INTERRUPTED'
+        ? t('libraryV1.error.fileUnreadable')
+        : failedOcrScan
+          ? t('document.pipeline.ocrFailed')
+          : document.status === 'failed'
+            ? t('document.pipeline.failed')
+            : undefined;
     return (
       <ScrollView contentContainerStyle={{ padding: desktop ? 28 : 16, gap: spacing.lg, maxWidth: 920, width: '100%', alignSelf: 'center' }}>
         <DocumentHeader document={document} />
@@ -144,12 +167,14 @@ export default function DocumentIntelligenceScreen() {
         <Card><DocumentPipeline
           status={document.status}
           stage={document.stage}
-          error={failedOcrScan ? t('document.pipeline.ocrFailed') : document.error}
+          error={failureDetail}
           retryLabelKey={retryableOcrScan ? 'document.pipeline.retryOcr' : undefined}
-          onRetry={retryableOcrScan || document.status === 'failed'
+          onRetry={retryableOcrScan || retryableFileExtraction || document.status === 'failed'
             ? () => void action('retry', () => api(
                 retryableOcrScan
                   ? `/documents/${document.id}/retry-scan`
+                  : retryableFileExtraction
+                    ? `/documents/${document.id}/retry-extraction`
                   : `/documents/${document.id}/reindex`,
                 { method: 'POST' },
               ))
@@ -165,7 +190,12 @@ export default function DocumentIntelligenceScreen() {
     );
   }
 
-  const documentPane = <DocumentPane document={document} />;
+  const documentPane = <DocumentPane
+    document={document}
+    retryingPageId={busy?.startsWith('page-') ? busy.slice(5) : null}
+    onRetryPage={(pageId) => void action(`page-${pageId}`, () =>
+      api(`/documents/${document.id}/pages/${pageId}/retry-ocr`, { method: 'POST' }))}
+  />;
   const intelligencePane = (
     <IntelligencePane
       document={document}
@@ -194,6 +224,15 @@ export default function DocumentIntelligenceScreen() {
       <DocumentHeader document={document} />
       <ContextBar items={contexts} />
       {error ? <Alert tone="error" title={t('state.error')} detail={error} /> : null}
+      {document.status === 'partial' ? <Card style={{ gap: spacing.sm }}>
+        <Alert tone="warning" title={t('document.pipeline.partial')} detail={t('document.pipeline.ocrRetryHelp')} />
+        <Button
+          label={t('document.pipeline.retryOcr')}
+          variant="secondary"
+          loading={busy === 'retry-partial'}
+          onPress={() => void action('retry-partial', () => api(`/documents/${document.id}/retry-scan`, { method: 'POST' }))}
+        />
+      </Card> : null}
 
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
         <Button label={t('library7.action.ask')} icon="?" onPress={() => setSection('ask')} />
@@ -237,23 +276,78 @@ function DocumentHeader({ document }: { document: LibraryDocumentDetail }) {
     <Text accessibilityRole="header" style={[typography.headline, { color: c.textPrimary }]}>{document.title}</Text>
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
       <Badge label={t(`lib.status.${document.status}`)} tone={document.status === 'ready' ? 'success' : document.status === 'failed' ? 'error' : 'ai'} />
-      <Badge label={document.source.toUpperCase()} />
+      <Badge label={contentTypeLabel(document.contentType, t)} />
+      {document.pageCount > 0 ? <Badge label={t('scan.pagesReady').replace('{n}', String(document.pageCount))} tone="info" /> : null}
       {document.sourceRef && document.sourceRef !== document.title ? <Badge label={document.sourceRef} tone="info" /> : null}
     </View>
   </View>;
 }
 
-function DocumentPane({ document }: { document: LibraryDocumentDetail }) {
+function DocumentPane({ document, retryingPageId, onRetryPage }: {
+  document: LibraryDocumentDetail;
+  retryingPageId: string | null;
+  onRetryPage: (pageId: string) => void;
+}) {
   const { colors: c, spacing, typography } = useTokens();
   const { t, formatLocale } = useI18n();
+  const [activePage, setActivePage] = useState(document.pages[0]?.id ?? null);
+  const mediaPath = activePage
+    ? `/documents/${document.id}/pages/${activePage}/content`
+    : document.mimeType === 'application/pdf'
+      ? `/documents/${document.id}/original`
+      : null;
+  const mediaUri = usePrivateObjectUrl(mediaPath);
+  const activeMetadata = document.pages.find((page) => page.id === activePage) ?? null;
   return <Card style={{ gap: spacing.md }} testID="document-reading-pane">
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: spacing.sm }}>
       <Text accessibilityRole="header" style={[typography.title, { color: c.textPrimary }]}>{t('library7.tab.document')}</Text>
       <Text style={[typography.caption, { color: c.textMuted }]}>{document.charCount.toLocaleString(formatLocale)} {t('lib.chars')} · {new Date(document.createdAt).toLocaleDateString(formatLocale)}</Text>
     </View>
+    {document.pages.length > 0 ? <>
+      <ScrollView horizontal contentContainerStyle={{ gap: spacing.xs }} accessibilityRole="tablist">
+        {document.pages.map((page) => <Pressable
+          key={page.id}
+          accessibilityRole="tab"
+          accessibilityState={{ selected: page.id === activePage }}
+          onPress={() => setActivePage(page.id)}
+          style={{ minWidth: 54, minHeight: 44, padding: spacing.xs, borderWidth: 1, borderColor: page.id === activePage ? c.primary : c.border, borderRadius: 8, alignItems: 'center', justifyContent: 'center' }}
+        ><Text style={{ color: c.textPrimary }}>{page.position + 1}</Text></Pressable>)}
+      </ScrollView>
+      {mediaUri ? <Image source={{ uri: mediaUri }} resizeMode="contain" accessibilityLabel={activeMetadata?.originalName ?? document.title} style={{ width: '100%', minHeight: 420, backgroundColor: c.surfaceSunken, borderRadius: 8 }} /> : null}
+      {activeMetadata?.ocrText ? <Text selectable style={[typography.bodySmall, { color: c.textSecondary, lineHeight: 22 }]}>{activeMetadata.ocrText}</Text> : null}
+      {activeMetadata?.ocrStatus === 'FAILED' ? <Button
+        label={t('document.pipeline.retryOcr')}
+        variant="secondary"
+        loading={retryingPageId === activeMetadata.id}
+        onPress={() => onRetryPage(activeMetadata.id)}
+      /> : null}
+    </> : null}
+    {document.mimeType === 'application/pdf' && mediaUri && Platform.OS === 'web'
+      ? createElement('iframe', { src: mediaUri, title: document.title, style: { width: '100%', minHeight: 620, border: 0, borderRadius: 8 } })
+      : null}
     <Text selectable style={[typography.body, { color: c.textPrimary, lineHeight: 25 }]}>{document.content.slice(0, 12000)}</Text>
     {document.content.length > 12000 ? <Alert tone="info" title={t('library7.document.previewLimited')} detail={t('library7.document.previewLimitedDetail')} /> : null}
   </Card>;
+}
+
+function usePrivateObjectUrl(path: string | null): string | null {
+  const [uri, setUri] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+    setUri(null);
+    if (!path || Platform.OS !== 'web') return () => { active = false; };
+    void apiBinary(path).then((response) => {
+      if (!active || !response) return;
+      objectUrl = URL.createObjectURL(new Blob([response.data], { type: response.contentType }));
+      setUri(objectUrl);
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [path]);
+  return uri;
 }
 
 function IntelligencePane(props: {

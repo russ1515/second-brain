@@ -17,7 +17,7 @@ import { PrivateMediaService } from '../media/private-media.service';
 import { randomUUID } from 'node:crypto';
 import type { ScanPageEdit } from '../media/scan-page-transform';
 
-const MAX_IMAGES = 8;
+const MAX_IMAGES = 50;
 const MIN_TEXT_CHARS = 20;
 const STALE_SCAN_MS = 5 * 60_000;
 
@@ -50,6 +50,12 @@ export class ScanService {
     title?: string,
     requestId?: string,
     pageEdits?: ScanPageEdit[],
+    metadata: {
+      subject?: string;
+      language?: string;
+      collectionId?: string;
+      contentType?: 'PHOTO' | 'SCAN' | 'NOTEBOOK';
+    } = {},
   ): Promise<DocumentDetail> {
     this.assertFiles(files, pageEdits);
     const operationId = requestId?.trim() || randomUUID();
@@ -58,7 +64,7 @@ export class ScanService {
     const active = this.inFlight.get(key);
     if (active) return active;
 
-    const pending = this.processIdempotent(userId, files, title, sourceRef, pageEdits)
+    const pending = this.processIdempotent(userId, files, title, sourceRef, pageEdits, metadata)
       .finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, pending);
     return pending;
@@ -77,19 +83,26 @@ export class ScanService {
     return pending;
   }
 
+  async retryPage(userId: string, documentId: string, pageId: string): Promise<DocumentDetail> {
+    const key = `${userId}:retry:${documentId}:${pageId}`;
+    const active = this.inFlight.get(key);
+    if (active) return active;
+    const pending = this.retryPersisted(userId, documentId, pageId)
+      .finally(() => this.inFlight.delete(key));
+    this.inFlight.set(key, pending);
+    return pending;
+  }
+
   private async retryPersisted(
     userId: string,
     documentId: string,
+    pageId?: string,
   ): Promise<DocumentDetail> {
     let existing = await this.documents.get(userId, documentId);
-    if (
-      !existing.sourceRef?.startsWith('scan:') ||
-      existing.charCount > 0 ||
-      existing.content.trim().length > 0
-    ) {
+    if (!existing.sourceRef?.startsWith('scan:')) {
       throw new BadRequestException({
         code: 'SCAN_OCR_RETRY_NOT_APPLICABLE',
-        message: 'This document is not a failed OCR scan.',
+        message: 'This document is not an OCR scan.',
       });
     }
     if (existing.status === 'processing') {
@@ -110,7 +123,7 @@ export class ScanService {
       existing = await this.documents.get(userId, documentId);
       if (!recovered) return this.resolveExisting(userId, existing);
     }
-    if (existing.status !== 'failed' && existing.status !== 'pending') {
+    if (existing.status !== 'failed' && existing.status !== 'partial' && existing.status !== 'pending') {
       throw new ConflictException({
         code: 'SCAN_OCR_RETRY_NOT_READY',
         message: 'This scan is not ready for an OCR retry.',
@@ -127,13 +140,39 @@ export class ScanService {
     // Read first, then atomically claim. Cross-replica contenders may both read
     // private bytes, but only the updateMany winner is allowed to call Vision.
     const pages = await this.privateMedia.getScanPages(userId, documentId);
+    let metadata = await this.documents.scanPages(userId, documentId);
+    if (metadata.length === 0) {
+      await this.documents.recordScanPages(
+        userId,
+        documentId,
+        pages.map((_, index) => ({ originalName: `page-${index + 1}.jpg` })),
+      );
+      metadata = await this.documents.scanPages(userId, documentId);
+    }
+    const retryable = metadata.filter((page) =>
+      page.ocrStatus !== 'READY' && (!pageId || page.id === pageId));
+    if (pageId && retryable.length === 0) {
+      throw new BadRequestException({
+        code: 'SCAN_PAGE_RETRY_NOT_APPLICABLE',
+        message: 'That page does not need an OCR retry.',
+      });
+    }
     const reading = await this.documents.startScanRetry(userId, documentId);
     if (!reading.started) return this.resolveExisting(userId, reading.document);
     try {
-      const text = await this.readText(pages.map((buffer) => ({
-        mimeType: 'image/jpeg',
-        data: buffer.toString('base64'),
-      })));
+      const selected = retryable.length > 0 ? retryable : metadata;
+      await this.readAndRecordPages(
+        documentId,
+        selected.map((page) => ({
+          pageNumber: page.pageNumber,
+          image: {
+            mimeType: 'image/jpeg',
+            data: pages[page.pageNumber - 1].toString('base64'),
+          },
+        })),
+      );
+      const refreshed = await this.documents.scanPages(userId, documentId);
+      const text = this.joinPageText(refreshed);
       return await this.documents.completeScan(userId, documentId, {
         title: (existing.title.trim() || this.deriveTitle(text)).slice(0, 300),
         content: text,
@@ -150,6 +189,12 @@ export class ScanService {
     title: string | undefined,
     sourceRef: string,
     pageEdits: ScanPageEdit[] | undefined,
+    metadata: {
+      subject?: string;
+      language?: string;
+      collectionId?: string;
+      contentType?: 'PHOTO' | 'SCAN' | 'NOTEBOOK';
+    },
   ): Promise<DocumentDetail> {
     const existing = await this.documents.findBySourceRef(userId, sourceRef);
     if (existing) {
@@ -157,15 +202,34 @@ export class ScanService {
       // Never OCR the newly submitted retry bytes against the already durable
       // document shell. They may be different pages. The persisted capture is
       // authoritative, so a retry always rereads those exact normalized pages.
-      if (!this.llm.supportsVision) return existing;
+      if (!this.llm.supportsVision) {
+        await this.documents.failScan(userId, existing.id, 'SCAN_OCR_UNAVAILABLE');
+        return this.documents.get(userId, existing.id);
+      }
       const persistedPages = await this.privateMedia.getScanPages(userId, existing.id);
+      let metadata = await this.documents.scanPages(userId, existing.id);
+      if (metadata.length === 0) {
+        await this.documents.recordScanPages(
+          userId,
+          existing.id,
+          persistedPages.map((_, index) => ({ originalName: `page-${index + 1}.jpg` })),
+        );
+        metadata = await this.documents.scanPages(userId, existing.id);
+      }
       const reading = await this.documents.startScanReading(userId, existing.id);
       if (!reading.started) return this.resolveExisting(userId, reading.document);
       try {
-        const text = await this.readText(persistedPages.map((buffer) => ({
-          mimeType: 'image/jpeg',
-          data: buffer.toString('base64'),
-        })));
+        await this.readAndRecordPages(
+          existing.id,
+          metadata.map((page) => ({
+            pageNumber: page.pageNumber,
+            image: {
+              mimeType: 'image/jpeg',
+              data: persistedPages[page.pageNumber - 1].toString('base64'),
+            },
+          })),
+        );
+        const text = this.joinPageText(await this.documents.scanPages(userId, existing.id));
         return await this.documents.completeScan(userId, existing.id, {
           title: (existing.title.trim() || this.deriveTitle(text)).slice(0, 300),
           content: text,
@@ -180,7 +244,13 @@ export class ScanService {
     // bytes have not consumed provider quota and can safely be corrected.
     const images = await this.normalize(files, pageEdits);
     const captureTitle = title?.trim() || this.captureTitle(files);
-    const started = await this.documents.beginScan(userId, captureTitle, sourceRef);
+    const started = await this.documents.beginScan(
+      userId,
+      captureTitle,
+      sourceRef,
+      images.length,
+      metadata,
+    );
     if (!started.created) return this.resolveExisting(userId, started.document);
     let capturedDocument = started.document;
     if (started.created) {
@@ -189,6 +259,14 @@ export class ScanService {
           userId,
           started.document.id,
           images.map((image) => image.buffer),
+        );
+        await this.documents.recordScanPages(
+          userId,
+          started.document.id,
+          files.map((file) => ({
+            originalName: file.originalname,
+            rotation: 0,
+          })),
         );
       } catch (error) {
         await this.documents.failScan(userId, started.document.id).catch(() => undefined);
@@ -199,12 +277,24 @@ export class ScanService {
     // Capture is a durable, useful operation by itself. Echo or any provider
     // without Vision leaves it honestly queued instead of discarding the pages
     // or attempting a paid fallback.
-    if (!this.llm.supportsVision) return capturedDocument;
+    if (!this.llm.supportsVision) {
+      await this.documents.failScan(userId, capturedDocument.id, 'SCAN_OCR_UNAVAILABLE');
+      return this.documents.get(userId, capturedDocument.id);
+    }
 
     const reading = await this.documents.startScanReading(userId, capturedDocument.id);
     if (!reading.started) return this.resolveExisting(userId, reading.document);
     try {
-      const text = await this.readText(images.map(({ mimeType, data }) => ({ mimeType, data })));
+      await this.readAndRecordPages(
+        capturedDocument.id,
+        images.map(({ mimeType, data }, index) => ({
+          pageNumber: index + 1,
+          image: { mimeType, data },
+        })),
+      );
+      const text = this.joinPageText(
+        await this.documents.scanPages(userId, capturedDocument.id),
+      );
       return await this.documents.completeScan(userId, started.document.id, {
         title: (title?.trim() || this.deriveTitle(text)).slice(0, 300),
         content: text,
@@ -310,6 +400,42 @@ export class ScanService {
       this.logger.error('Document scan failed.');
       throw this.publicError(error);
     }
+  }
+
+  private async readAndRecordPages(
+    documentId: string,
+    pages: ReadonlyArray<{ pageNumber: number; image: LLMImagePart }>,
+  ): Promise<void> {
+    let completed = 0;
+    for (const page of pages) {
+      await this.documents.updatePageOcr(documentId, page.pageNumber, { status: 'PROCESSING' });
+      try {
+        const text = await this.readText([page.image]);
+        await this.documents.updatePageOcr(documentId, page.pageNumber, {
+          status: 'READY',
+          text,
+        });
+        completed += 1;
+      } catch {
+        await this.documents.updatePageOcr(documentId, page.pageNumber, {
+          status: 'FAILED',
+          error: 'OCR_PAGE_FAILED',
+        });
+      }
+    }
+    if (completed === 0) {
+      throw new UnprocessableEntityException(
+        'No readable text was found. The original pages were preserved for retry.',
+      );
+    }
+  }
+
+  private joinPageText(pages: Awaited<ReturnType<DocumentService['scanPages']>>): string {
+    return pages
+      .filter((page) => page.ocrStatus === 'READY' && page.ocrText?.trim())
+      .map((page) => `--- Page ${page.pageNumber} ---\n${page.ocrText?.trim()}`)
+      .join('\n\n')
+      .trim();
   }
 
   private publicError(error: unknown): HttpException {

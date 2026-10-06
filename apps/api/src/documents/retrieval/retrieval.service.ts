@@ -99,6 +99,9 @@ export class RetrievalService {
         documentId: String(h.payload.documentId),
         documentTitle: titleById.get(String(h.payload.documentId)) ?? '',
         chunkIndex: Number(h.payload.chunkIndex),
+        ...(Number.isInteger(Number(h.payload.pageNumber)) && Number(h.payload.pageNumber) > 0
+          ? { pageNumber: Number(h.payload.pageNumber) }
+          : {}),
         content: String(h.payload.content),
         score: h.score,
       }));

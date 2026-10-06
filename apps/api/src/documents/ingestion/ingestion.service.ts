@@ -46,6 +46,7 @@ export class IngestionService implements OnModuleInit {
       // Don't crash boot if Qdrant is momentarily unavailable; ingest will retry.
       this.logger.warn('Could not ensure the Qdrant collection at boot.');
     }
+    void this.recoverInterrupted();
   }
 
   /**
@@ -98,7 +99,16 @@ export class IngestionService implements OnModuleInit {
 
       // ── Segmentation ──
       if (!await this.setStage(documentId, 'segmenting')) return;
-      const chunks = this.chunking.chunk(doc.content);
+      const pageRows = await this.prisma.documentPage.findMany({
+        where: { documentId, ocrStatus: 'READY', ocrText: { not: null } },
+        orderBy: [{ position: 'asc' }, { pageNumber: 'asc' }],
+      });
+      const chunkInputs = pageRows.length > 0
+        ? pageRows.flatMap((page) => this.chunking
+            .chunk(this.cleaning.clean(page.ocrText ?? ''))
+            .map((content) => ({ content, pageNumber: page.pageNumber })))
+        : this.chunking.chunk(doc.content).map((content) => ({ content, pageNumber: null }));
+      const chunks = chunkInputs.map((chunk) => chunk.content);
       let points: VectorPoint[] = [];
 
       if (chunks.length > 0) {
@@ -111,7 +121,14 @@ export class IngestionService implements OnModuleInit {
         points = chunks.map((content, index) => ({
           id: randomUUID(),
           vector: vectors[index],
-          payload: { userId: doc.userId, documentId, chunkIndex: index, content },
+          payload: {
+            userId: doc.userId,
+            documentId,
+            chunkIndex: index,
+            content,
+            pageNumber: chunkInputs[index].pageNumber,
+            sourceType: doc.contentType,
+          },
         }));
       }
 
@@ -146,6 +163,8 @@ export class IngestionService implements OnModuleInit {
                 userId: doc.userId,
                 chunkIndex: index,
                 content: chunks[index],
+                pageNumber: chunkInputs[index].pageNumber,
+                sourceType: doc.contentType,
                 vectorId: point.id,
               })),
             });
@@ -175,6 +194,9 @@ export class IngestionService implements OnModuleInit {
         this.logger.warn('Knowledge-Graph stage was skipped.');
       }
 
+      const failedPages = await this.prisma.documentPage.count({
+        where: { documentId, ocrStatus: 'FAILED' },
+      });
       await this.prisma.document.updateMany({
         where: {
           id: documentId,
@@ -183,7 +205,11 @@ export class IngestionService implements OnModuleInit {
           stage: { not: 'deleting' },
           user: { accountStatus: 'active' },
         },
-        data: { status: 'ready', stage: null, error: null },
+        data: {
+          status: failedPages > 0 ? 'partial' : 'ready',
+          stage: null,
+          error: failedPages > 0 ? 'OCR_PARTIAL' : null,
+        },
       });
       this.logger.log('Document-ingestion pipeline completed.');
     } catch {
@@ -199,6 +225,61 @@ export class IngestionService implements OnModuleInit {
           data: { status: 'failed', stage: null, error: 'PROCESSING_FAILED' },
         })
         .catch(() => undefined);
+    }
+  }
+
+  /** Close the fire-and-forget restart gap. Text-bearing work is safely
+   * reclaimed under the normal ingestion lock; stale empty scans become an
+   * explicit retryable failure instead of spinning forever. */
+  private async recoverInterrupted(): Promise<void> {
+    const staleBefore = new Date(Date.now() - 5 * 60_000);
+    try {
+      await this.prisma.document.updateMany({
+        where: {
+          deletedAt: null,
+          charCount: 0,
+          sourceRef: { startsWith: 'scan:' },
+          status: { in: ['pending', 'processing'] },
+          updatedAt: { lte: staleBefore },
+        },
+        data: { status: 'failed', stage: null, error: 'SCAN_READING_INTERRUPTED' },
+      });
+      await this.prisma.document.updateMany({
+        where: {
+          deletedAt: null,
+          charCount: 0,
+          source: 'file',
+          status: { in: ['pending', 'processing'] },
+          updatedAt: { lte: staleBefore },
+        },
+        data: { status: 'failed', stage: null, error: 'FILE_EXTRACTION_INTERRUPTED' },
+      });
+
+      const reclaimable = await this.prisma.document.findMany({
+        where: {
+          deletedAt: null,
+          charCount: { gt: 0 },
+          OR: [
+            { status: 'pending' },
+            { status: 'processing', updatedAt: { lte: staleBefore } },
+          ],
+          user: { accountStatus: 'active' },
+        },
+        select: { id: true, status: true },
+      });
+      for (const document of reclaimable) {
+        if (document.status === 'processing') {
+          await this.prisma.document.updateMany({
+            where: { id: document.id, status: 'processing', updatedAt: { lte: staleBefore } },
+            data: { status: 'pending', stage: null, error: null },
+          });
+        }
+        // Recovery is deliberately sequential: a restart may uncover a large
+        // backlog, but must not fan out unbounded provider/vector calls.
+        await this.ingest(document.id);
+      }
+    } catch {
+      this.logger.warn('Interrupted document recovery could not complete at boot.');
     }
   }
 

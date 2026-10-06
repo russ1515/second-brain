@@ -31,6 +31,7 @@ export interface LibraryQuery {
   subject?: string;
   language?: string;
   collectionId?: string;
+  contentType?: string;
   /** Free-text match on title / summary. */
   q?: string;
 }
@@ -110,7 +111,26 @@ export class LibraryService {
   async getOne(userId: string, id: string): Promise<LibraryDocumentDetail> {
     const doc = await this.own(userId, id);
     const base = await this.hydrate(userId, doc);
-    return { ...base, content: doc.content, error: doc.error ?? undefined };
+    const pages = await this.prisma.documentPage.findMany({
+      where: { documentId: id },
+      orderBy: [{ position: 'asc' }, { pageNumber: 'asc' }],
+    });
+    return {
+      ...base,
+      content: doc.content,
+      error: doc.error ?? undefined,
+      pages: pages.map((page) => ({
+        id: page.id,
+        pageNumber: page.pageNumber,
+        position: page.position,
+        mimeType: page.mimeType,
+        originalName: page.originalName,
+        rotation: page.rotation,
+        ocrStatus: page.ocrStatus as LibraryDocumentDetail['pages'][number]['ocrStatus'],
+        ocrText: page.ocrText,
+        ocrError: page.ocrError,
+      })),
+    };
   }
 
   /** Counts + facet values that drive the sidebar. */
@@ -256,12 +276,83 @@ export class LibraryService {
   }
 
   async createCollection(userId: string, name: string): Promise<Collection> {
-    const trimmed = name.trim();
+    const trimmed = name.trim().replace(/\s+/g, ' ').slice(0, 120);
     if (!trimmed) throw new BadRequestException('A collection name is required.');
-    const created = await this.prisma.collection.create({
-      data: { userId, name: trimmed.slice(0, 120) },
+    const normalizedName = trimmed.toLocaleLowerCase();
+    const duplicate = await this.prisma.collection.findFirst({
+      where: { userId, normalizedName }, select: { id: true },
     });
+    if (duplicate) throw new ConflictException('A collection with this name already exists.');
+    let created;
+    try {
+      created = await this.prisma.collection.create({
+        data: { userId, name: trimmed, normalizedName },
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code === 'P2002') {
+        throw new ConflictException('A collection with this name already exists.');
+      }
+      throw error;
+    }
     return { id: created.id, name: created.name, documentCount: 0 };
+  }
+
+  async renameCollection(userId: string, id: string, name: string): Promise<Collection> {
+    const trimmed = name.trim().replace(/\s+/g, ' ').slice(0, 120);
+    if (!trimmed) throw new BadRequestException('A collection name is required.');
+    const normalizedName = trimmed.toLocaleLowerCase();
+    const owned = await this.prisma.collection.findFirst({ where: { id, userId } });
+    if (!owned) throw new NotFoundException('Collection not found.');
+    const duplicate = await this.prisma.collection.findFirst({
+      where: { userId, normalizedName, id: { not: id } }, select: { id: true },
+    });
+    if (duplicate) throw new ConflictException('A collection with this name already exists.');
+    let updated;
+    try {
+      updated = await this.prisma.collection.update({
+        where: { id }, data: { name: trimmed, normalizedName },
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code === 'P2002') {
+        throw new ConflictException('A collection with this name already exists.');
+      }
+      throw error;
+    }
+    const count = await this.prisma.document.count({
+      where: { collectionId: id, userId, deletedAt: null },
+    });
+    return { id, name: updated.name, documentCount: count };
+  }
+
+  async updateDocument(
+    userId: string,
+    id: string,
+    input: { title?: string; subject?: string | null },
+  ): Promise<LibraryDocument> {
+    await this.own(userId, id);
+    const data: Prisma.DocumentUpdateInput = {};
+    if (input.title !== undefined) {
+      const title = input.title.trim().slice(0, 300);
+      if (!title) throw new BadRequestException('A title is required.');
+      data.title = title;
+    }
+    if (input.subject !== undefined) {
+      const subject = input.subject?.trim().replace(/\s+/g, ' ').slice(0, 120) || null;
+      const canonical = subject
+        ? await this.prisma.document.findFirst({
+            where: {
+              userId,
+              deletedAt: null,
+              id: { not: id },
+              subject: { equals: subject, mode: 'insensitive' },
+            },
+            select: { subject: true },
+          })
+        : null;
+      data.subject = canonical?.subject ?? subject;
+    }
+    const updated = await this.prisma.document.update({ where: { id }, data });
+    return this.hydrate(userId, updated);
   }
 
   async assignCollection(
@@ -307,6 +398,7 @@ export class LibraryService {
     if (query.subject) where.subject = query.subject;
     if (query.language) where.language = query.language;
     if (query.collectionId) where.collectionId = query.collectionId;
+    if (query.contentType) where.contentType = query.contentType;
 
     // Free-text.
     if (query.q?.trim()) {
@@ -314,6 +406,10 @@ export class LibraryService {
       where.OR = [
         { title: { contains: q, mode: 'insensitive' } },
         { summary: { contains: q, mode: 'insensitive' } },
+        { subject: { contains: q, mode: 'insensitive' } },
+        { collection: { name: { contains: q, mode: 'insensitive' } } },
+        { content: { contains: q, mode: 'insensitive' } },
+        { pages: { some: { ocrText: { contains: q, mode: 'insensitive' } } } },
       ];
     }
 
@@ -376,6 +472,10 @@ export class LibraryService {
       sourceRef: doc.sourceRef ?? undefined,
       charCount: doc.charCount,
       status: doc.status,
+      contentType: doc.contentType as LibraryDocument['contentType'],
+      mimeType: doc.mimeType,
+      sizeBytes: doc.sizeBytes,
+      pageCount: doc.pageCount,
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
       stage: (doc.stage as LibraryDocument['stage']) ?? null,

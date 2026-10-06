@@ -16,6 +16,7 @@ const file = {
 test('scan retries with one request id share one provider call and one document', async () => {
   let reads = 0;
   let completions = 0;
+  const pages = [{ pageNumber: 1, position: 0, ocrStatus: 'PENDING', ocrText: null }];
   const detail = { id: 'doc-1', title: 'Scan', content: 'Readable page text long enough.', status: 'pending' };
   const llm = {
     supportsVision: true,
@@ -32,6 +33,14 @@ test('scan retries with one request id share one provider call and one document'
       return { document: { ...detail, content: '', status: 'processing' }, created: true };
     },
     markScanCaptured: async () => ({ ...detail, content: '', charCount: 0, status: 'pending' }),
+    recordScanPages: async () => undefined,
+    scanPages: async () => pages,
+    updatePageOcr: async (_documentId, pageNumber, input) => {
+      Object.assign(pages.find((page) => page.pageNumber === pageNumber), {
+        ocrStatus: input.status,
+        ocrText: input.text ?? null,
+      });
+    },
     startScanReading: async () => ({
       document: { ...detail, content: '', charCount: 0, status: 'processing' },
       started: true,
@@ -39,7 +48,7 @@ test('scan retries with one request id share one provider call and one document'
     completeScan: async (_userId, id, input) => {
       completions += 1;
       assert.equal(id, detail.id);
-      assert.equal(input.content, detail.content);
+      assert.match(input.content, /Readable page text long enough/);
       return detail;
     },
     failScan: async () => assert.fail('successful scan must not be failed'),
@@ -94,6 +103,7 @@ test('a pending request-id retry OCRs only the persisted capture, never the new 
   let reads = 0;
   let normalizations = 0;
   let pageWrites = 0;
+  const pages = [{ pageNumber: 1, position: 0, ocrStatus: 'PENDING', ocrText: null }];
   const service = new ScanService({
     supportsVision: true,
     readImages: async (images) => {
@@ -109,6 +119,14 @@ test('a pending request-id retry OCRs only the persisted capture, never the new 
       document: { ...existing, status: 'processing', stage: 'reading' },
       started: true,
     }),
+    scanPages: async () => pages,
+    recordScanPages: async () => undefined,
+    updatePageOcr: async (_documentId, pageNumber, input) => {
+      Object.assign(pages.find((page) => page.pageNumber === pageNumber), {
+        ocrStatus: input.status,
+        ocrText: input.text ?? null,
+      });
+    },
     completeScan: async (_userId, id, input) => {
       assert.equal(id, existing.id);
       assert.match(input.content, /original persisted capture/);
@@ -187,6 +205,7 @@ test('a terminal provider attempt is not replayed under the same request id', as
 test('capture is durably saved when the active provider has no Vision capability', async () => {
   let storedPages = 0;
   let providerReads = 0;
+  let failureCode = null;
   const shell = {
     id: 'doc-captured', title: 'page', content: '', charCount: 0,
     status: 'processing', updatedAt: new Date().toISOString(),
@@ -198,7 +217,9 @@ test('capture is durably saved when the active provider has no Vision capability
     findBySourceRef: async () => null,
     beginScan: async () => ({ document: shell, created: true }),
     markScanCaptured: async () => ({ ...shell, status: 'pending' }),
-    failScan: async () => assert.fail('a successful capture must not fail'),
+    recordScanPages: async () => undefined,
+    failScan: async (_userId, _documentId, code) => { failureCode = code; },
+    get: async () => ({ ...shell, status: 'failed', error: failureCode }),
   }, {
     scanPage: async () => ({ mimeType: 'image/jpeg', buffer: Buffer.from([4, 5, 6]) }),
   }, {
@@ -209,7 +230,8 @@ test('capture is durably saved when the active provider has no Vision capability
   });
 
   const result = await service.fromImages('user-4', [file], undefined, 'capture-only');
-  assert.equal(result.status, 'pending');
+  assert.equal(result.status, 'failed');
+  assert.equal(result.error, 'SCAN_OCR_UNAVAILABLE');
   assert.equal(storedPages, 1);
   assert.equal(providerReads, 0);
 });
@@ -223,16 +245,23 @@ test('explicit failed OCR retry reads saved pages once and never uses reindex', 
     id: 'doc-retry', title: 'Saved scan', sourceRef: 'scan:request-retry',
     content: '', charCount: 0, status: 'failed', updatedAt: new Date().toISOString(),
   };
+  const pageRows = [
+    { pageNumber: 1, position: 0, ocrStatus: 'PENDING', ocrText: null },
+    { pageNumber: 2, position: 1, ocrStatus: 'PENDING', ocrText: null },
+  ];
   const completed = {
-    ...failed, content: 'Recovered OCR content from saved pages.', charCount: 39, status: 'pending',
+    ...failed,
+    content: '--- Page 1 ---\nRecovered OCR content from saved page 1.\n\n--- Page 2 ---\nRecovered OCR content from saved page 2.',
+    charCount: 113,
+    status: 'pending',
   };
   const service = new ScanService({
     supportsVision: true,
     readImages: async (images) => {
       reads += 1;
-      assert.equal(images.length, 2);
+      assert.equal(images.length, 1);
       await new Promise((resolve) => setTimeout(resolve, 5));
-      return { text: completed.content };
+      return { text: `Recovered OCR content from saved page ${reads}.` };
     },
   }, {
     get: async (userId, documentId) => {
@@ -243,6 +272,14 @@ test('explicit failed OCR retry reads saved pages once and never uses reindex', 
     startScanRetry: async () => {
       claims += 1;
       return { document: { ...failed, status: 'processing' }, started: true };
+    },
+    scanPages: async () => pageRows,
+    recordScanPages: async () => undefined,
+    updatePageOcr: async (_documentId, pageNumber, input) => {
+      Object.assign(pageRows.find((page) => page.pageNumber === pageNumber), {
+        ocrStatus: input.status,
+        ocrText: input.text ?? null,
+      });
     },
     completeScan: async (_userId, documentId, input) => {
       completions += 1;
@@ -263,7 +300,7 @@ test('explicit failed OCR retry reads saved pages once and never uses reindex', 
 
   assert.equal(first, completed);
   assert.equal(duplicate, completed);
-  assert.equal(reads, 1);
+  assert.equal(reads, 2);
   assert.equal(claims, 1);
   assert.equal(completions, 1);
   assert.equal(reindexes, 0);

@@ -91,6 +91,7 @@ export class RagService {
       documentId: r.documentId,
       documentTitle: r.documentTitle,
       chunkIndex: r.chunkIndex,
+      ...(r.pageNumber ? { pageNumber: r.pageNumber } : {}),
       score: r.score,
       content: r.content.slice(0, CITATION_SNIPPET_CHARS),
     }));

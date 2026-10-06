@@ -42,7 +42,7 @@ export interface BrainDocumentReference {
   id: string;
   title: string;
   subject: string | null;
-  status: 'pending' | 'processing' | 'ready' | 'failed';
+  status: 'pending' | 'processing' | 'ready' | 'partial' | 'failed';
   updatedAt: string;
 }
 

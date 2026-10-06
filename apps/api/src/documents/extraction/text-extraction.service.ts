@@ -24,6 +24,7 @@ export interface ExtractedText {
   text: string;
   /** A title derived from the source, when one is available. */
   title?: string;
+  pageCount?: number;
 }
 
 const MAX_FETCH_BYTES = 5 * 1024 * 1024; // 5 MB
@@ -66,10 +67,10 @@ export class TextExtractionService {
         const ocr = await this.ocrPdf(file.buffer, pages);
         if (ocr && ocr.length > text.length) {
           this.logger.log('Scanned PDF OCR completed.');
-          return { text: ocr, title };
+          return { text: ocr, title, pageCount: pages };
         }
       }
-      return { text, title };
+      return { text, title, pageCount: pages };
     }
 
     const isText =

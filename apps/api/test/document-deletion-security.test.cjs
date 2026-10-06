@@ -143,6 +143,7 @@ test('a durable ingestion claim suppresses a concurrent retry provider call', as
       update: async ({ data }) => (Object.assign(row, data), { ...row }),
       updateMany: async ({ data }) => (Object.assign(row, data), { count: 1 }),
     },
+    documentPage: { findMany: async () => [], count: async () => 0 },
     documentChunk: { deleteMany: async () => ({ count: 0 }), createMany: async () => ({ count: 1 }) },
   };
   const prisma = { ...tx, $transaction: async (operation) => operation(tx) };

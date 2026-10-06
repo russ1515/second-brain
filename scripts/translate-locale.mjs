@@ -19,6 +19,8 @@ const OUT_DIR = path.join(ROOT, 'apps/mobile/lib/locales');
 const ESSENTIAL_FILE = path.join(OUT_DIR, 'essential.ts');
 const REVIEW_FILE = path.join(OUT_DIR, 'review.ts');
 const AUTH_ERRORS_FILE = path.join(OUT_DIR, 'auth-errors.ts');
+const VOICE_PHASE2_FILE = path.join(OUT_DIR, 'voice-phase2.ts');
+const LIBRARY_V1_FILE = path.join(OUT_DIR, 'library-v1.ts');
 const PROGRESS_DIR = path.join(OUT_DIR, '.translation-progress');
 const DEFAULT_MANIFEST = path.join(PROGRESS_DIR, 'manifest.json');
 const JOB_LOCK = path.join(PROGRESS_DIR, 'apply.lock');
@@ -191,6 +193,29 @@ export function readNestedCatalog(file, variableName) {
   return catalogs;
 }
 
+/** Parse a code -> fixed string tuple and assign each tuple slot to a key. */
+export function readTupleCatalog(file, variableName, keys) {
+  const object = objectLiteral(file, variableName);
+  const catalogs = new Map();
+
+  for (const property of object.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    const code = propertyName(property);
+    const value = unwrap(property.initializer);
+    invariant(code && ts.isArrayLiteralExpression(value), `Invalid tuple catalog ${code ?? '<unknown>'}`);
+    invariant(value.elements.length === keys.length, `Invalid tuple length in ${variableName}.${code}`);
+    const entries = new Map();
+    for (let index = 0; index < keys.length; index += 1) {
+      const translation = unwrap(value.elements[index]);
+      invariant(ts.isStringLiteralLike(translation), `Invalid tuple translation in ${variableName}.${code}`);
+      entries.set(keys[index], translation.text);
+    }
+    catalogs.set(code, entries);
+  }
+
+  return catalogs;
+}
+
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
@@ -220,8 +245,22 @@ function batchesFor(count, batchSize) {
 export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
   const english = readCatalog(I18N, 'en');
   const essentials = readNestedCatalog(ESSENTIAL_FILE, 'essential');
+  const learnerPassportEssentials = readNestedCatalog(ESSENTIAL_FILE, 'learnerPassportEssential');
+  const supportBridgeEssentials = readNestedCatalog(ESSENTIAL_FILE, 'supportBridgeEssential');
   const reviews = readNestedCatalog(REVIEW_FILE, 'review');
   const authErrors = readNestedCatalog(AUTH_ERRORS_FILE, 'authErrors');
+  const voicePhase2 = readNestedCatalog(VOICE_PHASE2_FILE, 'voicePhase2');
+  const libraryV1 = readNestedCatalog(LIBRARY_V1_FILE, 'libraryV1');
+  const libraryOrganization = readTupleCatalog(
+    LIBRARY_V1_FILE,
+    'organizationLabels',
+    ['lib.types', 'libraryV1.type.notebook'],
+  );
+  const libraryFailures = readTupleCatalog(
+    LIBRARY_V1_FILE,
+    'failureLabels',
+    ['libraryV1.error.fileUnreadable', 'libraryV1.error.storage'],
+  );
   const locales = [];
 
   for (const code of codes) {
@@ -229,9 +268,26 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
     const { file, variableName } = localeCatalogDescriptor(code);
     const base = fs.existsSync(file) ? readCatalog(file, variableName) : new Map();
     const essential = essentials.get(code) ?? new Map();
+    const learnerPassportEssential = learnerPassportEssentials.get(code) ?? new Map();
+    const supportBridgeEssential = supportBridgeEssentials.get(code) ?? new Map();
     const review = reviews.get(code) ?? new Map();
     const authError = authErrors.get(code) ?? new Map();
-    const effective = new Map([...base, ...essential, ...review, ...authError]);
+    const voice = voicePhase2.get(code) ?? new Map();
+    const library = libraryV1.get(code) ?? new Map();
+    const organization = libraryOrganization.get(code) ?? new Map();
+    const failures = libraryFailures.get(code) ?? new Map();
+    const effective = new Map([
+      ...base,
+      ...essential,
+      ...learnerPassportEssential,
+      ...supportBridgeEssential,
+      ...review,
+      ...authError,
+      ...voice,
+      ...library,
+      ...organization,
+      ...failures,
+    ]);
     const missingKeys = [...english.keys()].filter((key) => !effective.has(key));
 
     for (const key of effective.keys()) {
@@ -262,6 +318,9 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
     overlayFileChecksums: {
       essential: sha256(fs.readFileSync(ESSENTIAL_FILE)),
       review: sha256(fs.readFileSync(REVIEW_FILE)),
+      authErrors: sha256(fs.readFileSync(AUTH_ERRORS_FILE)),
+      voicePhase2: sha256(fs.readFileSync(VOICE_PHASE2_FILE)),
+      libraryV1: sha256(fs.readFileSync(LIBRARY_V1_FILE)),
     },
     batchSize,
     locales,
@@ -1099,7 +1158,10 @@ function assertPlanInputsUnchanged(plan) {
   );
   invariant(
     sha256(fs.readFileSync(ESSENTIAL_FILE)) === plan.overlayFileChecksums.essential
-    && sha256(fs.readFileSync(REVIEW_FILE)) === plan.overlayFileChecksums.review,
+    && sha256(fs.readFileSync(REVIEW_FILE)) === plan.overlayFileChecksums.review
+    && sha256(fs.readFileSync(AUTH_ERRORS_FILE)) === plan.overlayFileChecksums.authErrors
+    && sha256(fs.readFileSync(VOICE_PHASE2_FILE)) === plan.overlayFileChecksums.voicePhase2
+    && sha256(fs.readFileSync(LIBRARY_V1_FILE)) === plan.overlayFileChecksums.libraryV1,
     'Locale overlays changed during translation; stop and rebuild the plan',
   );
   for (const locale of plan.locales) {

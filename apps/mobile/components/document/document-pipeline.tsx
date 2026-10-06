@@ -16,6 +16,7 @@ const PHASES: DocumentPipelinePhase[] = [
   'indexing',
   'connecting',
   'completed',
+  'partial',
 ];
 
 const PHASE_KEY: Record<DocumentPipelinePhase, TranslationKey> = {
@@ -25,6 +26,7 @@ const PHASE_KEY: Record<DocumentPipelinePhase, TranslationKey> = {
   indexing: 'document.pipeline.indexing',
   connecting: 'document.pipeline.connecting',
   completed: 'document.pipeline.completed',
+  partial: 'document.pipeline.partial',
   failed: 'document.pipeline.failed',
 };
 

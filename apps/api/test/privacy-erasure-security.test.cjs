@@ -220,6 +220,10 @@ test('document ingestion revalidates ownership under the same account-data lock 
   };
   const prisma = {
     document: documentModel,
+    documentPage: {
+      findMany: async () => [],
+      count: async () => 0,
+    },
     documentChunk: {
       deleteMany: async () => undefined,
     },

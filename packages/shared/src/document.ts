@@ -2,7 +2,30 @@
 
 export type DocumentSource = 'text' | 'file' | 'url';
 
-export type DocumentStatus = 'pending' | 'processing' | 'ready' | 'failed';
+export type DocumentStatus = 'pending' | 'processing' | 'ready' | 'partial' | 'failed';
+
+export type DocumentContentType =
+  | 'PDF'
+  | 'PHOTO'
+  | 'SCAN'
+  | 'NOTEBOOK'
+  | 'DOCUMENT'
+  | 'NOTE'
+  | 'LESSON_AI';
+
+export type DocumentPageStatus = 'PENDING' | 'PROCESSING' | 'READY' | 'FAILED';
+
+export interface DocumentPage {
+  id: string;
+  pageNumber: number;
+  position: number;
+  mimeType: string;
+  originalName: string | null;
+  rotation: number;
+  ocrStatus: DocumentPageStatus;
+  ocrText: string | null;
+  ocrError: string | null;
+}
 
 /** AI-estimated reading difficulty of a document. */
 export type DocumentDifficulty = 'beginner' | 'intermediate' | 'advanced';
@@ -10,6 +33,8 @@ export type DocumentDifficulty = 'beginner' | 'intermediate' | 'advanced';
 /** The automatic Smart Upload Pipeline stages (Sprint 6.2), in order. Null when
  *  the document is settled (ready/failed). */
 export type PipelineStage =
+  | 'capturing'
+  | 'reading'
   | 'cleaning'
   | 'segmenting'
   | 'embedding'
@@ -25,6 +50,7 @@ export type DocumentPipelinePhase =
   | 'indexing'
   | 'connecting'
   | 'completed'
+  | 'partial'
   | 'failed';
 
 export interface DocumentPipelineState {
@@ -45,10 +71,15 @@ export function resolveDocumentPipeline(
   if (status === 'ready') {
     return { phase: 'completed', messageCode: 'document.pipeline.completed', progress: { mode: 'determinate', percent: 100 }, canRetry: false };
   }
+  if (status === 'partial') {
+    return { phase: 'partial', messageCode: 'document.pipeline.partial', progress: { mode: 'determinate', percent: 100 }, canRetry: true };
+  }
   if (status === 'failed') {
     return { phase: 'failed', messageCode: 'document.pipeline.failed', progress: { mode: 'indeterminate' }, canRetry: true };
   }
   const phaseByStage: Partial<Record<PipelineStage, DocumentPipelinePhase>> = {
+    capturing: 'queued',
+    reading: 'reading',
     cleaning: 'reading',
     segmenting: 'extracting',
     embedding: 'indexing',
@@ -73,6 +104,10 @@ export interface DocumentSummary {
   sourceRef?: string;
   charCount: number;
   status: DocumentStatus;
+  contentType: DocumentContentType;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  pageCount: number;
   /** ISO-8601 timestamps. */
   createdAt: string;
   updatedAt: string;
@@ -131,6 +166,7 @@ export interface LibraryDocument extends DocumentSummary {
 /** A library document with its full extracted text — the detail view. */
 export interface LibraryDocumentDetail extends LibraryDocument {
   content: string;
+  pages: DocumentPage[];
   /** Failure reason when status is 'failed'. */
   error?: string;
 }
@@ -430,6 +466,7 @@ export interface SearchResultItem {
   documentId: string;
   documentTitle: string;
   chunkIndex: number;
+  pageNumber?: number;
   /** The matching chunk text. */
   content: string;
   /** Cosine similarity in [0, 1], higher is closer. */
@@ -457,6 +494,7 @@ export interface Citation {
   documentId: string;
   documentTitle: string;
   chunkIndex: number;
+  pageNumber?: number;
   score: number;
   /** The passage text the answer drew on (Sprint 6.4 — "retrouver les passages"). */
   content?: string;

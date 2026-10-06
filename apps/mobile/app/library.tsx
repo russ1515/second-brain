@@ -3,6 +3,7 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import {
   isQuotaError,
+  type DocumentContentType,
   type DocumentDifficulty,
   type LibraryDocument,
   type LibraryFacets,
@@ -22,6 +23,7 @@ import { Alert, Badge, Button, Card, SegmentedControl } from '../components/ds/c
 import { SmartEmptyState, SmartLoadingState } from '../components/ds/states';
 import { DocumentPipeline } from '../components/document/document-pipeline';
 import { BatchImport } from '../components/document/batch-import';
+import { Dialog } from '../components/ds/overlays';
 
 const SHELVES: Array<{ filter: LibraryFilter; key: TranslationKey; icon: string }> = [
   { filter: 'all', key: 'lib.all', icon: '▤' },
@@ -33,6 +35,10 @@ const SHELVES: Array<{ filter: LibraryFilter; key: TranslationKey; icon: string 
 const DIFFICULTY_KEY: Record<DocumentDifficulty, TranslationKey> = {
   beginner: 'lib.diff.beginner', intermediate: 'lib.diff.intermediate', advanced: 'lib.diff.advanced',
 };
+
+const CONTENT_TYPES: DocumentContentType[] = [
+  'PDF', 'PHOTO', 'SCAN', 'NOTEBOOK', 'DOCUMENT', 'NOTE', 'LESSON_AI',
+];
 
 type Facet =
   | { kind: 'subject'; value: string }
@@ -54,6 +60,7 @@ export default function LibraryScreen() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [shelf, setShelf] = useState<LibraryFilter>('all');
   const [facet, setFacet] = useState<Facet>(null);
+  const [contentType, setContentType] = useState<DocumentContentType | null>(null);
   const [sort, setSort] = useState<LibrarySort>('newest');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -72,8 +79,9 @@ export default function LibraryScreen() {
     if (facet?.kind === 'subject') params.set('subject', facet.value);
     if (facet?.kind === 'language') params.set('language', facet.value);
     if (facet?.kind === 'collection') params.set('collectionId', facet.id);
+    if (contentType) params.set('contentType', contentType);
     return params.toString();
-  }, [facet, search, shelf, sort]);
+  }, [contentType, facet, search, shelf, sort]);
 
   const load = useCallback(async (append = false) => {
     if (!user) { setLoading(false); return; }
@@ -146,6 +154,9 @@ export default function LibraryScreen() {
         {facets.collections.map((collection) => <FilterButton key={collection.id} label={collection.name} count={collection.documentCount} selected={facet?.kind === 'collection' && facet.id === collection.id} onPress={() => chooseFacet({ kind: 'collection', id: collection.id, name: collection.name })} />)}
         <Button label={t('library7.collection.create')} variant="ghost" size="sm" onPress={() => setPanel(panel === 'collection' ? null : 'collection')} />
       </FacetGroup>
+      <FacetGroup title={t('lib.types')}>
+        {CONTENT_TYPES.map((type) => <FilterButton key={type} label={contentTypeLabel(type, t)} selected={contentType === type} onPress={() => { setContentType((current) => current === type ? null : type); setCursor(null); }} />)}
+      </FacetGroup>
       {facets.subjects.length ? <FacetGroup title={t('lib.subjects')}>{facets.subjects.slice(0, 8).map((item) => <FilterButton key={item.value} label={item.value} count={item.count} selected={facet?.kind === 'subject' && facet.value === item.value} onPress={() => chooseFacet({ kind: 'subject', value: item.value })} />)}</FacetGroup> : null}
       {facets.languages.length ? <FacetGroup title={t('lib.languages')}>{facets.languages.slice(0, 8).map((item) => <FilterButton key={item.value} label={item.value} count={item.count} selected={facet?.kind === 'language' && facet.value === item.value} onPress={() => chooseFacet({ kind: 'language', value: item.value })} />)}</FacetGroup> : null}
     </View>
@@ -171,13 +182,14 @@ export default function LibraryScreen() {
 
       {panel === 'import' ? <ImportPanel onDone={(id) => { setPanel(null); void load(false); router.push(`/library/${id}`); }} /> : null}
       {panel === 'batch' ? <BatchImport onChanged={() => void load(false)} onOpen={(id) => router.push(`/library/${id}`)} onUsage={() => router.push('/usage')} /> : null}
-      {panel === 'collection' ? <CollectionPanel onDone={() => { setPanel(null); void load(false); }} /> : null}
+      {panel === 'collection' ? <CollectionPanel collections={facets?.collections ?? []} onDone={() => { setPanel(null); void load(false); }} /> : null}
 
       <View style={{ flexDirection: desktop ? 'row' : 'column', alignItems: 'flex-start', gap: spacing.lg }}>
         {desktop ? <View style={{ width: 240 }}>{filters}</View> : (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxWidth: '100%' }} contentContainerStyle={{ gap: spacing.xs }}>
             {SHELVES.map((item) => <FilterButton key={item.filter} label={`${item.icon} ${t(item.key)}`} count={facets?.[item.filter]} selected={shelf === item.filter && !facet} onPress={() => chooseShelf(item.filter)} />)}
             {facets?.collections.map((collection) => <FilterButton key={collection.id} label={collection.name} count={collection.documentCount} selected={facet?.kind === 'collection' && facet.id === collection.id} onPress={() => chooseFacet({ kind: 'collection', id: collection.id, name: collection.name })} />)}
+            {CONTENT_TYPES.map((type) => <FilterButton key={type} label={contentTypeLabel(type, t)} selected={contentType === type} onPress={() => { setContentType((current) => current === type ? null : type); setCursor(null); }} />)}
           </ScrollView>
         )}
 
@@ -191,7 +203,7 @@ export default function LibraryScreen() {
             <LibraryEmpty onImport={() => setPanel('import')} onScan={() => router.push('/scan')} />
           ) : (
             <View accessibilityRole="list" style={{ gap: spacing.sm }}>
-              {documents.map((document) => <DocumentRow key={document.id} document={document} formatLocale={formatLocale} onOpen={() => router.push(`/library/${document.id}`)} onFavorite={() => void mutate(document, 'favorite')} onTrash={() => void mutate(document, document.deletedAt ? 'restore' : 'trash')} />)}
+              {documents.map((document) => <DocumentRow key={document.id} document={document} collections={facets?.collections ?? []} formatLocale={formatLocale} onOpen={() => document.contentType === 'LESSON_AI' && document.sourceRef?.startsWith('lesson:') ? router.push(`/lesson/${document.sourceRef.slice(7)}`) : router.push(`/library/${document.id}`)} onFavorite={() => void mutate(document, 'favorite')} onTrash={() => void mutate(document, document.deletedAt ? 'restore' : 'trash')} onChanged={() => void load(false)} />)}
             </View>
           )}
           {cursor ? <Button label={t('library7.more')} variant="secondary" loading={loadingMore} onPress={() => void load(true)} /> : null}
@@ -218,29 +230,68 @@ function LibraryEmpty({ onImport, onScan }: { onImport: () => void; onScan: () =
   );
 }
 
-function DocumentRow({ document, formatLocale, onOpen, onFavorite, onTrash }: { document: LibraryDocument; formatLocale: string; onOpen: () => void; onFavorite: () => void; onTrash: () => void }) {
+function DocumentRow({ document, collections, formatLocale, onOpen, onFavorite, onTrash, onChanged }: { document: LibraryDocument; collections: LibraryFacets['collections']; formatLocale: string; onOpen: () => void; onFavorite: () => void; onTrash: () => void; onChanged: () => void }) {
   const { colors: c, spacing, typography } = useTokens();
   const { t } = useI18n();
+  const router = useRouter();
+  const [menu, setMenu] = useState(false);
+  const [confirmTrash, setConfirmTrash] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const [title, setTitle] = useState(document.title);
+  const saveTitle = async () => {
+    await api(`/library/documents/${document.id}`, { method: 'PATCH', body: { title } });
+    setRenaming(false); setMenu(false); onChanged();
+  };
   return (
-    <Card testID={`library-document-${document.id}`} style={{ gap: spacing.sm }}>
+    <><Card testID={`library-document-${document.id}`} style={{ gap: spacing.sm }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm }}>
         <Pressable onPress={onOpen} accessibilityRole="link" style={{ flex: 1, minHeight: 44 }}>
-          <Text numberOfLines={2} style={[typography.title, { color: c.textPrimary }]}>{document.source === 'url' ? '↗' : document.source === 'text' ? '≡' : '▤'} {document.title}</Text>
-          <Text style={[typography.caption, { color: c.textMuted }]}>{new Date(document.createdAt).toLocaleDateString(formatLocale)} · {document.charCount.toLocaleString(formatLocale)} {t('lib.chars')}</Text>
+          <Text numberOfLines={2} style={[typography.title, { color: c.textPrimary }]}>{document.contentType === 'PHOTO' || document.contentType === 'SCAN' ? '▣' : document.contentType === 'NOTEBOOK' ? '▥' : document.contentType === 'PDF' ? '▤' : document.source === 'url' ? '↗' : '≡'} {document.title}</Text>
+          <Text style={[typography.caption, { color: c.textMuted }]}>{contentTypeLabel(document.contentType, t)} · {new Date(document.createdAt).toLocaleDateString(formatLocale)}{document.pageCount ? ` · ${t('scan.pagesReady').replace('{n}', String(document.pageCount))}` : ` · ${document.charCount.toLocaleString(formatLocale)} ${t('lib.chars')}`}</Text>
         </Pressable>
-        <Button label={document.isFavorite ? '★' : '☆'} accessibilityLabel={t('library7.favorite')} variant="ghost" size="sm" onPress={onFavorite} />
-        <Button label={document.deletedAt ? '↺' : '⌫'} accessibilityLabel={document.deletedAt ? t('lib.restore') : t('lib.moveToTrash')} variant="ghost" size="sm" onPress={onTrash} />
+        <Button label="⋮" accessibilityLabel={t('library7.action.more')} variant="ghost" size="sm" onPress={() => setMenu((value) => !value)} />
       </View>
+      {menu ? <Card style={{ gap: spacing.xs, backgroundColor: c.surfaceSunken }}>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+          <Button label={t('home.open')} variant="ghost" size="sm" onPress={onOpen} />
+          <Button label={t('workspace10.plan.rename')} variant="ghost" size="sm" onPress={() => setRenaming(true)} />
+          <Button label={t('library7.favorite')} variant="ghost" size="sm" onPress={onFavorite} />
+          <Button label={t('lib.m.collection')} variant="ghost" size="sm" onPress={() => setMoving((value) => !value)} />
+          <Button label={t('lib.u.summarize')} variant="ghost" size="sm" onPress={onOpen} />
+          <Button label={t('library7.action.ask')} variant="ghost" size="sm" onPress={() => router.push({ pathname: `/library/${document.id}`, params: { section: 'ask' } })} />
+          <Button label={t('library7.action.learn')} variant="ghost" size="sm" onPress={() => router.push({ pathname: '/tutor', params: { documentId: document.id, title: document.title, mode: 'teach', intent: 'learn-document' } })} />
+          <Button label={t('library7.action.workspace')} variant="ghost" size="sm" onPress={() => router.push({ pathname: '/library/workspace', params: { documentId: document.id, title: document.title } })} />
+          <Button label={document.deletedAt ? t('lib.restore') : t('lib.moveToTrash')} variant="danger" size="sm" onPress={() => document.deletedAt ? onTrash() : setConfirmTrash(true)} />
+        </View>
+        {moving ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+          <Button label={t('library7.collection.none')} variant="ghost" size="sm" onPress={() => void api(`/library/documents/${document.id}/collection`, { method: 'PATCH', body: { collectionId: null } }).then(onChanged)} />
+          {collections.map((collection) => <Button key={collection.id} label={collection.name} variant="ghost" size="sm" onPress={() => void api(`/library/documents/${document.id}/collection`, { method: 'PATCH', body: { collectionId: collection.id } }).then(onChanged)} />)}
+        </View> : null}
+      </Card> : null}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
         <Badge label={t(`lib.status.${document.status}`)} tone={document.status === 'ready' ? 'success' : document.status === 'failed' ? 'error' : 'ai'} />
         {document.subject ? <Badge label={document.subject} /> : null}
         {document.difficulty ? <Badge label={t(DIFFICULTY_KEY[document.difficulty])} tone="info" /> : null}
         {document.collectionName ? <Badge label={document.collectionName} tone="primary" /> : null}
       </View>
-      {document.status === 'pending' || document.status === 'processing' || document.status === 'failed' ? <DocumentPipeline status={document.status} stage={document.stage} compact /> : <Text numberOfLines={3} style={[typography.bodySmall, { color: c.textSecondary }]}>{document.summary ?? document.preview}</Text>}
+      {document.status === 'pending' || document.status === 'processing' || document.status === 'partial' || document.status === 'failed' ? <DocumentPipeline status={document.status} stage={document.stage} compact /> : <Text numberOfLines={3} style={[typography.bodySmall, { color: c.textSecondary }]}>{document.summary ?? document.preview}</Text>}
       {document.concepts.length ? <Text style={[typography.caption, { color: c.textMuted }]}>{t('library7.conceptsCount').replace('{n}', String(document.concepts.length))} · {document.concepts.slice(0, 4).map((concept) => concept.name).join(' · ')}</Text> : null}
     </Card>
+    <Dialog visible={confirmTrash} onClose={() => setConfirmTrash(false)} title={t('lib.moveToTrash')} footer={<><Button label={t('tutor.cancel')} variant="ghost" onPress={() => setConfirmTrash(false)} /><Button label={t('lib.moveToTrash')} variant="danger" onPress={() => { setConfirmTrash(false); onTrash(); }} /></>}><Text style={{ color: c.textSecondary }}>{document.title}</Text></Dialog>
+    <Dialog visible={renaming} onClose={() => setRenaming(false)} title={t('workspace10.plan.rename')} footer={<><Button label={t('tutor.cancel')} variant="ghost" onPress={() => setRenaming(false)} /><Button label={t('onb.twin.confirm')} disabled={!title.trim()} onPress={() => void saveTitle()} /></>}><TextInput value={title} onChangeText={setTitle} accessibilityLabel={t('lib.addTitle')} style={{ minHeight: 46, borderWidth: 1, borderColor: c.border, borderRadius: 8, padding: 12, color: c.textPrimary }} /></Dialog>
+    </>
   );
+}
+
+function contentTypeLabel(type: DocumentContentType, t: (key: TranslationKey) => string): string {
+  if (type === 'PDF') return 'PDF';
+  if (type === 'PHOTO') return t('learn5.capture.photo');
+  if (type === 'SCAN') return t('library7.scan');
+  if (type === 'NOTEBOOK') return t('libraryV1.type.notebook');
+  if (type === 'NOTE') return t('library7.import.text');
+  if (type === 'LESSON_AI') return t('reco.kind.lesson');
+  return t('library7.import.file');
 }
 
 function ImportPanel({ onDone }: { onDone: (documentId: string) => void }) {
@@ -282,16 +333,21 @@ function ImportPanel({ onDone }: { onDone: (documentId: string) => void }) {
   );
 }
 
-function CollectionPanel({ onDone }: { onDone: () => void }) {
+function CollectionPanel({ collections, onDone }: { collections: LibraryFacets['collections']; onDone: () => void }) {
   const { colors: c, spacing } = useTokens();
   const { t } = useI18n();
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   return <Card style={{ gap: spacing.sm }}>
     <TextInput accessibilityLabel={t('library7.collection.name')} placeholder={t('library7.collection.name')} placeholderTextColor={c.textMuted} value={name} onChangeText={setName} style={{ minHeight: 46, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12, color: c.textPrimary }} />
     {error ? <Alert tone="error" title={t('state.error')} detail={error} /> : null}
-    <Button label={t('library7.collection.create')} disabled={!name.trim()} loading={busy} onPress={() => { setBusy(true); setError(null); void api('/library/collections', { method: 'POST', body: { name: name.trim() } }).then(onDone).catch((caught) => setError((caught as Error).message)).finally(() => setBusy(false)); }} />
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+      <Button label={editingId ? t('workspace10.plan.rename') : t('library7.collection.create')} disabled={!name.trim()} loading={busy} onPress={() => { setBusy(true); setError(null); void api(editingId ? `/library/collections/${editingId}` : '/library/collections', { method: editingId ? 'PATCH' : 'POST', body: { name: name.trim() } }).then(onDone).catch((caught) => setError((caught as Error).message)).finally(() => setBusy(false)); }} />
+      {editingId ? <Button label={t('tutor.cancel')} variant="ghost" onPress={() => { setEditingId(null); setName(''); }} /> : null}
+    </View>
+    {collections.length ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>{collections.map((collection) => <Button key={collection.id} label={`${t('workspace10.plan.rename')} · ${collection.name}`} variant="ghost" size="sm" onPress={() => { setEditingId(collection.id); setName(collection.name); }} />)}</View> : null}
   </Card>;
 }
 

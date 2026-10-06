@@ -31,6 +31,14 @@ export interface PortablePrivateMedia {
       modifiedAt: string;
     }>;
   }>;
+  documents: Array<{
+    documentId: string;
+    fileName: 'original.bin';
+    mimeType: string;
+    encoding: 'base64';
+    data: string;
+    modifiedAt: string;
+  }>;
   reportScreenshots: Array<{
     reportId: string;
     fileName: 'screenshot.webp';
@@ -184,6 +192,7 @@ export class PrivateMediaService implements OnModuleInit {
       }
 
       const scans: PortablePrivateMedia['scans'] = [];
+      const documents: PortablePrivateMedia['documents'] = [];
       for (const documentId of documentIds) {
         const directory = this.scanDirectory(userId, documentId);
         let names: string[];
@@ -208,6 +217,28 @@ export class PrivateMediaService implements OnModuleInit {
           });
         }
         if (pages.length > 0) scans.push({ documentId, pages });
+
+        try {
+          const target = this.documentOriginalPath(userId, documentId);
+          const [buffer, info, document] = await Promise.all([
+            readFile(target),
+            stat(target),
+            this.prisma.document.findFirst({
+              where: { id: documentId, userId },
+              select: { mimeType: true },
+            }),
+          ]);
+          documents.push({
+            documentId,
+            fileName: 'original.bin',
+            mimeType: document?.mimeType ?? 'application/octet-stream',
+            encoding: 'base64',
+            data: buffer.toString('base64'),
+            modifiedAt: info.mtime.toISOString(),
+          });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+        }
       }
 
       const reports = await this.prisma.report.findMany({
@@ -231,7 +262,48 @@ export class PrivateMediaService implements OnModuleInit {
           if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
         }
       }
-      return { avatar, scans, reportScreenshots };
+      return { avatar, scans, documents, reportScreenshots };
+    });
+  }
+
+  /** Persist the exact user-provided file beside other private document media.
+   * Extraction/indexing may fail later; the original remains recoverable. */
+  async putDocumentOriginal(
+    userId: string,
+    documentId: string,
+    buffer: Buffer,
+  ): Promise<void> {
+    await this.withOwnerLock(userId, async () => {
+      const document = await this.prisma.document.findFirst({
+        where: { id: documentId, userId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!document) throw new NotFoundException('Document not found.');
+      await this.atomicWrite(this.documentOriginalPath(userId, documentId), buffer);
+    });
+  }
+
+  async getDocumentOriginal(userId: string, documentId: string): Promise<StoredPrivateMedia> {
+    return this.withOwnerLock(userId, async () => {
+      const document = await this.prisma.document.findFirst({
+        where: { id: documentId, userId },
+        select: { mimeType: true },
+      });
+      if (!document) throw new NotFoundException('Document not found.');
+      try {
+        const target = this.documentOriginalPath(userId, documentId);
+        const [buffer, info] = await Promise.all([readFile(target), stat(target)]);
+        return {
+          buffer,
+          mimeType: document.mimeType ?? 'application/octet-stream',
+          modifiedAt: info.mtime,
+        };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+          throw new NotFoundException('Original document not found.');
+        }
+        throw error;
+      }
     });
   }
 
@@ -318,6 +390,31 @@ export class PrivateMediaService implements OnModuleInit {
       }
       if (names.length === 0) throw new NotFoundException('Scan pages not found.');
       return Promise.all(names.map((name) => readFile(join(directory, name))));
+    });
+  }
+
+  async getScanPage(
+    userId: string,
+    documentId: string,
+    storageName: string,
+  ): Promise<StoredPrivateMedia> {
+    if (!/^\d{3}\.jpg$/.test(storageName)) throw new NotFoundException('Scan page not found.');
+    return this.withOwnerLock(userId, async () => {
+      const document = await this.prisma.document.findFirst({
+        where: { id: documentId, userId },
+        select: { id: true },
+      });
+      if (!document) throw new NotFoundException('Document not found.');
+      try {
+        const target = join(this.scanDirectory(userId, documentId), storageName);
+        const [buffer, info] = await Promise.all([readFile(target), stat(target)]);
+        return { buffer, mimeType: 'image/jpeg', modifiedAt: info.mtime };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+          throw new NotFoundException('Scan page not found.');
+        }
+        throw error;
+      }
     });
   }
 
@@ -417,6 +514,10 @@ export class PrivateMediaService implements OnModuleInit {
   private scanDirectory(userId: string, documentId: string): string {
     const opaqueDocument = createHash('sha256').update(documentId).digest('hex');
     return join(this.userDirectory(userId), 'scans', opaqueDocument);
+  }
+
+  private documentOriginalPath(userId: string, documentId: string): string {
+    return join(this.scanDirectory(userId, documentId), 'original.bin');
   }
 
   private async atomicWrite(target: string, data: Buffer): Promise<void> {

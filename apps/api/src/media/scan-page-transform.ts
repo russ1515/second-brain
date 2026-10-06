@@ -20,8 +20,8 @@ export interface PerspectiveOutputSize {
   height: number;
 }
 
-export const MAX_SCAN_PAGE_EDITS = 8;
-export const MAX_SCAN_PAGE_EDITS_BYTES = 8 * 1024;
+export const MAX_SCAN_PAGE_EDITS = 50;
+export const MAX_SCAN_PAGE_EDITS_BYTES = 64 * 1024;
 export const MAX_PERSPECTIVE_OUTPUT_EDGE = 2000;
 export const MAX_PERSPECTIVE_OUTPUT_PIXELS = 3_000_000;
 export const MAX_PERSPECTIVE_WORKER_MS = 15_000;

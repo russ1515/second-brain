@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { Image, Linking, ScrollView, Text, TextInput, View } from 'react-native';
+import { createElement, useEffect, useRef, useState } from 'react';
+import { Image, Linking, Platform, ScrollView, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { manipulateAsync, SaveFormat, type Action } from 'expo-image-manipulator';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { DocumentDetail } from '@second-brain/shared';
+import type { Collection, DocumentDetail } from '@second-brain/shared';
 import { ApiError, api, apiUpload } from '../lib/client';
 import { createClientRequestId } from '../lib/request-id';
 import { appendPickedDocument, type PickedDocument } from '../lib/document-import';
@@ -21,7 +21,7 @@ import { CameraCapture } from '../components/capture/camera-capture';
 import { ScanCornerEditor } from '../components/capture/scan-corner-editor';
 import { Alert, Button, Card } from '../components/ds/core';
 
-const MAX_PAGES = 8;
+const MAX_PAGES = 50;
 
 interface ScanPage extends CapturedImage {
   /** Stable identity: async image transforms must not target a different page
@@ -48,6 +48,10 @@ export default function ScanScreen() {
   const [pages, setPages] = useState<ScanPage[]>([]);
   const [selected, setSelected] = useState(0);
   const [title, setTitle] = useState('');
+  const [subject, setSubject] = useState('');
+  const [language, setLanguage] = useState('');
+  const [collectionId, setCollectionId] = useState<string | null>(null);
+  const [collections, setCollections] = useState<Collection[]>([]);
   const [cameraOpen, setCameraOpen] = useState(mode === 'qr');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +60,7 @@ export default function ScanScreen() {
   const [qrAttempt, setQrAttempt] = useState(0);
   const [failedScanDocumentId, setFailedScanDocumentId] = useState<string | null>(null);
   const [editingCorners, setEditingCorners] = useState(false);
+  const [dragPageId, setDragPageId] = useState<string | null>(null);
   const uploadRequestId = useRef<string | null>(null);
   const objectUrls = useRef(createObjectUrlLease());
   const releaseObjectUrlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -63,6 +68,19 @@ export default function ScanScreen() {
   const activePage = pages[selected] ?? null;
   const remaining = MAX_PAGES - pages.length;
   const canAdd = remaining > 0;
+
+  const movePageTo = (pageId: string, destination: number) => {
+    setPages((current) => {
+      const source = current.findIndex((page) => page.id === pageId);
+      if (source < 0 || source === destination) return current;
+      const next = [...current];
+      const [page] = next.splice(source, 1);
+      next.splice(destination, 0, page);
+      setSelected(destination);
+      uploadRequestId.current = null;
+      return next;
+    });
+  };
 
   useEffect(() => {
     objectUrls.current.replace(pages.flatMap((page) => [page.originalUri, page.uri]));
@@ -82,6 +100,12 @@ export default function ScanScreen() {
         releaseObjectUrlsTimer.current = null;
       }, 0);
     };
+  }, []);
+
+  useEffect(() => {
+    void api<Collection[]>('/library/collections')
+      .then(setCollections)
+      .catch(() => setCollections([]));
   }, []);
 
   const makePage = (image: CapturedImage): ScanPage => ({
@@ -203,9 +227,25 @@ export default function ScanScreen() {
     setError(null);
     try {
       const form = new FormData();
-      for (const page of pages) await appendPickedDocument(form, 'images', page as PickedDocument);
+      for (const page of pages) {
+        const resized = await manipulateAsync(
+          page.uri,
+          page.width > 2000 ? [{ resize: { width: 2000 } }] : [],
+          { compress: 0.72, format: SaveFormat.JPEG },
+        );
+        await appendPickedDocument(form, 'images', {
+          uri: resized.uri,
+          name: page.name.replace(/\.[^.]+$/, '') + '.jpg',
+          mimeType: 'image/jpeg',
+          size: null,
+        });
+      }
       form.append('pageEdits', JSON.stringify(pages.map((page) => ({ corners: page.corners }))));
+      form.append('contentType', pages.length > 1 ? 'NOTEBOOK' : 'SCAN');
       if (title.trim()) form.append('title', title.trim());
+      if (subject.trim()) form.append('subject', subject.trim());
+      if (language.trim()) form.append('language', language.trim());
+      if (collectionId) form.append('collectionId', collectionId);
       const requestId = uploadRequestId.current ?? createClientRequestId('scan');
       uploadRequestId.current = requestId;
       const document = await apiUpload<DocumentDetail>('/documents/scan', form, { requestId });
@@ -268,6 +308,9 @@ export default function ScanScreen() {
     setPages([]);
     setSelected(0);
     setTitle('');
+    setSubject('');
+    setLanguage('');
+    setCollectionId(null);
     setError(null);
     setFailedScanDocumentId(null);
     setEditingCorners(false);
@@ -429,7 +472,33 @@ export default function ScanScreen() {
         <View style={{ gap: spacing.sm }}>
           <Text style={{ color: c.textPrimary, fontWeight: '700' }}>{t('scan.pagesReady').replace('{n}', String(pages.length))}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
-            {pages.map((page, index) => <Button key={page.id} size="sm" variant={index === selected ? 'primary' : 'secondary'} label={`${index + 1}`} disabled={busy} onPress={() => { setSelected(index); setEditingCorners(true); }} />)}
+            {pages.map((page, index) => Platform.OS === 'web'
+              ? createElement('button', {
+                  key: page.id,
+                  type: 'button',
+                  draggable: !busy,
+                  'aria-label': t('scan.pagePosition').replace('{current}', String(index + 1)).replace('{total}', String(pages.length)),
+                  onClick: () => { setSelected(index); setEditingCorners(true); },
+                  onDragStart: () => setDragPageId(page.id),
+                  onDragOver: (event: { preventDefault: () => void }) => event.preventDefault(),
+                  onDrop: (event: { preventDefault: () => void }) => {
+                    event.preventDefault();
+                    if (dragPageId) movePageTo(dragPageId, index);
+                    setDragPageId(null);
+                  },
+                  onDragEnd: () => setDragPageId(null),
+                  disabled: busy,
+                  style: {
+                    minWidth: 44,
+                    minHeight: 40,
+                    borderRadius: radius.sm,
+                    border: `1px solid ${index === selected ? c.primary : c.border}`,
+                    background: index === selected ? c.primary : c.surface,
+                    color: index === selected ? c.onPrimary : c.textPrimary,
+                    cursor: busy ? 'default' : 'grab',
+                  },
+                }, String(index + 1))
+              : <Button key={page.id} size="sm" variant={index === selected ? 'primary' : 'secondary'} label={`${index + 1}`} disabled={busy} onPress={() => { setSelected(index); setEditingCorners(true); }} />)}
           </View>
           <TextInput
             value={title}
@@ -439,6 +508,29 @@ export default function ScanScreen() {
             placeholderTextColor={c.textMuted}
             style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.sm, padding: spacing.sm, color: c.textPrimary, backgroundColor: c.surface }}
           />
+          <TextInput
+            value={subject}
+            editable={!busy && !failedScanDocumentId}
+            onChangeText={(value) => { setSubject(value); uploadRequestId.current = null; }}
+            placeholder={t('lib.m.subject')}
+            placeholderTextColor={c.textMuted}
+            style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.sm, padding: spacing.sm, color: c.textPrimary, backgroundColor: c.surface }}
+          />
+          <TextInput
+            value={language}
+            editable={!busy && !failedScanDocumentId}
+            onChangeText={(value) => { setLanguage(value); uploadRequestId.current = null; }}
+            placeholder={t('lib.m.language')}
+            placeholderTextColor={c.textMuted}
+            style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.sm, padding: spacing.sm, color: c.textPrimary, backgroundColor: c.surface }}
+          />
+          {collections.length ? <View style={{ gap: spacing.xs }}>
+            <Text style={{ color: c.textSecondary, fontWeight: '600' }}>{t('lib.m.collection')}</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+              <Button label={t('library7.collection.none')} size="sm" variant={!collectionId ? 'primary' : 'ghost'} onPress={() => setCollectionId(null)} />
+              {collections.map((collection) => <Button key={collection.id} label={collection.name} size="sm" variant={collectionId === collection.id ? 'primary' : 'ghost'} onPress={() => setCollectionId(collection.id)} />)}
+            </View>
+          </View> : null}
           {!failedScanDocumentId ? <Button testID="scan-submit" label={t('scan.readPages')} loading={busy} disabled={!pages.length || cameraOpen || busy} onPress={() => void upload()} /> : null}
         </View>
       ) : null}

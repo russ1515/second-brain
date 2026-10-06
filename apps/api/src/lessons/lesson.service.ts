@@ -188,6 +188,8 @@ export class LessonService {
     const doc = await this.documents.createFromText(userId, {
       title: `Lesson — ${topic}`.slice(0, 300),
       content: this.assemblePlainText(topic, raw),
+      sourceRef: `lesson:${lesson.id}`,
+      contentType: 'LESSON_AI',
     });
     await this.prisma.lesson.update({
       where: { id: lesson.id },

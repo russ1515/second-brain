@@ -330,7 +330,7 @@ export class BrainService {
     return rows.map((row) => this.documentReference(row));
   }
 
-  private documentReference(row: { id: string; title: string; subject: string | null; status: 'pending' | 'processing' | 'ready' | 'failed'; updatedAt: Date }): BrainDocumentReference {
+  private documentReference(row: { id: string; title: string; subject: string | null; status: 'pending' | 'processing' | 'ready' | 'partial' | 'failed'; updatedAt: Date }): BrainDocumentReference {
     return { ...row, updatedAt: row.updatedAt.toISOString() };
   }
 

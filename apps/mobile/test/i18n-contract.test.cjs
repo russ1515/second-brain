@@ -93,6 +93,26 @@ function nestedCatalog(file, variableName) {
   return catalogs;
 }
 
+function tupleCatalog(file, variableName, keys) {
+  const object = objectLiteral(file, variableName);
+  const catalogs = new Map();
+  for (const property of object.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    const code = propertyName(property);
+    const value = unwrap(property.initializer);
+    assert.ok(code && ts.isArrayLiteralExpression(value), `Invalid tuple catalog ${code}`);
+    assert.equal(value.elements.length, keys.length, `Unexpected tuple length for ${code}`);
+    const entries = new Map();
+    value.elements.forEach((element, index) => {
+      const translation = unwrap(element);
+      assert.ok(ts.isStringLiteralLike(translation));
+      entries.set(keys[index], translation.text);
+    });
+    catalogs.set(code, entries);
+  }
+  return catalogs;
+}
+
 function objectKeys(file, variableName) {
   return new Set(objectLiteral(file, variableName).properties.map(propertyName).filter(Boolean));
 }
@@ -121,7 +141,10 @@ const supportBridgeEssentials = nestedCatalog(path.join(LOCALES_DIR, 'essential.
 const reviewCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'review.ts'), 'review');
 const authErrorCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'auth-errors.ts'), 'authErrors');
 const voicePhase2Catalogs = nestedCatalog(path.join(LOCALES_DIR, 'voice-phase2.ts'), 'voicePhase2');
-const overlayFiles = new Set(['auth-errors.ts', 'essential.ts', 'index.ts', 'review.ts', 'voice-phase2.ts']);
+const libraryV1Catalogs = nestedCatalog(path.join(LOCALES_DIR, 'library-v1.ts'), 'libraryV1');
+const libraryV1Organization = tupleCatalog(path.join(LOCALES_DIR, 'library-v1.ts'), 'organizationLabels', ['lib.types', 'libraryV1.type.notebook']);
+const libraryV1Failures = tupleCatalog(path.join(LOCALES_DIR, 'library-v1.ts'), 'failureLabels', ['libraryV1.error.fileUnreadable', 'libraryV1.error.storage']);
+const overlayFiles = new Set(['auth-errors.ts', 'essential.ts', 'index.ts', 'library-v1.ts', 'review.ts', 'voice-phase2.ts']);
 
 function registeredLocale(file) {
   const source = sourceFile(path.join(LOCALES_DIR, file));
@@ -162,6 +185,9 @@ function effectiveCatalog(resource) {
     ...(reviewCatalogs.get(code) ?? new Map()),
     ...(authErrorCatalogs.get(code) ?? new Map()),
     ...(voicePhase2Catalogs.get(code) ?? new Map()),
+    ...(libraryV1Catalogs.get(code) ?? new Map()),
+    ...(libraryV1Organization.get(code) ?? new Map()),
+    ...(libraryV1Failures.get(code) ?? new Map()),
   ]);
 }
 

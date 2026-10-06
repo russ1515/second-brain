@@ -4,9 +4,17 @@ import {
   Injectable,
   NotFoundException,
   PayloadTooLargeException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import type { Document, DocumentSource } from '@prisma/client';
-import type { DocumentDetail, DocumentSummary, Page } from '@second-brain/shared';
+import type {
+  DocumentContentType,
+  DocumentDetail,
+  DocumentPage,
+  DocumentSummary,
+  Page,
+} from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   TextExtractionService,
@@ -32,13 +40,19 @@ export class DocumentService {
   /** Ingest pasted text/markdown. */
   createFromText(
     userId: string,
-    input: { title: string; content: string; sourceRef?: string | null },
+    input: {
+      title: string;
+      content: string;
+      sourceRef?: string | null;
+      contentType?: 'NOTE' | 'LESSON_AI';
+    },
   ): Promise<DocumentDetail> {
     return this.persist(userId, {
       title: input.title.trim(),
       content: input.content,
       source: 'text',
       sourceRef: input.sourceRef ?? null,
+      contentType: input.contentType ?? 'NOTE',
     });
   }
 
@@ -58,6 +72,13 @@ export class DocumentService {
     userId: string,
     title: string | undefined,
     sourceRef: string,
+    pageCount = 1,
+    metadata: {
+      subject?: string;
+      language?: string;
+      collectionId?: string;
+      contentType?: 'PHOTO' | 'SCAN' | 'NOTEBOOK';
+    } = {},
   ): Promise<{ document: DocumentDetail; created: boolean }> {
     // The in-process coalescer in ScanService only protects one replica. Keep
     // creation safe across API replicas without a schema migration by taking a
@@ -73,6 +94,26 @@ export class DocumentService {
       });
       if (existing) return { document: this.toDetail(existing), created: false };
 
+      let collectionId: string | null = null;
+      if (metadata.collectionId) {
+        const collection = await tx.collection.findFirst({
+          where: { id: metadata.collectionId, userId }, select: { id: true },
+        });
+        if (!collection) throw new NotFoundException('Collection not found.');
+        collectionId = collection.id;
+      }
+      const requestedSubject = metadata.subject?.trim().replace(/\s+/g, ' ').slice(0, 120) || null;
+      const existingSubject = requestedSubject
+        ? await tx.document.findFirst({
+            where: {
+              userId,
+              deletedAt: null,
+              subject: { equals: requestedSubject, mode: 'insensitive' },
+            },
+            select: { subject: true },
+          })
+        : null;
+
       const doc = await tx.document.create({
         data: {
           userId,
@@ -83,6 +124,13 @@ export class DocumentService {
           charCount: 0,
         status: 'processing',
         stage: 'capturing',
+          contentType: metadata.contentType
+            ?? (pageCount > 1 ? 'NOTEBOOK' : 'SCAN'),
+          mimeType: 'image/jpeg',
+          pageCount,
+          subject: existingSubject?.subject ?? requestedSubject,
+          language: metadata.language?.trim().slice(0, 80) || null,
+          collectionId,
         },
       });
       return { document: this.toDetail(doc), created: true };
@@ -123,8 +171,7 @@ export class DocumentService {
         id,
         userId,
         deletedAt: null,
-        status: { in: ['pending', 'failed'] },
-        charCount: 0,
+        status: { in: ['pending', 'partial', 'failed'] },
         sourceRef: { startsWith: 'scan:' },
       },
       data: { status: 'processing', stage: 'reading', error: null },
@@ -193,13 +240,119 @@ export class DocumentService {
     return this.toDetail(doc);
   }
 
-  async failScan(userId: string, id: string): Promise<void> {
+  /** Persist page identity/order independently from private image bytes. */
+  async recordScanPages(
+    userId: string,
+    documentId: string,
+    pages: ReadonlyArray<{ originalName?: string; rotation?: number }>,
+  ): Promise<void> {
+    const document = await this.prisma.document.findFirst({
+      where: { id: documentId, userId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!document) throw new NotFoundException('Document not found.');
+    await this.prisma.$transaction(async (tx) => {
+      await tx.documentPage.deleteMany({ where: { documentId } });
+      await tx.documentPage.createMany({
+        data: pages.map((page, index) => ({
+          documentId,
+          pageNumber: index + 1,
+          position: index,
+          storageName: `${String(index + 1).padStart(3, '0')}.jpg`,
+          originalName: page.originalName?.slice(0, 300) ?? null,
+          rotation: page.rotation ?? 0,
+          ocrStatus: 'PENDING',
+        })),
+      });
+      await tx.document.update({
+        where: { id: documentId },
+        data: {
+          pageCount: pages.length,
+          // An explicit single-photo classification remains stable. Any
+          // multi-page capture is a notebook regardless of its entry point.
+          contentType: pages.length > 1 ? 'NOTEBOOK' : undefined,
+        },
+      });
+    });
+  }
+
+  async scanPages(userId: string, documentId: string): Promise<DocumentPage[]> {
+    await this.get(userId, documentId);
+    const pages = await this.prisma.documentPage.findMany({
+      where: { documentId },
+      orderBy: [{ position: 'asc' }, { pageNumber: 'asc' }],
+    });
+    return pages.map((page) => ({
+      id: page.id,
+      pageNumber: page.pageNumber,
+      position: page.position,
+      mimeType: page.mimeType,
+      originalName: page.originalName,
+      rotation: page.rotation,
+      ocrStatus: page.ocrStatus as DocumentPage['ocrStatus'],
+      ocrText: page.ocrText,
+      ocrError: page.ocrError,
+    }));
+  }
+
+  async updatePageOcr(
+    documentId: string,
+    pageNumber: number,
+    input: { status: 'PROCESSING' | 'READY' | 'FAILED'; text?: string; error?: string },
+  ): Promise<void> {
+    await this.prisma.documentPage.update({
+      where: { documentId_pageNumber: { documentId, pageNumber } },
+      data: {
+        ocrStatus: input.status,
+        ocrText: input.text ?? (input.status === 'READY' ? '' : undefined),
+        ocrError: input.error ?? null,
+      },
+    });
+  }
+
+  async reorderPages(userId: string, documentId: string, pageIds: string[]): Promise<DocumentPage[]> {
+    const document = await this.prisma.document.findFirst({
+      where: { id: documentId, userId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!document) throw new NotFoundException('Document not found.');
+    const existing = await this.prisma.documentPage.findMany({
+      where: { documentId }, select: { id: true },
+    });
+    const unique = [...new Set(pageIds)];
+    if (unique.length !== existing.length || existing.some((page) => !unique.includes(page.id))) {
+      throw new BadRequestException('Page order must contain every page exactly once.');
+    }
+    await this.prisma.$transaction(unique.map((id, position) =>
+      this.prisma.documentPage.update({ where: { id }, data: { position } }),
+    ));
+    return this.scanPages(userId, documentId);
+  }
+
+  async getOriginal(userId: string, id: string) {
+    await this.get(userId, id);
+    return this.privateMedia.getDocumentOriginal(userId, id);
+  }
+
+  async getPageMedia(userId: string, documentId: string, pageId: string) {
+    const page = await this.prisma.documentPage.findFirst({
+      where: { id: pageId, documentId, document: { userId } },
+      select: { storageName: true },
+    });
+    if (!page) throw new NotFoundException('Scan page not found.');
+    return this.privateMedia.getScanPage(userId, documentId, page.storageName);
+  }
+
+  async failScan(userId: string, id: string, error = 'SCAN_OCR_FAILED'): Promise<void> {
+    const readyPages = await this.prisma.documentPage.count({
+      where: { documentId: id, ocrStatus: 'READY' },
+    });
     await this.prisma.document.updateMany({
       where: { id, userId, status: 'processing' },
       data: {
-        status: 'failed',
+        status: readyPages > 0 ? 'partial' : 'failed',
         stage: null,
-        error: 'Scan reading failed. The saved pages were preserved for retry.',
+        error: readyPages > 0 ? 'OCR_PARTIAL' : error,
       },
     });
   }
@@ -209,14 +362,68 @@ export class DocumentService {
     userId: string,
     file: UploadedFileLike,
     title?: string,
+    allowDuplicate = false,
   ): Promise<DocumentDetail> {
-    const extracted = await this.extraction.extractFromFile(file);
-    return this.persist(userId, {
-      title: (title?.trim() || extracted.title || file.originalname).trim(),
-      content: extracted.text,
-      source: 'file',
-      sourceRef: file.originalname,
+    const fingerprint = createHash('sha256').update(file.buffer).digest('hex');
+    if (!allowDuplicate) {
+      const duplicate = await this.prisma.document.findFirst({
+        where: { userId, fingerprint, deletedAt: null },
+        select: { id: true, title: true },
+      });
+      if (duplicate) {
+        throw new ConflictException({
+          code: 'DUPLICATE_DOCUMENT',
+          message: 'This exact file is already in the Library.',
+          existingDocumentId: duplicate.id,
+        });
+      }
+    }
+    // Create the durable shell and persist the original before parsing. A bad
+    // PDF or an API restart can therefore never make the learner's upload
+    // disappear; extraction is explicitly retryable from the saved bytes.
+    const doc = await this.prisma.document.create({
+      data: {
+        userId,
+        title: (title?.trim() || file.originalname).slice(0, 300),
+        source: 'file',
+        sourceRef: file.originalname,
+        content: '',
+        charCount: 0,
+        status: 'processing',
+        stage: 'reading',
+        contentType: file.mimetype === 'application/pdf' ? 'PDF' : 'DOCUMENT',
+        mimeType: file.mimetype,
+        sizeBytes: file.size || file.buffer.length,
+        fingerprint,
+      },
     });
+    try {
+      await this.privateMedia.putDocumentOriginal(userId, doc.id, file.buffer);
+    } catch {
+      await this.prisma.document.update({
+        where: { id: doc.id },
+        data: { status: 'failed', stage: null, error: 'ORIGINAL_STORAGE_FAILED' },
+      });
+      throw new ServiceUnavailableException({
+        code: 'ORIGINAL_STORAGE_FAILED',
+        message: 'The original file could not be saved safely.',
+      });
+    }
+    return this.extractStoredFile(userId, doc.id, title);
+  }
+
+  /** Retry parsing from the private original without asking the learner to
+   * upload it again. This does not duplicate the document or its storage. */
+  async retryFileExtraction(userId: string, id: string): Promise<DocumentDetail> {
+    const document = await this.prisma.document.findFirst({
+      where: { id, userId, deletedAt: null, source: 'file' },
+    });
+    if (!document) throw new NotFoundException('Document not found.');
+    await this.prisma.document.update({
+      where: { id },
+      data: { status: 'processing', stage: 'reading', error: null },
+    });
+    return this.extractStoredFile(userId, id, document.title);
   }
 
   /** Ingest a web page by URL. */
@@ -366,6 +573,11 @@ export class DocumentService {
       content: string;
       source: DocumentSource;
       sourceRef: string | null;
+      contentType?: DocumentContentType;
+      mimeType?: string | null;
+      sizeBytes?: number | null;
+      fingerprint?: string | null;
+      original?: Buffer;
     },
   ): Promise<DocumentDetail> {
     const content = data.content.trim();
@@ -390,8 +602,27 @@ export class DocumentService {
         content,
         charCount: content.length,
         status: 'pending',
+        contentType: data.contentType ?? (data.source === 'text' ? 'NOTE' : 'DOCUMENT'),
+        mimeType: data.mimeType ?? null,
+        sizeBytes: data.sizeBytes ?? null,
+        fingerprint: data.fingerprint ?? null,
       },
     });
+
+    if (data.original) {
+      try {
+        await this.privateMedia.putDocumentOriginal(userId, doc.id, data.original);
+      } catch {
+        await this.prisma.document.update({
+          where: { id: doc.id },
+          data: { status: 'failed', error: 'ORIGINAL_STORAGE_FAILED' },
+        });
+        throw new ServiceUnavailableException({
+          code: 'ORIGINAL_STORAGE_FAILED',
+          message: 'The original file could not be saved safely.',
+        });
+      }
+    }
 
     // Fire-and-forget embedding pipeline; it advances status and records errors
     // on the row itself, so a failure never breaks the create response.
@@ -403,6 +634,54 @@ export class DocumentService {
     return this.toDetail(doc);
   }
 
+  private async extractStoredFile(
+    userId: string,
+    id: string,
+    preferredTitle?: string,
+  ): Promise<DocumentDetail> {
+    const document = await this.prisma.document.findFirst({
+      where: { id, userId, deletedAt: null, source: 'file' },
+    });
+    if (!document) throw new NotFoundException('Document not found.');
+    try {
+      const original = await this.privateMedia.getDocumentOriginal(userId, id);
+      const extracted = await this.extraction.extractFromFile({
+        originalname: document.sourceRef || document.title,
+        mimetype: document.mimeType ?? original.mimeType,
+        size: document.sizeBytes ?? original.buffer.length,
+        buffer: original.buffer,
+      });
+      const content = extracted.text.trim();
+      if (!content) throw new BadRequestException('No text content could be ingested.');
+      if (content.length > MAX_CONTENT_CHARS) {
+        throw new PayloadTooLargeException(
+          `Document exceeds the ${MAX_CONTENT_CHARS.toLocaleString()}-character limit.`,
+        );
+      }
+      const updated = await this.prisma.document.update({
+        where: { id },
+        data: {
+          title: (preferredTitle?.trim() || extracted.title || document.title).slice(0, 300),
+          content,
+          charCount: content.length,
+          pageCount: extracted.pageCount ?? document.pageCount,
+          status: 'pending',
+          stage: null,
+          error: null,
+        },
+      });
+      void this.ingestion.ingest(id);
+      void this.enrichment.enrich(id);
+      return this.toDetail(updated);
+    } catch {
+      const failed = await this.prisma.document.update({
+        where: { id },
+        data: { status: 'failed', stage: null, error: 'FILE_EXTRACTION_FAILED' },
+      });
+      return this.toDetail(failed);
+    }
+  }
+
   private toSummary(doc: Document): DocumentSummary {
     return {
       id: doc.id,
@@ -411,6 +690,10 @@ export class DocumentService {
       sourceRef: doc.sourceRef ?? undefined,
       charCount: doc.charCount,
       status: doc.status,
+      contentType: doc.contentType as DocumentContentType,
+      mimeType: doc.mimeType,
+      sizeBytes: doc.sizeBytes,
+      pageCount: doc.pageCount,
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
     };

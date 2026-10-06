@@ -8,14 +8,18 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   PayloadTooLargeException,
   Post,
   Query,
+  Res,
+  StreamableFile,
   UploadedFile,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
 import type {
@@ -41,13 +45,13 @@ import { parseScanPageEdits } from '../media/scan-page-transform';
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
 /** Pages per scan. Mirrors ScanService's own cap. */
-const MAX_SCAN_IMAGES = 8;
+const MAX_SCAN_IMAGES = 50;
 // BUSINESS_DECISION_REQUIRED: a bounded request total prevents eight valid
 // per-file uploads from exhausting API memory. This is a security ceiling, not
 // a commercial plan quota.
-const MAX_SCAN_TOTAL_BYTES = 30 * 1024 * 1024;
+const MAX_SCAN_TOTAL_BYTES = 100 * 1024 * 1024;
 // Multer's memory storage buffers files before the controller can validate the
-// aggregate. Capping each of the eight pages to one eighth of the request
+// aggregate. Capping every one of the 50 possible pages to its share of the
 // ceiling makes that aggregate ceiling effective while bytes are received.
 const MAX_SCAN_PAGE_BYTES = Math.floor(MAX_SCAN_TOTAL_BYTES / MAX_SCAN_IMAGES);
 
@@ -120,15 +124,16 @@ export class DocumentController {
     @CurrentUser() user: AuthenticatedUser,
     @UploadedFile() file: UploadedFileLike | undefined,
     @Body('title') title?: string,
+    @Body('allowDuplicate') allowDuplicate?: string,
   ): Promise<DocumentDetail> {
     if (!file) {
       throw new BadRequestException('No file was uploaded (field "file").');
     }
-    return this.documents.createFromFile(user.userId, file, title);
+    return this.documents.createFromFile(user.userId, file, title, allowDuplicate === 'true');
   }
 
   /**
-   * Ingest photographed / scanned pages (multipart field `images`, up to 8).
+   * Ingest photographed / scanned pages (multipart field `images`, up to 50).
    * The pages are transcribed by the vision-capable LLM and then travel the
    * ordinary text pipeline — chunked, embedded, and usable as lesson grounding.
    */
@@ -145,6 +150,10 @@ export class DocumentController {
     @UploadedFiles() images: UploadedFileLike[] | undefined,
     @Body('title') title?: string,
     @Body('pageEdits') pageEdits?: string,
+    @Body('subject') subject?: string,
+    @Body('language') language?: string,
+    @Body('collectionId') collectionId?: string,
+    @Body('contentType') contentType?: string,
     @Headers('x-request-id') requestId?: string,
   ): Promise<DocumentDetail> {
     if (!images?.length) {
@@ -155,10 +164,17 @@ export class DocumentController {
       0,
     );
     if (totalBytes > MAX_SCAN_TOTAL_BYTES) {
-      throw new PayloadTooLargeException('The scan exceeds the 30 MB request safety limit.');
+      throw new PayloadTooLargeException('The scan exceeds the 100 MB request safety limit.');
     }
     const edits = parseScanPageEdits(pageEdits, images.length);
-    return this.scan.fromImages(user.userId, images, title, requestId, edits);
+    return this.scan.fromImages(user.userId, images, title, requestId, edits, {
+      subject,
+      language,
+      collectionId,
+      contentType: contentType === 'PHOTO' || contentType === 'NOTEBOOK'
+        ? contentType
+        : 'SCAN',
+    });
   }
 
   /** Ingest a web page by URL (fetched and extracted server-side). */
@@ -199,6 +215,53 @@ export class DocumentController {
     return this.documents.get(user.userId, id);
   }
 
+  @Get(':id/original')
+  async original(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<StreamableFile> {
+    const media = await this.documents.getOriginal(user.userId, id);
+    response.set({
+      'Content-Type': media.mimeType,
+      'Cache-Control': 'private, no-store',
+      'Content-Disposition': 'inline',
+      'Last-Modified': media.modifiedAt.toUTCString(),
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return new StreamableFile(media.buffer);
+  }
+
+  @Get(':id/pages/:pageId/content')
+  async pageContent(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('pageId') pageId: string,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<StreamableFile> {
+    const media = await this.documents.getPageMedia(user.userId, id, pageId);
+    response.set({
+      'Content-Type': media.mimeType,
+      'Cache-Control': 'private, no-store',
+      'Content-Disposition': 'inline',
+      'Last-Modified': media.modifiedAt.toUTCString(),
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return new StreamableFile(media.buffer);
+  }
+
+  @Patch(':id/pages/order')
+  reorderPages(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body('pageIds') pageIds?: unknown,
+  ) {
+    if (!Array.isArray(pageIds) || !pageIds.every((value) => typeof value === 'string')) {
+      throw new BadRequestException('pageIds must be an array of page identifiers.');
+    }
+    return this.documents.reorderPages(user.userId, id, pageIds);
+  }
+
   /** Re-run the embedding pipeline for a document (e.g. after a failure). */
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post(':id/retry-scan')
@@ -208,6 +271,27 @@ export class DocumentController {
     @Param('id') id: string,
   ): Promise<DocumentDetail> {
     return this.scan.retry(user.userId, id);
+  }
+
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post(':id/pages/:pageId/retry-ocr')
+  @HttpCode(HttpStatus.ACCEPTED)
+  retryScanPage(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('pageId') pageId: string,
+  ): Promise<DocumentDetail> {
+    return this.scan.retryPage(user.userId, id, pageId);
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post(':id/retry-extraction')
+  @HttpCode(HttpStatus.ACCEPTED)
+  retryExtraction(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<DocumentDetail> {
+    return this.documents.retryFileExtraction(user.userId, id);
   }
 
   /** Re-run the embedding pipeline only when extracted text already exists. */

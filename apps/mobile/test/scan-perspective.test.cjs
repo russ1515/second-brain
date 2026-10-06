@@ -54,11 +54,12 @@ test('scan geometry maps handles onto the actual contained image, not letterboxi
 test('scan UI sends ordered page edits and exposes four draggable corners before submit', () => {
   const screen = read('apps/mobile/app/scan.tsx');
   const editor = read('apps/mobile/components/capture/scan-corner-editor.tsx');
-  assert.match(screen, /const MAX_PAGES = 8/);
+  assert.match(screen, /const MAX_PAGES = 50/);
   assert.match(screen, /<ScanCornerEditor/);
   assert.match(screen, /isValidScanQuadrilateral\(page\.corners\)/);
   assert.match(screen, /form\.append\('pageEdits', JSON\.stringify\(pages\.map/);
-  assert.match(screen, /for \(const page of pages\) await appendPickedDocument/);
+  assert.match(screen, /for \(const page of pages\)[\s\S]*manipulateAsync[\s\S]*await appendPickedDocument/);
+  assert.match(screen, /draggable/);
   assert.match(screen, /testID="scan-submit"/);
   assert.doesNotMatch(screen, /CROP_STEPS/);
   assert.match(screen, /scan\.perspectiveLimit/);

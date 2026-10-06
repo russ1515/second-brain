@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -49,6 +50,7 @@ export class LibraryController {
     @Query('subject') subject?: string,
     @Query('language') language?: string,
     @Query('collectionId') collectionId?: string,
+    @Query('contentType') contentType?: string,
     @Query('q') q?: string,
   ): Promise<LibraryDocument[]> {
     return this.library.list(user.userId, {
@@ -56,6 +58,7 @@ export class LibraryController {
       subject,
       language,
       collectionId,
+      contentType,
       q,
     });
   }
@@ -80,6 +83,7 @@ export class LibraryController {
     @Query('subject') subject?: string,
     @Query('language') language?: string,
     @Query('collectionId') collectionId?: string,
+    @Query('contentType') contentType?: string,
     @Query('q') q?: string,
     @Query('sort') sort?: string,
     @Query('limit') limit?: string,
@@ -92,6 +96,7 @@ export class LibraryController {
         subject,
         language,
         collectionId,
+        contentType,
         q,
       },
       this.toSort(sort),
@@ -116,6 +121,34 @@ export class LibraryController {
     @Body() dto: CreateCollectionDto,
   ): Promise<Collection> {
     return this.library.createCollection(user.userId, dto.name);
+  }
+
+  @Patch('collections/:id')
+  renameCollection(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body('name') name?: unknown,
+  ): Promise<Collection> {
+    if (typeof name !== 'string') throw new BadRequestException('A collection name is required.');
+    return this.library.renameCollection(user.userId, id, name);
+  }
+
+  @Patch('documents/:id')
+  updateDocument(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { title?: unknown; subject?: unknown },
+  ): Promise<LibraryDocument> {
+    if (body.title !== undefined && typeof body.title !== 'string') {
+      throw new BadRequestException('Title must be a string.');
+    }
+    if (body.subject !== undefined && body.subject !== null && typeof body.subject !== 'string') {
+      throw new BadRequestException('Subject must be a string or null.');
+    }
+    return this.library.updateDocument(user.userId, id, {
+      ...(typeof body.title === 'string' ? { title: body.title } : {}),
+      ...(body.subject === null || typeof body.subject === 'string' ? { subject: body.subject } : {}),
+    });
   }
 
   @Patch('documents/:id/favorite')

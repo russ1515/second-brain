@@ -34,7 +34,7 @@ test('scan page edit metadata is bounded and must match every uploaded page', ()
   assert.equal(parseScanPageEdits(undefined, 2), undefined, 'older clients remain compatible');
   assert.throws(() => parseScanPageEdits(JSON.stringify([{ corners: full }]), 2), /match the uploaded page count/);
   assert.throws(() => parseScanPageEdits({ corners: full }, 1), /JSON string/);
-  assert.throws(() => parseScanPageEdits('[' + ' '.repeat(9000) + ']', 1), /safety limit/);
+  assert.throws(() => parseScanPageEdits('[' + ' '.repeat(70_000) + ']', 1), /safety limit/);
   assert.throws(() => parseScanPageEdits(JSON.stringify([{ corners: {
     ...full,
     topLeft: { x: -0.01, y: 0 },
@@ -178,7 +178,7 @@ test('scan endpoint wires validated edits into durable normalization', () => {
   const service = fs.readFileSync(path.join(root, 'apps/api/src/documents/scan.service.ts'), 'utf8');
   const safety = fs.readFileSync(path.join(root, 'apps/api/src/media/image-safety.service.ts'), 'utf8');
   assert.match(controller, /parseScanPageEdits\(pageEdits, images\.length\)/);
-  assert.match(controller, /fromImages\(user\.userId, images, title, requestId, edits\)/);
+  assert.match(controller, /fromImages\(user\.userId, images, title, requestId, edits, \{/);
   assert.match(service, /scanPage\(files\[index\], pageEdits\?\.\[index\]\)/);
   assert.match(service, /putScanPages[\s\S]*images\.map\(\(image\) => image\.buffer\)/);
   assert.match(safety, /warpPerspectiveRaw/);

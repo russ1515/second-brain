@@ -1,4 +1,5 @@
 import * as DocumentPicker from 'expo-document-picker';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { Platform } from 'react-native';
 import type { DocumentDetail } from '@second-brain/shared';
 import { apiUpload } from './client';
@@ -57,6 +58,23 @@ export function isImageDocument(document: PickedDocument): boolean {
 export async function uploadPickedDocument(document: PickedDocument): Promise<DocumentDetail> {
   const image = isImageDocument(document);
   const form = new FormData();
-  await appendPickedDocument(form, image ? 'images' : 'file', document);
+  // The API's 100 MB / 50-page safety envelope intentionally caps each scan
+  // page at 2 MB. Normalize only oversized or unknown-size picker photos here,
+  // just as the dedicated Scan screen does, so a modern camera photo reaches
+  // the shared ingestion path without weakening that server-side bound.
+  const upload = image && (!document.size || document.size > 2 * 1024 * 1024)
+    ? await manipulateAsync(
+        document.uri,
+        [{ resize: { width: 2000 } }],
+        { compress: 0.72, format: SaveFormat.JPEG },
+      ).then((result): PickedDocument => ({
+        uri: result.uri,
+        name: document.name.replace(/\.[^.]+$/, '') + '.jpg',
+        mimeType: 'image/jpeg',
+        size: null,
+      }))
+    : document;
+  await appendPickedDocument(form, image ? 'images' : 'file', upload);
+  if (image) form.append('contentType', 'PHOTO');
   return apiUpload<DocumentDetail>(image ? '/documents/scan' : '/documents/upload', form);
 }
