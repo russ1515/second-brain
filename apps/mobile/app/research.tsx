@@ -114,13 +114,15 @@ export default function ResearchScreen() {
     ...(params.workspaceId ? [{ id: `workspace:${params.workspaceId}`, kind: 'workspace' as const, scope: 'active-object' as const, referenceId: params.workspaceId, label: t('workspace10.title'), priority: 95, visibility: 'visible' as const }] : []),
   ]).items : [], [params.workspaceId, scopes, t, user]);
 
-  const webAvailable = availability?.external.status === 'available' && availability.external.capabilities.webSearch;
+  const webAvailable = availability?.web.status === 'available' && availability.web.capabilities.webSearch;
+  const externalAvailable = availability?.external.status === 'available' && availability.external.capabilities.externalSearch;
   const selectionReady = scopeKinds.length > 0
     && (!scopeKinds.includes('documents') || selectedDocumentIds.length > 0)
     && (!scopeKinds.includes('collection') || Boolean(collectionId));
 
   const toggleScope = (kind: ResearchScopeKind) => {
-    if ((kind === 'web' || kind === 'external') && !webAvailable) return;
+    if (kind === 'web' && !webAvailable) return;
+    if (kind === 'external' && !externalAvailable) return;
     setResult(null);
     setScopeKinds((current) => current.includes(kind)
       ? current.length === 1 ? current : current.filter((value) => value !== kind)
@@ -222,6 +224,11 @@ export default function ResearchScreen() {
               id: citation.id, title: citation.title, kind: citation.kind,
               ...(citation.documentId ? { documentId: citation.documentId } : {}),
               ...(citation.url ? { url: citation.url } : {}),
+              ...(citation.domain ? { domain: citation.domain } : {}),
+              ...(citation.provider ? { provider: citation.provider } : {}),
+              ...(citation.publishedAt !== undefined ? { publishedAt: citation.publishedAt } : {}),
+              ...(citation.retrievedAt ? { retrievedAt: citation.retrievedAt } : {}),
+              ...(citation.quality ? { quality: citation.quality } : {}),
               excerpt: citation.excerpt,
         })),
       };
@@ -272,7 +279,7 @@ export default function ResearchScreen() {
     <View style={{ gap: spacing.sm }}>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
         {SCOPE_KINDS.map((kind) => {
-          const disabled = (kind === 'web' || kind === 'external') && !webAvailable;
+          const disabled = (kind === 'web' && !webAvailable) || (kind === 'external' && !externalAvailable);
           const selected = scopeKinds.includes(kind);
           return <Pressable key={kind} accessibilityRole="checkbox" accessibilityState={{ checked: selected, disabled }} onPress={() => toggleScope(kind)} style={{ minHeight: 44, paddingVertical: 10, paddingHorizontal: 12, borderRadius: radius.full, borderWidth: 1, borderColor: selected ? c.primary : c.border, backgroundColor: selected ? c.primary : c.surfaceSunken, opacity: disabled ? 0.5 : 1 }}>
             <Text style={[typography.bodySmall, { color: selected ? c.onPrimary : c.textPrimary, fontWeight: '700' }]}>{t(`research10.scope.${kind}` as TranslationKey)}</Text>
@@ -280,6 +287,7 @@ export default function ResearchScreen() {
         })}
       </View>
       {!webAvailable ? <Alert tone="info" title={t('research10.webUnavailable')} detail={t('research10.webUnavailableDetail')} /> : null}
+      {!externalAvailable ? <Alert tone="info" title={t('research10.externalUnavailable')} detail={t('research10.externalUnavailableDetail')} /> : null}
       {scopeKinds.includes('documents') ? <SourceSelector documents={documents} selected={selectedDocumentIds} onToggle={(id) => setSelectedDocumentIds((current) => current.includes(id) ? current.filter((value) => value !== id) : current.length < 20 ? [...current, id] : current)} /> : null}
       {scopeKinds.includes('collection') ? <CollectionSelector collections={collections} selected={collectionId} onSelect={setCollectionId} /> : null}
     </View>
@@ -324,7 +332,10 @@ export default function ResearchScreen() {
         {result ? (
           <View style={{ flexDirection: desktop ? 'row' : 'column', alignItems: 'flex-start', gap: spacing.lg }}>
             <View style={{ flex: 1, minWidth: 0, width: '100%', gap: spacing.lg }}>
-              <ResearchResultView result={result} />
+              <ResearchResultView result={result} onCitation={(id) => {
+                const citation = result.citations.find((item) => item.id === id);
+                if (citation) setSelectedCitation(citation);
+              }} />
               <Section title={t('research10.next')}>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
                   <Button label={t('research10.action.learn')} onPress={() => router.push({ pathname: '/tutor', params: { mode: 'explain', q: result.question, researchSessionId: sessionId } })} />
@@ -341,7 +352,9 @@ export default function ResearchScreen() {
         {selectedCitation ? <SourcePreview
           title={selectedCitation.title}
           snippet={selectedCitation.excerpt}
-          location={selectedCitation.chunkIndex !== undefined ? t('source.passage').replace('{n}', String(selectedCitation.chunkIndex + 1)) : selectedCitation.publishedAt ?? null}
+          location={selectedCitation.chunkIndex !== undefined
+            ? t('source.passage').replace('{n}', String(selectedCitation.chunkIndex + 1))
+            : [selectedCitation.domain, selectedCitation.publishedAt ?? selectedCitation.retrievedAt].filter(Boolean).join(' · ') || null}
           kind={selectedCitation.kind}
           onOpen={selectedCitation.documentId
             ? () => router.push(`/library/${selectedCitation.documentId}`)
@@ -373,18 +386,29 @@ function DeepPlan({ onLaunch, onCancel }: { onLaunch: () => void; onCancel: () =
   </Card>;
 }
 
-function ResearchResultView({ result }: { result: ResearchResult }) {
+function ResearchResultView({ result, onCitation }: { result: ResearchResult; onCitation: (id: string) => void }) {
   const { t } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   if (!result.citations.length) return <Alert tone="info" title={t('research10.noSources')} detail={t('research10.noSourcesDetail')} />;
   return <View style={{ gap: spacing.lg }} testID="research-result">
     {result.partial ? <Alert tone="warning" title={t('research10.partial')} detail={t('research10.partialDetail')} /> : null}
     <Card style={{ gap: spacing.md }}><Text accessibilityRole="header" style={[typography.h2, { color: c.textPrimary }]}>{t('research10.synthesis')}</Text><Markdown text={result.synthesis} /></Card>
-    {result.keyPoints.length ? <Card style={{ gap: spacing.sm }}><Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('research10.keyPoints')}</Text>{result.keyPoints.map((point, index) => <Text key={index} style={[typography.body, { color: c.textSecondary }]}>• {point}</Text>)}</Card> : null}
-    {result.sections.map((section) => <Card key={section.id} style={{ gap: spacing.sm }}><Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{section.title}</Text><Markdown text={section.body} />{section.citationIds.length ? <Text style={[typography.caption, { color: c.textMuted }]}>{section.citationIds.map((id) => `[${id}]`).join(' ')}</Text> : null}</Card>)}
+    {result.plan?.queries.length ? <Card style={{ gap: spacing.sm }}><Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('research10.plan.title')}</Text>{result.plan.queries.map((query, index) => <Text key={`${index}:${query}`} style={[typography.bodySmall, { color: c.textSecondary }]}>{index + 1}. {query}</Text>)}</Card> : null}
+    {result.keyPoints.length || result.claims?.length ? <Card style={{ gap: spacing.sm }}><Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('research10.keyPoints')}</Text>{(result.claims?.length ? result.claims : result.keyPoints.map((text) => ({ text, citationIds: [] }))).map((claim, index) => <View key={index} style={{ gap: spacing.xs }}><Text style={[typography.body, { color: c.textSecondary }]}>• {claim.text}</Text><CitationLinks ids={claim.citationIds} citations={result.citations} onPress={onCitation} /></View>)}</Card> : null}
+    {result.sections.map((section) => <Card key={section.id} style={{ gap: spacing.sm }}><Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{section.title}</Text><Markdown text={section.body} /><CitationLinks ids={section.citationIds} citations={result.citations} onPress={onCitation} /></Card>)}
     {result.comparison ? <Card style={{ gap: spacing.md }}><Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('research10.comparison')}</Text><Comparison title={t('research10.agreements')} items={result.comparison.agreements} /><Comparison title={t('research10.divergences')} items={result.comparison.divergences} /><Comparison title={t('research10.specificities')} items={result.comparison.specificities} /></Card> : null}
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>{result.stages.map((stage) => <Badge key={stage.kind} tone="success" label={`${t(`research10.stage.${stage.kind}` as TranslationKey)}${stage.itemCount !== undefined ? ` · ${stage.itemCount}` : ''}`} />)}</View>
   </View>;
+}
+
+function CitationLinks({ ids, citations, onPress }: { ids: string[]; citations: UnifiedResearchCitation[]; onPress: (id: string) => void }) {
+  const { colors: c, spacing, typography, radius } = useTokens();
+  if (!ids.length) return null;
+  return <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>{ids.map((id) => {
+    const index = citations.findIndex((citation) => citation.id === id);
+    if (index < 0) return null;
+    return <Pressable key={id} accessibilityRole="link" accessibilityLabel={citations[index].title} onPress={() => onPress(id)} style={{ minWidth: 32, minHeight: 32, alignItems: 'center', justifyContent: 'center', borderRadius: radius.full, backgroundColor: c.surfaceSunken, borderWidth: 1, borderColor: c.border }}><Text style={[typography.caption, { color: c.primary, fontWeight: '700' }]}>[{index + 1}]</Text></Pressable>;
+  })}</View>;
 }
 
 function Comparison({ title, items }: { title: string; items: string[] }) {

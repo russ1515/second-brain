@@ -23,6 +23,11 @@ export interface WorkspaceCitationReference {
   kind: 'document' | 'brain' | 'external' | 'web';
   documentId?: string;
   url?: string;
+  domain?: string;
+  provider?: string;
+  publishedAt?: string | null;
+  retrievedAt?: string;
+  quality?: string;
   excerpt?: string | null;
 }
 

@@ -50,3 +50,4 @@ import './review';
 import './auth-errors';
 import './voice-phase2';
 import './library-v1';
+import './research-web-v1';

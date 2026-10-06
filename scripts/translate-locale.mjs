@@ -21,6 +21,7 @@ const REVIEW_FILE = path.join(OUT_DIR, 'review.ts');
 const AUTH_ERRORS_FILE = path.join(OUT_DIR, 'auth-errors.ts');
 const VOICE_PHASE2_FILE = path.join(OUT_DIR, 'voice-phase2.ts');
 const LIBRARY_V1_FILE = path.join(OUT_DIR, 'library-v1.ts');
+const RESEARCH_WEB_V1_FILE = path.join(OUT_DIR, 'research-web-v1.ts');
 const PROGRESS_DIR = path.join(OUT_DIR, '.translation-progress');
 const DEFAULT_MANIFEST = path.join(PROGRESS_DIR, 'manifest.json');
 const JOB_LOCK = path.join(PROGRESS_DIR, 'apply.lock');
@@ -251,6 +252,11 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
   const authErrors = readNestedCatalog(AUTH_ERRORS_FILE, 'authErrors');
   const voicePhase2 = readNestedCatalog(VOICE_PHASE2_FILE, 'voicePhase2');
   const libraryV1 = readNestedCatalog(LIBRARY_V1_FILE, 'libraryV1');
+  const researchWebV1 = readTupleCatalog(
+    RESEARCH_WEB_V1_FILE,
+    'researchWebV1',
+    ['research10.externalUnavailable', 'research10.externalUnavailableDetail'],
+  );
   const libraryOrganization = readTupleCatalog(
     LIBRARY_V1_FILE,
     'organizationLabels',
@@ -276,6 +282,7 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
     const library = libraryV1.get(code) ?? new Map();
     const organization = libraryOrganization.get(code) ?? new Map();
     const failures = libraryFailures.get(code) ?? new Map();
+    const researchWeb = researchWebV1.get(code) ?? new Map();
     const effective = new Map([
       ...base,
       ...essential,
@@ -287,6 +294,7 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
       ...library,
       ...organization,
       ...failures,
+      ...researchWeb,
     ]);
     const missingKeys = [...english.keys()].filter((key) => !effective.has(key));
 

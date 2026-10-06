@@ -61,6 +61,8 @@ const DURABLY_INSTRUMENTED_RESOURCES = new Set<string>([
   'OCR_PAGES',
   'EMBEDDING_UNITS',
   'ACADEMIC_AI',
+  'WEB_SEARCH',
+  'DEEP_RESEARCH',
 ]);
 
 /**

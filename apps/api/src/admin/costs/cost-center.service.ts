@@ -194,7 +194,10 @@ export class CostCenterService {
   }
 
   async research(query: Record<string, unknown>) {
-    return this.category(query, (attempt) => ['FREE_SEARCH', 'WEB_SEARCH', 'DEEP_RESEARCH'].includes(attempt.operation.feature));
+    return this.category(query, (attempt) => [
+      'FREE_SEARCH', 'WEB_SEARCH', 'QUICK_SEARCH', 'SOURCED_SEARCH',
+      'DEEP_RESEARCH', 'EXTERNAL_SOURCE_SEARCH',
+    ].includes(attempt.operation.feature));
   }
 
   async languages(query: Record<string, unknown>) {
@@ -247,8 +250,11 @@ export class CostCenterService {
         featureStatus('DOCUMENT_OCR', 'INSUFFICIENT_DATA'),
         featureStatus('DOCUMENT_EMBEDDING', 'INSUFFICIENT_DATA'),
         featureStatus('DOCUMENT_RAG', 'INSUFFICIENT_DATA'),
-        featureStatus('WEB_SEARCH', 'NOT_INSTRUMENTED'),
+        featureStatus('QUICK_SEARCH', 'INSUFFICIENT_DATA'),
+        featureStatus('SOURCED_SEARCH', 'INSUFFICIENT_DATA'),
+        featureStatus('WEB_SEARCH', 'INSUFFICIENT_DATA'),
         featureStatus('DEEP_RESEARCH', 'INSUFFICIENT_DATA'),
+        featureStatus('EXTERNAL_SOURCE_SEARCH', 'INSUFFICIENT_DATA'),
         { feature: 'INFRASTRUCTURE_COST', providerCalls: null, coverage: null, costStatus: 'NOT_INSTRUMENTED', dataStatus: 'NOT_INSTRUMENTED', reason: 'DEFERRED_TO_SPRINT_6' },
         { feature: 'EMAIL_COST', providerCalls: null, coverage: null, costStatus: 'NOT_INSTRUMENTED', dataStatus: 'NOT_INSTRUMENTED' },
       ],

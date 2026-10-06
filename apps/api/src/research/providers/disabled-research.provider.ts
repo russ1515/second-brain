@@ -16,6 +16,7 @@ export class DisabledResearchProvider implements ResearchProvider {
   readonly name = 'disabled';
   readonly capabilities: ResearchProviderCapabilities = {
     webSearch: false,
+    externalSearch: false,
     sourceMetadata: false,
     dateFiltering: false,
     languageFiltering: false,

@@ -7,8 +7,9 @@ import type {
 } from '@second-brain/shared';
 
 export const RESEARCH_PROVIDER = Symbol('RESEARCH_PROVIDER');
+export const EXTERNAL_RESEARCH_PROVIDER = Symbol('EXTERNAL_RESEARCH_PROVIDER');
 
-/** Replaceable external-search seam. Lot 0 intentionally registers no provider. */
+/** Replaceable server-side research seam. Provider credentials never cross it. */
 export interface ResearchProvider {
   readonly name: string;
   readonly capabilities: ResearchProviderCapabilities;

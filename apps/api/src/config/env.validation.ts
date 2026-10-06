@@ -84,6 +84,14 @@ class EnvironmentVariables {
   @IsString()
   LLM_PROVIDER!: string;
 
+  @IsOptional()
+  @IsIn(['disabled', 'openai'])
+  RESEARCH_PROVIDER?: string;
+
+  @IsOptional()
+  @IsString()
+  RESEARCH_MODEL?: string;
+
   @ValidateIf((env: EnvironmentVariables) => env.LLM_PROVIDER !== 'openai' || !env.OPENAI_MODEL)
   @IsString()
   LLM_MODEL?: string;
@@ -93,7 +101,7 @@ class EnvironmentVariables {
   GEMINI_API_KEY?: string;
 
   @ValidateIf((env: EnvironmentVariables) =>
-    env.LLM_PROVIDER === 'openai' || env.SPEECH_PROVIDER === 'openai')
+    env.LLM_PROVIDER === 'openai' || env.SPEECH_PROVIDER === 'openai' || env.RESEARCH_PROVIDER === 'openai')
   @IsString()
   @MinLength(1)
   OPENAI_API_KEY?: string;

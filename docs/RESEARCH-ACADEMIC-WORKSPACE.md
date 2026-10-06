@@ -14,13 +14,21 @@ Ces limites sont des bornes de sources, pas des estimations de progression. L’
 
 Les périmètres internes disponibles sont Mon Cerveau, toute la Bibliothèque, une sélection de documents et une collection. Les identifiants de documents et de collections sont toujours résolus avec le `userId` authentifié. Une sélection est limitée à 20 documents et une recherche à quatre périmètres.
 
-Les périmètres `external` et `web` passent exclusivement par `ResearchProvider`. Le déploiement actuel enregistre `DisabledResearchProvider` : l’interface affiche donc « Recherche Web non disponible » et l’API ne simule aucune source externe. Brancher un fournisseur ultérieur exige une décision de configuration et une implémentation de l’interface existante.
+Les périmètres `external` et `web` restent séparés et passent exclusivement par `ResearchProvider`. `RESEARCH_PROVIDER=openai` branche la Responses API et son outil Web Search sur la seam existante, avec la même clé privée serveur que le LLM. Seules les annotations URL réellement renvoyées par le provider deviennent des preuves. Les connecteurs spécialisés restent indépendants : faute de connecteur configuré, `external` est explicitement indisponible sans désactiver le Web.
+
+La configuration bêta persistante vit dans l’overlay Compose revu : `RESEARCH_PROVIDER=openai`, modèle configurable par `RESEARCH_MODEL` avec repli sur `OPENAI_MODEL`, et secret uniquement dans le fichier privé VPS. Le démarrage journalise exclusivement provider/modèle et `OPENAI_API_KEY=SET|MISSING`.
 
 ## Sources et citations
 
-`UnifiedResearchCitation.kind` distingue `document`, `brain`, `external` et `web`. Les extraits sont bornés et une citation générée n’est conservée que si son identifiant existe dans les preuves collectées. Les composants `SourceCitation` et `SourcePreview` assurent la même interaction dans Recherche et Workspace. Aucune page ou section n’est créée si la source ne la fournit pas.
+`UnifiedResearchCitation.kind` distingue `document`, `brain`, `external` et `web`. Une source Web conserve URL canonique, domaine, date publiée si réellement fournie, date de récupération, rang, provider et classe de qualité. Les extraits sont bornés et une citation générée n’est conservée que si son identifiant existe dans les preuves collectées. Les affirmations importantes exposent leurs `citationIds`; l’interface relie ces références au panneau de source interactif. Aucune date, page, URL ou section n’est créée si la source ne la fournit pas.
 
-Si aucune preuve n’est trouvée, la synthèse est vide et l’interface explique qu’aucune réponse sourcée n’a été générée. Un fournisseur indisponible dans une recherche combinée produit un résultat `partial`, sans masquer les sources internes réussies.
+Si aucune preuve n’est trouvée, la synthèse est vide et l’interface explique qu’aucune réponse sourcée n’a été générée. Les limites distinguent `NO_PROVIDER`, `PROVIDER_TIMEOUT`, `RATE_LIMIT`, `NO_RESULTS`, `INSUFFICIENT_EVIDENCE`, `SOURCE_FETCH_ERROR` et l’absence de connecteur spécialisé. Un fournisseur indisponible dans une recherche combinée produit un résultat `partial`, sans masquer les sources internes réussies.
+
+## Exécution bornée et cache
+
+`quick` exécute une requête et cinq sources maximum. `sourced` exécute une requête et dix sources maximum. `deep` produit d’abord un plan adaptatif, puis exécute au plus quatre requêtes, seize sources et une seule itération de collecte. Chaque appel possède un timeout ; aucune boucle agentique n’est possible. Les recherches Web réussies sont mises en cache par utilisateur et empreinte de requête pendant cinq minutes, réduites à une minute pour les formulations sensibles à l’actualité.
+
+Le contenu Web est toujours une donnée non fiable. Il n’est jamais exécuté, l’API ne suit pas une URL arbitraire et les instructions présentes dans une source sont explicitement ignorées. Les URL autres que HTTP(S), comportant des credentials ou absentes des annotations provider sont rejetées.
 
 ## Sessions et reprise
 

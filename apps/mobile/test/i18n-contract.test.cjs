@@ -144,7 +144,8 @@ const voicePhase2Catalogs = nestedCatalog(path.join(LOCALES_DIR, 'voice-phase2.t
 const libraryV1Catalogs = nestedCatalog(path.join(LOCALES_DIR, 'library-v1.ts'), 'libraryV1');
 const libraryV1Organization = tupleCatalog(path.join(LOCALES_DIR, 'library-v1.ts'), 'organizationLabels', ['lib.types', 'libraryV1.type.notebook']);
 const libraryV1Failures = tupleCatalog(path.join(LOCALES_DIR, 'library-v1.ts'), 'failureLabels', ['libraryV1.error.fileUnreadable', 'libraryV1.error.storage']);
-const overlayFiles = new Set(['auth-errors.ts', 'essential.ts', 'index.ts', 'library-v1.ts', 'review.ts', 'voice-phase2.ts']);
+const researchWebV1 = tupleCatalog(path.join(LOCALES_DIR, 'research-web-v1.ts'), 'researchWebV1', ['research10.externalUnavailable', 'research10.externalUnavailableDetail']);
+const overlayFiles = new Set(['auth-errors.ts', 'essential.ts', 'index.ts', 'library-v1.ts', 'research-web-v1.ts', 'review.ts', 'voice-phase2.ts']);
 
 function registeredLocale(file) {
   const source = sourceFile(path.join(LOCALES_DIR, file));
@@ -188,6 +189,7 @@ function effectiveCatalog(resource) {
     ...(libraryV1Catalogs.get(code) ?? new Map()),
     ...(libraryV1Organization.get(code) ?? new Map()),
     ...(libraryV1Failures.get(code) ?? new Map()),
+    ...(researchWebV1.get(code) ?? new Map()),
   ]);
 }
 

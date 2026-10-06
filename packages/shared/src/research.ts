@@ -1,5 +1,6 @@
 import type { RagScope } from './document';
 import type { ResearchProviderAvailability } from './research-provider';
+import type { ResearchSourceQuality } from './research-provider';
 
 export const RESEARCH_DEPTHS = ['quick', 'sourced', 'deep'] as const;
 export type ResearchDepth = (typeof RESEARCH_DEPTHS)[number];
@@ -38,9 +39,27 @@ export interface UnifiedResearchCitation {
   conceptId?: string;
   chunkIndex?: number;
   url?: string;
+  domain?: string;
   provider?: string;
   publishedAt?: string | null;
+  retrievedAt?: string;
+  rank?: number;
+  quality?: ResearchSourceQuality;
   relevance?: number | null;
+}
+
+export interface ResearchClaim {
+  text: string;
+  citationIds: string[];
+}
+
+export interface ResearchPlan {
+  question: string;
+  queries: string[];
+  maxQueries: number;
+  maxSources: number;
+  maxIterations: number;
+  timeoutMs: number;
 }
 
 export interface ResearchSection {
@@ -72,12 +91,15 @@ export interface ResearchResult {
   synthesis: string;
   sections: ResearchSection[];
   keyPoints: string[];
+  claims: ResearchClaim[];
   comparison: ResearchComparison | null;
   citations: UnifiedResearchCitation[];
   limits: string[];
   stages: ResearchStage[];
   partial: boolean;
   provider: string | null;
+  plan: ResearchPlan | null;
+  queries: string[];
   generatedAt: string;
 }
 
@@ -88,6 +110,7 @@ export interface ResearchAvailabilityResponse {
     documents: true;
     collection: true;
   };
+  web: ResearchProviderAvailability;
   external: ResearchProviderAvailability;
 }
 
@@ -113,6 +136,12 @@ export function researchSourceLimit(depth: ResearchDepth): number {
   return 10;
 }
 
+export function researchExecutionLimits(depth: ResearchDepth): Pick<ResearchPlan, 'maxQueries' | 'maxSources' | 'maxIterations' | 'timeoutMs'> {
+  if (depth === 'quick') return { maxQueries: 1, maxSources: 5, maxIterations: 1, timeoutMs: 25_000 };
+  if (depth === 'deep') return { maxQueries: 4, maxSources: 16, maxIterations: 1, timeoutMs: 75_000 };
+  return { maxQueries: 1, maxSources: 10, maxIterations: 1, timeoutMs: 45_000 };
+}
+
 export function researchScopeToRag(scope: ResearchScope): RagScope | null {
   if (scope.kind === 'documents') return { documentIds: [...new Set(scope.documentIds ?? [])].slice(0, 20) };
   if (scope.kind === 'collection') return scope.collectionId ? { collectionId: scope.collectionId } : { documentIds: [] };
@@ -120,6 +149,8 @@ export function researchScopeToRag(scope: ResearchScope): RagScope | null {
   return null;
 }
 
-export function isExternalResearchScope(scope: ResearchScope): boolean {
+export function isExternalResearchScope(
+  scope: ResearchScope,
+): scope is ResearchScope & { kind: 'external' | 'web' } {
   return scope.kind === 'external' || scope.kind === 'web';
 }

@@ -16,6 +16,7 @@ import {
   localeCatalogDescriptor,
   readCatalog,
   readNestedCatalog,
+  readTupleCatalog,
 } from './translate-locale.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -25,6 +26,8 @@ const ESSENTIAL_FILE = path.join(LOCALES_DIR, 'essential.ts');
 const REVIEW_FILE = path.join(LOCALES_DIR, 'review.ts');
 const AUTH_ERRORS_FILE = path.join(LOCALES_DIR, 'auth-errors.ts');
 const VOICE_PHASE2_FILE = path.join(LOCALES_DIR, 'voice-phase2.ts');
+const LIBRARY_V1_FILE = path.join(LOCALES_DIR, 'library-v1.ts');
+const RESEARCH_WEB_V1_FILE = path.join(LOCALES_DIR, 'research-web-v1.ts');
 
 export const ALL_LOCALE_CODES = Object.freeze(['en', 'fr', ...SUPPORTED_CODES]);
 export const PROTECTED_BRANDS = Object.freeze([
@@ -295,6 +298,10 @@ export function auditRepository() {
   const reviews = readNestedCatalog(REVIEW_FILE, 'review');
   const authErrors = readNestedCatalog(AUTH_ERRORS_FILE, 'authErrors');
   const voicePhase2 = readNestedCatalog(VOICE_PHASE2_FILE, 'voicePhase2');
+  const libraryV1 = readNestedCatalog(LIBRARY_V1_FILE, 'libraryV1');
+  const libraryOrganization = readTupleCatalog(LIBRARY_V1_FILE, 'organizationLabels', ['lib.types', 'libraryV1.type.notebook']);
+  const libraryFailures = readTupleCatalog(LIBRARY_V1_FILE, 'failureLabels', ['libraryV1.error.fileUnreadable', 'libraryV1.error.storage']);
+  const researchWebV1 = readTupleCatalog(RESEARCH_WEB_V1_FILE, 'researchWebV1', ['research10.externalUnavailable', 'research10.externalUnavailableDetail']);
   const catalogs = new Map([
     ['en', english],
     ['fr', french],
@@ -316,6 +323,10 @@ export function auditRepository() {
     const review = reviews.get(code) ?? new Map();
     const authError = authErrors.get(code) ?? new Map();
     const voice = voicePhase2.get(code) ?? new Map();
+    const library = libraryV1.get(code) ?? new Map();
+    const organization = libraryOrganization.get(code) ?? new Map();
+    const failures = libraryFailures.get(code) ?? new Map();
+    const researchWeb = researchWebV1.get(code) ?? new Map();
     catalogs.set(code, new Map([
       ...base,
       ...essential,
@@ -324,6 +335,10 @@ export function auditRepository() {
       ...review,
       ...authError,
       ...voice,
+      ...library,
+      ...organization,
+      ...failures,
+      ...researchWeb,
     ]));
     layersByLocale.set(code, [
       { name: path.relative(LOCALES_DIR, file).replaceAll('\\', '/'), entries: base },
@@ -333,6 +348,10 @@ export function auditRepository() {
       { name: 'review.ts', entries: review },
       { name: 'auth-errors.ts', entries: authError },
       { name: 'voice-phase2.ts', entries: voice },
+      { name: 'library-v1.ts', entries: library },
+      { name: 'library-v1.ts:organizationLabels', entries: organization },
+      { name: 'library-v1.ts:failureLabels', entries: failures },
+      { name: 'research-web-v1.ts', entries: researchWeb },
     ]);
   }
 

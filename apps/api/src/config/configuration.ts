@@ -65,6 +65,13 @@ export default () => ({
       ),
     },
   },
+  research: {
+    // Public Web search has its own explicit switch while reusing the private
+    // OpenAI credential/model already used by the Responses provider.
+    provider: process.env.RESEARCH_PROVIDER ?? 'disabled',
+    model: process.env.RESEARCH_MODEL?.trim() || process.env.OPENAI_MODEL || '',
+    openaiApiKey: process.env.OPENAI_API_KEY,
+  },
   privateMedia: {
     directory: process.env.PRIVATE_MEDIA_DIR ?? '.private-media',
   },

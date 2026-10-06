@@ -9,6 +9,8 @@ test('research exposes three depths with strict, increasing source budgets', () 
   assert.equal(shared.researchSourceLimit('quick'), 5);
   assert.equal(shared.researchSourceLimit('sourced'), 10);
   assert.equal(shared.researchSourceLimit('deep'), 16);
+  assert.deepEqual(shared.researchExecutionLimits('quick'), { maxQueries: 1, maxSources: 5, maxIterations: 1, timeoutMs: 25000 });
+  assert.deepEqual(shared.researchExecutionLimits('deep'), { maxQueries: 4, maxSources: 16, maxIterations: 1, timeoutMs: 75000 });
 });
 
 test('deep plan is a preview with four semantic steps and no progress estimate', () => {
