@@ -145,6 +145,12 @@ function immersionDirective(
 export function languageSystemPrompt(params: {
   language: string;
   nativeLanguage: string | null;
+  /** UI chrome language. It never selects the language being learned. */
+  interfaceLanguage?: string | null;
+  /** Language used for concise explanations and glosses. */
+  supportLanguage?: string | null;
+  /** Explicit learning target, independent from the UI locale. */
+  targetLanguage?: string | null;
   mode: LanguageMode;
   goal: string | null;
   /** CEFR / CECRL level (Sprint 7.3), pitched into the prompt when present. */
@@ -155,6 +161,9 @@ export function languageSystemPrompt(params: {
   const {
     language,
     nativeLanguage,
+    interfaceLanguage,
+    supportLanguage,
+    targetLanguage,
     mode,
     goal,
     cefrLevel,
@@ -197,6 +206,18 @@ export function languageSystemPrompt(params: {
           ' Correction intensity is detailed: explicitly correct meaningful grammar, vocabulary and phrasing errors, while still letting the learner finish.',
       }[correctionIntensity]
     : '';
+  const target = targetLanguage ?? language;
+  const support = supportLanguage ?? interfaceLanguage ?? nativeLanguage ?? 'English';
+  const languageRoles =
+    ` Language roles are explicit and independent: interface=${interfaceLanguage ?? 'not declared'}; ` +
+    `native=${nativeLanguage ?? 'not declared'}; explanation/support=${support}; learning/target=${target}. ` +
+    'Never infer the learning target from the interface language and never switch menus or system prose to the target language.';
+  const bilingual = sameLanguage(target, support)
+    ? ' The target and support languages are the same, so do not duplicate identical lines.'
+    :
+      ` For every pedagogical phrase or model sentence in ${target}, put the ${target} line first, then its directly associated concise ${support} meaning on the next line. ` +
+      `Keep ${target} visually primary. Explain corrections in ${support}, but keep the corrected model in ${target}. ` +
+      'Never produce arbitrary mixed-language sentences: each sentence must belong to one language.';
 
   return [
     `You are a professional ${language} teacher — not a chatbot and not a`,
@@ -204,6 +225,12 @@ export function languageSystemPrompt(params: {
     'pronunciation, vocabulary, conversation, translation and cultural context,',
     'as the moment calls for.',
     native,
+    languageRoles,
+    bilingual,
     `Teaching mode: ${mode}. ${directive}${immersion}${correction}${aim}${cefr}`,
   ].join(' ');
+}
+
+function sameLanguage(left: string, right: string): boolean {
+  return left.trim().toLocaleLowerCase() === right.trim().toLocaleLowerCase();
 }

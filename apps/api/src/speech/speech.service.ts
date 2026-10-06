@@ -1,4 +1,4 @@
-import { Inject, Injectable, Optional, ServiceUnavailableException } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type { SynthesisResult, TranscriptionResult } from '@second-brain/shared';
 import { SPEECH_PROVIDER } from './speech.constants';
@@ -10,6 +10,7 @@ import type {
   TranscribeOptions,
 } from './speech-provider.interface';
 import { ProviderMeteringService, type ProviderAttemptRunner } from '../usage/provider-metering.service';
+import { RequestContextService } from '../common/request-context.service';
 
 /**
  * The single entry point business code uses for speech.
@@ -17,6 +18,7 @@ import { ProviderMeteringService, type ProviderAttemptRunner } from '../usage/pr
  */
 @Injectable()
 export class SpeechService {
+  private readonly logger = new Logger(SpeechService.name);
   private readonly inFlight = new Map<string, Promise<unknown>>();
   private readonly synthesisCache = new Map<
     string,
@@ -28,6 +30,7 @@ export class SpeechService {
   constructor(
     @Inject(SPEECH_PROVIDER) private readonly provider: SpeechProvider,
     @Optional() private readonly metering?: ProviderMeteringService,
+    @Optional() private readonly requestContext?: RequestContextService,
   ) {}
 
   get activeProvider(): string {
@@ -53,16 +56,21 @@ export class SpeechService {
     feature = 'TUTOR_VOICE',
   ): Promise<TranscriptionResult> {
     const key = this.key('stt', audio, options);
-    const seconds = this.wavSeconds(audio, options.mimeType);
+    const seconds = this.wavSeconds(audio, options.mimeType)
+      ?? this.boundedDuration(options.durationSeconds);
     return this.deduplicate(key, () => this.metering?.executeWithAttempts(
       {
         provider: this.provider.name, feature, resource: 'VOICE_SECONDS', units: seconds ?? 1,
         metadata: { inputSeconds: seconds ?? null, audioDurationMeasurement: seconds === null ? 'NOT_INSTRUMENTED' : 'OBSERVED' },
         measure: (result) => ({
           model: (result as TranscriptionResult).model,
-          ...(seconds === null ? {} : { audioInputSeconds: seconds }),
+          providerRequestId: (result as TranscriptionResult).providerRequestId,
+          ...(((result as TranscriptionResult).audioSeconds ?? seconds) === null
+            ? {}
+            : { audioInputSeconds: (result as TranscriptionResult).audioSeconds ?? seconds ?? undefined }),
           measurementSource: 'OBSERVED',
         }),
+        quotaUnits: (result) => (result as TranscriptionResult).audioSeconds ?? seconds ?? 1,
       },
       (attempts) => this.execute('SPEECH_TRANSCRIPTION_UNAVAILABLE', 45_000, () => this.provider.transcribe(audio, options), attempts),
     ) ?? this.execute('SPEECH_TRANSCRIPTION_UNAVAILABLE', 45_000, () => this.provider.transcribe(audio, options)));
@@ -80,24 +88,33 @@ export class SpeechService {
     if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.value);
     const synthesize = this.provider.synthesize;
     return this.deduplicate(key, async () => {
-      const providerCall = () => this.execute('SPEECH_SYNTHESIS_UNAVAILABLE', 60_000, () => synthesize.call(this.provider, text, options));
+      // Reserve a conservative upper bound before the billable call. WAV output
+      // gives us exact duration afterwards and ProviderMetering releases the
+      // unused part exactly once.
+      const reservedSeconds = Math.max(1, Math.ceil(text.length / 8));
+      const providerCall = () => synthesize.call(this.provider, text, options);
       const value = await (this.metering?.executeWithAttempts(
         {
-          provider: this.provider.name, feature, resource: 'VOICE_SECONDS', units: 1,
+          provider: this.provider.name, feature, resource: 'VOICE_SECONDS', units: reservedSeconds,
           metadata: { outputDurationMeasurement: 'OBSERVED_WHEN_WAV' },
           measure: (result) => {
             const speech = result as SynthesisResult;
             const duration = this.audioSeconds(speech.audioBase64, speech.mimeType);
             return {
               model: speech.model,
+              providerRequestId: speech.providerRequestId,
               ...(duration === null ? {} : { audioOutputSeconds: duration }),
               measurementSource: 'OBSERVED' as const,
               metadata: { outputSeconds: duration ?? null, outputDurationMeasurement: duration === null ? 'NOT_INSTRUMENTED' : 'OBSERVED' },
             };
           },
+          quotaUnits: (result) => {
+            const speech = result as SynthesisResult;
+            return this.audioSeconds(speech.audioBase64, speech.mimeType) ?? reservedSeconds;
+          },
         },
         (attempts) => this.execute('SPEECH_SYNTHESIS_UNAVAILABLE', 60_000, providerCall, attempts),
-      ) ?? providerCall());
+      ) ?? this.execute('SPEECH_SYNTHESIS_UNAVAILABLE', 60_000, providerCall));
       this.synthesisCache.set(key, { value, expiresAt: Date.now() + 10 * 60_000 });
       while (this.synthesisCache.size > 20) {
         const oldest = this.synthesisCache.keys().next().value as string | undefined;
@@ -117,7 +134,8 @@ export class SpeechService {
     }
     const analyze = this.provider.analyze;
     const key = this.key('analysis', audio, options);
-    const seconds = this.wavSeconds(audio, options.mimeType);
+    const seconds = this.wavSeconds(audio, options.mimeType)
+      ?? this.boundedDuration(options.durationSeconds);
     return this.deduplicate(key, () => this.metering?.executeWithAttempts(
       {
         provider: this.provider.name, feature, resource: 'VOICE_SECONDS', units: seconds ?? 1,
@@ -171,7 +189,12 @@ export class SpeechService {
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
-    void lastError;
+    const providerCode = this.safeErrorCode(lastError);
+    const requestId = this.requestContext?.current()?.requestId ?? 'REQUEST_CONTEXT_UNAVAILABLE';
+    this.logger.error(
+      `Speech provider failure category=${code} provider=${this.provider.name} ` +
+        `providerCode=${providerCode} requestId=${requestId}`,
+    );
     throw this.unavailable(code);
   }
 
@@ -232,6 +255,19 @@ export class SpeechService {
     } catch {
       return null;
     }
+  }
+
+  private boundedDuration(value: number | undefined): number | null {
+    if (!Number.isFinite(value) || value === undefined) return null;
+    const seconds = Math.ceil(value);
+    return seconds >= 1 && seconds <= 600 ? seconds : null;
+  }
+
+  private safeErrorCode(error: unknown): string {
+    const value = (error as { code?: unknown; status?: unknown; statusCode?: unknown } | null) ?? null;
+    const candidate = value?.code ?? value?.status ?? value?.statusCode ?? 'UNKNOWN';
+    const normalized = String(candidate).replace(/[^A-Za-z0-9_.:-]/g, '_').slice(0, 80);
+    return normalized || 'UNKNOWN';
   }
 }
 

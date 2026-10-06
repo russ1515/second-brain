@@ -316,8 +316,11 @@ export class LearnerPassportService {
     return {
       directive: ` ${lines.join(' ')}`,
       ageBand: declared.ageBand,
+      interfaceLanguage: declared.interfaceLanguage,
       nativeOrPrimaryLanguage: declared.nativeOrPrimaryLanguage,
+      explanationLanguage: declared.explanationLanguage,
       teachingLanguage: declared.teachingLanguage,
+      targetLanguage: declared.languageGoals.targetLanguage,
       learningPreferences: includeAdaptiveSignals ? declared.learningPreferences : [],
     };
   }

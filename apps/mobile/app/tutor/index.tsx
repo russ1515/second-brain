@@ -15,6 +15,14 @@ import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { saveTutorSessionDraft } from '../../lib/tutor/session-draft';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
+import { SpeakButton } from '../../components/speak-button';
+import {
+  pauseSpeaking,
+  playSynthesis,
+  resumeSpeaking,
+  speak,
+  stopSpeaking,
+} from '../../lib/speak';
 
 /**
  * The AI Teacher — a virtual classroom, not a chat box.
@@ -60,12 +68,14 @@ export default function TutorEntry() {
   const initialQuery = Array.isArray(params.q) ? params.q[0] : params.q;
   const focusConceptId = Array.isArray(params.conceptId) ? params.conceptId[0] : params.conceptId;
   const contexts = tutorContextsFromParams(params);
+  const languageProfileId = Array.isArray(params.languageProfileId) ? params.languageProfileId[0] : params.languageProfileId;
+  const languageName = Array.isArray(params.languageName) ? params.languageName[0] : params.languageName;
   if (mode === 'free' || mode === 'free_search') return <FreeSearch initialQuery={initialQuery} initialContexts={contexts} />;
   if (mode === 'deepsearch' || mode === 'deep_research') return <DeepResearch initialQuery={initialQuery} initialContexts={contexts} />;
-  if (mode === 'oral_exercise') return <OralExercise />;
+  if (mode === 'oral_exercise') return <OralExercise languageProfileId={languageProfileId} targetLanguage={languageName} />;
   if (mode === 'explain') return <Explain initialQuery={initialQuery} focusConceptId={focusConceptId} initialContexts={contexts} />;
   if (mode === 'discuss' || mode === 'chat_tutor') return <Discuss initialQuery={initialQuery} initialContexts={contexts} />;
-  if (mode === 'oral_exam') return <OralExam />;
+  if (mode === 'oral_exam') return <OralExam languageProfileId={languageProfileId} targetLanguage={languageName} />;
   if (mode && !TUTOR_MODES.has(mode)) return <ModeError />;
   return <TeacherHome />;
 }
@@ -515,13 +525,21 @@ function Explain({ initialQuery = '', focusConceptId, initialContexts = [] }: { 
  * Honest states (Ready / Listening / Analyzing) and no fabricated pronunciation
  * scores, since the backend returns only a transcript and the teacher's reply.
  */
-function OralExercise() {
+function OralExercise({
+  languageProfileId,
+  targetLanguage,
+}: {
+  languageProfileId?: string;
+  targetLanguage?: string;
+}) {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [turns, setTurns] = useState<{ role: 'teacher' | 'you'; text: string }[]>([]);
-  const [status, setStatus] = useState<'init' | 'ready' | 'recording' | 'analyzing'>('init');
+  const [status, setStatus] = useState<
+    'init' | 'ready' | 'recording' | 'paused' | 'analyzing' | 'speaking' | 'playbackPaused'
+  >('init');
   const [error, setError] = useState<string | null>(null);
   const recorder = useRef<Recorder | null>(null);
 
@@ -542,7 +560,13 @@ function OralExercise() {
       try {
         const s = await api<TutorSessionSummary>('/tutor/sessions', {
           method: 'POST',
-          body: { objective: t('learn.oral.title'), intent: 'practice', mode: 'oral_exercise', inputModality: 'voice' },
+          body: {
+            objective: t('learn.oral.title'),
+            intent: 'practice',
+            mode: 'oral_exercise',
+            inputModality: 'voice',
+            ...(languageProfileId ? { languageProfileId } : {}),
+          },
         });
         if (cancel) return;
         setSessionId(s.id);
@@ -554,19 +578,29 @@ function OralExercise() {
         if (!cancel) { setError((e as Error).message); setStatus('ready'); }
       }
     })();
-    return () => { cancel = true; };
-  }, [refresh, t]);
+    return () => { cancel = true; recorder.current?.cancel(); stopSpeaking(); };
+  }, [languageProfileId, refresh, t]);
 
   const stopAndSend = async () => {
     if (!recorder.current || !sessionId) return;
     setStatus('analyzing');
     try {
-      const { blob, mimeType } = await recorder.current.stop();
+      const { blob, mimeType, durationMs } = await recorder.current.stop();
       const ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
       const form = new FormData();
       form.append('audio', blob, `turn.${ext}`);
-      await apiUpload<VoiceTurnResponse>(`/tutor/sessions/${sessionId}/voice`, form);
+      form.append('speak', 'true');
+      form.append('lesson', 'false');
+      if (durationMs !== undefined) form.append('durationMs', String(durationMs));
+      if (targetLanguage) form.append('language', targetLanguage);
+      const response = await apiUpload<VoiceTurnResponse>(`/tutor/sessions/${sessionId}/voice`, form);
       await refresh(sessionId);
+      if (response.audio) {
+        setStatus('speaking');
+        await playSynthesis(response.audio);
+      } else if (response.audioUnavailable) {
+        setError(t('error.serverBusy'));
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -576,8 +610,8 @@ function OralExercise() {
   };
 
   const toggleRecord = async () => {
-    if (status === 'analyzing' || status === 'init') return;
-    if (status === 'recording') { await stopAndSend(); return; }
+    if (status === 'analyzing' || status === 'init' || status === 'speaking' || status === 'playbackPaused') return;
+    if (status === 'recording' || status === 'paused') { await stopAndSend(); return; }
     if (!sessionId) return;
     setError(null);
     try {
@@ -589,9 +623,39 @@ function OralExercise() {
     }
   };
 
+  const pauseRecording = async () => {
+    if (!recorder.current || status !== 'recording') return;
+    try { await recorder.current.pause(); setStatus('paused'); }
+    catch (cause) { setError((cause as Error).message); setStatus('ready'); }
+  };
+
+  const resumeRecording = async () => {
+    if (!recorder.current || status !== 'paused') return;
+    try { await recorder.current.resume(); setStatus('recording'); }
+    catch (cause) { setError((cause as Error).message); setStatus('ready'); }
+  };
+
+  const cancelRecording = () => {
+    recorder.current?.cancel();
+    recorder.current = null;
+    setStatus('ready');
+  };
+
+  const pausePlayback = async () => {
+    if (await pauseSpeaking()) setStatus('playbackPaused');
+  };
+
+  const resumePlayback = async () => {
+    if (await resumeSpeaking()) setStatus('speaking');
+  };
+
+  const stopPlayback = () => { stopSpeaking(); setStatus('ready'); };
+
   const statusKey: TranslationKey =
     status === 'recording' ? 'learn.oral.recording'
+    : status === 'paused' ? 'voice11.state.paused'
     : status === 'analyzing' ? 'learn.oral.analyzing'
+    : status === 'speaking' || status === 'playbackPaused' ? 'voice11.state.speaking'
     : status === 'init' ? 'learn.oral.starting'
     : 'learn.oral.ready';
 
@@ -613,6 +677,7 @@ function OralExercise() {
             <View key={i} style={turn.role === 'you' ? styles.youBubble : styles.teacherBubble}>
               <Text style={styles.bubbleWho}>{turn.role === 'you' ? t('learn.oral.you') : t('learn.oral.teacher')}</Text>
               <Text style={styles.bubbleText}>{turn.text}</Text>
+              {turn.role === 'teacher' ? <SpeakButton text={turn.text} language={targetLanguage} /> : null}
             </View>
           ))}
 
@@ -622,14 +687,20 @@ function OralExercise() {
             </View>
             <Pressable
               onPress={toggleRecord}
-              disabled={status === 'init' || status === 'analyzing'}
+              disabled={status === 'init' || status === 'analyzing' || status === 'speaking' || status === 'playbackPaused'}
               accessibilityRole="button"
-              accessibilityLabel={t(status === 'recording' ? 'learn.oral.stop' : 'learn.oral.record')}
-              style={[styles.micButton, status === 'recording' && { backgroundColor: c.error, borderColor: c.error }, (status === 'init' || status === 'analyzing') && { opacity: 0.6 }]}
+              accessibilityLabel={t(status === 'recording' || status === 'paused' ? 'learn.oral.stop' : 'learn.oral.record')}
+              style={[styles.micButton, (status === 'recording' || status === 'paused') && { backgroundColor: c.error, borderColor: c.error }, (status === 'init' || status === 'analyzing' || status === 'speaking' || status === 'playbackPaused') && { opacity: 0.6 }]}
             >
-              <Text style={styles.micIcon}>{status === 'recording' ? '⏹' : '🎙️'}</Text>
+              <Text style={styles.micIcon}>{status === 'recording' || status === 'paused' ? '⏹' : '🎙️'}</Text>
             </Pressable>
-            <Text style={styles.micLabel}>{t(status === 'recording' ? 'learn.oral.stop' : 'learn.oral.record')}</Text>
+            <Text style={styles.micLabel}>{t(status === 'recording' || status === 'paused' ? 'learn.oral.stop' : 'learn.oral.record')}</Text>
+            {status === 'recording' ? <Button variant="ghost" label={t('voice11.pause')} onPress={() => void pauseRecording()} /> : null}
+            {status === 'paused' ? <Button variant="ghost" label={t('voice11.resume')} onPress={() => void resumeRecording()} /> : null}
+            {status === 'recording' || status === 'paused' ? <Button variant="ghost" label={t('tutor.cancel')} onPress={cancelRecording} /> : null}
+            {status === 'speaking' ? <Button variant="ghost" label={t('voice11.pause')} onPress={() => void pausePlayback()} /> : null}
+            {status === 'playbackPaused' ? <Button variant="ghost" label={t('voice11.resume')} onPress={() => void resumePlayback()} /> : null}
+            {status === 'speaking' || status === 'playbackPaused' ? <Button variant="ghost" label={t('learn.oral.stop')} onPress={stopPlayback} /> : null}
           </Card>
         </>
       )}
@@ -644,14 +715,22 @@ function OralExercise() {
  * /voice); after → the examiner's qualitative evaluation (strengths, gaps,
  * recommendations). No fabricated numeric score — only what the examiner says.
  */
-function OralExam() {
+function OralExam({
+  languageProfileId,
+  targetLanguage,
+}: {
+  languageProfileId?: string;
+  targetLanguage?: string;
+}) {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const [phase, setPhase] = useState<'setup' | 'starting' | 'exam' | 'evaluating' | 'result'>('setup');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [turns, setTurns] = useState<{ role: 'examiner' | 'you'; text: string }[]>([]);
-  const [status, setStatus] = useState<'ready' | 'recording' | 'analyzing'>('ready');
+  const [status, setStatus] = useState<
+    'ready' | 'recording' | 'paused' | 'analyzing' | 'speaking' | 'playbackPaused'
+  >('ready');
   const [error, setError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
   const recorder = useRef<Recorder | null>(null);
@@ -661,6 +740,8 @@ function OralExam() {
     const timer = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => clearInterval(timer);
   }, [phase]);
+
+  useEffect(() => () => { recorder.current?.cancel(); stopSpeaking(); }, []);
 
   const refresh = useCallback(async (sid: string) => {
     const detail = await api<TutorSessionDetail>(`/tutor/sessions/${sid}`);
@@ -678,12 +759,32 @@ function OralExam() {
     try {
       const s = await api<TutorSessionSummary>('/tutor/sessions', {
         method: 'POST',
-        body: { objective: t('learn.exam.title'), intent: 'practice', mode: 'oral_exam', inputModality: 'voice' },
+        body: {
+          objective: t('learn.exam.title'),
+          intent: 'practice',
+          mode: 'oral_exam',
+          inputModality: 'voice',
+          ...(languageProfileId ? { languageProfileId } : {}),
+        },
       });
       setSessionId(s.id);
       await api(`/tutor/sessions/${s.id}/messages`, { method: 'POST', body: { content: t('learn.exam.startFrame') } });
-      await refresh(s.id);
+      const detail = await api<TutorSessionDetail>(`/tutor/sessions/${s.id}`);
+      setTurns(
+        detail.messages
+          .slice(1)
+          .map((m) => ({ role: (m.role === 'assistant' ? 'examiner' : 'you') as 'examiner' | 'you', text: m.content }))
+          .filter((x) => x.text.trim()),
+      );
       setPhase('exam');
+      const opening = [...detail.messages].reverse().find((message) => message.role === 'assistant');
+      if (opening) {
+        setStatus('speaking');
+        await speak(opening.content, targetLanguage).catch((cause) => {
+          setError((cause as Error).message);
+        });
+        setStatus('ready');
+      }
     } catch (e) {
       setError((e as Error).message);
       setPhase('setup');
@@ -694,12 +795,22 @@ function OralExam() {
     if (!recorder.current || !sessionId) return;
     setStatus('analyzing');
     try {
-      const { blob, mimeType } = await recorder.current.stop();
+      const { blob, mimeType, durationMs } = await recorder.current.stop();
       const ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
       const form = new FormData();
       form.append('audio', blob, `turn.${ext}`);
-      await apiUpload<VoiceTurnResponse>(`/tutor/sessions/${sessionId}/voice`, form);
+      form.append('speak', 'true');
+      form.append('lesson', 'false');
+      if (durationMs !== undefined) form.append('durationMs', String(durationMs));
+      if (targetLanguage) form.append('language', targetLanguage);
+      const response = await apiUpload<VoiceTurnResponse>(`/tutor/sessions/${sessionId}/voice`, form);
       await refresh(sessionId);
+      if (response.audio) {
+        setStatus('speaking');
+        await playSynthesis(response.audio);
+      } else if (response.audioUnavailable) {
+        setError(t('error.serverBusy'));
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -709,8 +820,8 @@ function OralExam() {
   };
 
   const toggleRecord = async () => {
-    if (status === 'analyzing') return;
-    if (status === 'recording') { await stopAndSend(); return; }
+    if (status === 'analyzing' || status === 'speaking' || status === 'playbackPaused') return;
+    if (status === 'recording' || status === 'paused') { await stopAndSend(); return; }
     if (!sessionId) return;
     setError(null);
     try {
@@ -721,6 +832,34 @@ function OralExam() {
       setError((e as Error).message);
     }
   };
+
+  const pauseRecording = async () => {
+    if (!recorder.current || status !== 'recording') return;
+    try { await recorder.current.pause(); setStatus('paused'); }
+    catch (cause) { setError((cause as Error).message); setStatus('ready'); }
+  };
+
+  const resumeRecording = async () => {
+    if (!recorder.current || status !== 'paused') return;
+    try { await recorder.current.resume(); setStatus('recording'); }
+    catch (cause) { setError((cause as Error).message); setStatus('ready'); }
+  };
+
+  const cancelRecording = () => {
+    recorder.current?.cancel();
+    recorder.current = null;
+    setStatus('ready');
+  };
+
+  const pausePlayback = async () => {
+    if (await pauseSpeaking()) setStatus('playbackPaused');
+  };
+
+  const resumePlayback = async () => {
+    if (await resumeSpeaking()) setStatus('speaking');
+  };
+
+  const stopPlayback = () => { stopSpeaking(); setStatus('ready'); };
 
   const endExam = async () => {
     if (!sessionId) return;
@@ -737,7 +876,15 @@ function OralExam() {
   };
 
   const mmss = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
-  const statusKey: TranslationKey = status === 'recording' ? 'learn.oral.recording' : status === 'analyzing' ? 'learn.oral.analyzing' : 'learn.oral.ready';
+  const statusKey: TranslationKey = status === 'recording'
+    ? 'learn.oral.recording'
+    : status === 'paused'
+      ? 'voice11.state.paused'
+      : status === 'analyzing'
+        ? 'learn.oral.analyzing'
+        : status === 'speaking' || status === 'playbackPaused'
+          ? 'voice11.state.speaking'
+          : 'learn.oral.ready';
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -771,6 +918,7 @@ function OralExam() {
             <View key={i} style={turn.role === 'you' ? styles.youBubble : styles.teacherBubble}>
               <Text style={styles.bubbleWho}>{turn.role === 'you' ? t('learn.oral.you') : t('learn.exam.examiner')}</Text>
               <Text style={styles.bubbleText}>{turn.text}</Text>
+              {turn.role === 'examiner' ? <SpeakButton text={turn.text} language={targetLanguage} /> : null}
             </View>
           ))}
 
@@ -782,14 +930,20 @@ function OralExam() {
                 </View>
                 <Pressable
                   onPress={toggleRecord}
-                  disabled={status === 'analyzing'}
+                  disabled={status === 'analyzing' || status === 'speaking' || status === 'playbackPaused'}
                   accessibilityRole="button"
-                  accessibilityLabel={t(status === 'recording' ? 'learn.oral.stop' : 'learn.oral.record')}
-                  style={[styles.micButton, status === 'recording' && { backgroundColor: c.error, borderColor: c.error }, status === 'analyzing' && { opacity: 0.6 }]}
+                  accessibilityLabel={t(status === 'recording' || status === 'paused' ? 'learn.oral.stop' : 'learn.oral.record')}
+                  style={[styles.micButton, (status === 'recording' || status === 'paused') && { backgroundColor: c.error, borderColor: c.error }, (status === 'analyzing' || status === 'speaking' || status === 'playbackPaused') && { opacity: 0.6 }]}
                 >
-                  <Text style={styles.micIcon}>{status === 'recording' ? '⏹' : '🎙️'}</Text>
+                  <Text style={styles.micIcon}>{status === 'recording' || status === 'paused' ? '⏹' : '🎙️'}</Text>
                 </Pressable>
-                <Text style={styles.micLabel}>{t(status === 'recording' ? 'learn.oral.stop' : 'learn.oral.record')}</Text>
+                <Text style={styles.micLabel}>{t(status === 'recording' || status === 'paused' ? 'learn.oral.stop' : 'learn.oral.record')}</Text>
+                {status === 'recording' ? <Button variant="ghost" label={t('voice11.pause')} onPress={() => void pauseRecording()} /> : null}
+                {status === 'paused' ? <Button variant="ghost" label={t('voice11.resume')} onPress={() => void resumeRecording()} /> : null}
+                {status === 'recording' || status === 'paused' ? <Button variant="ghost" label={t('tutor.cancel')} onPress={cancelRecording} /> : null}
+                {status === 'speaking' ? <Button variant="ghost" label={t('voice11.pause')} onPress={() => void pausePlayback()} /> : null}
+                {status === 'playbackPaused' ? <Button variant="ghost" label={t('voice11.resume')} onPress={() => void resumePlayback()} /> : null}
+                {status === 'speaking' || status === 'playbackPaused' ? <Button variant="ghost" label={t('learn.oral.stop')} onPress={stopPlayback} /> : null}
               </Card>
               <Button variant="ghost" label={t('learn.exam.end')} onPress={endExam} />
             </>

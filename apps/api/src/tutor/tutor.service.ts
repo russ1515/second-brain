@@ -33,6 +33,7 @@ import {
   resolveTeacherPolicy,
   TEACHER_POLICY_METADATA_SOURCE,
   teacherPolicyDirective,
+  toSupportedLanguage,
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
@@ -131,6 +132,9 @@ interface FocusInfo {
 /** Set only for language-practice sessions; drives the Language Professor role. */
 interface LanguageInfo {
   language: string;
+  targetLanguage: string | null;
+  interfaceLanguage: string | null;
+  supportLanguage: string | null;
   nativeLanguage: string | null;
   mode: LanguageMode;
   goal: string | null;
@@ -503,7 +507,7 @@ export class TutorService {
       userId,
       session.languageProfileId,
       experience,
-      passport.nativeOrPrimaryLanguage,
+      passport,
     );
     const personalization = adaptationEnabled
       ? await this.loadPersonalization(userId)
@@ -714,7 +718,7 @@ export class TutorService {
     userId: string,
     languageProfileId: string | null,
     experience?: ExperienceSession,
-    nativeLanguageFallback?: string | null,
+    passport?: LearnerPassportTutorContext,
   ): Promise<LanguageInfo | undefined> {
     if (!languageProfileId) return undefined;
     const profile = await this.prisma.languageProfile.findFirst({
@@ -779,7 +783,19 @@ export class TutorService {
     ].filter((value): value is string => value !== null);
     return {
       language: profile.language,
-      nativeLanguage: profile.nativeLanguage ?? nativeLanguageFallback ?? null,
+      targetLanguage:
+        toSupportedLanguage(profile.normalizedLanguage)
+        ?? toSupportedLanguage(profile.language)
+        ?? passport?.targetLanguage
+        ?? null,
+      interfaceLanguage: passport?.interfaceLanguage ?? null,
+      supportLanguage:
+        passport?.explanationLanguage
+        ?? passport?.teachingLanguage
+        ?? passport?.interfaceLanguage
+        ?? passport?.nativeOrPrimaryLanguage
+        ?? null,
+      nativeLanguage: profile.nativeLanguage ?? passport?.nativeOrPrimaryLanguage ?? null,
       mode: profile.mode as LanguageMode,
       goal: profile.goal,
       cefrLevel: typeof courseLevel === 'string' && /^(A1|A2|B1|B2|C1|C2)$/.test(courseLevel)

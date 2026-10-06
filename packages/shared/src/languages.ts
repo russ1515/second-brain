@@ -143,3 +143,15 @@ export function toSupportedLanguage(value: string | null | undefined): Supported
       .some((name) => comparableLanguageName(name) === normalized);
   }) ?? null;
 }
+
+/** Provider-safe speech hint for every public language. OpenAI transcription
+ * accepts ISO-639-1 language hints; Traditional Chinese therefore shares the
+ * `zh` recognizer hint while the product keeps its distinct script/RTL metadata.
+ * Unknown values stay undefined rather than being guessed from the UI locale. */
+export function speechLanguageTag(
+  value: string | null | undefined,
+): SupportedLanguageCode | 'zh' | undefined {
+  const code = toSupportedLanguage(value);
+  if (!code) return undefined;
+  return code === 'zh-Hant' ? 'zh' : code;
+}

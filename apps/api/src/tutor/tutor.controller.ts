@@ -122,6 +122,7 @@ export class TutorController {
     @Body('speak') speak?: string,
     @Body('language') language?: string,
     @Body('lesson') lesson?: string,
+    @Body('durationMs') durationMs?: string,
   ): Promise<VoiceTurnResponse> {
     if (!audio) {
       throw new BadRequestException('No audio was uploaded (field "audio").');
@@ -131,6 +132,7 @@ export class TutorController {
       language: language?.trim() || undefined,
       // Written-first is the default; only an explicit "false" opts out.
       lesson: this.isFalse(lesson) ? false : undefined,
+      durationSeconds: this.durationSeconds(durationMs),
     });
   }
 
@@ -141,5 +143,12 @@ export class TutorController {
 
   private isFalse(value?: string): boolean {
     return value === 'false' || value === '0';
+  }
+
+
+  private durationSeconds(value?: string): number | undefined {
+    const milliseconds = Number(value);
+    if (!Number.isFinite(milliseconds) || milliseconds <= 0 || milliseconds > 600_000) return undefined;
+    return Math.ceil(milliseconds / 1_000);
   }
 }

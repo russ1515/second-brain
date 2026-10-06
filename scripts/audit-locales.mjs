@@ -24,6 +24,7 @@ const LOCALES_DIR = path.join(ROOT, 'apps/mobile/lib/locales');
 const ESSENTIAL_FILE = path.join(LOCALES_DIR, 'essential.ts');
 const REVIEW_FILE = path.join(LOCALES_DIR, 'review.ts');
 const AUTH_ERRORS_FILE = path.join(LOCALES_DIR, 'auth-errors.ts');
+const VOICE_PHASE2_FILE = path.join(LOCALES_DIR, 'voice-phase2.ts');
 
 export const ALL_LOCALE_CODES = Object.freeze(['en', 'fr', ...SUPPORTED_CODES]);
 export const PROTECTED_BRANDS = Object.freeze([
@@ -293,6 +294,7 @@ export function auditRepository() {
   const supportBridgeEssentials = readNestedCatalog(ESSENTIAL_FILE, 'supportBridgeEssential');
   const reviews = readNestedCatalog(REVIEW_FILE, 'review');
   const authErrors = readNestedCatalog(AUTH_ERRORS_FILE, 'authErrors');
+  const voicePhase2 = readNestedCatalog(VOICE_PHASE2_FILE, 'voicePhase2');
   const catalogs = new Map([
     ['en', english],
     ['fr', french],
@@ -313,6 +315,7 @@ export function auditRepository() {
     const supportBridgeEssential = supportBridgeEssentials.get(code) ?? new Map();
     const review = reviews.get(code) ?? new Map();
     const authError = authErrors.get(code) ?? new Map();
+    const voice = voicePhase2.get(code) ?? new Map();
     catalogs.set(code, new Map([
       ...base,
       ...essential,
@@ -320,6 +323,7 @@ export function auditRepository() {
       ...supportBridgeEssential,
       ...review,
       ...authError,
+      ...voice,
     ]));
     layersByLocale.set(code, [
       { name: path.relative(LOCALES_DIR, file).replaceAll('\\', '/'), entries: base },
@@ -328,6 +332,7 @@ export function auditRepository() {
       { name: 'essential.ts:supportBridgeEssential', entries: supportBridgeEssential },
       { name: 'review.ts', entries: review },
       { name: 'auth-errors.ts', entries: authError },
+      { name: 'voice-phase2.ts', entries: voice },
     ]);
   }
 

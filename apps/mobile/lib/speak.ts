@@ -2,6 +2,7 @@ import { synthesize } from './speech-api';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
 import { tr } from './i18n';
+import type { SynthesisResult } from '@second-brain/shared';
 
 export { synthesize };
 
@@ -18,6 +19,12 @@ let current: ActivePlayback | null = null;
 export async function speak(text: string, language?: string): Promise<void> {
   stopSpeaking();
   const result = await synthesize(text, language);
+  await playSynthesis(result);
+}
+
+/** Play audio returned by a voice turn without paying for a duplicate TTS. */
+export async function playSynthesis(result: SynthesisResult): Promise<void> {
+  stopSpeaking();
   const directory = FileSystem.cacheDirectory;
   if (!directory) throw new Error(tr('voice.error.playback'));
   const extension = result.mimeType.includes('wav') ? 'wav' : 'mp3';
@@ -61,4 +68,20 @@ export function stopSpeaking(): void {
   if (!active) return;
   void active.sound.stopAsync().catch(() => undefined);
   active.finish();
+}
+
+export async function pauseSpeaking(): Promise<boolean> {
+  if (!current) return false;
+  const status = await current.sound.getStatusAsync();
+  if (!status.isLoaded || !status.isPlaying) return false;
+  await current.sound.pauseAsync();
+  return true;
+}
+
+export async function resumeSpeaking(): Promise<boolean> {
+  if (!current) return false;
+  const status = await current.sound.getStatusAsync();
+  if (!status.isLoaded || status.isPlaying) return false;
+  await current.sound.playAsync();
+  return true;
 }

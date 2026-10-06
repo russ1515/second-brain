@@ -128,7 +128,10 @@ export interface LearnerPassportTutorContext {
   /** Persisted declaration forwarded as data to the existing ITE. The ITE,
    * not the client or the Passport projection, derives pedagogical policy. */
   ageBand: LearnerAgeBand | null;
+  interfaceLanguage: SupportedLanguageCode | null;
   nativeOrPrimaryLanguage: SupportedLanguageCode | null;
+  explanationLanguage: SupportedLanguageCode | null;
   teachingLanguage: SupportedLanguageCode | null;
+  targetLanguage: SupportedLanguageCode | null;
   learningPreferences: string[];
 }

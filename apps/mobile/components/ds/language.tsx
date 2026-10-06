@@ -280,7 +280,7 @@ export function VoiceState({ state, elapsedSeconds, transcript }: { state: Voice
   const { colors: c, radius } = useTokens();
   const { t } = useI18n();
   const normalized: VoiceExperienceState = state === 'speaking'
-    ? 'RESPONSE'
+    ? 'SPEAKING'
     : state === 'listening' || state === 'recording'
       ? 'LISTENING'
       : state;
@@ -289,6 +289,7 @@ export function VoiceState({ state, elapsedSeconds, transcript }: { state: Voice
     LISTENING: { icon: '●', key: 'voice11.state.listening', color: c.error },
     TRANSCRIPTION: { icon: '✎', key: 'voice11.state.transcription', color: c.info },
     THINKING: { icon: '✦', key: 'voice11.state.thinking', color: c.aiAccent },
+    SPEAKING: { icon: '🔊', key: 'voice11.state.speaking', color: c.success },
     RESPONSE: { icon: '🔊', key: 'voice11.state.response', color: c.success },
     PAUSED: { icon: 'Ⅱ', key: 'voice11.state.paused', color: c.warning },
     ERROR: { icon: '!', key: 'voice11.state.error', color: c.error },

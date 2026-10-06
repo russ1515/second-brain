@@ -9,6 +9,9 @@ export interface TranscribeOptions {
   mimeType: string;
   /** Hint of the expected spoken language (BCP-47); providers may ignore it. */
   language?: string;
+  /** Bounded client observation used only when the container cannot be decoded
+   * server-side. WAV duration remains authoritative when available. */
+  durationSeconds?: number;
 }
 
 export interface SynthesizeOptions {
@@ -21,6 +24,7 @@ export interface AnalyzeOptions {
   mimeType: string;
   /** Hint of the spoken language; providers may ignore it. */
   language?: string;
+  durationSeconds?: number;
   /** The analysis instruction — the DOMAIN owns the prompt/schema; the provider
    *  only forwards the audio + this text to an audio-native model. */
   instruction: string;

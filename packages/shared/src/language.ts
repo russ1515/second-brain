@@ -252,7 +252,7 @@ export const LANGUAGE_PRACTICE_FORMATS = [
 export type LanguagePracticeFormat = (typeof LANGUAGE_PRACTICE_FORMATS)[number];
 
 export const VOICE_EXPERIENCE_STATES = [
-  'READY', 'LISTENING', 'TRANSCRIPTION', 'THINKING', 'RESPONSE', 'PAUSED', 'ERROR',
+  'READY', 'LISTENING', 'TRANSCRIPTION', 'THINKING', 'SPEAKING', 'RESPONSE', 'PAUSED', 'ERROR',
 ] as const;
 export type VoiceExperienceState = (typeof VOICE_EXPERIENCE_STATES)[number];
 

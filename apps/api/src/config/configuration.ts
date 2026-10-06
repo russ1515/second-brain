@@ -76,15 +76,28 @@ export default () => ({
     geminiApiKey: process.env.GEMINI_API_KEY,
   },
   speech: {
-    // 'gemini' does real STT+TTS; 'fake' is a deterministic offline dev
-    // transport (UTF-8 text payload in, no TTS).
+    // OpenAI/Gemini do real STT+TTS; fake is a deterministic offline dev
+    // transport (UTF-8 text payload in, no TTS). OpenAI reuses the same private
+    // server credential as the validated LLM provider; it is never client-side.
     provider: process.env.SPEECH_PROVIDER ?? 'fake',
-    // Audio-in works on the regular multimodal models; TTS needs a *-tts model.
-    sttModel: process.env.SPEECH_STT_MODEL ?? 'gemini-flash-lite-latest',
-    ttsModel: process.env.SPEECH_TTS_MODEL ?? 'gemini-2.5-flash-preview-tts',
-    voice: process.env.SPEECH_VOICE ?? 'Kore',
+    sttModel: process.env.SPEECH_STT_MODEL ?? (
+      process.env.SPEECH_PROVIDER === 'openai'
+        ? 'gpt-4o-mini-transcribe'
+        : 'gemini-flash-lite-latest'
+    ),
+    ttsModel: process.env.SPEECH_TTS_MODEL ?? (
+      process.env.SPEECH_PROVIDER === 'openai'
+        ? 'gpt-4o-mini-tts'
+        : 'gemini-2.5-flash-preview-tts'
+    ),
+    // Both providers expose named voices; deployments choose rather than UI
+    // code hardcoding one voice for every environment.
+    voice: process.env.SPEECH_VOICE ?? (
+      process.env.SPEECH_PROVIDER === 'openai' ? 'marin' : 'Kore'
+    ),
     // Gemini key is shared with the LLM layer.
     geminiApiKey: process.env.GEMINI_API_KEY,
+    openaiApiKey: process.env.OPENAI_API_KEY,
   },
   auth: {
     accessSecret: process.env.JWT_ACCESS_SECRET as string,

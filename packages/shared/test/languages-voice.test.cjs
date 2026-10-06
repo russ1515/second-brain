@@ -22,6 +22,19 @@ test('Arabic and Hebrew expose centralized RTL metadata', () => {
   assert.equal(shared.SUPPORTED_LANGUAGES.fr.rtl, undefined);
 });
 
+test('all 34 languages have a deterministic provider speech hint', () => {
+  for (const code of shared.SUPPORTED_LANGUAGE_CODES) {
+    const hint = shared.speechLanguageTag(code);
+    assert.ok(hint, `missing speech hint for ${code}`);
+    if (code !== 'fr') {
+      assert.notEqual(hint, 'fr', `learning language ${code} was replaced by UI French`);
+    }
+  }
+  assert.equal(shared.speechLanguageTag('zh-Hant'), 'zh');
+  assert.equal(shared.speechLanguageTag('no-NO'), 'nb');
+  assert.equal(shared.speechLanguageTag('unknown-language'), undefined);
+});
+
 test('language resolution accepts code variants and native names without creating variants', () => {
   assert.equal(shared.toSupportedLanguage('en-GB'), 'en');
   assert.equal(shared.toSupportedLanguage('pt_BR'), 'pt');
@@ -38,9 +51,9 @@ test('language resolution accepts code variants and native names without creatin
 
 test('voice experience exposes every semantic state exactly once', () => {
   assert.deepEqual(shared.VOICE_EXPERIENCE_STATES, [
-    'READY', 'LISTENING', 'TRANSCRIPTION', 'THINKING', 'RESPONSE', 'PAUSED', 'ERROR',
+    'READY', 'LISTENING', 'TRANSCRIPTION', 'THINKING', 'SPEAKING', 'RESPONSE', 'PAUSED', 'ERROR',
   ]);
-  assert.equal(new Set(shared.VOICE_EXPERIENCE_STATES).size, 7);
+  assert.equal(new Set(shared.VOICE_EXPERIENCE_STATES).size, 8);
 });
 
 test('language next action is deterministic and never invents progression', () => {

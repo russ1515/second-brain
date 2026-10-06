@@ -120,7 +120,8 @@ const learnerPassportEssentials = nestedCatalog(path.join(LOCALES_DIR, 'essentia
 const supportBridgeEssentials = nestedCatalog(path.join(LOCALES_DIR, 'essential.ts'), 'supportBridgeEssential');
 const reviewCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'review.ts'), 'review');
 const authErrorCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'auth-errors.ts'), 'authErrors');
-const overlayFiles = new Set(['auth-errors.ts', 'essential.ts', 'index.ts', 'review.ts']);
+const voicePhase2Catalogs = nestedCatalog(path.join(LOCALES_DIR, 'voice-phase2.ts'), 'voicePhase2');
+const overlayFiles = new Set(['auth-errors.ts', 'essential.ts', 'index.ts', 'review.ts', 'voice-phase2.ts']);
 
 function registeredLocale(file) {
   const source = sourceFile(path.join(LOCALES_DIR, file));
@@ -160,6 +161,7 @@ function effectiveCatalog(resource) {
     ...(supportBridgeEssentials.get(code) ?? new Map()),
     ...(reviewCatalogs.get(code) ?? new Map()),
     ...(authErrorCatalogs.get(code) ?? new Map()),
+    ...(voicePhase2Catalogs.get(code) ?? new Map()),
   ]);
 }
 

@@ -4,7 +4,7 @@
 import type { LessonView } from './lesson';
 import type { TutorMessageView } from './tutor';
 
-export type SpeechProviderName = 'gemini' | 'fake';
+export type SpeechProviderName = 'gemini' | 'openai' | 'fake';
 
 export interface TranscriptionResult {
   text: string;
@@ -12,6 +12,10 @@ export interface TranscriptionResult {
   language: string | null;
   provider: SpeechProviderName;
   model: string | null;
+  /** Opaque provider request id used only for server-side cost correlation. */
+  providerRequestId?: string | null;
+  /** Provider-reported audio duration when available. */
+  audioSeconds?: number | null;
 }
 
 export interface SpeechCapabilities {
@@ -27,6 +31,8 @@ export interface SynthesisResult {
   mimeType: string;
   provider: SpeechProviderName;
   model: string | null;
+  /** Opaque provider request id used only for server-side cost correlation. */
+  providerRequestId?: string | null;
 }
 
 /** Ask the teacher to read something aloud.
@@ -50,4 +56,7 @@ export interface VoiceTurnResponse {
   lesson: LessonView | null;
   /** Present only when `speak` was requested AND the provider supports TTS. */
   audio?: SynthesisResult;
+  /** True only when speech was requested but TTS failed after the written turn
+   * succeeded. Clients must surface this rather than pretending voice played. */
+  audioUnavailable?: boolean;
 }

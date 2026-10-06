@@ -92,7 +92,8 @@ class EnvironmentVariables {
   @IsString()
   GEMINI_API_KEY?: string;
 
-  @ValidateIf((env: EnvironmentVariables) => env.LLM_PROVIDER === 'openai')
+  @ValidateIf((env: EnvironmentVariables) =>
+    env.LLM_PROVIDER === 'openai' || env.SPEECH_PROVIDER === 'openai')
   @IsString()
   @MinLength(1)
   OPENAI_API_KEY?: string;
@@ -181,7 +182,7 @@ class EnvironmentVariables {
 
   // ── Speech (Phase 5, voice layer) ──
   @IsOptional()
-  @IsString()
+  @IsIn(['gemini', 'openai', 'fake'])
   SPEECH_PROVIDER?: string;
 
   @IsOptional()

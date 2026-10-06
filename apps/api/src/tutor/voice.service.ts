@@ -26,6 +26,8 @@ export interface VoiceTurnOptions {
   language?: string;
   /** Escape hatch for rapid back-and-forth; the written package is the default. */
   lesson?: boolean;
+  /** Bounded recording duration observation for compressed-audio quota units. */
+  durationSeconds?: number;
 }
 
 /**
@@ -62,11 +64,11 @@ export class VoiceService {
     if (options.speak && !this.speech.supportsSynthesis) {
       throw new NotImplementedException(
         `The active speech provider ("${this.speech.activeProvider}") cannot ` +
-          `synthesize speech. Set SPEECH_PROVIDER=gemini to voice replies back.`,
+          `synthesize speech. Configure a real speech provider to voice replies back.`,
       );
     }
 
-    const transcript = await this.transcribe(audio, options.language);
+    const transcript = await this.transcribe(audio, options.language, options.durationSeconds);
 
     // The same grounded, twin-steered flow a typed message takes.
     let message: TutorMessageView;
@@ -112,6 +114,7 @@ export class VoiceService {
       message,
       lesson,
       ...(audioReply ? { audio: audioReply } : {}),
+      ...(options.speak && !audioReply ? { audioUnavailable: true } : {}),
     };
   }
 
@@ -120,12 +123,14 @@ export class VoiceService {
   private async transcribe(
     audio: UploadedFileLike,
     language?: string,
+    durationSeconds?: number,
   ): Promise<{ text: string; language: string | null }> {
     let result;
     try {
       result = await this.speech.transcribe(audio.buffer, {
         mimeType: audio.mimetype || 'application/octet-stream',
         language,
+        durationSeconds,
       }, 'TUTOR_VOICE');
     } catch (error) {
       this.logger.error('Learning operation failed.');

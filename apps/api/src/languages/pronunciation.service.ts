@@ -41,9 +41,10 @@ export class PronunciationService {
     profileId: string,
     targetPhrase: string,
     audio: UploadedFileLike,
+    durationSeconds?: number,
   ): Promise<PronunciationAssessment> {
     const profile = await this.languages.requireOwned(userId, profileId);
-    const heard = await this.transcribe(audio, profile);
+    const heard = await this.transcribe(audio, profile, durationSeconds);
     const { words, accuracy } = alignWords(targetPhrase, heard);
     const feedback = await this.coach(profile, targetPhrase, heard, accuracy);
 
@@ -61,6 +62,7 @@ export class PronunciationService {
     profileId: string,
     audio: UploadedFileLike,
     context?: string,
+    durationSeconds?: number,
   ): Promise<PronunciationCoaching> {
     const profile = await this.languages.requireOwned(userId, profileId);
     if (!this.speech.supportsAnalysis) {
@@ -76,6 +78,7 @@ export class PronunciationService {
         mimeType: audio.mimetype || 'application/octet-stream',
         language: profile.language,
         instruction,
+        durationSeconds,
       }, 'LANGUAGE_VOICE');
       raw = result.text;
     } catch (error) {
@@ -199,6 +202,7 @@ export class PronunciationService {
   private async transcribe(
     audio: UploadedFileLike,
     profile: LanguageProfile,
+    durationSeconds?: number,
   ): Promise<string> {
     let text: string;
     try {
@@ -207,6 +211,7 @@ export class PronunciationService {
         // Tell the recogniser what language to expect, or it will happily
         // transcribe learner speech as accented English.
         language: profile.language,
+        durationSeconds,
       }, 'LANGUAGE_VOICE');
       text = result.text.trim();
     } catch (error) {

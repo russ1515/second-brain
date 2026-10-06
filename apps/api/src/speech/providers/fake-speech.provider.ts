@@ -29,8 +29,8 @@ export class FakeSpeechProvider implements SpeechProvider {
     if (!this.isPlainText(text)) {
       throw new Error(
         'The `fake` speech provider only accepts UTF-8 text payloads (it is a ' +
-          'dev transport, not a recogniser). Set SPEECH_PROVIDER=gemini to ' +
-          'transcribe real audio.',
+          'dev transport, not a recogniser). Configure a real speech provider ' +
+          'to transcribe real audio.',
       );
     }
     return {

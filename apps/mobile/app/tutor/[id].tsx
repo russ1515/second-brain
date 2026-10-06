@@ -36,6 +36,7 @@ import { SmartErrorState, SmartLoadingState, SmartState } from '../../components
 import { ContextBar } from '../../components/context/context-bar';
 import { SpeakButton } from '../../components/speak-button';
 import { VoiceState } from '../../components/ds/language';
+import { pauseSpeaking, resumeSpeaking, speak, stopSpeaking } from '../../lib/speak';
 import {
   ProgressNarrative,
   ResultActionBar,
@@ -104,9 +105,15 @@ export default function TutorSessionScreen() {
   const pausedDuration = useRef(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [voiceDraft, setVoiceDraft] = useState(false);
+  const [voicePlayback, setVoicePlayback] = useState<'playing' | 'paused' | null>(null);
   const scroll = useRef<ScrollView | null>(null);
   const busy = workState === 'THINKING' || workState === 'TRANSCRIPTION';
   const recording = workState === 'LISTENING' || workState === 'PAUSED';
+  const activeSpeechLanguage = typeof session?.experienceSession?.currentStep?.metadata?.language === 'string'
+    ? session.experienceSession.currentStep.metadata.language
+    : undefined;
+
+  useEffect(() => () => { recorder.current?.cancel(); stopSpeaking(); }, []);
 
   useEffect(() => {
     if (workState !== 'LISTENING') return;
@@ -169,6 +176,7 @@ export default function TutorSessionScreen() {
     setFailure(null);
     setNotice(null);
     try {
+      let spokenReply: string | null = null;
       if (missionContext) {
         const result: RlleMissionTurnResponse = await sendRlleMissionTurn(
           missionContext.languageProfileId,
@@ -183,10 +191,11 @@ export default function TutorSessionScreen() {
         if (result.evaluation?.outcome === 'demonstrated') setNotice(t('rlle.ui.mission.feedback.succeeded'));
         else if (result.evaluation?.outcome === 'needs-repair') setNotice(t('rlle.ui.mission.feedback.repair'));
       } else {
-        await api<SendTutorMessageResponse>(`/tutor/sessions/${id}/messages`, {
+        const response = await api<SendTutorMessageResponse>(`/tutor/sessions/${id}/messages`, {
           method: 'POST',
           body: { content, ...(pace ? { pace } : {}), ...(viaVoice ? { viaVoice: true } : {}) },
         });
+        spokenReply = response.message.content;
       }
       setDraft('');
       setVoiceDraft(false);
@@ -194,8 +203,17 @@ export default function TutorSessionScreen() {
       if (user?.id) await clearTutorSessionDraft(user.id, id);
       setWorkState('RESPONSE');
       await load(false);
-      if (!viaVoice && !voiceFocused) setWorkState('READY');
       requestAnimationFrame(() => scroll.current?.scrollToEnd({ animated: true }));
+      if (viaVoice && spokenReply) {
+        setVoicePlayback('playing');
+        await speak(spokenReply, activeSpeechLanguage).catch((cause) => {
+          setFailure({ kind: 'provider', message: (cause as Error).message });
+        });
+        setVoicePlayback(null);
+        setWorkState('READY');
+      } else if (!viaVoice && !voiceFocused) {
+        setWorkState('READY');
+      }
     } catch (error) {
       setFailure(toFailure(error));
       setWorkState('ERROR');
@@ -237,6 +255,7 @@ export default function TutorSessionScreen() {
       const form = new FormData();
       const ext = recording.mimeType.includes('mp4') ? 'mp4' : recording.mimeType.includes('ogg') ? 'ogg' : 'webm';
       form.append('audio', recording.blob, `turn.${ext}`);
+      if (recording.durationMs !== undefined) form.append('durationMs', String(recording.durationMs));
       const language = session?.experienceSession?.currentStep?.metadata?.language;
       if (typeof language === 'string') form.append('language', language);
       const transcript = await apiUpload<TranscriptionResult>('/speech/stt', form);
@@ -302,6 +321,20 @@ export default function TutorSessionScreen() {
     setWorkState('READY');
   };
 
+  const pausePlayback = async () => {
+    if (await pauseSpeaking()) setVoicePlayback('paused');
+  };
+
+  const resumePlayback = async () => {
+    if (await resumeSpeaking()) setVoicePlayback('playing');
+  };
+
+  const stopPlayback = () => {
+    stopSpeaking();
+    setVoicePlayback(null);
+    setWorkState('READY');
+  };
+
   const removeContext = async (item: ContextItem) => {
     const experience = session?.experienceSession;
     if (!experience) return;
@@ -360,9 +393,7 @@ export default function TutorSessionScreen() {
   const experience = session.experienceSession ?? null;
   const objective = experience?.currentStep?.label ?? experience?.intent ?? session.title ?? t('tutor.discussion');
   const contexts = experience?.activeContexts.items ?? [];
-  const targetLanguage = typeof experience?.currentStep?.metadata?.language === 'string'
-    ? experience.currentStep.metadata.language
-    : undefined;
+  const targetLanguage = activeSpeechLanguage;
   const canPace = session.messages.some((message) => message.role === 'assistant') && !recording;
   const continueCompleted = () => {
     if (!experience) return;
@@ -560,8 +591,11 @@ export default function TutorSessionScreen() {
             />
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.sm }}>
               <Button label={t('tutor.send')} onPress={send} loading={workState === 'THINKING'} disabled={!draft.trim() || recording} />
+              {voicePlayback === 'playing' ? <Button label={t('voice11.pause')} variant="secondary" onPress={() => void pausePlayback()} /> : null}
+              {voicePlayback === 'paused' ? <Button label={t('voice11.resume')} variant="secondary" onPress={() => void resumePlayback()} /> : null}
+              {voicePlayback ? <Button label={t('learn.oral.stop')} variant="ghost" onPress={stopPlayback} /> : null}
               {RECORDING_SUPPORTED ? (
-                recording ? (
+                voicePlayback ? null : recording ? (
                   <>
                     <Button label={t('voice11.transcribe')} variant="ai" onPress={() => void stopAndTranscribe()} />
                     {workState === 'PAUSED'

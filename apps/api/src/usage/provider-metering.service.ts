@@ -50,6 +50,10 @@ export interface ProviderMeteringInput {
   metadata?: SafeMetadata;
   operationId?: string;
   measure?: (result: unknown) => ProviderUsageMeasurement;
+  /** Derive the actual commercial units from the successful provider result.
+   * The value can only release part of the pre-call reservation, never exceed
+   * it. This is useful for WAV TTS where duration is known only afterwards. */
+  quotaUnits?: (result: unknown) => number;
 }
 
 export interface ProviderAttemptInput {
@@ -140,6 +144,7 @@ export class ProviderMeteringService {
 
     let opened: OpenOperation | null = null;
     let providerSucceeded = false;
+    let finalizedUnits = input.units;
     try {
       opened = await this.open(input, operationId);
       let attemptNumber = await this.prisma.providerUsageAttempt.count({
@@ -169,6 +174,12 @@ export class ProviderMeteringService {
               (override.measure ?? input.measure)?.(result) ?? {},
               model,
             );
+            if (input.quotaUnits) {
+              const measuredUnits = input.quotaUnits(result);
+              if (Number.isSafeInteger(measuredUnits) && measuredUnits >= 0) {
+                finalizedUnits = Math.min(input.units, measuredUnits);
+              }
+            }
             const cost = await this.calculateCost(provider, measurement, startedAt);
             const completedAt = new Date();
             await this.prisma.providerUsageAttempt.update({
@@ -244,7 +255,7 @@ export class ProviderMeteringService {
       // would create free provider work and invite a duplicate retry.
       if (opened.reservationId && opened.reservationStatus === 'RESERVED') {
         try {
-          await this.quotas.finalize(opened.reservationId, input.units);
+          await this.quotas.finalize(opened.reservationId, finalizedUnits);
         } catch (error) {
           await this.prisma.providerUsageOperation.update({
             where: { id: opened.id },

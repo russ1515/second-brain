@@ -371,6 +371,7 @@ export class LanguageController {
     @Param('id') id: string,
     @UploadedFile() audio: UploadedFileLike | undefined,
     @Body('targetPhrase') targetPhrase?: string,
+    @Body('durationMs') durationMs?: string,
   ): Promise<PronunciationAssessment> {
     if (!audio) {
       throw new BadRequestException('No audio was uploaded (field "audio").');
@@ -383,6 +384,7 @@ export class LanguageController {
       id,
       targetPhrase.trim(),
       audio,
+      this.durationSeconds(durationMs),
     );
   }
 
@@ -400,10 +402,23 @@ export class LanguageController {
     @Param('id') id: string,
     @UploadedFile() audio: UploadedFileLike | undefined,
     @Body('context') context?: string,
+    @Body('durationMs') durationMs?: string,
   ): Promise<PronunciationCoaching> {
     if (!audio) {
       throw new BadRequestException('No audio was uploaded (field "audio").');
     }
-    return this.pronunciation.coachSpeaking(user.userId, id, audio, context);
+    return this.pronunciation.coachSpeaking(
+      user.userId,
+      id,
+      audio,
+      context,
+      this.durationSeconds(durationMs),
+    );
+  }
+
+  private durationSeconds(value?: string): number | undefined {
+    const milliseconds = Number(value);
+    if (!Number.isFinite(milliseconds) || milliseconds <= 0 || milliseconds > 600_000) return undefined;
+    return Math.ceil(milliseconds / 1_000);
   }
 }

@@ -1,6 +1,12 @@
 import { useEffect, useState, useMemo } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
-import { PLAYBACK_SUPPORTED, speak, stopSpeaking } from '../lib/speak';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  pauseSpeaking,
+  PLAYBACK_SUPPORTED,
+  resumeSpeaking,
+  speak,
+  stopSpeaking,
+} from '../lib/speak';
 import { useTokens } from '../lib/design/theme';
 import type { ColorScale } from '../lib/design/tokens';
 import { useI18n } from '../lib/i18n';
@@ -25,7 +31,7 @@ export function SpeakButton({
   const { t } = useI18n();
   const styles = useMemo(() => makeStyles(c), [c]);
   const idleLabel = label ?? t('lesson.readAloud');
-  const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle');
+  const [state, setState] = useState<'idle' | 'loading' | 'playing' | 'paused'>('idle');
   const [error, setError] = useState<string | null>(null);
 
   // Leaving the screen must not leave a voice talking to an empty room.
@@ -33,12 +39,8 @@ export function SpeakButton({
 
   if (!PLAYBACK_SUPPORTED) return null;
 
-  const toggle = async () => {
-    if (state !== 'idle') {
-      stopSpeaking();
-      setState('idle');
-      return;
-    }
+  const start = async () => {
+    if (state !== 'idle') return;
     setError(null);
     setState('loading');
     try {
@@ -51,23 +53,58 @@ export function SpeakButton({
     }
   };
 
+  const pause = async () => {
+    if (await pauseSpeaking()) setState('paused');
+  };
+
+  const resume = async () => {
+    try {
+      if (await resumeSpeaking()) setState('playing');
+    } catch (cause) {
+      setError((cause as Error).message);
+      stopSpeaking();
+      setState('idle');
+    }
+  };
+
+  const stop = () => {
+    stopSpeaking();
+    setState('idle');
+  };
+
   return (
     <>
-      <Pressable onPress={toggle} accessibilityRole="button" style={styles.button}>
-        {state === 'loading' ? (
-          <ActivityIndicator size="small" color={c.warning} />
+      <View style={styles.controls}>
+        {state === 'idle' || state === 'loading' ? (
+          <Pressable onPress={() => void start()} disabled={state === 'loading'} accessibilityRole="button" style={styles.button}>
+            {state === 'loading'
+              ? <ActivityIndicator size="small" color={c.warning} />
+              : <Text style={styles.label}>🔊 {idleLabel}</Text>}
+          </Pressable>
         ) : (
-          <Text style={styles.label}>
-            {state === 'playing' ? `⏹ ${t('learn.oral.stop')}` : `🔊 ${idleLabel}`}
-          </Text>
+          <>
+            <Pressable
+              onPress={state === 'paused' ? () => void resume() : () => void pause()}
+              accessibilityRole="button"
+              style={styles.button}
+            >
+              <Text style={styles.label}>
+                {state === 'paused' ? `▶ ${t('voice11.resume')}` : `⏸ ${t('voice11.pause')}`}
+              </Text>
+            </Pressable>
+            <Pressable onPress={stop} accessibilityRole="button" style={styles.button}>
+              <Text style={styles.label}>⏹ {t('learn.oral.stop')}</Text>
+            </Pressable>
+          </>
         )}
-      </Pressable>
+      </View>
       {error ? <Text style={styles.error}>{error}</Text> : null}
     </>
   );
 }
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
+  controls: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
   button: {
     alignSelf: 'flex-start',
     borderWidth: 1,

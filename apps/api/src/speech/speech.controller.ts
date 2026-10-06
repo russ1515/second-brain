@@ -61,6 +61,7 @@ export class SpeechController {
   async transcribe(
     @UploadedFile() audio: UploadedFileLike | undefined,
     @Body('language') language?: string,
+    @Body('durationMs') durationMs?: string,
   ): Promise<TranscriptionResult> {
     if (!audio) {
       throw new BadRequestException('No audio was uploaded (field "audio").');
@@ -69,6 +70,7 @@ export class SpeechController {
       return await this.speech.transcribe(audio.buffer, {
         mimeType: audio.mimetype || 'application/octet-stream',
         ...(language?.trim() ? { language: language.trim() } : {}),
+        ...(this.durationSeconds(durationMs) ? { durationSeconds: this.durationSeconds(durationMs)! } : {}),
       });
     } catch (error) {
       this.logger.error('Learning operation failed.');
@@ -88,7 +90,7 @@ export class SpeechController {
     if (!this.speech.supportsSynthesis) {
       throw new NotImplementedException(
         `The active speech provider ("${this.speech.activeProvider}") cannot ` +
-          `synthesize speech. Set SPEECH_PROVIDER=gemini to hear your teacher.`,
+          `synthesize speech. Configure a real speech provider to hear your teacher.`,
       );
     }
     try {
@@ -99,5 +101,11 @@ export class SpeechController {
         'Your teacher’s voice is temporarily unavailable. Please try again shortly.',
       );
     }
+  }
+
+  private durationSeconds(value?: string): number | undefined {
+    const milliseconds = Number(value);
+    if (!Number.isFinite(milliseconds) || milliseconds <= 0 || milliseconds > 600_000) return undefined;
+    return Math.ceil(milliseconds / 1_000);
   }
 }

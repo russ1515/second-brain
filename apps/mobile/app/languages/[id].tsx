@@ -763,11 +763,12 @@ function Pronunciation({ profileId }: { profileId: string }) {
     setRecording(false);
     setBusy(true);
     try {
-      const { blob, mimeType } = await recorder.current.stop();
+      const { blob, mimeType, durationMs } = await recorder.current.stop();
       const ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
       const form = new FormData();
       form.append('audio', blob, `say.${ext}`);
       form.append('targetPhrase', phrase.trim());
+      if (durationMs !== undefined) form.append('durationMs', String(durationMs));
       setResult(
         await apiUpload<PronunciationAssessment>(`/languages/${profileId}/pronounce`, form),
       );
@@ -858,10 +859,11 @@ function PronunciationCoach({ profileId }: { profileId: string }) {
     setRecording(false);
     setBusy(true);
     try {
-      const { blob, mimeType } = await recorder.current.stop();
+      const { blob, mimeType, durationMs } = await recorder.current.stop();
       const ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
       const form = new FormData();
       form.append('audio', blob, `speak.${ext}`);
+      if (durationMs !== undefined) form.append('durationMs', String(durationMs));
       if (context.trim()) form.append('context', context.trim());
       setResult(
         await apiUpload<PronunciationCoaching>(

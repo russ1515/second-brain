@@ -139,6 +139,9 @@ export default function LearnScreen() {
       if (!payload.recording) throw new Error(t('learn5.voice.missing'));
       const form = new FormData();
       form.append('audio', payload.recording.blob, `learn-turn.${audioExtension(payload.recording.mimeType)}`);
+      if (payload.recording.durationMs !== undefined) {
+        form.append('durationMs', String(payload.recording.durationMs));
+      }
       await apiUpload<VoiceTurnResponse>(`/tutor/sessions/${session.id}/voice`, form);
     } else {
       // Send the learner's own wording unchanged. The existing Tutor backend

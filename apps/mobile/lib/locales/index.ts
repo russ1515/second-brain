@@ -48,3 +48,4 @@ import './bn'; // Bengali
 import './essential';
 import './review';
 import './auth-errors';
+import './voice-phase2';

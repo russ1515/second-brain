@@ -4,13 +4,14 @@ import { SPEECH_PROVIDER } from './speech.constants';
 import type { SpeechProvider } from './speech-provider.interface';
 import { GeminiSpeechProvider } from './providers/gemini-speech.provider';
 import { FakeSpeechProvider } from './providers/fake-speech.provider';
+import { OpenAISpeechProvider } from './providers/openai-speech.provider';
 import { SpeechService } from './speech.service';
 import { SpeechController } from './speech.controller';
 import { UsageModule } from '../usage/usage.module';
 
 /**
  * Binds the speech provider selected by SPEECH_PROVIDER. This factory is the
- * ONLY place that knows about concrete providers. `gemini` does real STT+TTS;
+ * ONLY place that knows about concrete providers. OpenAI/Gemini do real STT+TTS;
  * `fake` is a deterministic dev transport (text payload in, no TTS) for offline
  * work without an API key. To add Whisper/ElevenLabs: implement SpeechProvider
  * and add a case below — no business code changes.
@@ -22,6 +23,13 @@ const speechProviderFactory: Provider = {
     const provider = config.getOrThrow<string>('speech.provider');
 
     switch (provider) {
+      case 'openai':
+        return new OpenAISpeechProvider(
+          config.get<string>('speech.openaiApiKey') ?? '',
+          config.getOrThrow<string>('speech.sttModel'),
+          config.getOrThrow<string>('speech.ttsModel'),
+          config.getOrThrow<string>('speech.voice'),
+        );
       case 'gemini':
         return new GeminiSpeechProvider(
           config.get<string>('speech.geminiApiKey') ?? '',
