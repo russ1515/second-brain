@@ -152,3 +152,12 @@ test('Tutor voice UI preserves one session, provides playback controls and oral 
   assert.match(policy, /Give no hints or answer before closure/);
   assert.match(policy, /After closure, justify the result by criteria/);
 });
+
+test('persistent beta runtime selects OpenAI speech without putting a credential in source', () => {
+  const runtime = read('scripts/compose.openai-runtime.yml');
+  assert.match(runtime, /SPEECH_PROVIDER: openai/);
+  assert.match(runtime, /SPEECH_STT_MODEL: \$\{SPEECH_STT_MODEL:-gpt-4o-mini-transcribe\}/);
+  assert.match(runtime, /SPEECH_TTS_MODEL: \$\{SPEECH_TTS_MODEL:-gpt-4o-mini-tts\}/);
+  assert.match(runtime, /OPENAI_API_KEY: \$\{OPENAI_API_KEY:\?OPENAI_API_KEY is required\}/);
+  assert.doesNotMatch(runtime, /sk-(?:proj-)?[A-Za-z0-9_-]{20,}/);
+});

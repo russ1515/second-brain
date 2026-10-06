@@ -9,3 +9,9 @@ services:
       LLM_MODEL: ${OPENAI_MODEL:?OPENAI_MODEL is required}
       OPENAI_MODEL: ${OPENAI_MODEL:?OPENAI_MODEL is required}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}
+      # The beta uses the same private OpenAI credential through the existing
+      # SpeechProvider seam. Models and voice remain deployment-configurable.
+      SPEECH_PROVIDER: openai
+      SPEECH_STT_MODEL: ${SPEECH_STT_MODEL:-gpt-4o-mini-transcribe}
+      SPEECH_TTS_MODEL: ${SPEECH_TTS_MODEL:-gpt-4o-mini-tts}
+      SPEECH_VOICE: ${SPEECH_VOICE:-marin}
