@@ -278,3 +278,43 @@ test('temporary OpenAI provider-gate mode enforces a single bounded Tutor attemp
   assert.equal(calls, 1);
   assert.equal(receivedOptions.maxOutputTokens, 7);
 });
+
+test('OpenAI vision is costed once from provider tokens while page count stays in quota metadata', async () => {
+  let meteringInput;
+  let measured;
+  const primary = {
+    name: 'openai',
+    generate: async () => ({ text: 'fixture', provider: 'openai', model: 'fixture-model' }),
+    readImages: async () => ({
+      text: 'page transcription', provider: 'openai', model: 'fixture-model',
+      usage: { inputTokens: 120, outputTokens: 12, totalTokens: 132 },
+    }),
+  };
+  const orchestrator = { pickProvider: () => primary, supportsVision: true };
+  const metrics = { recordAiCall: () => undefined, captureError: () => undefined };
+  const metering = {
+    executeWithAttempts: async (input, operation) => {
+      meteringInput = input;
+      return operation({
+        attempt: async (call) => {
+          const result = await call();
+          measured = input.measure(result);
+          return result;
+        },
+      });
+    },
+  };
+  const service = new LlmService(orchestrator, metrics, metering, { get: () => undefined });
+  await service.readImages([
+    { mimeType: 'image/jpeg', data: 'controlled-page' },
+  ], 'Transcribe.', { operation: 'ocr' });
+
+  assert.equal(meteringInput.feature, 'DOCUMENT_OCR');
+  assert.equal(meteringInput.resource, 'OCR_PAGES');
+  assert.deepEqual(meteringInput.metadata, { images: 1, operation: 'ocr' });
+  assert.equal(measured.inputTokens, 120);
+  assert.equal(measured.outputTokens, 12);
+  assert.equal(measured.measurementSource, 'PROVIDER');
+  assert.equal(measured.ocrPages, undefined);
+  assert.equal(measured.visionCalls, undefined);
+});

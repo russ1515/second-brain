@@ -87,7 +87,19 @@ export class LlmService {
       {
         provider: provider.name, model: bounded.model, feature: this.costFeatureFor(operation),
         resource: this.resourceFor(operation), units: Math.max(1, images.length), metadata: { images: images.length, operation },
-        measure: (result) => ({ ...this.llmMeasurement(result), ocrPages: images.length, visionCalls: 1, measurementSource: 'OBSERVED' }),
+        measure: (result) => {
+          const measurement = this.llmMeasurement(result);
+          // OpenAI Responses reports image-input consumption in its token
+          // usage. Adding separately priced OCR/vision units would require a
+          // fictitious rate and correctly force the ledger to UNKNOWN. The
+          // page count remains authoritative in the quota reservation and the
+          // operation metadata (`images`); cost is measured from provider
+          // tokens exactly once. Other adapters retain the existing observed
+          // page/call units for their own pricing catalogs.
+          return provider.name === 'openai'
+            ? { ...measurement, measurementSource: 'PROVIDER' }
+            : { ...measurement, ocrPages: images.length, visionCalls: 1, measurementSource: 'OBSERVED' };
+        },
       },
       (attempts) => this.execute(provider, operation, () => call.call(provider, images, prompt, bounded), attempts),
     ) ?? this.execute(provider, operation, () => call.call(provider, images, prompt, bounded)));
