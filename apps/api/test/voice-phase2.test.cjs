@@ -98,10 +98,11 @@ test('speech metering reserves once, measures WAV duration and does not double-c
     },
   };
   const service = new SpeechService(provider, metering);
-  const result = await service.synthesize('A deliberately longer sentence for quota reservation.');
+  const text = 'A deliberately longer sentence for quota reservation.';
+  const result = await service.synthesize(text);
   assert.equal(result.model, 'gpt-tts-test');
   assert.equal(calls, 1);
-  assert.ok(envelope.units > 1);
+  assert.equal(envelope.units, Math.ceil(text.length / 3));
   assert.equal(envelope.quotaUnits(result), 1);
   assert.equal(envelope.measure(result).providerRequestId, 'req-1');
 });

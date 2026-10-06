@@ -91,7 +91,10 @@ export class SpeechService {
       // Reserve a conservative upper bound before the billable call. WAV output
       // gives us exact duration afterwards and ProviderMetering releases the
       // unused part exactly once.
-      const reservedSeconds = Math.max(1, Math.ceil(text.length / 8));
+      // Three characters/second is deliberately conservative across Latin,
+      // CJK and RTL scripts. The exact WAV duration finalizes the reservation
+      // and releases the unused balance after success.
+      const reservedSeconds = Math.max(1, Math.ceil(text.length / 3));
       const providerCall = () => synthesize.call(this.provider, text, options);
       const value = await (this.metering?.executeWithAttempts(
         {
