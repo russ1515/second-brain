@@ -150,6 +150,52 @@ test('OpenAI Responses adapter serializes safely and canonicalizes separately pr
   });
 });
 
+test('OpenAI Responses adapter sends normalized scan pages through the existing vision seam', async () => {
+  const calls = [];
+  const provider = new OpenAIProvider('test-key', 'configured-vision-model', async (url, init) => {
+    calls.push({ url, init });
+    return jsonResponse({
+      id: 'vision-response-id',
+      model: 'configured-vision-model',
+      output: [{
+        type: 'message', role: 'assistant',
+        content: [{ type: 'output_text', text: 'Transcription page test.' }],
+      }],
+      usage: { input_tokens: 12, output_tokens: 4, total_tokens: 16 },
+    });
+  });
+
+  const result = await provider.readImages([
+    { mimeType: 'image/jpeg', data: 'controlled-base64-page' },
+  ], 'Transcribe this page.', { maxOutputTokens: 80, temperature: 0 });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://api.openai.com/v1/responses');
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(body.model, 'configured-vision-model');
+  assert.equal(body.store, false);
+  assert.equal(body.max_output_tokens, 80);
+  assert.equal(body.temperature, 0);
+  assert.deepEqual(body.input, [{
+    role: 'user',
+    content: [
+      { type: 'input_text', text: 'Transcribe this page.' },
+      { type: 'input_image', image_url: 'data:image/jpeg;base64,controlled-base64-page' },
+    ],
+  }]);
+  assert.equal(result.text, 'Transcription page test.');
+  assert.equal(result.provider, 'openai');
+  assert.deepEqual(result.usage, {
+    inputTokens: 12,
+    cachedTokens: undefined,
+    outputTokens: 4,
+    totalTokens: 16,
+    cacheWriteTokens: undefined,
+    reasoningTokens: undefined,
+    unpricedUsageReason: undefined,
+  });
+});
+
 test('OpenAI adapter refuses missing credentials and never exposes a provider error body', async () => {
   let missingKeyFetchCalled = false;
   const missingKey = new OpenAIProvider('', 'configured-test-model', async () => {
@@ -183,6 +229,7 @@ test('OpenAI remains the only executable route until echo is explicitly selected
     const openai = {
       name: 'openai',
       generate: async () => ({ text: 'fixture', provider: 'openai', model: 'fixture-model' }),
+      readImages: async () => ({ text: 'vision fixture', provider: 'openai', model: 'fixture-model' }),
     };
     const config = { get: (key) => key === 'llm.model' ? 'fixture-model' : undefined };
     const metrics = { snapshot: () => ({ ai: { byModel: {} } }) };
@@ -192,6 +239,8 @@ test('OpenAI remains the only executable route until echo is explicitly selected
       assert.equal(orchestrator.pickProvider().name, 'openai');
       assert.equal(orchestrator.view().selection[strategy], 'openai');
     }
+    assert.equal(orchestrator.supportsVision, true);
+    assert.equal(orchestrator.pickProvider({ needsVision: true }).name, 'openai');
     const echo = orchestrator.view().providers.find((provider) => provider.name === 'echo');
     assert.equal(echo.available, false);
   } finally {

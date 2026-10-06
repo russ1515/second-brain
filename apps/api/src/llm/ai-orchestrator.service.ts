@@ -48,10 +48,8 @@ export class AiOrchestratorService {
     this.instances.set(this.primary.name, this.primary);
 
     this.catalog = [
-      { name: 'gemini', family: 'Google Gemini', model: this.primary.name === 'gemini' ? configuredModel : 'MODEL_NOT_CONFIGURED', costTier: 2, speedTier: 3, qualityTier: 2, vision: true, keyEnv: 'GEMINI_API_KEY', hasAdapter: true },
-      // The initial Responses seam is text-only. Do not advertise vision until
-      // readImages is implemented and independently validated.
-      { name: 'openai', family: 'OpenAI', model: this.primary.name === 'openai' ? configuredModel : 'MODEL_NOT_CONFIGURED', costTier: 3, speedTier: 2, qualityTier: 3, vision: false, keyEnv: 'OPENAI_API_KEY', hasAdapter: true },
+      { name: 'gemini', family: 'Google Gemini', model: this.primary.name === 'gemini' ? configuredModel : 'MODEL_NOT_CONFIGURED', costTier: 2, speedTier: 3, qualityTier: 2, vision: this.primary.name === 'gemini' && typeof this.primary.readImages === 'function', keyEnv: 'GEMINI_API_KEY', hasAdapter: true },
+      { name: 'openai', family: 'OpenAI', model: this.primary.name === 'openai' ? configuredModel : 'MODEL_NOT_CONFIGURED', costTier: 3, speedTier: 2, qualityTier: 3, vision: this.primary.name === 'openai' && typeof this.primary.readImages === 'function', keyEnv: 'OPENAI_API_KEY', hasAdapter: true },
       { name: 'claude', family: 'Anthropic Claude', model: 'claude-3.5-sonnet', costTier: 3, speedTier: 2, qualityTier: 3, vision: true, keyEnv: 'ANTHROPIC_API_KEY', hasAdapter: false },
       { name: 'mistral', family: 'Mistral', model: 'mistral-large', costTier: 1, speedTier: 3, qualityTier: 2, vision: false, keyEnv: 'MISTRAL_API_KEY', hasAdapter: false },
       { name: 'ollama', family: 'Local (Ollama)', model: 'llama3', costTier: 1, speedTier: 1, qualityTier: 1, vision: false, hasAdapter: false },

@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import type {
   LLMGenerateOptions,
   LLMGenerateResult,
+  LLMImagePart,
   LLMMessage,
   LLMProviderName,
 } from '@second-brain/shared';
@@ -116,6 +117,77 @@ export class OpenAIProvider implements LLMProvider {
     const text = responseText(parsed);
     if (!text) throw new OpenAIProviderError('OPENAI_RESPONSE_TEXT_MISSING', 502);
 
+    const usage = responseUsage(parsed);
+    return {
+      text,
+      provider: this.name,
+      model: stringValue(parsed.model) ?? model,
+      providerRequestId: stringValue(parsed.id),
+      ...(usage ? { usage } : {}),
+    };
+  }
+
+  /** Responses accepts normalized private scan pages as data URLs. The caller
+   * has already decoded, bounded and stripped metadata from these bytes; this
+   * adapter keeps the existing provider, metering and retry path intact. */
+  async readImages(
+    images: LLMImagePart[],
+    prompt: string,
+    options?: LLMGenerateOptions,
+  ): Promise<LLMGenerateResult> {
+    if (!this.apiKey) throw new OpenAIProviderError('OPENAI_CREDENTIAL_MISSING', 401);
+    const model = (options?.model ?? this.defaultModel).trim();
+    if (!model) throw new OpenAIProviderError('OPENAI_MODEL_MISSING', 400);
+    if (!images.length || !prompt.trim()) {
+      throw new OpenAIProviderError('OPENAI_INPUT_MISSING', 400);
+    }
+
+    const request = {
+      model,
+      input: [{
+        role: 'user',
+        content: [
+          { type: 'input_text', text: prompt },
+          ...images.map((image) => ({
+            type: 'input_image',
+            image_url: `data:${image.mimeType};base64,${image.data}`,
+          })),
+        ],
+      }],
+      store: false,
+      ...(options?.maxOutputTokens !== undefined
+        ? { max_output_tokens: options.maxOutputTokens }
+        : {}),
+      ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+    };
+
+    let response: OpenAIFetchResponse;
+    try {
+      response = await this.fetcher('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
+      });
+    } catch {
+      throw new OpenAIProviderError('OPENAI_NETWORK_ERROR', 503);
+    }
+    if (!response.ok) {
+      throw new OpenAIProviderError(`OPENAI_RESPONSE_HTTP_${response.status}`, response.status);
+    }
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new OpenAIProviderError('OPENAI_RESPONSE_INVALID_JSON', 502);
+    }
+    const parsed = asRecord(payload);
+    if (!parsed) throw new OpenAIProviderError('OPENAI_RESPONSE_INVALID', 502);
+    const text = responseText(parsed);
+    if (!text) throw new OpenAIProviderError('OPENAI_RESPONSE_TEXT_MISSING', 502);
     const usage = responseUsage(parsed);
     return {
       text,
