@@ -234,6 +234,19 @@ test('Mobile Home consumes one aggregate endpoint and keeps the compact content 
   assert.match(decisionComponents, /isReduceMotionEnabled/);
 });
 
+test('Home resume cards confirm and archive only the resumable experience', () => {
+  const screen = fs.readFileSync(path.resolve(__dirname, '../../mobile/app/(tabs)/index.tsx'), 'utf8');
+  const components = fs.readFileSync(path.resolve(__dirname, '../../mobile/components/home/decision.tsx'), 'utf8');
+  assert.match(components, /resume-delete-\$\{session\.id\}/);
+  assert.match(components, /<Dialog/);
+  assert.match(components, /resume-delete-confirm-\$\{session\.id\}/);
+  assert.match(screen, /\/experience-sessions\/\$\{session\.id\}/);
+  assert.match(screen, /body: \{ status: 'abandoned' \}/);
+  assert.match(screen, /resumableSessions\.filter\(\(item\) => item\.id !== session\.id\)/);
+  assert.match(screen, /queryClient\.invalidateQueries\(\{ queryKey: \['home', 'overview'\] \}\)/);
+  assert.doesNotMatch(screen, /DELETE/);
+});
+
 test('Home endpoint is protected by the JWT access guard', () => {
   const guards = Reflect.getMetadata('__guards__', HomeController) ?? [];
   assert.ok(guards.some((guard) => guard.name === 'JwtAccessGuard'));

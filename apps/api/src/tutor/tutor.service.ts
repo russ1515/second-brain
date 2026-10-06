@@ -399,7 +399,10 @@ export class TutorService {
     const session = await this.prisma.tutorSession.findUnique({
       where: { id },
       include: {
-        messages: { orderBy: { createdAt: 'desc' }, take: SESSION_MESSAGE_LIMIT },
+        messages: {
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: SESSION_MESSAGE_LIMIT,
+        },
         focusConcept: { select: { name: true } },
       },
     });
@@ -541,7 +544,7 @@ export class TutorService {
 
     const historyDescending = await this.prisma.tutorMessage.findMany({
       where: { sessionId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: HISTORY_LIMIT,
     });
     // A voice transcript survives a provider/quota failure. Retrying that exact
@@ -629,6 +632,11 @@ export class TutorService {
     const subjectChanged = subject != null && subject !== session.subject;
     const strategyChanged = adaptationEnabled && strategy !== session.strategy;
 
+    // Text turns are persisted in one transaction. Give both sides an explicit
+    // monotonic timestamp so a user turn can never render after its answer,
+    // even on databases whose NOW() value is transaction-stable.
+    const userCreatedAt = new Date();
+    const assistantCreatedAt = new Date(userCreatedAt.getTime() + 1);
     const assistantCreate = this.prisma.tutorMessage.create({
       data: {
         sessionId,
@@ -636,6 +644,7 @@ export class TutorService {
         content: answer,
         citations: this.citationsForStorage(citations),
         viaVoice,
+        createdAt: assistantCreatedAt,
       },
     });
     const sessionUpdate = this.prisma.tutorSession.update({
@@ -653,7 +662,7 @@ export class TutorService {
     } else {
       const ops = await this.prisma.$transaction([
         this.prisma.tutorMessage.create({
-          data: { sessionId, role: 'user', content, viaVoice },
+          data: { sessionId, role: 'user', content, viaVoice, createdAt: userCreatedAt },
         }),
         assistantCreate,
         sessionUpdate,
@@ -688,7 +697,7 @@ export class TutorService {
     await this.requireOwned(userId, sessionId);
     const last = await this.prisma.tutorMessage.findFirst({
       where: { sessionId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
     if (last?.role === 'user' && last.content === transcript) return;
     await this.prisma.tutorMessage.create({

@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { RefreshControl, ScrollView, View } from 'react-native';
 import type {
@@ -36,12 +37,16 @@ export default function HomeScreen() {
   const { user } = useAuth();
   const { t, locale } = useI18n();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { colors: c, spacing } = useTokens();
   const { width } = useResponsive();
   const composition = resolveHomeComposition(width);
+  const overviewQueryKey = ['home', 'overview', locale, user?.id] as const;
+  const [deletingResumeId, setDeletingResumeId] = useState<string | null>(null);
+  const [deleteResumeFailed, setDeleteResumeFailed] = useState(false);
 
   const overview = useQuery<HomeOverview>({
-    queryKey: ['home', 'overview', locale, user?.id],
+    queryKey: overviewQueryKey,
     queryFn: ({ signal }) => api<HomeOverview>('/home/overview', { signal }),
     enabled: Boolean(user),
     staleTime: 30_000,
@@ -55,6 +60,30 @@ export default function HomeScreen() {
   };
   const resume = (session: HomeResumableSession) => open(session.destination);
   const openUpcoming = (item: HomeUpcomingItem) => open(item.destination);
+  const deleteResume = async (session: HomeResumableSession) => {
+    if (deletingResumeId) return;
+    setDeletingResumeId(session.id);
+    setDeleteResumeFailed(false);
+    await queryClient.cancelQueries({ queryKey: overviewQueryKey });
+    const previous = queryClient.getQueryData<HomeOverview>(overviewQueryKey);
+    queryClient.setQueryData<HomeOverview>(overviewQueryKey, (current) => (
+      current
+        ? { ...current, resumableSessions: current.resumableSessions.filter((item) => item.id !== session.id) }
+        : current
+    ));
+    try {
+      await api(`/experience-sessions/${session.id}`, {
+        method: 'PATCH',
+        body: { status: 'abandoned' },
+      });
+      await queryClient.invalidateQueries({ queryKey: ['home', 'overview'] });
+    } catch {
+      if (previous) queryClient.setQueryData(overviewQueryKey, previous);
+      setDeleteResumeFailed(true);
+    } finally {
+      setDeletingResumeId(null);
+    }
+  };
 
   if (overview.isPending || !user) {
     return <HomeSkeleton />;
@@ -81,7 +110,14 @@ export default function HomeScreen() {
   const hasGoal = data.mainGoal !== null;
   const hasProgress = data.progress !== null;
 
-  const resumeSection = <ResumeSection sessions={data.resumableSessions} onResume={resume} />;
+  const resumeSection = (
+    <ResumeSection
+      sessions={data.resumableSessions}
+      onResume={resume}
+      onDelete={(session) => { void deleteResume(session); }}
+      deletingSessionId={deletingResumeId}
+    />
+  );
   const upcomingSection = (
     <UpcomingSection
       items={data.upcoming}
@@ -116,6 +152,10 @@ export default function HomeScreen() {
           <SmartState state="stale" detail={t('home4.stale')} />
         ) : data.partial ? (
           <SmartState state="partial" detail={t('home4.partial')} />
+        ) : null}
+
+        {deleteResumeFailed ? (
+          <Alert tone="error" title={t('state.error')} detail={t('home4.unavailable')} />
         ) : null}
 
         {data.nextBestAction ? (

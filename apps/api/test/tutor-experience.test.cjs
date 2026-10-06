@@ -39,7 +39,10 @@ test('Tutor resume restores server state and local drafts without unbounded read
   assert.match(drafts, /userId, sessionId/);
   assert.match(service, /SESSION_LIST_LIMIT = 20/);
   assert.match(service, /SESSION_MESSAGE_LIMIT = 100/);
-  assert.match(service, /orderBy: \{ createdAt: 'desc' \}/);
+  assert.match(service, /orderBy: \[\{ createdAt: 'desc' \}, \{ id: 'desc' \}\]/);
+  assert.match(service, /const assistantCreatedAt = new Date\(userCreatedAt\.getTime\(\) \+ 1\)/);
+  assert.match(service, /const messages = \[\.\.\.session\.messages\]\.reverse\(\)/);
+  assert.match(screen, /session\.messages\.map/);
 });
 
 test('Provider and quota failures preserve work and keep non-AI navigation available', () => {

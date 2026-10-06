@@ -18,6 +18,7 @@ import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
 import { Badge, Button, Card, Progress } from '../ds/core';
 import { Section } from '../ds/layout';
+import { Dialog } from '../ds/overlays';
 
 export function HomeContextHeader({ name, context }: { name: string; context: HomeContextView }) {
   const { t } = useI18n();
@@ -107,50 +108,116 @@ export function NextBestActionCard({ action, onOpen }: { action: NextBestAction;
   );
 }
 
-export function SessionResumeCard({ session, onResume }: { session: HomeResumableSession; onResume: () => void }) {
+export function SessionResumeCard({
+  session,
+  onResume,
+  onDelete,
+  deleting = false,
+}: {
+  session: HomeResumableSession;
+  onResume: () => void;
+  onDelete?: () => void;
+  deleting?: boolean;
+}) {
   const { t, formatLocale } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const typeLabel = t(`home4.session.type.${session.type}` as TranslationKey);
   const percent = session.progress?.percent;
+  const deleteLabel = t('workspace10.plan.remove');
   return (
-    <Card style={{ gap: spacing.sm }}>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.sm }}>
-        <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-          <Badge tone="neutral" label={typeLabel} />
-          <Text style={[typography.title, { color: c.textPrimary, marginTop: spacing.xs }]} numberOfLines={2}>
-            {session.title ?? typeLabel}
-          </Text>
-          <Text style={[typography.caption, { color: c.textMuted }]}>
-            {t('home4.lastActivity')}: {formatActivityDate(session.updatedAt, formatLocale, t)}
-          </Text>
+    <>
+      <Card style={{ gap: spacing.sm }}>
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.sm }}>
+          <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+            <Badge tone="neutral" label={typeLabel} />
+            <Text style={[typography.title, { color: c.textPrimary, marginTop: spacing.xs }]} numberOfLines={2}>
+              {session.title ?? typeLabel}
+            </Text>
+            <Text style={[typography.caption, { color: c.textMuted }]}>
+              {t('home4.lastActivity')}: {formatActivityDate(session.updatedAt, formatLocale, t)}
+            </Text>
+          </View>
+          {percent !== undefined ? <Text style={[typography.title, { color: c.primary }]}>{percent}%</Text> : null}
         </View>
-        {percent !== undefined ? <Text style={[typography.title, { color: c.primary }]}>{percent}%</Text> : null}
-      </View>
 
-      {session.contextLabels.length > 0 ? (
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
-          {session.contextLabels.map((label) => <Badge key={label} tone="primary" label={label} />)}
+        {session.contextLabels.length > 0 ? (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+            {session.contextLabels.map((label) => <Badge key={label} tone="primary" label={label} />)}
+          </View>
+        ) : null}
+        {percent !== undefined ? <Progress value={percent} /> : null}
+        {session.artifact ? (
+          <Text style={[typography.bodySmall, { color: c.textSecondary }]} numberOfLines={2}>
+            {t('home4.artifact')}: {session.artifact.title ?? session.artifact.kind}
+          </Text>
+        ) : null}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+          <Button label={t('home4.resumeAction')} variant="secondary" onPress={onResume} />
+          {onDelete ? (
+            <Button
+              label={deleteLabel}
+              icon="⌫"
+              variant="ghost"
+              disabled={deleting}
+              onPress={() => setConfirmingDelete(true)}
+              testID={`resume-delete-${session.id}`}
+            />
+          ) : null}
         </View>
-      ) : null}
-      {percent !== undefined ? <Progress value={percent} /> : null}
-      {session.artifact ? (
-        <Text style={[typography.bodySmall, { color: c.textSecondary }]} numberOfLines={2}>
-          {t('home4.artifact')}: {session.artifact.title ?? session.artifact.kind}
-        </Text>
-      ) : null}
-      <Button label={t('home4.resumeAction')} variant="secondary" onPress={onResume} />
-    </Card>
+      </Card>
+      <Dialog
+        visible={confirmingDelete}
+        onClose={() => { if (!deleting) setConfirmingDelete(false); }}
+        title={deleteLabel}
+        footer={(
+          <>
+            <Button label={t('tutor.cancel')} variant="ghost" disabled={deleting} onPress={() => setConfirmingDelete(false)} />
+            <Button
+              label={deleteLabel}
+              variant="danger"
+              loading={deleting}
+              onPress={() => {
+                setConfirmingDelete(false);
+                onDelete?.();
+              }}
+              testID={`resume-delete-confirm-${session.id}`}
+            />
+          </>
+        )}
+      >
+        <Text style={[typography.body, { color: c.textSecondary }]}>{session.title ?? typeLabel}</Text>
+      </Dialog>
+    </>
   );
 }
 
-export function ResumeSection({ sessions, onResume }: { sessions: HomeResumableSession[]; onResume: (session: HomeResumableSession) => void }) {
+export function ResumeSection({
+  sessions,
+  onResume,
+  onDelete,
+  deletingSessionId,
+}: {
+  sessions: HomeResumableSession[];
+  onResume: (session: HomeResumableSession) => void;
+  onDelete?: (session: HomeResumableSession) => void;
+  deletingSessionId?: string | null;
+}) {
   const { t } = useI18n();
   const { spacing } = useTokens();
   if (sessions.length === 0) return null;
   return (
     <Section title={t('home4.resume')} description={t('home4.resumeDetail')}>
       <View style={{ gap: spacing.sm }}>
-        {sessions.slice(0, 3).map((session) => <SessionResumeCard key={session.id} session={session} onResume={() => onResume(session)} />)}
+        {sessions.slice(0, 3).map((session) => (
+          <SessionResumeCard
+            key={session.id}
+            session={session}
+            onResume={() => onResume(session)}
+            onDelete={onDelete ? () => onDelete(session) : undefined}
+            deleting={deletingSessionId === session.id}
+          />
+        ))}
       </View>
     </Section>
   );
