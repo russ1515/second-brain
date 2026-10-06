@@ -3,7 +3,6 @@
 # the VPS; Compose fails before recreation if either required value is missing.
 services:
   api:
-    command: ["node", "dist/main.js"]
     environment:
       LLM_PROVIDER: openai
       LLM_MODEL: ${OPENAI_MODEL:?OPENAI_MODEL is required}
