@@ -168,6 +168,17 @@ export class PrivateMediaService implements OnModuleInit {
     );
   }
 
+  /** Remove learner-owned document media while preserving account-level media
+   * (avatar and support-report screenshots). The tombstone keeps the file and
+   * relational mutations atomic from the caller's point of view. */
+  async deleteLearningMediaAnd<T>(userId: string, finalize: () => Promise<T>): Promise<T> {
+    return this.withOwnerLock(
+      userId,
+      () => this.deleteWithTombstone(join(this.userDirectory(userId), 'scans'), finalize),
+      180_000,
+    );
+  }
+
   /** Include user-provided private media in the existing GDPR JSON export.
    * Reads are serialized with avatar/scan writes and use only owner-derived,
    * hashed paths. No filesystem path or user identifier is returned. */
@@ -538,11 +549,15 @@ export class PrivateMediaService implements OnModuleInit {
     await chmod(path, 0o700);
   }
 
-  private withOwnerLock<T>(userId: string, operation: () => Promise<T>): Promise<T> {
+  private withOwnerLock<T>(
+    userId: string,
+    operation: () => Promise<T>,
+    timeout = 30_000,
+  ): Promise<T> {
     return this.prisma.$transaction(async (tx) => {
       const lockKey = `private-media:${userId}`;
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       return operation();
-    }, { timeout: 30_000 });
+    }, { timeout });
   }
 }

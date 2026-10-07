@@ -19,6 +19,7 @@ import { isOnline, onConnectivityChange } from './connectivity';
 const CACHE_PREFIX = 'sb.cache.';
 const OUTBOX_KEY = 'sb.outbox';
 const LAST_SYNC_KEY = 'sb.lastSync';
+let outboxGeneration = 0;
 
 // ── read cache ──────────────────────────────────────────────────────────────
 
@@ -108,6 +109,20 @@ export async function lastSyncAt(): Promise<number | null> {
   return raw ? Number(raw) : null;
 }
 
+/**
+ * Drop persisted learning reads and pending writes after an authoritative
+ * learning reset. The generation barrier prevents an in-flight flush from
+ * writing its stale snapshot back into storage after the purge.
+ */
+export async function clearOfflineLearningState(): Promise<void> {
+  outboxGeneration += 1;
+  const keys = (await AsyncStorage.getAllKeys()).filter((key) =>
+    key.startsWith(CACHE_PREFIX) || key === OUTBOX_KEY || key === LAST_SYNC_KEY,
+  );
+  if (keys.length) await AsyncStorage.multiRemove(keys);
+  notify();
+}
+
 let flushing = false;
 
 /** Replay every queued write, in order. Drops entries the server rejects (4xx);
@@ -115,14 +130,21 @@ let flushing = false;
 export async function flushOutbox(): Promise<{ sent: number; dropped: number; kept: number }> {
   if (flushing || !isOnline()) return { sent: 0, dropped: 0, kept: 0 };
   flushing = true;
+  const generation = outboxGeneration;
   let sent = 0;
   let dropped = 0;
   try {
     let entries = await readOutbox();
     const remaining: OutboxEntry[] = [];
     for (const entry of entries) {
+      if (generation !== outboxGeneration) {
+        return { sent, dropped, kept: 0 };
+      }
       try {
         await api(entry.path, { method: entry.method, body: entry.body });
+        if (generation !== outboxGeneration) {
+          return { sent: sent + 1, dropped, kept: 0 };
+        }
         sent++;
       } catch (err) {
         if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
@@ -132,6 +154,9 @@ export async function flushOutbox(): Promise<{ sent: number; dropped: number; ke
           remaining.push(entry); // network hiccup — try again next time
         }
       }
+    }
+    if (generation !== outboxGeneration) {
+      return { sent, dropped, kept: 0 };
     }
     await writeOutbox(remaining);
     await AsyncStorage.setItem(LAST_SYNC_KEY, String(Date.now()));

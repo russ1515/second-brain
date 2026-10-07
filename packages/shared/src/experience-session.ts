@@ -153,3 +153,36 @@ export interface ExperienceSessionPage {
   items: ExperienceSession[];
   nextCursor: string | null;
 }
+
+/** Exact, server-computed impact of removing one user-owned learning object. */
+export interface LearningDeletionCounts {
+  sessions: number;
+  lessons: number;
+  tutorMessages: number;
+  studySessions: number;
+  exerciseAttempts: number;
+  homework: number;
+  reviewItems: number;
+  cards: number;
+  documentsMovedToTrash: number;
+  workspaceReferences: number;
+  recommendations: number;
+  calendarEvents: number;
+}
+
+export interface LearningDeletionPreview {
+  target: 'experience-session' | 'lesson' | 'goal' | 'calendar-event';
+  id: string;
+  title: string | null;
+  counts: LearningDeletionCounts;
+  /** Generated lesson documents are hidden from active retrieval and moved to
+   * the existing Library trash; shared documents/concepts/collections remain. */
+  reversibleDocuments: boolean;
+  sharedDocumentsPreserved: number;
+}
+
+export interface LearningDeletionResult {
+  deleted: boolean;
+  alreadyDeleted: boolean;
+  preview: LearningDeletionPreview | null;
+}

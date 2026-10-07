@@ -4,15 +4,20 @@ import type {
   CreateGoalRequest,
   Goal,
   GoalPeriod,
+  LearningDeletionPreview,
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
+import { LearningDataDeletionService } from '../experience-sessions/learning-data-deletion.service';
 
 const PERIODS: GoalPeriod[] = ['daily', 'weekly', 'monthly'];
 
 /** Goals (Sprint 5): the learner's daily / weekly / monthly objectives. */
 @Injectable()
 export class GoalsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly learningDeletions: LearningDataDeletionService,
+  ) {}
 
   async list(userId: string): Promise<Goal[]> {
     const goals = await this.prisma.goal.findMany({
@@ -44,8 +49,11 @@ export class GoalsService {
   }
 
   async remove(userId: string, id: string): Promise<void> {
-    await this.requireOwned(userId, id);
-    await this.prisma.goal.delete({ where: { id } });
+    await this.learningDeletions.deleteGoal(userId, id);
+  }
+
+  previewRemoval(userId: string, id: string): Promise<LearningDeletionPreview> {
+    return this.learningDeletions.previewGoal(userId, id);
   }
 
   private async requireOwned(userId: string, id: string): Promise<GoalRow> {

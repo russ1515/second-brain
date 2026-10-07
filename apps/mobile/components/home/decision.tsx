@@ -12,6 +12,7 @@ import type {
   HomeProgressSummary,
   HomeResumableSession,
   HomeUpcomingItem,
+  LearningDeletionPreview,
   NextBestAction,
 } from '@second-brain/shared';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
@@ -112,16 +113,21 @@ export function SessionResumeCard({
   session,
   onResume,
   onDelete,
+  onPreviewDelete,
   deleting = false,
 }: {
   session: HomeResumableSession;
   onResume: () => void;
   onDelete?: () => void;
+  onPreviewDelete?: () => Promise<LearningDeletionPreview>;
   deleting?: boolean;
 }) {
   const { t, formatLocale } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [preview, setPreview] = useState<LearningDeletionPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewFailed, setPreviewFailed] = useState(false);
   const typeLabel = t(`home4.session.type.${session.type}` as TranslationKey);
   const percent = session.progress?.percent;
   const deleteLabel = t('workspace10.plan.remove');
@@ -160,7 +166,16 @@ export function SessionResumeCard({
               icon="⌫"
               variant="ghost"
               disabled={deleting}
-              onPress={() => setConfirmingDelete(true)}
+              onPress={() => {
+                setConfirmingDelete(true);
+                setPreview(null);
+                setPreviewFailed(false);
+                setPreviewing(true);
+                void onPreviewDelete?.()
+                  .then(setPreview)
+                  .catch(() => setPreviewFailed(true))
+                  .finally(() => setPreviewing(false));
+              }}
               testID={`resume-delete-${session.id}`}
             />
           ) : null}
@@ -176,7 +191,8 @@ export function SessionResumeCard({
             <Button
               label={deleteLabel}
               variant="danger"
-              loading={deleting}
+              loading={deleting || previewing}
+              disabled={!preview || previewFailed}
               onPress={() => {
                 setConfirmingDelete(false);
                 onDelete?.();
@@ -187,6 +203,7 @@ export function SessionResumeCard({
         )}
       >
         <Text style={[typography.body, { color: c.textSecondary }]}>{session.title ?? typeLabel}</Text>
+        <DeletionImpact preview={preview} loading={previewing} failed={previewFailed} />
       </Dialog>
     </>
   );
@@ -196,11 +213,13 @@ export function ResumeSection({
   sessions,
   onResume,
   onDelete,
+  onPreviewDelete,
   deletingSessionId,
 }: {
   sessions: HomeResumableSession[];
   onResume: (session: HomeResumableSession) => void;
   onDelete?: (session: HomeResumableSession) => void;
+  onPreviewDelete?: (session: HomeResumableSession) => Promise<LearningDeletionPreview>;
   deletingSessionId?: string | null;
 }) {
   const { t } = useI18n();
@@ -215,6 +234,7 @@ export function ResumeSection({
             session={session}
             onResume={() => onResume(session)}
             onDelete={onDelete ? () => onDelete(session) : undefined}
+            onPreviewDelete={onPreviewDelete ? () => onPreviewDelete(session) : undefined}
             deleting={deletingSessionId === session.id}
           />
         ))}
@@ -223,7 +243,21 @@ export function ResumeSection({
   );
 }
 
-export function UpcomingSection({ items, onOpen, onPlanning }: { items: HomeUpcomingItem[]; onOpen: (item: HomeUpcomingItem) => void; onPlanning: () => void }) {
+export function UpcomingSection({
+  items,
+  onOpen,
+  onPlanning,
+  onDelete,
+  onPreviewDelete,
+  deletingItemId,
+}: {
+  items: HomeUpcomingItem[];
+  onOpen: (item: HomeUpcomingItem) => void;
+  onPlanning: () => void;
+  onDelete?: (item: HomeUpcomingItem) => void;
+  onPreviewDelete?: (item: HomeUpcomingItem) => Promise<LearningDeletionPreview>;
+  deletingItemId?: string | null;
+}) {
   const { t, formatLocale } = useI18n();
   const { colors: c, radius, spacing, typography } = useTokens();
   return (
@@ -233,25 +267,15 @@ export function UpcomingSection({ items, onOpen, onPlanning }: { items: HomeUpco
       ) : (
         <View style={{ gap: spacing.xs }}>
           {items.map((item) => (
-            <Pressable
+            <UpcomingItemRow
               key={`${item.date}-${item.kind}-${item.id}`}
-              accessibilityRole="button"
-              accessibilityLabel={`${formatUpcomingDate(item.date, formatLocale, t)} — ${item.title}`}
-              onPress={() => onOpen(item)}
-              style={({ pressed }) => ({
-                flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 54,
-                paddingVertical: spacing.sm, paddingHorizontal: spacing.sm, borderRadius: radius.sm,
-                backgroundColor: pressed ? c.surfaceSunken : 'transparent',
-                borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
-              })}
-            >
-              <Text style={[typography.caption, { color: c.textMuted, width: 88 }]}>{formatUpcomingDate(item.date, formatLocale, t)}</Text>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={[typography.bodySmall, { color: c.textPrimary, fontWeight: '700' }]} numberOfLines={2}>{item.title}</Text>
-                <Text style={[typography.caption, { color: c.textMuted }]}>{t(`home4.upcoming.kind.${item.kind}` as TranslationKey)}</Text>
-              </View>
-              <Text accessible={false} style={{ color: c.textMuted }}>→</Text>
-            </Pressable>
+              item={item}
+              dateLabel={formatUpcomingDate(item.date, formatLocale, t)}
+              onOpen={() => onOpen(item)}
+              onDelete={onDelete && item.deletion?.kind !== 'details-only' ? () => onDelete(item) : undefined}
+              onPreviewDelete={onPreviewDelete && item.deletion?.kind !== 'details-only' ? () => onPreviewDelete(item) : undefined}
+              deleting={deletingItemId === item.id}
+            />
           ))}
         </View>
       )}
@@ -259,19 +283,219 @@ export function UpcomingSection({ items, onOpen, onPlanning }: { items: HomeUpco
   );
 }
 
-export function MainGoalPreview({ goal, onOpen }: { goal: HomeGoalPreview | null; onOpen: () => void }) {
+export function MainGoalPreview({ goal, onOpen, onDelete, onPreviewDelete, deleting = false }: {
+  goal: HomeGoalPreview | null;
+  onOpen: () => void;
+  onDelete?: () => void;
+  onPreviewDelete?: () => Promise<LearningDeletionPreview>;
+  deleting?: boolean;
+}) {
   const { t } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [preview, setPreview] = useState<LearningDeletionPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewFailed, setPreviewFailed] = useState(false);
   if (!goal) return null;
+  return (
+    <>
+      <Section title={t('home4.mainGoal')}>
+        <View style={{ gap: spacing.sm, paddingVertical: spacing.xs }}>
+          <Text style={[typography.h3, { color: c.textPrimary }]}>{goal.title}</Text>
+          <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t(`home4.goal.period.${goal.period}` as TranslationKey)}</Text>
+          {goal.progress !== null ? <Progress value={goal.progress} /> : null}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+            <Button label={t('home4.goal.open')} variant="secondary" onPress={onOpen} />
+            {onDelete ? (
+              <Button
+                label={t('learningControl.deleteGoal')}
+                variant="ghost"
+                disabled={deleting}
+                onPress={() => {
+                  setConfirmingDelete(true);
+                  setPreview(null);
+                  setPreviewFailed(false);
+                  setPreviewing(true);
+                  void onPreviewDelete?.()
+                    .then(setPreview)
+                    .catch(() => setPreviewFailed(true))
+                    .finally(() => setPreviewing(false));
+                }}
+              />
+            ) : null}
+          </View>
+        </View>
+      </Section>
+      <Dialog
+        visible={confirmingDelete}
+        onClose={() => { if (!deleting) setConfirmingDelete(false); }}
+        title={t('learningControl.deleteGoal')}
+        footer={(
+          <>
+            <Button label={t('tutor.cancel')} variant="ghost" disabled={deleting} onPress={() => setConfirmingDelete(false)} />
+            <Button
+              label={t('learningControl.deleteGoal')}
+              variant="danger"
+              loading={deleting || previewing}
+              disabled={!preview || previewFailed}
+              onPress={() => { setConfirmingDelete(false); onDelete?.(); }}
+            />
+          </>
+        )}
+      >
+        <Text style={[typography.body, { color: c.textSecondary }]}>{goal.title}</Text>
+        <DeletionImpact preview={preview} loading={previewing} failed={previewFailed} />
+      </Dialog>
+    </>
+  );
+}
+
+export function MainGoalEmpty({ onCreate }: { onCreate: () => void }) {
+  const { t } = useI18n();
+  const { colors: c, spacing, typography } = useTokens();
   return (
     <Section title={t('home4.mainGoal')}>
       <View style={{ gap: spacing.sm, paddingVertical: spacing.xs }}>
-        <Text style={[typography.h3, { color: c.textPrimary }]}>{goal.title}</Text>
-        <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t(`home4.goal.period.${goal.period}` as TranslationKey)}</Text>
-        {goal.progress !== null ? <Progress value={goal.progress} /> : null}
-        <Button label={t('home4.goal.open')} variant="secondary" onPress={onOpen} />
+        <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('goals.none')}</Text>
+        <Button label={t('brain8.action.goal')} variant="secondary" onPress={onCreate} />
       </View>
     </Section>
+  );
+}
+
+function UpcomingItemRow({
+  item,
+  dateLabel,
+  onOpen,
+  onDelete,
+  onPreviewDelete,
+  deleting,
+}: {
+  item: HomeUpcomingItem;
+  dateLabel: string;
+  onOpen: () => void;
+  onDelete?: () => void;
+  onPreviewDelete?: () => Promise<LearningDeletionPreview>;
+  deleting: boolean;
+}) {
+  const { t } = useI18n();
+  const { colors: c, radius, spacing, typography } = useTokens();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [preview, setPreview] = useState<LearningDeletionPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const detailOnly = item.deletion?.kind === 'details-only';
+  const openAction = () => {
+    if (detailOnly || !onDelete || !onPreviewDelete) {
+      onOpen();
+      return;
+    }
+    setConfirmingDelete(true);
+    setPreview(null);
+    setPreviewFailed(false);
+    setPreviewing(true);
+    void onPreviewDelete()
+      .then(setPreview)
+      .catch(() => setPreviewFailed(true))
+      .finally(() => setPreviewing(false));
+  };
+  return (
+    <>
+      <View style={{
+        flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 54,
+        paddingVertical: spacing.sm, paddingHorizontal: spacing.sm, borderRadius: radius.sm,
+        borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
+      }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${dateLabel} — ${item.title}`}
+          onPress={onOpen}
+          style={({ pressed }) => ({
+            flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+            backgroundColor: pressed ? c.surfaceSunken : 'transparent',
+          })}
+        >
+          <Text style={[typography.caption, { color: c.textMuted, width: 88 }]}>{dateLabel}</Text>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[typography.bodySmall, { color: c.textPrimary, fontWeight: '700' }]} numberOfLines={2}>{item.title}</Text>
+            <Text style={[typography.caption, { color: c.textMuted }]}>{t(`home4.upcoming.kind.${item.kind}` as TranslationKey)}</Text>
+          </View>
+        </Pressable>
+        {item.deletion ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={detailOnly ? t('learningControl.openDetails') : t('learningControl.delete')}
+            onPress={openAction}
+            disabled={deleting}
+            hitSlop={8}
+            style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }}
+          >
+            <Text style={[typography.title, { color: c.textMuted }]}>⋮</Text>
+          </Pressable>
+        ) : <Text accessible={false} style={{ color: c.textMuted }}>→</Text>}
+      </View>
+      <Dialog
+        visible={confirmingDelete}
+        onClose={() => { if (!deleting) setConfirmingDelete(false); }}
+        title={t('learningControl.delete')}
+        footer={(
+          <>
+            <Button label={t('tutor.cancel')} variant="ghost" disabled={deleting} onPress={() => setConfirmingDelete(false)} />
+            <Button
+              label={t('learningControl.delete')}
+              variant="danger"
+              loading={deleting || previewing}
+              disabled={!preview || previewFailed}
+              onPress={() => { setConfirmingDelete(false); onDelete?.(); }}
+            />
+          </>
+        )}
+      >
+        <Text style={[typography.body, { color: c.textSecondary }]}>{item.title}</Text>
+        <DeletionImpact preview={preview} loading={previewing} failed={previewFailed} />
+      </Dialog>
+    </>
+  );
+}
+
+export function DeletionImpact({ preview, loading, failed }: {
+  preview: LearningDeletionPreview | null;
+  loading: boolean;
+  failed: boolean;
+}) {
+  const { t } = useI18n();
+  const { colors: c, spacing, typography } = useTokens();
+  if (loading) return <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('learningControl.previewLoading')}</Text>;
+  if (failed || !preview) return <Text style={[typography.bodySmall, { color: c.error }]}>{t('learningControl.previewFailed')}</Text>;
+  const allCountEntries: Array<[TranslationKey, number]> = [
+    ['learningControl.count.sessions', preview.counts.sessions],
+    ['learningControl.count.lessons', preview.counts.lessons],
+    ['learningControl.count.studySessions', preview.counts.studySessions],
+    ['learningControl.count.messages', preview.counts.tutorMessages],
+    ['learningControl.count.exercises', preview.counts.exerciseAttempts + preview.counts.homework],
+    ['learningControl.count.reviews', preview.counts.reviewItems],
+    ['learningControl.count.cards', preview.counts.cards],
+    ['learningControl.count.documents', preview.counts.documentsMovedToTrash],
+    ['learningControl.count.reminders', preview.counts.calendarEvents],
+    ['learningControl.count.references', preview.counts.workspaceReferences],
+    ['learningControl.count.recommendations', preview.counts.recommendations],
+  ];
+  const countEntries = allCountEntries.filter((entry) => entry[1] > 0);
+  return (
+    <View style={{ gap: spacing.xs }}>
+      <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('learningControl.impact')}</Text>
+      {countEntries.map(([key, count]) => (
+        <Text key={key} style={[typography.bodySmall, { color: c.textPrimary }]}>• {t(key).replace('{count}', String(count))}</Text>
+      ))}
+      {preview.reversibleDocuments ? (
+        <Text style={[typography.caption, { color: c.textMuted }]}>{t('learningControl.documentsTrash')}</Text>
+      ) : null}
+      {preview.sharedDocumentsPreserved > 0 ? (
+        <Text style={[typography.caption, { color: c.textMuted }]}>
+          {t('learningControl.sharedPreserved').replace('{count}', String(preview.sharedDocumentsPreserved))}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 

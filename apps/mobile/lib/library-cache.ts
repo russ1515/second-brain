@@ -34,3 +34,15 @@ export async function saveLibraryCache(
   const entry: LibraryCacheEntry = { ...value, savedAt: new Date().toISOString() };
   await AsyncStorage.setItem(key(userId, value.query), JSON.stringify(entry));
 }
+
+/** Remove every cached Library projection for one authenticated owner. A hard
+ * deletion must not reappear from another cached Trash search while offline. */
+export async function invalidateLibraryCache(userId: string): Promise<void> {
+  try {
+    const ownerPrefix = `${PREFIX}.${userId}.`;
+    const keys = (await AsyncStorage.getAllKeys()).filter((value) => value.startsWith(ownerPrefix));
+    if (keys.length) await AsyncStorage.multiRemove(keys);
+  } catch {
+    // Cache cleanup is best-effort; the authenticated API remains authoritative.
+  }
+}

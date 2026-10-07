@@ -27,6 +27,11 @@ export interface CalendarEntry {
   source: 'ai' | 'user';
   /** True only for the learner's own entries. */
   editable: boolean;
+  /** Stable deletion/detail target. Never inferred from a translated title. */
+  deletion?:
+    | { kind: 'lesson'; targetId: string }
+    | { kind: 'calendar-event'; targetId: string }
+    | { kind: 'details-only'; targetId: string; count?: number };
 }
 
 export interface CalendarDay {

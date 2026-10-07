@@ -22,6 +22,9 @@ const AUTH_ERRORS_FILE = path.join(OUT_DIR, 'auth-errors.ts');
 const VOICE_PHASE2_FILE = path.join(OUT_DIR, 'voice-phase2.ts');
 const LIBRARY_V1_FILE = path.join(OUT_DIR, 'library-v1.ts');
 const RESEARCH_WEB_V1_FILE = path.join(OUT_DIR, 'research-web-v1.ts');
+const LEARNING_DATA_CONTROL_EUROPE_FILE = path.join(OUT_DIR, 'learning-data-control-europe-v1.ts');
+const LEARNING_DATA_CONTROL_ASIA_FILE = path.join(OUT_DIR, 'learning-data-control-asia-v1.ts');
+const LEARNING_DATA_CONTROL_AFRICA_FILE = path.join(OUT_DIR, 'learning-data-control-africa-v1.ts');
 const PROGRESS_DIR = path.join(OUT_DIR, '.translation-progress');
 const DEFAULT_MANIFEST = path.join(PROGRESS_DIR, 'manifest.json');
 const JOB_LOCK = path.join(PROGRESS_DIR, 'apply.lock');
@@ -151,6 +154,31 @@ function objectLiteral(file, variableName) {
   return result;
 }
 
+/** Parse a TypeScript readonly tuple containing only string literals. */
+export function readStringArray(file, variableName) {
+  const source = sourceFile(file);
+  let result;
+  function visit(node) {
+    if (
+      ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.name.text === variableName
+      && node.initializer
+    ) {
+      const initializer = unwrap(node.initializer);
+      if (ts.isArrayLiteralExpression(initializer)) result = initializer;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  invariant(result, `Missing string tuple ${variableName} in ${path.relative(ROOT, file)}`);
+  return result.elements.map((element) => {
+    const value = unwrap(element);
+    invariant(ts.isStringLiteralLike(value), `Non-string entry in ${variableName}`);
+    return value.text;
+  });
+}
+
 /** Parse a TypeScript object literal containing only string values. */
 export function readCatalog(file, variableName) {
   const object = objectLiteral(file, variableName);
@@ -257,6 +285,25 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
     'researchWebV1',
     ['research10.externalUnavailable', 'research10.externalUnavailableDetail'],
   );
+  const learningDataControlKeys = readStringArray(
+    LEARNING_DATA_CONTROL_EUROPE_FILE,
+    'learningDataControlKeys',
+  );
+  const learningDataControlEurope = readTupleCatalog(
+    LEARNING_DATA_CONTROL_EUROPE_FILE,
+    'learningDataControlEuropeValues',
+    learningDataControlKeys,
+  );
+  const learningDataControlAsia = readTupleCatalog(
+    LEARNING_DATA_CONTROL_ASIA_FILE,
+    'learningDataControlAsiaValues',
+    learningDataControlKeys,
+  );
+  const learningDataControlAfrica = readTupleCatalog(
+    LEARNING_DATA_CONTROL_AFRICA_FILE,
+    'learningDataControlAfricaValues',
+    learningDataControlKeys,
+  );
   const libraryOrganization = readTupleCatalog(
     LIBRARY_V1_FILE,
     'organizationLabels',
@@ -283,6 +330,11 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
     const organization = libraryOrganization.get(code) ?? new Map();
     const failures = libraryFailures.get(code) ?? new Map();
     const researchWeb = researchWebV1.get(code) ?? new Map();
+    const learningDataControl = new Map([
+      ...(learningDataControlEurope.get(code) ?? new Map()),
+      ...(learningDataControlAsia.get(code) ?? new Map()),
+      ...(learningDataControlAfrica.get(code) ?? new Map()),
+    ]);
     const effective = new Map([
       ...base,
       ...essential,
@@ -295,6 +347,7 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
       ...organization,
       ...failures,
       ...researchWeb,
+      ...learningDataControl,
     ]);
     const missingKeys = [...english.keys()].filter((key) => !effective.has(key));
 
@@ -329,6 +382,9 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
       authErrors: sha256(fs.readFileSync(AUTH_ERRORS_FILE)),
       voicePhase2: sha256(fs.readFileSync(VOICE_PHASE2_FILE)),
       libraryV1: sha256(fs.readFileSync(LIBRARY_V1_FILE)),
+      learningDataControlEurope: sha256(fs.readFileSync(LEARNING_DATA_CONTROL_EUROPE_FILE)),
+      learningDataControlAsia: sha256(fs.readFileSync(LEARNING_DATA_CONTROL_ASIA_FILE)),
+      learningDataControlAfrica: sha256(fs.readFileSync(LEARNING_DATA_CONTROL_AFRICA_FILE)),
     },
     batchSize,
     locales,

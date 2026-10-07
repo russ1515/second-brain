@@ -16,6 +16,7 @@ import type {
   ExerciseAttemptView,
   LessonSummary,
   LessonView,
+  LearningDeletionPreview,
   SubmitAttemptResponse,
 } from '@second-brain/shared';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -56,6 +57,14 @@ export class LessonController {
     @Param('id') id: string,
   ): Promise<LessonView> {
     return this.lessons.get(user.userId, id);
+  }
+
+  @Get(':id/deletion-preview')
+  deletionPreview(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<LearningDeletionPreview> {
+    return this.lessons.previewRemoval(user.userId, id);
   }
 
   @Delete(':id')

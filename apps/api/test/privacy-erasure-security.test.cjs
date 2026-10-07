@@ -228,7 +228,9 @@ test('document ingestion revalidates ownership under the same account-data lock 
       deleteMany: async () => undefined,
     },
     $transaction: async (operation) => operation({
-      $queryRaw: async (_strings, lockKey) => { events.push(`lock:${lockKey}`); },
+      // Ingestion uses the mutation-safe advisory-lock primitive introduced by
+      // fix(library); keep the fixture aligned with that real transaction API.
+      $executeRaw: async (_strings, lockKey) => { events.push(`lock:${lockKey}`); },
       document: documentModel,
       documentChunk: {
         deleteMany: async () => undefined,

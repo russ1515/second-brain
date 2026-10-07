@@ -9,7 +9,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import type { CalendarEntry, CalendarView } from '@second-brain/shared';
+import type { CalendarEntry, CalendarView, LearningDeletionPreview } from '@second-brain/shared';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import type { AuthenticatedUser } from '../auth/auth.types';
@@ -37,6 +37,15 @@ export class CalendarController {
     @Body() dto: CreateCalendarEventDto,
   ): Promise<CalendarEntry> {
     return this.calendar.createEvent(user.userId, dto);
+  }
+
+  /** Remove one of the learner's own events (AI entries can't be removed). */
+  @Get('events/:id/deletion-preview')
+  deletionPreview(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<LearningDeletionPreview> {
+    return this.calendar.deletionPreview(user.userId, id);
   }
 
   /** Remove one of the learner's own events (AI entries can't be removed). */

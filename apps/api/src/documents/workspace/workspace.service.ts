@@ -161,8 +161,10 @@ export class WorkspaceService {
   }
 
   private async own(userId: string, id: string): Promise<Document> {
-    const doc = await this.prisma.document.findUnique({ where: { id } });
-    if (!doc || doc.userId !== userId) {
+    const doc = await this.prisma.document.findFirst({
+      where: { id, userId, deletedAt: null },
+    });
+    if (!doc) {
       throw new NotFoundException('Document not found.');
     }
     return doc;

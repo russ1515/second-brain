@@ -16,6 +16,7 @@ import {
   localeCatalogDescriptor,
   readCatalog,
   readNestedCatalog,
+  readStringArray,
   readTupleCatalog,
 } from './translate-locale.mjs';
 
@@ -28,6 +29,9 @@ const AUTH_ERRORS_FILE = path.join(LOCALES_DIR, 'auth-errors.ts');
 const VOICE_PHASE2_FILE = path.join(LOCALES_DIR, 'voice-phase2.ts');
 const LIBRARY_V1_FILE = path.join(LOCALES_DIR, 'library-v1.ts');
 const RESEARCH_WEB_V1_FILE = path.join(LOCALES_DIR, 'research-web-v1.ts');
+const LEARNING_DATA_CONTROL_EUROPE_FILE = path.join(LOCALES_DIR, 'learning-data-control-europe-v1.ts');
+const LEARNING_DATA_CONTROL_ASIA_FILE = path.join(LOCALES_DIR, 'learning-data-control-asia-v1.ts');
+const LEARNING_DATA_CONTROL_AFRICA_FILE = path.join(LOCALES_DIR, 'learning-data-control-africa-v1.ts');
 
 export const ALL_LOCALE_CODES = Object.freeze(['en', 'fr', ...SUPPORTED_CODES]);
 export const PROTECTED_BRANDS = Object.freeze([
@@ -302,6 +306,10 @@ export function auditRepository() {
   const libraryOrganization = readTupleCatalog(LIBRARY_V1_FILE, 'organizationLabels', ['lib.types', 'libraryV1.type.notebook']);
   const libraryFailures = readTupleCatalog(LIBRARY_V1_FILE, 'failureLabels', ['libraryV1.error.fileUnreadable', 'libraryV1.error.storage']);
   const researchWebV1 = readTupleCatalog(RESEARCH_WEB_V1_FILE, 'researchWebV1', ['research10.externalUnavailable', 'research10.externalUnavailableDetail']);
+  const learningDataControlKeys = readStringArray(LEARNING_DATA_CONTROL_EUROPE_FILE, 'learningDataControlKeys');
+  const learningDataControlEurope = readTupleCatalog(LEARNING_DATA_CONTROL_EUROPE_FILE, 'learningDataControlEuropeValues', learningDataControlKeys);
+  const learningDataControlAsia = readTupleCatalog(LEARNING_DATA_CONTROL_ASIA_FILE, 'learningDataControlAsiaValues', learningDataControlKeys);
+  const learningDataControlAfrica = readTupleCatalog(LEARNING_DATA_CONTROL_AFRICA_FILE, 'learningDataControlAfricaValues', learningDataControlKeys);
   const catalogs = new Map([
     ['en', english],
     ['fr', french],
@@ -327,6 +335,11 @@ export function auditRepository() {
     const organization = libraryOrganization.get(code) ?? new Map();
     const failures = libraryFailures.get(code) ?? new Map();
     const researchWeb = researchWebV1.get(code) ?? new Map();
+    const learningDataControl = new Map([
+      ...(learningDataControlEurope.get(code) ?? new Map()),
+      ...(learningDataControlAsia.get(code) ?? new Map()),
+      ...(learningDataControlAfrica.get(code) ?? new Map()),
+    ]);
     catalogs.set(code, new Map([
       ...base,
       ...essential,
@@ -339,6 +352,7 @@ export function auditRepository() {
       ...organization,
       ...failures,
       ...researchWeb,
+      ...learningDataControl,
     ]));
     layersByLocale.set(code, [
       { name: path.relative(LOCALES_DIR, file).replaceAll('\\', '/'), entries: base },
@@ -352,6 +366,7 @@ export function auditRepository() {
       { name: 'library-v1.ts:organizationLabels', entries: organization },
       { name: 'library-v1.ts:failureLabels', entries: failures },
       { name: 'research-web-v1.ts', entries: researchWeb },
+      { name: 'learning-data-control-v1', entries: learningDataControl },
     ]);
   }
 

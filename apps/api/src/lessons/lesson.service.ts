@@ -32,6 +32,8 @@ import { RevisionEngineService } from '../revision/revision-engine.service';
 import { localeDirective, resolveLocale } from '../common/learning-locale';
 import type { GenerateLessonDto } from './dto/generate-lesson.dto';
 import { ExperienceSessionService } from '../experience-sessions/experience-session.service';
+import { LearningDataDeletionService } from '../experience-sessions/learning-data-deletion.service';
+import type { LearningDeletionPreview } from '@second-brain/shared';
 
 const CONTEXT_LIMIT = 5;
 const FLASHCARD_COUNT = 8;
@@ -102,6 +104,7 @@ export class LessonService {
     private readonly mastery: MasteryService,
     private readonly revision: RevisionEngineService,
     private readonly experienceSessions: ExperienceSessionService,
+    private readonly learningDeletions: LearningDataDeletionService,
   ) {}
 
   async generate(
@@ -240,35 +243,12 @@ export class LessonService {
     return this.toView(lesson, cardCount);
   }
 
-  async remove(userId: string, id: string): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      const owned = await tx.lesson.findFirst({
-        where: { id, userId },
-        select: { id: true },
-      });
-      if (!owned) {
-        throw new NotFoundException('Lesson not found.');
-      }
+  previewRemoval(userId: string, id: string): Promise<LearningDeletionPreview> {
+    return this.learningDeletions.previewLesson(userId, id);
+  }
 
-      // Lesson uses an optional SetNull FK from ExperienceSession. Abandon its
-      // resumable envelopes while that link still exists, then delete the lesson
-      // in the same transaction so a dead resume route is never committed.
-      await tx.experienceSession.updateMany({
-        where: {
-          userId,
-          lessonId: id,
-          status: { in: ['active', 'paused'] },
-        },
-        data: {
-          status: 'abandoned',
-          pausedAt: null,
-          resumeTarget: Prisma.JsonNull,
-          nextBestAction: Prisma.JsonNull,
-          version: { increment: 1 },
-        },
-      });
-      await tx.lesson.delete({ where: { id } });
-    });
+  async remove(userId: string, id: string): Promise<void> {
+    await this.learningDeletions.deleteLesson(userId, id);
   }
 
   // ── internals ────────────────────────────────────────────────────────────

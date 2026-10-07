@@ -110,8 +110,10 @@ export class KnowledgeIntegrationService {
 
   /** Build the integration report for a document. */
   async report(userId: string, documentId: string): Promise<KnowledgeIntegration> {
-    const doc = await this.prisma.document.findUnique({ where: { id: documentId } });
-    if (!doc || doc.userId !== userId) {
+    const doc = await this.prisma.document.findFirst({
+      where: { id: documentId, userId, deletedAt: null },
+    });
+    if (!doc) {
       throw new NotFoundException('Document not found.');
     }
 

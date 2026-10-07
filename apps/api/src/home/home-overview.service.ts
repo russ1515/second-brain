@@ -461,6 +461,7 @@ export class HomeOverviewService {
         title: entry.title,
         date: day.date,
         destination: this.calendarDestination(entry),
+        ...(entry.deletion ? { deletion: entry.deletion } : {}),
       })));
     const examItems: HomeUpcomingItem[] = exams.map((exam) => ({
       id: exam.id,

@@ -149,3 +149,16 @@ test('V1 library UI exposes explicit menu, private viewers, page retry, drag ord
   assert.match(scan, /draggable/);
   assert.match(scan, /NOTEBOOK/);
 });
+
+test('Trash UI confirms irreversible owner-scoped purge and exact-count emptying', () => {
+  const root = path.resolve(__dirname, '../../..');
+  const library = fs.readFileSync(path.join(root, 'apps/mobile/app/library.tsx'), 'utf8');
+  const cache = fs.readFileSync(path.join(root, 'apps/mobile/lib/library-cache.ts'), 'utf8');
+  assert.match(library, /\/library\/documents\/\$\{target\.id\}\/permanent/);
+  assert.match(library, /api<\{ deletedCount: number \}>\('\/library\/trash'/);
+  assert.match(library, /body: \{ expectedCount \}/);
+  assert.match(library, /library7\.trash\.permanentDetail/);
+  assert.match(library, /library7\.trash\.emptyDetail/);
+  assert.match(library, /invalidateLibraryCache/);
+  assert.match(cache, /AsyncStorage\.multiRemove/);
+});

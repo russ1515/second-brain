@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -10,7 +11,12 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import type { ExperienceSession, ExperienceSessionPage } from '@second-brain/shared';
+import type {
+  ExperienceSession,
+  ExperienceSessionPage,
+  LearningDeletionPreview,
+  LearningDeletionResult,
+} from '@second-brain/shared';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import type { AuthenticatedUser } from '../auth/auth.types';
@@ -18,11 +24,15 @@ import { CreateExperienceSessionDto } from './dto/create-experience-session.dto'
 import { ListExperienceSessionsDto } from './dto/list-experience-sessions.dto';
 import { UpdateExperienceSessionDto } from './dto/update-experience-session.dto';
 import { ExperienceSessionService } from './experience-session.service';
+import { LearningDataDeletionService } from './learning-data-deletion.service';
 
 @UseGuards(JwtAccessGuard)
 @Controller('experience-sessions')
 export class ExperienceSessionController {
-  constructor(private readonly sessions: ExperienceSessionService) {}
+  constructor(
+    private readonly sessions: ExperienceSessionService,
+    private readonly deletions: LearningDataDeletionService,
+  ) {}
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
@@ -55,6 +65,22 @@ export class ExperienceSessionController {
     @Param('id') id: string,
   ): Promise<ExperienceSession> {
     return this.sessions.get(user.userId, id);
+  }
+
+  @Get(':id/deletion-preview')
+  deletionPreview(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<LearningDeletionPreview> {
+    return this.deletions.previewSession(user.userId, id);
+  }
+
+  @Delete(':id')
+  delete(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<LearningDeletionResult> {
+    return this.deletions.deleteSession(user.userId, id);
   }
 
   @Patch(':id')

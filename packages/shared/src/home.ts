@@ -57,6 +57,11 @@ export interface HomeUpcomingItem {
   title: string;
   date: string;
   destination: ActionDestination;
+  /** Exact server-provided action; aggregate rows intentionally remain detail-only. */
+  deletion?:
+    | { kind: 'lesson'; targetId: string }
+    | { kind: 'calendar-event'; targetId: string }
+    | { kind: 'details-only'; targetId: string; count?: number };
 }
 
 export interface HomeGoalPreview {

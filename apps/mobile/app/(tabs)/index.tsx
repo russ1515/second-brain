@@ -7,6 +7,7 @@ import type {
   HomeOverview,
   HomeResumableSession,
   HomeUpcomingItem,
+  LearningDeletionPreview,
 } from '@second-brain/shared';
 import { resolveHomeComposition } from '@second-brain/shared';
 import { useAuth } from '../../lib/auth-context';
@@ -21,6 +22,7 @@ import { SmartErrorState, SmartState } from '../../components/ds/states';
 import {
   HomeContextHeader,
   HomeQuickActions,
+  MainGoalEmpty,
   MainGoalPreview,
   NextBestActionCard,
   ProgressSummary,
@@ -43,7 +45,9 @@ export default function HomeScreen() {
   const composition = resolveHomeComposition(width);
   const overviewQueryKey = ['home', 'overview', locale, user?.id] as const;
   const [deletingResumeId, setDeletingResumeId] = useState<string | null>(null);
-  const [deleteResumeFailed, setDeleteResumeFailed] = useState(false);
+  const [deletingUpcomingId, setDeletingUpcomingId] = useState<string | null>(null);
+  const [deletingGoalId, setDeletingGoalId] = useState<string | null>(null);
+  const [deleteFailed, setDeleteFailed] = useState(false);
 
   const overview = useQuery<HomeOverview>({
     queryKey: overviewQueryKey,
@@ -60,10 +64,20 @@ export default function HomeScreen() {
   };
   const resume = (session: HomeResumableSession) => open(session.destination);
   const openUpcoming = (item: HomeUpcomingItem) => open(item.destination);
+  const invalidateLearningViews = async () => {
+    await queryClient.invalidateQueries({
+      predicate: ({ queryKey }) => [
+        'home', 'calendar', 'goals', 'lessons', 'revision', 'recommendations',
+        'brain', 'tutor', 'library', 'research', 'workspace',
+      ].includes(String(queryKey[0] ?? '')),
+    });
+  };
+  const previewResume = (session: HomeResumableSession) =>
+    api<LearningDeletionPreview>(`/experience-sessions/${session.id}/deletion-preview`);
   const deleteResume = async (session: HomeResumableSession) => {
     if (deletingResumeId) return;
     setDeletingResumeId(session.id);
-    setDeleteResumeFailed(false);
+    setDeleteFailed(false);
     await queryClient.cancelQueries({ queryKey: overviewQueryKey });
     const previous = queryClient.getQueryData<HomeOverview>(overviewQueryKey);
     queryClient.setQueryData<HomeOverview>(overviewQueryKey, (current) => (
@@ -72,16 +86,63 @@ export default function HomeScreen() {
         : current
     ));
     try {
-      await api(`/experience-sessions/${session.id}`, {
-        method: 'PATCH',
-        body: { status: 'abandoned' },
-      });
-      await queryClient.invalidateQueries({ queryKey: ['home', 'overview'] });
+      await api(`/experience-sessions/${session.id}`, { method: 'DELETE' });
+      await invalidateLearningViews();
     } catch {
       if (previous) queryClient.setQueryData(overviewQueryKey, previous);
-      setDeleteResumeFailed(true);
+      setDeleteFailed(true);
     } finally {
       setDeletingResumeId(null);
+    }
+  };
+  const previewUpcoming = (item: HomeUpcomingItem) => {
+    const action = item.deletion;
+    if (!action || action.kind === 'details-only') throw new Error('No deletion target.');
+    return api<LearningDeletionPreview>(action.kind === 'lesson'
+      ? `/lessons/${action.targetId}/deletion-preview`
+      : `/calendar/events/${action.targetId}/deletion-preview`);
+  };
+  const deleteUpcoming = async (item: HomeUpcomingItem) => {
+    const action = item.deletion;
+    if (!action || action.kind === 'details-only' || deletingUpcomingId) return;
+    setDeletingUpcomingId(item.id);
+    setDeleteFailed(false);
+    await queryClient.cancelQueries({ queryKey: overviewQueryKey });
+    const previous = queryClient.getQueryData<HomeOverview>(overviewQueryKey);
+    queryClient.setQueryData<HomeOverview>(overviewQueryKey, (current) => current
+      ? { ...current, upcoming: current.upcoming.filter((candidate) => candidate.id !== item.id) }
+      : current);
+    try {
+      await api(action.kind === 'lesson'
+        ? `/lessons/${action.targetId}`
+        : `/calendar/events/${action.targetId}`, { method: 'DELETE' });
+      await invalidateLearningViews();
+    } catch {
+      if (previous) queryClient.setQueryData(overviewQueryKey, previous);
+      setDeleteFailed(true);
+    } finally {
+      setDeletingUpcomingId(null);
+    }
+  };
+  const previewGoal = (goalId: string) =>
+    api<LearningDeletionPreview>(`/goals/${goalId}/deletion-preview`);
+  const deleteGoal = async (goalId: string) => {
+    if (deletingGoalId) return;
+    setDeletingGoalId(goalId);
+    setDeleteFailed(false);
+    await queryClient.cancelQueries({ queryKey: overviewQueryKey });
+    const previous = queryClient.getQueryData<HomeOverview>(overviewQueryKey);
+    queryClient.setQueryData<HomeOverview>(overviewQueryKey, (current) => current
+      ? { ...current, mainGoal: current.mainGoal?.id === goalId ? null : current.mainGoal }
+      : current);
+    try {
+      await api(`/goals/${goalId}`, { method: 'DELETE' });
+      await invalidateLearningViews();
+    } catch {
+      if (previous) queryClient.setQueryData(overviewQueryKey, previous);
+      setDeleteFailed(true);
+    } finally {
+      setDeletingGoalId(null);
     }
   };
 
@@ -115,6 +176,7 @@ export default function HomeScreen() {
       sessions={data.resumableSessions}
       onResume={resume}
       onDelete={(session) => { void deleteResume(session); }}
+      onPreviewDelete={previewResume}
       deletingSessionId={deletingResumeId}
     />
   );
@@ -123,11 +185,22 @@ export default function HomeScreen() {
       items={data.upcoming}
       onOpen={openUpcoming}
       onPlanning={() => router.push('/calendar' as never)}
+      onDelete={(item) => { void deleteUpcoming(item); }}
+      onPreviewDelete={previewUpcoming}
+      deletingItemId={deletingUpcomingId}
     />
   );
   const goalSection = data.mainGoal ? (
-    <MainGoalPreview goal={data.mainGoal} onOpen={() => open(data.mainGoal!.destination)} />
-  ) : null;
+    <MainGoalPreview
+      goal={data.mainGoal}
+      onOpen={() => open(data.mainGoal!.destination)}
+      onPreviewDelete={() => previewGoal(data.mainGoal!.id)}
+      onDelete={() => { void deleteGoal(data.mainGoal!.id); }}
+      deleting={deletingGoalId === data.mainGoal.id}
+    />
+  ) : (
+    <MainGoalEmpty onCreate={() => router.push('/goals' as never)} />
+  );
   const progressSection = data.progress ? (
     <ProgressSummary progress={data.progress} onOpen={() => router.push('/brain' as never)} />
   ) : null;
@@ -154,7 +227,7 @@ export default function HomeScreen() {
           <SmartState state="partial" detail={t('home4.partial')} />
         ) : null}
 
-        {deleteResumeFailed ? (
+        {deleteFailed ? (
           <Alert tone="error" title={t('state.error')} detail={t('home4.unavailable')} />
         ) : null}
 

@@ -9,6 +9,7 @@ import type {
   CalendarEntryKind,
   CalendarView,
   CreateCalendarEventRequest,
+  LearningDeletionPreview,
   ReviewableKind,
   UserEventKind,
 } from '@second-brain/shared';
@@ -51,7 +52,7 @@ export class CalendarService {
     const [reviewables, cardsDue, events] = await Promise.all([
       this.prisma.reviewable.findMany({
         where: { userId, due: { gte: start, lt: horizon } },
-        select: { id: true, kind: true, title: true, due: true },
+        select: { id: true, kind: true, refId: true, title: true, due: true },
       }),
       this.prisma.card.groupBy({
         by: ['due'],
@@ -80,6 +81,9 @@ export class CalendarService {
         title: r.title,
         source: 'ai',
         editable: false,
+        deletion: r.kind === 'lesson'
+          ? { kind: 'lesson', targetId: r.refId }
+          : { kind: 'details-only', targetId: r.refId },
       });
     }
     // AI — flashcards due, one aggregate entry per day.
@@ -95,6 +99,7 @@ export class CalendarService {
         title: `${count} flashcard${count === 1 ? '' : 's'}`,
         source: 'ai',
         editable: false,
+        deletion: { kind: 'details-only', targetId: key, count },
       });
     }
     // AI — today's study session.
@@ -114,6 +119,7 @@ export class CalendarService {
         title: e.title,
         source: 'user',
         editable: true,
+        deletion: { kind: 'calendar-event', targetId: e.id },
       });
     }
 
@@ -155,11 +161,34 @@ export class CalendarService {
   }
 
   async deleteEvent(userId: string, id: string): Promise<void> {
-    const event = await this.prisma.calendarEvent.findUnique({ where: { id } });
-    if (!event || event.userId !== userId) {
-      throw new NotFoundException('Event not found.');
-    }
-    await this.prisma.calendarEvent.delete({ where: { id } });
+    // DELETE is intentionally idempotent and does not reveal another owner's id.
+    await this.prisma.calendarEvent.deleteMany({ where: { id, userId } });
+  }
+
+  async deletionPreview(userId: string, id: string): Promise<LearningDeletionPreview> {
+    const event = await this.prisma.calendarEvent.findFirst({ where: { id, userId } });
+    if (!event) throw new NotFoundException('Event not found.');
+    return {
+      target: 'calendar-event',
+      id,
+      title: event.title,
+      counts: {
+        sessions: 0,
+        lessons: 0,
+        tutorMessages: 0,
+        studySessions: 0,
+        exerciseAttempts: 0,
+        homework: 0,
+        reviewItems: 0,
+        cards: 0,
+        documentsMovedToTrash: 0,
+        workspaceReferences: 0,
+        recommendations: 0,
+        calendarEvents: 1,
+      },
+      reversibleDocuments: false,
+      sharedDocumentsPreserved: 0,
+    };
   }
 
   // ── internals ─────────────────────────────────────────────────────────────

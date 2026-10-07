@@ -51,3 +51,7 @@ import './auth-errors';
 import './voice-phase2';
 import './library-v1';
 import './research-web-v1';
+import './learning-control-v1';
+import './learning-data-control-europe-v1';
+import './learning-data-control-asia-v1';
+import './learning-data-control-africa-v1';

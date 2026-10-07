@@ -10,7 +10,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import type { ExamView, Goal } from '@second-brain/shared';
+import type { ExamView, Goal, LearningDeletionPreview } from '@second-brain/shared';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import type { AuthenticatedUser } from '../auth/auth.types';
@@ -60,6 +60,14 @@ export class GoalsController {
     @Param('id') id: string,
   ): Promise<void> {
     return this.goals.remove(user.userId, id);
+  }
+
+  @Get('goals/:id/deletion-preview')
+  goalDeletionPreview(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<LearningDeletionPreview> {
+    return this.goals.previewRemoval(user.userId, id);
   }
 
   // ── Exams ──────────────────────────────────────────────────────────────────

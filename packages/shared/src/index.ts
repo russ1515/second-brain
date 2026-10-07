@@ -37,6 +37,7 @@ export * from './learn-orchestration';
 export * from './languages';
 export * from './learner-profile';
 export * from './learner-passport';
+export * from './learning-report';
 export * from './learning-dna';
 export * from './lesson';
 export * from './llm';

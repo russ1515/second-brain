@@ -7,6 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import type { Document, DocumentSource } from '@prisma/client';
 import type {
   DocumentContentType,
@@ -528,6 +529,91 @@ export class DocumentService {
     }, { timeout: 60_000 });
   }
 
+  /** Permanently remove one of the caller's already-trashed documents.
+   *
+   * Missing/already-purged ids are a successful no-op, which makes retries and
+   * double-clicks safe without exposing whether an id belongs to another
+   * account. An active document can never enter this hard-delete path. */
+  async permanentlyDeleteTrashed(userId: string, id: string): Promise<boolean> {
+    const staged = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const owned = await tx.document.findFirst({
+        where: { id, userId, deletedAt: { not: null } },
+        select: { id: true, stage: true },
+      });
+      if (!owned) return false;
+      if (owned.stage !== 'deleting') {
+        await tx.document.update({
+          where: { id },
+          data: { status: 'processing', stage: 'deleting', error: null },
+        });
+      }
+      return true;
+    }, { timeout: 60_000 });
+    if (!staged) return false;
+
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const document = await tx.document.findFirst({
+        where: { id, userId, deletedAt: { not: null }, stage: 'deleting' },
+        select: { id: true },
+      });
+      // A concurrent identical request may already have completed. Treat that
+      // as success while never touching an active or foreign document.
+      if (!document) return false;
+      await this.ingestion.purgeVectors(id);
+      await this.privateMedia.deleteScanPagesAnd(userId, id, async () => {
+        await this.deleteDocumentData(userId, id);
+      });
+      return true;
+    }, { timeout: 60_000 });
+  }
+
+  /** Purge the exact trash snapshot the learner confirmed. A new item moved to
+   * Trash while this request runs is intentionally left for a later explicit
+   * confirmation. */
+  async emptyTrash(
+    userId: string,
+    expectedCount: number,
+  ): Promise<{ deletedCount: number }> {
+    const ids = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const rows = await tx.document.findMany({
+        where: { userId, deletedAt: { not: null } },
+        orderBy: { id: 'asc' },
+        select: { id: true },
+      });
+      if (rows.length !== expectedCount) {
+        throw new ConflictException({
+          code: 'TRASH_CONTENT_CHANGED',
+          message: 'Trash contents changed. Review the current count before confirming again.',
+          actualCount: rows.length,
+        });
+      }
+      return rows.map((row) => row.id);
+    }, { timeout: 60_000 });
+
+    for (const documentId of ids) {
+      await this.permanentlyDeleteTrashed(userId, documentId);
+    }
+
+    // A concurrent restore is never silently counted as a purge. Concurrent
+    // duplicate deletes are fine because the target no longer exists.
+    const remaining = ids.length
+      ? await this.prisma.document.count({ where: { userId, id: { in: ids } } })
+      : 0;
+    if (remaining > 0) {
+      throw new ConflictException({
+        code: 'TRASH_PURGE_INCOMPLETE',
+        message: 'Some trash items changed while deletion was running. Retry after refreshing.',
+      });
+    }
+    return { deletedCount: ids.length };
+  }
+
   /** Re-run the embedding pipeline for a document (e.g. after a failure). */
   async reindex(userId: string, id: string): Promise<DocumentDetail> {
     const doc = await this.prisma.$transaction(async (tx) => {
@@ -565,6 +651,116 @@ export class DocumentService {
   }
 
   // ── internals ──────────────────────────────────────────────────────────
+
+  /** Delete exclusive derivatives and stale references while preserving shared
+   * concepts, collections, workspaces, sessions and decks. The surrounding
+   * private-media tombstone restores bytes if this SQL transaction fails. */
+  private async deleteDocumentData(userId: string, documentId: string): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const [resources, workspaces, sessions, messages] = await Promise.all([
+        tx.studyResource.findMany({
+          where: { userId, documentId, deckId: { not: null } },
+          select: { deckId: true },
+        }),
+        tx.academicWorkspace.findMany({
+          where: { userId },
+          select: { id: true, sources: true },
+        }),
+        tx.experienceSession.findMany({
+          where: { userId },
+          select: { id: true, activeContexts: true, sourceReferences: true },
+        }),
+        tx.tutorMessage.findMany({
+          where: { session: { userId }, citations: { not: Prisma.DbNull } },
+          select: { id: true, citations: true },
+        }),
+      ]);
+      const candidateDeckIds = [...new Set(
+        resources.flatMap((resource) => resource.deckId ? [resource.deckId] : []),
+      )];
+
+      // Cards with this source are exclusive derivatives. Their deck is kept
+      // whenever any other card, plan, language profile or resource uses it.
+      await tx.card.deleteMany({ where: { userId, sourceDocumentId: documentId } });
+      // Recommendations are derived projections rather than learning history;
+      // retaining one would leave a resumable action pointing at a purged id.
+      await tx.recommendation.deleteMany({
+        where: {
+          userId,
+          OR: [
+            { targetKind: 'document', targetId: documentId },
+            { dedupeKey: `document:${documentId}` },
+          ],
+        },
+      });
+
+      for (const workspace of workspaces) {
+        const next = withoutDocumentArrayReference(workspace.sources, documentId);
+        if (next.changed) {
+          await tx.academicWorkspace.update({
+            where: { id: workspace.id },
+            data: { sources: next.value },
+          });
+        }
+      }
+      for (const session of sessions) {
+        const sources = withoutDocumentArrayReference(session.sourceReferences, documentId);
+        const context = withoutDocumentContext(session.activeContexts, documentId);
+        if (sources.changed || context.changed) {
+          await tx.experienceSession.update({
+            where: { id: session.id },
+            data: {
+              ...(sources.changed ? { sourceReferences: sources.value } : {}),
+              ...(context.changed ? { activeContexts: context.value } : {}),
+            },
+          });
+        }
+      }
+      for (const message of messages) {
+        const citations = withoutDocumentCitation(message.citations, documentId);
+        if (citations.changed) {
+          await tx.tutorMessage.update({
+            where: { id: message.id },
+            data: { citations: citations.value },
+          });
+        }
+      }
+
+      const deleted = await tx.document.deleteMany({
+        where: {
+          id: documentId,
+          userId,
+          deletedAt: { not: null },
+          stage: 'deleting',
+        },
+      });
+      if (deleted.count !== 1) {
+        throw new ConflictException('Document deletion is no longer staged.');
+      }
+
+      for (const deckId of candidateDeckIds) {
+        const [resourceReferences, deck] = await Promise.all([
+          tx.studyResource.count({ where: { userId, deckId } }),
+          tx.deck.findFirst({
+            where: { id: deckId, userId },
+            select: {
+              id: true,
+              _count: { select: { cards: true, languageProfiles: true, planItems: true } },
+            },
+          }),
+        ]);
+        if (
+          resourceReferences === 0 &&
+          deck &&
+          deck._count.cards === 0 &&
+          deck._count.languageProfiles === 0 &&
+          deck._count.planItems === 0
+        ) {
+          await tx.deck.deleteMany({ where: { id: deckId, userId } });
+        }
+      }
+    }, { timeout: 60_000 });
+  }
 
   private async persist(
     userId: string,
@@ -706,4 +902,61 @@ export class DocumentService {
       error: doc.error ?? undefined,
     };
   }
+}
+
+type PrunedJson = { changed: boolean; value: Prisma.InputJsonValue };
+
+function jsonRecord(value: Prisma.JsonValue): Prisma.JsonObject | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Prisma.JsonObject
+    : null;
+}
+
+function inputJson(value: Prisma.JsonValue): Prisma.InputJsonValue {
+  return value as Prisma.InputJsonValue;
+}
+
+/** Workspace and Experience source arrays share the same `{kind,id}` shape. */
+function withoutDocumentArrayReference(
+  value: Prisma.JsonValue,
+  documentId: string,
+): PrunedJson {
+  if (!Array.isArray(value)) return { changed: false, value: inputJson(value) };
+  const filtered = value.filter((entry) => {
+    const record = jsonRecord(entry);
+    return !(record?.kind === 'document' && record.id === documentId);
+  });
+  return {
+    changed: filtered.length !== value.length,
+    value: filtered as Prisma.InputJsonValue,
+  };
+}
+
+function withoutDocumentContext(value: Prisma.JsonValue, documentId: string): PrunedJson {
+  const context = jsonRecord(value);
+  if (!context || !Array.isArray(context.items)) {
+    return { changed: false, value: inputJson(value) };
+  }
+  const items = context.items.filter((entry) => {
+    const record = jsonRecord(entry);
+    return !(record?.kind === 'document' && record.referenceId === documentId);
+  });
+  if (items.length === context.items.length) {
+    return { changed: false, value: inputJson(value) };
+  }
+  return {
+    changed: true,
+    value: { ...context, items } as Prisma.InputJsonValue,
+  };
+}
+
+function withoutDocumentCitation(value: Prisma.JsonValue | null, documentId: string): PrunedJson {
+  if (!Array.isArray(value)) {
+    return { changed: false, value: (value ?? []) as Prisma.InputJsonValue };
+  }
+  const citations = value.filter((entry) => jsonRecord(entry)?.documentId !== documentId);
+  return {
+    changed: citations.length !== value.length,
+    value: citations as Prisma.InputJsonValue,
+  };
 }

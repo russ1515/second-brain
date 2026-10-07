@@ -4,19 +4,22 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import type {
   ConsentView,
   DataExportResponse,
+  LearningReportView,
 } from '@second-brain/shared';
 import { api } from '../lib/client';
 import { useAuth } from '../lib/auth-context';
 import { useTokens } from '../lib/design/theme';
 import type { ColorScale } from '../lib/design/tokens';
-import { useI18n, type TranslationKey } from '../lib/i18n';
+import { localeDirection, useI18n, type TranslationKey } from '../lib/i18n';
+import { saveLearningReportAsPdf } from '../lib/learning-report-pdf';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
+import { LearningResetCard } from '../components/privacy/learning-reset-card';
 
 /** Privacy & GDPR (Sprint 8.7): consents, data export, account deletion. */
 export default function PrivacyScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
-  const { t } = useI18n();
+  const { t, locale, formatLocale } = useI18n();
   const router = useRouter();
   const { logout } = useAuth();
   const [consents, setConsents] = useState<ConsentView[] | null>(null);
@@ -61,6 +64,55 @@ export default function PrivacyScreen() {
       } else {
         setNotice(t('priv.exportReady'));
       }
+    } catch (e) { setError((e as Error).message); } finally { setBusy(null); }
+  };
+
+  const exportLearningReport = async () => {
+    setBusy('learning-report'); setError(null); setNotice(null);
+    try {
+      const report = await api<LearningReportView>(
+        `/me/learning-report?locale=${encodeURIComponent(locale)}`,
+      );
+      const ageBand = report.declared.profile.ageBand;
+      await saveLearningReportAsPdf(
+        report,
+        {
+          title: t('priv.learningReport.title'),
+          subtitle: t('priv.learningReport.help'),
+          generated: t('priv.learningReport.generated'),
+          learnerName: t('profile.card.name'),
+          declared: t('passport.source.declared'),
+          observed: t('passport.source.observed'),
+          assessed: t('priv.learningReport.assessed'),
+          ageBand: t('onb.identity.age'),
+          originCountry: t('passport.originCountry'),
+          currentCountry: t('passport.currentCountry'),
+          teachingLanguage: t('passport.teachingLanguage'),
+          subjects: t('onb.subjects.title'),
+          goals: t('onb.twin.goals'),
+          preferences: t('profile.preferences'),
+          learningProfile: t('passport.title'),
+          lessons: t('twin.lessons'),
+          tutorSessions: t('tutor6.lobby.recent'),
+          concepts: t('brain8.metrics.concepts'),
+          completedSessions: t('priv.learningReport.completedSessions'),
+          reviews: t('brain8.memory.reviews'),
+          lastActivity: t('home4.lastActivity'),
+          assessmentSubmissions: t('priv.learningReport.assessmentSubmissions'),
+          averageAssessmentScore: t('priv.learningReport.averageAssessmentScore'),
+          exerciseAttempts: t('priv.learningReport.exerciseAttempts'),
+          correctAttempts: t('priv.learningReport.correctAttempts'),
+          averageExerciseScore: t('priv.learningReport.averageExerciseScore'),
+          noEvidence: t('priv.learningReport.noEvidence'),
+          notAvailable: t('priv.learningReport.notAvailable'),
+          privacyNote: t('priv.learningReport.privacyNote'),
+          provenanceNote: t('priv.learningReport.provenanceNote'),
+        },
+        formatLocale,
+        localeDirection(locale),
+        ageBand ? t(`onb.age.${ageBand}` as TranslationKey) : undefined,
+      );
+      setNotice(t('priv.learningReport.done'));
     } catch (e) { setError((e as Error).message); } finally { setBusy(null); }
   };
 
@@ -118,9 +170,21 @@ export default function PrivacyScreen() {
       {/* Export */}
       <Text style={styles.section}>{t('priv.export')}</Text>
       <Card>
+        <Text style={styles.rowName}>{t('priv.learningReport.title')}</Text>
+        <Text style={styles.sub}>{t('priv.learningReport.help')}</Text>
+        <Button
+          label={t('priv.learningReport.button')}
+          busy={busy === 'learning-report'}
+          onPress={exportLearningReport}
+        />
+      </Card>
+      <Card>
         <Text style={styles.sub}>{t('priv.exportHelp')}</Text>
         <Button label={t('priv.exportBtn')} busy={busy === 'export'} onPress={exportData} />
       </Card>
+
+      <Text style={styles.section}>{t('priv.learningReset.section')}</Text>
+      <LearningResetCard />
 
       {/* Delete */}
       <Text style={styles.section}>{t('priv.danger')}</Text>

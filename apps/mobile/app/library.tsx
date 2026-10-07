@@ -14,7 +14,7 @@ import {
 } from '@second-brain/shared';
 import { ApiError, api } from '../lib/client';
 import { pickDocuments, uploadPickedDocument } from '../lib/document-import';
-import { loadLibraryCache, saveLibraryCache } from '../lib/library-cache';
+import { invalidateLibraryCache, loadLibraryCache, saveLibraryCache } from '../lib/library-cache';
 import { useAuth } from '../lib/auth-context';
 import { useTokens } from '../lib/design/theme';
 import { useI18n, type TranslationKey } from '../lib/i18n';
@@ -68,6 +68,9 @@ export default function LibraryScreen() {
   const [stale, setStale] = useState(false);
   const [error, setError] = useState<ErrorState>(null);
   const [panel, setPanel] = useState<'import' | 'batch' | 'collection' | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<LibraryDocument | null>(null);
+  const [confirmEmptyTrash, setConfirmEmptyTrash] = useState(false);
+  const [purging, setPurging] = useState<string | null>(null);
   const request = useRef<AbortController | null>(null);
   const documentsRef = useRef<LibraryDocument[]>([]);
 
@@ -145,6 +148,60 @@ export default function LibraryScreen() {
     } catch (caught) { setError(errorState(caught)); }
   };
 
+  const reflectPermanentDeletion = async (ids: ReadonlySet<string>, trashCount: number) => {
+    const nextDocuments = documentsRef.current.filter((document) => !ids.has(document.id));
+    documentsRef.current = nextDocuments;
+    setDocuments(nextDocuments);
+    setCursor(null);
+    setFacets((current) => current ? { ...current, trash: Math.max(0, trashCount) } : current);
+    if (user) await invalidateLibraryCache(user.id);
+  };
+
+  const permanentlyDelete = async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    setPurging(target.id);
+    setError(null);
+    try {
+      await api<{ deleted: boolean }>(`/library/documents/${target.id}/permanent`, { method: 'DELETE' });
+      await reflectPermanentDeletion(
+        new Set([target.id]),
+        Math.max(0, (facets?.trash ?? 1) - 1),
+      );
+      setDeleteTarget(null);
+      await load(false);
+    } catch (caught) {
+      setError(errorState(caught));
+    } finally {
+      setPurging(null);
+    }
+  };
+
+  const emptyTrash = async () => {
+    const expectedCount = facets?.trash ?? 0;
+    if (expectedCount === 0) { setConfirmEmptyTrash(false); return; }
+    setPurging('all');
+    setError(null);
+    try {
+      await api<{ deletedCount: number }>('/library/trash', {
+        method: 'DELETE',
+        body: { expectedCount },
+        timeoutMs: 90_000,
+      });
+      await reflectPermanentDeletion(
+        new Set(documentsRef.current.map((document) => document.id)),
+        0,
+      );
+      setConfirmEmptyTrash(false);
+      await load(false);
+    } catch (caught) {
+      setError(errorState(caught));
+      await load(false);
+    } finally {
+      setPurging(null);
+    }
+  };
+
   const filters = facets ? (
     <View style={{ gap: spacing.md }}>
       <View style={{ gap: spacing.xs }}>
@@ -178,6 +235,7 @@ export default function LibraryScreen() {
         <Button label={t('library7.scan')} variant="secondary" icon="▣" onPress={() => router.push('/scan')} />
         <Button label={t('library7.batch')} variant="secondary" icon="▤" onPress={() => setPanel(panel === 'batch' ? null : 'batch')} />
         <Button label={t('library7.ask')} variant="ghost" icon="?" onPress={() => router.push('/library/ask')} />
+        {shelf === 'trash' && (facets?.trash ?? 0) > 0 ? <Button label={t('library7.trash.empty').replace('{n}', String(facets?.trash ?? 0))} variant="danger" icon="⌫" loading={purging === 'all'} onPress={() => setConfirmEmptyTrash(true)} /> : null}
       </View>
 
       {panel === 'import' ? <ImportPanel onDone={(id) => { setPanel(null); void load(false); router.push(`/library/${id}`); }} /> : null}
@@ -200,25 +258,28 @@ export default function LibraryScreen() {
           </View>
 
           {loading && !documents.length ? <SmartLoadingState title={t('lib.loading')} /> : documents.length === 0 ? (
-            <LibraryEmpty onImport={() => setPanel('import')} onScan={() => router.push('/scan')} />
+            <LibraryEmpty trash={shelf === 'trash'} onImport={() => setPanel('import')} onScan={() => router.push('/scan')} />
           ) : (
             <View accessibilityRole="list" style={{ gap: spacing.sm }}>
-              {documents.map((document) => <DocumentRow key={document.id} document={document} collections={facets?.collections ?? []} formatLocale={formatLocale} onOpen={() => document.contentType === 'LESSON_AI' && document.sourceRef?.startsWith('lesson:') ? router.push(`/lesson/${document.sourceRef.slice(7)}`) : router.push(`/library/${document.id}`)} onFavorite={() => void mutate(document, 'favorite')} onTrash={() => void mutate(document, document.deletedAt ? 'restore' : 'trash')} onChanged={() => void load(false)} />)}
+              {documents.map((document) => <DocumentRow key={document.id} document={document} collections={facets?.collections ?? []} formatLocale={formatLocale} onOpen={() => document.contentType === 'LESSON_AI' && document.sourceRef?.startsWith('lesson:') ? router.push(`/lesson/${document.sourceRef.slice(7)}`) : router.push(`/library/${document.id}`)} onFavorite={() => void mutate(document, 'favorite')} onTrash={() => void mutate(document, document.deletedAt ? 'restore' : 'trash')} onPermanentDelete={() => setDeleteTarget(document)} onChanged={() => void load(false)} />)}
             </View>
           )}
           {cursor ? <Button label={t('library7.more')} variant="secondary" loading={loadingMore} onPress={() => void load(true)} /> : null}
         </View>
       </View>
+      <Dialog visible={Boolean(deleteTarget)} onClose={() => { if (!purging) setDeleteTarget(null); }} title={t('library7.trash.permanentTitle')} footer={<><Button label={t('tutor.cancel')} variant="ghost" disabled={Boolean(purging)} onPress={() => setDeleteTarget(null)} /><Button label={t('library7.trash.permanent')} variant="danger" loading={purging === deleteTarget?.id} onPress={() => void permanentlyDelete()} /></>}><Text style={{ color: c.textSecondary }}>{t('library7.trash.permanentDetail').replace('{title}', deleteTarget?.title ?? '')}</Text></Dialog>
+      <Dialog visible={confirmEmptyTrash} onClose={() => { if (!purging) setConfirmEmptyTrash(false); }} title={t('library7.trash.emptyTitle')} footer={<><Button label={t('tutor.cancel')} variant="ghost" disabled={Boolean(purging)} onPress={() => setConfirmEmptyTrash(false)} /><Button label={t('library7.trash.empty').replace('{n}', String(facets?.trash ?? 0))} variant="danger" loading={purging === 'all'} onPress={() => void emptyTrash()} /></>}><Text style={{ color: c.textSecondary }}>{t('library7.trash.emptyDetail').replace('{n}', String(facets?.trash ?? 0))}</Text></Dialog>
     </ScrollView>
   );
 }
 
-function LibraryEmpty({ onImport, onScan }: { onImport: () => void; onScan: () => void }) {
+function LibraryEmpty({ trash, onImport, onScan }: { trash: boolean; onImport: () => void; onScan: () => void }) {
   const { colors: c, spacing, typography } = useTokens();
   const { t } = useI18n();
   return (
     <Card style={{ gap: spacing.md }}>
-      <SmartEmptyState icon="▤" title={t('library7.empty.title')} detail={t('library7.empty.detail')} />
+      <SmartEmptyState icon={trash ? '⌫' : '▤'} title={t(trash ? 'library7.trash.emptyStateTitle' : 'library7.empty.title')} detail={t(trash ? 'library7.trash.emptyStateDetail' : 'library7.empty.detail')} />
+      {trash ? null : <>
       <View accessibilityLabel={t('library7.empty.pipeline')} style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: spacing.xs }}>
         {(['import', 'read', 'understand', 'connect', 'ready'] as const).map((step, index) => <Text key={step} style={[typography.caption, { color: c.textMuted }]}>{index ? '→ ' : ''}{t(`library7.empty.${step}`)}</Text>)}
       </View>
@@ -226,11 +287,12 @@ function LibraryEmpty({ onImport, onScan }: { onImport: () => void; onScan: () =
         <Button label={t('library7.import')} onPress={onImport} />
         <Button label={t('library7.scan')} variant="secondary" onPress={onScan} />
       </View>
+      </>}
     </Card>
   );
 }
 
-function DocumentRow({ document, collections, formatLocale, onOpen, onFavorite, onTrash, onChanged }: { document: LibraryDocument; collections: LibraryFacets['collections']; formatLocale: string; onOpen: () => void; onFavorite: () => void; onTrash: () => void; onChanged: () => void }) {
+function DocumentRow({ document, collections, formatLocale, onOpen, onFavorite, onTrash, onPermanentDelete, onChanged }: { document: LibraryDocument; collections: LibraryFacets['collections']; formatLocale: string; onOpen: () => void; onFavorite: () => void; onTrash: () => void; onPermanentDelete: () => void; onChanged: () => void }) {
   const { colors: c, spacing, typography } = useTokens();
   const { t } = useI18n();
   const router = useRouter();
@@ -255,6 +317,10 @@ function DocumentRow({ document, collections, formatLocale, onOpen, onFavorite, 
       {menu ? <Card style={{ gap: spacing.xs, backgroundColor: c.surfaceSunken }}>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
           <Button label={t('home.open')} variant="ghost" size="sm" onPress={onOpen} />
+          {document.deletedAt ? <>
+            <Button label={t('lib.restore')} variant="secondary" size="sm" onPress={onTrash} />
+            <Button label={t('library7.trash.permanent')} variant="danger" size="sm" onPress={onPermanentDelete} />
+          </> : <>
           <Button label={t('workspace10.plan.rename')} variant="ghost" size="sm" onPress={() => setRenaming(true)} />
           <Button label={t('library7.favorite')} variant="ghost" size="sm" onPress={onFavorite} />
           <Button label={t('lib.m.collection')} variant="ghost" size="sm" onPress={() => setMoving((value) => !value)} />
@@ -262,9 +328,10 @@ function DocumentRow({ document, collections, formatLocale, onOpen, onFavorite, 
           <Button label={t('library7.action.ask')} variant="ghost" size="sm" onPress={() => router.push({ pathname: `/library/${document.id}`, params: { section: 'ask' } })} />
           <Button label={t('library7.action.learn')} variant="ghost" size="sm" onPress={() => router.push({ pathname: '/tutor', params: { documentId: document.id, title: document.title, mode: 'teach', intent: 'learn-document' } })} />
           <Button label={t('library7.action.workspace')} variant="ghost" size="sm" onPress={() => router.push({ pathname: '/library/workspace', params: { documentId: document.id, title: document.title } })} />
-          <Button label={document.deletedAt ? t('lib.restore') : t('lib.moveToTrash')} variant="danger" size="sm" onPress={() => document.deletedAt ? onTrash() : setConfirmTrash(true)} />
+          <Button label={t('lib.moveToTrash')} variant="danger" size="sm" onPress={() => setConfirmTrash(true)} />
+          </>}
         </View>
-        {moving ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+        {moving && !document.deletedAt ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
           <Button label={t('library7.collection.none')} variant="ghost" size="sm" onPress={() => void api(`/library/documents/${document.id}/collection`, { method: 'PATCH', body: { collectionId: null } }).then(onChanged)} />
           {collections.map((collection) => <Button key={collection.id} label={collection.name} variant="ghost" size="sm" onPress={() => void api(`/library/documents/${document.id}/collection`, { method: 'PATCH', body: { collectionId: collection.id } }).then(onChanged)} />)}
         </View> : null}

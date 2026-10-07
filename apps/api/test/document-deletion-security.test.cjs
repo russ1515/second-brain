@@ -10,7 +10,7 @@ function removalFixture({ ownerExists = true, qdrantFails = false, sqlDeleteFail
   const events = [];
   const state = { deletedAt: alreadyDeleted ? new Date('2026-09-20T00:00:00Z') : null, status: 'ready', stage: null };
   const tx = {
-    $queryRaw: async (_strings, key) => events.push(`lock:${key}`),
+    $executeRaw: async (_strings, key) => events.push(`lock:${key}`),
     document: {
       findFirst: async (args) => {
         if (args.select?.deletedAt) {
@@ -113,11 +113,187 @@ test('retry accepts an already soft-deleted document and restages cleanup', asyn
   assert.ok(events.includes('sql-hard-delete'));
 });
 
+function trashPurgeFixture({ trashed = true, ownerId = 'owner-1' } = {}) {
+  const events = [];
+  const state = {
+    exists: true,
+    userId: ownerId,
+    deletedAt: trashed ? new Date('2026-10-06T00:00:00Z') : null,
+    stage: null,
+  };
+  const saved = {};
+  const tx = {
+    $executeRaw: async (_strings, key) => events.push(`lock:${key}`),
+    document: {
+      findFirst: async ({ where }) => {
+        if (!state.exists || where.userId !== state.userId || !state.deletedAt) return null;
+        if (where.stage && state.stage !== where.stage) return null;
+        return { id: 'document-1', stage: state.stage };
+      },
+      findMany: async () => state.exists && state.deletedAt ? [{ id: 'document-1' }] : [],
+      update: async ({ data }) => {
+        events.push('barrier'); Object.assign(state, data); return { id: 'document-1' };
+      },
+      deleteMany: async ({ where }) => {
+        events.push('document-delete');
+        if (!state.exists || where.userId !== state.userId || state.stage !== 'deleting') return { count: 0 };
+        state.exists = false;
+        return { count: 1 };
+      },
+      count: async () => state.exists ? 1 : 0,
+    },
+    studyResource: {
+      findMany: async () => [{ deckId: 'generated-deck' }],
+      count: async () => 0,
+    },
+    academicWorkspace: {
+      findMany: async () => [{ id: 'workspace-1', sources: [
+        { kind: 'document', id: 'document-1' },
+        { kind: 'collection', id: 'shared-collection' },
+      ] }],
+      update: async ({ data }) => { events.push('workspace-pruned'); saved.workspace = data.sources; },
+    },
+    experienceSession: {
+      findMany: async () => [{
+        id: 'experience-1',
+        sourceReferences: [
+          { kind: 'document', id: 'document-1' },
+          { kind: 'concept', id: 'shared-concept' },
+        ],
+        activeContexts: {
+          version: 1,
+          ownerUserId: ownerId,
+          capturedAt: '2026-10-06T00:00:00.000Z',
+          items: [
+            { kind: 'document', referenceId: 'document-1' },
+            { kind: 'concept', referenceId: 'shared-concept' },
+          ],
+        },
+      }],
+      update: async ({ data }) => { events.push('experience-pruned'); saved.experience = data; },
+    },
+    tutorMessage: {
+      findMany: async () => [{ id: 'message-1', citations: [
+        { documentId: 'document-1', chunkIndex: 0 },
+        { documentId: 'other-document', chunkIndex: 1 },
+      ] }],
+      update: async ({ data }) => { events.push('citations-pruned'); saved.citations = data.citations; },
+    },
+    card: { deleteMany: async () => (events.push('exclusive-cards-delete'), { count: 2 }) },
+    recommendation: {
+      deleteMany: async ({ where }) => {
+        assert.equal(where.userId, 'owner-1');
+        assert.deepEqual(where.OR, [
+          { targetKind: 'document', targetId: 'document-1' },
+          { dedupeKey: 'document:document-1' },
+        ]);
+        events.push('document-recommendations-delete');
+        return { count: 1 };
+      },
+    },
+    deck: {
+      findFirst: async () => ({
+        id: 'generated-deck',
+        _count: { cards: 0, languageProfiles: 0, planItems: 0 },
+      }),
+      deleteMany: async () => (events.push('empty-generated-deck-delete'), { count: 1 }),
+    },
+  };
+  const prisma = {
+    ...tx,
+    $transaction: async (operation, options) => {
+      assert.deepEqual(options, { timeout: 60_000 });
+      return operation(tx);
+    },
+  };
+  const service = new DocumentService(
+    prisma,
+    {},
+    { purgeVectors: async () => events.push('qdrant-and-chunks-purge') },
+    {},
+    {
+      deleteScanPagesAnd: async (_userId, _documentId, finalize) => {
+        events.push('private-media-tombstone');
+        return finalize();
+      },
+    },
+  );
+  return { service, events, state, saved, prisma };
+}
+
+test('permanent Trash deletion purges exclusive data and prunes only invalid references', async () => {
+  const { service, events, state, saved } = trashPurgeFixture();
+  assert.equal(await service.permanentlyDeleteTrashed('owner-1', 'document-1'), true);
+  assert.equal(state.exists, false);
+  assert.ok(events.includes('qdrant-and-chunks-purge'));
+  assert.ok(events.includes('private-media-tombstone'));
+  assert.ok(events.includes('exclusive-cards-delete'));
+  assert.ok(events.includes('document-recommendations-delete'));
+  assert.ok(events.includes('document-delete'));
+  assert.ok(events.includes('empty-generated-deck-delete'));
+  assert.deepEqual(saved.workspace, [{ kind: 'collection', id: 'shared-collection' }]);
+  assert.deepEqual(saved.experience.sourceReferences, [{ kind: 'concept', id: 'shared-concept' }]);
+  assert.deepEqual(saved.experience.activeContexts.items, [
+    { kind: 'concept', referenceId: 'shared-concept' },
+  ]);
+  assert.deepEqual(saved.citations, [{ documentId: 'other-document', chunkIndex: 1 }]);
+
+  const destructiveEvents = events.length;
+  assert.equal(await service.permanentlyDeleteTrashed('owner-1', 'document-1'), false);
+  assert.equal(events.slice(destructiveEvents).includes('qdrant-and-chunks-purge'), false);
+});
+
+test('permanent Trash deletion cannot delete active or foreign documents', async () => {
+  const active = trashPurgeFixture({ trashed: false });
+  assert.equal(await active.service.permanentlyDeleteTrashed('owner-1', 'document-1'), false);
+  assert.equal(active.state.exists, true);
+  assert.equal(active.events.includes('qdrant-and-chunks-purge'), false);
+
+  const foreign = trashPurgeFixture({ ownerId: 'owner-2' });
+  assert.equal(await foreign.service.permanentlyDeleteTrashed('owner-1', 'document-1'), false);
+  assert.equal(foreign.state.exists, true);
+  assert.equal(foreign.events.includes('qdrant-and-chunks-purge'), false);
+});
+
+test('empty Trash uses the exact owner snapshot and rejects a stale confirmation count', async () => {
+  const purged = [];
+  const tx = {
+    $executeRaw: async () => undefined,
+    document: { findMany: async ({ where }) => {
+      assert.equal(where.userId, 'owner-1');
+      assert.deepEqual(where.deletedAt, { not: null });
+      return [{ id: 'owned-a' }, { id: 'owned-b' }];
+    } },
+  };
+  const prisma = {
+    document: { count: async ({ where }) => {
+      assert.equal(where.userId, 'owner-1');
+      assert.deepEqual(where.id.in, ['owned-a', 'owned-b']);
+      return 0;
+    } },
+    $transaction: async (operation, options) => {
+      assert.deepEqual(options, { timeout: 60_000 });
+      return operation(tx);
+    },
+  };
+  const service = new DocumentService(prisma, {}, {}, {}, {});
+  service.permanentlyDeleteTrashed = async (userId, id) => {
+    assert.equal(userId, 'owner-1'); purged.push(id); return true;
+  };
+  assert.deepEqual(await service.emptyTrash('owner-1', 2), { deletedCount: 2 });
+  assert.deepEqual(purged, ['owned-a', 'owned-b']);
+  await assert.rejects(
+    () => service.emptyTrash('owner-1', 1),
+    (error) => error?.response?.code === 'TRASH_CONTENT_CHANGED' && error.response.actualCount === 2,
+  );
+  assert.deepEqual(purged, ['owned-a', 'owned-b']);
+});
+
 test('reindex refuses an empty OCR scan before ingestion', async () => {
   let ingestions = 0;
   const scan = { id: 'scan-empty', userId: 'owner-1', sourceRef: 'scan:a', content: '', charCount: 0, status: 'failed' };
   const prisma = { $transaction: async (operation) => operation({
-    $queryRaw: async () => undefined,
+    $executeRaw: async () => undefined,
     document: { findFirst: async () => scan },
   }) };
   const service = new DocumentService(prisma, {}, { ingest: async () => { ingestions += 1; } }, {}, {});
@@ -136,7 +312,7 @@ test('a durable ingestion claim suppresses a concurrent retry provider call', as
   const started = new Promise((resolve) => { announce = resolve; });
   const blocked = new Promise((resolve) => { release = resolve; });
   const tx = {
-    $queryRaw: async () => undefined,
+    $executeRaw: async () => undefined,
     document: {
       findUnique: async () => ({ ...row }),
       findFirst: async () => ({ ...row }),

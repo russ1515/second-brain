@@ -25,6 +25,21 @@ export interface DeleteAccountRequest {
   password: string;
 }
 
+/** Strong confirmation for clearing only the learner's pedagogical space. */
+export interface ResetLearningRequest {
+  password: string;
+  confirmation: 'RÉINITIALISER';
+}
+
+export interface LearningResetRequirements {
+  mfaRequired: boolean;
+}
+
+export interface LearningResetResponse {
+  resetAt: string;
+  onboardingRequired: true;
+}
+
 /** A portable dump of everything the platform holds about the user. */
 export interface DataExportResponse {
   generatedAt: string;

@@ -51,6 +51,30 @@ function objectLiteral(file, variableName) {
   return result;
 }
 
+function stringArray(file, variableName) {
+  const source = sourceFile(file);
+  let result;
+  function visit(node) {
+    if (
+      ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.name.text === variableName
+      && node.initializer
+    ) {
+      const initializer = unwrap(node.initializer);
+      if (ts.isArrayLiteralExpression(initializer)) result = initializer;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert.ok(result, `Missing array ${variableName} in ${path.relative(ROOT, file)}`);
+  return result.elements.map((element) => {
+    const value = unwrap(element);
+    assert.ok(ts.isStringLiteralLike(value), `Non-string value in ${variableName}`);
+    return value.text;
+  });
+}
+
 function propertyName(property) {
   if (!property.name) return null;
   if (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)) return property.name.text;
@@ -145,7 +169,57 @@ const libraryV1Catalogs = nestedCatalog(path.join(LOCALES_DIR, 'library-v1.ts'),
 const libraryV1Organization = tupleCatalog(path.join(LOCALES_DIR, 'library-v1.ts'), 'organizationLabels', ['lib.types', 'libraryV1.type.notebook']);
 const libraryV1Failures = tupleCatalog(path.join(LOCALES_DIR, 'library-v1.ts'), 'failureLabels', ['libraryV1.error.fileUnreadable', 'libraryV1.error.storage']);
 const researchWebV1 = tupleCatalog(path.join(LOCALES_DIR, 'research-web-v1.ts'), 'researchWebV1', ['research10.externalUnavailable', 'research10.externalUnavailableDetail']);
-const overlayFiles = new Set(['auth-errors.ts', 'essential.ts', 'index.ts', 'library-v1.ts', 'research-web-v1.ts', 'review.ts', 'voice-phase2.ts']);
+const learningDataControlGroups = [
+  {
+    file: 'learning-data-control-europe-v1.ts',
+    locales: 'learningDataControlEuropeLocales',
+    keys: 'learningDataControlKeys',
+    values: 'learningDataControlEuropeValues',
+  },
+  {
+    file: 'learning-data-control-asia-v1.ts',
+    locales: 'learningDataControlAsiaLocales',
+    keys: 'learningDataControlAsiaKeys',
+    values: 'learningDataControlAsiaValues',
+  },
+  {
+    file: 'learning-data-control-africa-v1.ts',
+    locales: 'learningDataControlAfricaLocales',
+    keys: 'learningDataControlAfricaKeys',
+    values: 'learningDataControlAfricaValues',
+  },
+].map((group) => {
+  const file = path.join(LOCALES_DIR, group.file);
+  const keys = stringArray(file, group.keys);
+  return {
+    ...group,
+    file,
+    keys,
+    locales: stringArray(file, group.locales),
+    catalogs: tupleCatalog(file, group.values, keys),
+  };
+});
+const learningDataControlKeys = learningDataControlGroups[0].keys;
+const learningDataControlCatalogs = new Map();
+for (const group of learningDataControlGroups) {
+  for (const [code, translations] of group.catalogs) {
+    assert.ok(!learningDataControlCatalogs.has(code), `Duplicate learning-data locale ${code}`);
+    learningDataControlCatalogs.set(code, translations);
+  }
+}
+const overlayFiles = new Set([
+  'auth-errors.ts',
+  'essential.ts',
+  'index.ts',
+  'learning-control-v1.ts',
+  'learning-data-control-africa-v1.ts',
+  'learning-data-control-asia-v1.ts',
+  'learning-data-control-europe-v1.ts',
+  'library-v1.ts',
+  'research-web-v1.ts',
+  'review.ts',
+  'voice-phase2.ts',
+]);
 
 function registeredLocale(file) {
   const source = sourceFile(path.join(LOCALES_DIR, file));
@@ -190,6 +264,7 @@ function effectiveCatalog(resource) {
     ...(libraryV1Organization.get(code) ?? new Map()),
     ...(libraryV1Failures.get(code) ?? new Map()),
     ...(researchWebV1.get(code) ?? new Map()),
+    ...(learningDataControlCatalogs.get(code) ?? new Map()),
   ]);
 }
 
@@ -239,6 +314,48 @@ test('all 34 UI catalogs are complete and exposed', () => {
       'fi', 'id', 'uk', 'ln', 'sw', 'wo', 'ha', 'he', 'zh-Hant', 'bn',
     ].sort(),
   );
+});
+
+test('all 34 catalogs cover every learning-data control with exact contracts', () => {
+  assert.equal(learningDataControlKeys.length, 54);
+  assert.equal(new Set(learningDataControlKeys).size, 54);
+  assert.equal(learningDataControlCatalogs.size, 32);
+  for (const group of learningDataControlGroups) {
+    assert.deepEqual(group.keys, learningDataControlKeys, `${path.basename(group.file)} key order`);
+    assert.deepEqual([...group.catalogs.keys()], group.locales, `${path.basename(group.file)} locale order`);
+  }
+
+  const barrel = fs.readFileSync(path.join(LOCALES_DIR, 'index.ts'), 'utf8');
+  for (const group of learningDataControlGroups) {
+    const moduleName = path.basename(group.file, '.ts');
+    assert.match(barrel, new RegExp(`import ['\"]\\./${moduleName}['\"]`));
+  }
+
+  const codes = ['en', 'fr', ...localeResources.map((resource) => resource.code)];
+  assert.equal(codes.length, 34);
+  assert.equal(new Set(codes).size, 34);
+  for (const code of codes) {
+    const resource = localeResources.find((candidate) => candidate.code === code);
+    const translations = code === 'en'
+      ? english
+      : code === 'fr'
+        ? french
+        : effectiveCatalog(resource);
+    assert.equal(translations.size, english.size, `${code} catalog coverage regressed`);
+    for (const key of learningDataControlKeys) {
+      const value = translations.get(key);
+      assert.ok(value?.trim(), `${code} is missing learning-data key ${key}`);
+      assert.deepEqual(placeholders(value), placeholders(english.get(key)), `${code}.${key}`);
+      // French legitimately shares a few short loan-word labels with English
+      // (for example "{count} session(s)"); generated locale overlays must not
+      // use the entire English source value as filler.
+      if (code !== 'en' && code !== 'fr') {
+        assert.notEqual(value, english.get(key), `${code}.${key} uses English filler`);
+      }
+    }
+    const prompt = translations.get('priv.learningReset.typePrompt');
+    assert.equal((prompt.match(/RÉINITIALISER/g) ?? []).length, 1, `${code} confirmation literal`);
+  }
 });
 
 test('French is complete and every generated catalog is a safe English subset', (t) => {

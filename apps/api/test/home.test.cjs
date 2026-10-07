@@ -234,17 +234,30 @@ test('Mobile Home consumes one aggregate endpoint and keeps the compact content 
   assert.match(decisionComponents, /isReduceMotionEnabled/);
 });
 
-test('Home resume cards confirm and archive only the resumable experience', () => {
+test('Home resume cards preview and invoke the central learning deletion operation', () => {
   const screen = fs.readFileSync(path.resolve(__dirname, '../../mobile/app/(tabs)/index.tsx'), 'utf8');
   const components = fs.readFileSync(path.resolve(__dirname, '../../mobile/components/home/decision.tsx'), 'utf8');
   assert.match(components, /resume-delete-\$\{session\.id\}/);
   assert.match(components, /<Dialog/);
   assert.match(components, /resume-delete-confirm-\$\{session\.id\}/);
   assert.match(screen, /\/experience-sessions\/\$\{session\.id\}/);
-  assert.match(screen, /body: \{ status: 'abandoned' \}/);
+  assert.match(screen, /\/experience-sessions\/\$\{session\.id\}\/deletion-preview/);
+  assert.match(screen, /method: 'DELETE'/);
   assert.match(screen, /resumableSessions\.filter\(\(item\) => item\.id !== session\.id\)/);
-  assert.match(screen, /queryClient\.invalidateQueries\(\{ queryKey: \['home', 'overview'\] \}\)/);
-  assert.doesNotMatch(screen, /DELETE/);
+  assert.match(screen, /invalidateLearningViews/);
+});
+
+test('Home upcoming and main goal expose ownership-checked preview before deletion', () => {
+  const screen = fs.readFileSync(path.resolve(__dirname, '../../mobile/app/(tabs)/index.tsx'), 'utf8');
+  const components = fs.readFileSync(path.resolve(__dirname, '../../mobile/components/home/decision.tsx'), 'utf8');
+  assert.match(screen, /\/lessons\/\$\{action\.targetId\}\/deletion-preview/);
+  assert.match(screen, /\/calendar\/events\/\$\{action\.targetId\}\/deletion-preview/);
+  assert.match(screen, /\/goals\/\$\{goalId\}\/deletion-preview/);
+  assert.match(components, /item\.deletion\?\.kind === 'details-only'/);
+  assert.match(components, /<DeletionImpact/);
+  assert.match(components, /export function MainGoalEmpty/);
+  assert.match(components, /t\('goals\.none'\)/);
+  assert.match(components, /t\('brain8\.action\.goal'\)/);
 });
 
 test('Home endpoint is protected by the JWT access guard', () => {

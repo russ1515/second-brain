@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import type { Goal, GoalPeriod } from '@second-brain/shared';
+import type { Goal, GoalPeriod, LearningDeletionPreview } from '@second-brain/shared';
 import { api } from '../lib/client';
 import { useTokens } from '../lib/design/theme';
 import type { ColorScale } from '../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../components/ui';
+import { Dialog } from '../components/ds/overlays';
+import { DeletionImpact } from '../components/home/decision';
 
 const PERIODS: { period: GoalPeriod; key: TranslationKey }[] = [
   { period: 'daily', key: 'goals.daily' },
@@ -25,6 +27,11 @@ export default function GoalsScreen() {
   const [title, setTitle] = useState('');
   const [period, setPeriod] = useState<GoalPeriod>('daily');
   const [busy, setBusy] = useState(false);
+  const [deletingGoal, setDeletingGoal] = useState<Goal | null>(null);
+  const [deletionPreview, setDeletionPreview] = useState<LearningDeletionPreview | null>(null);
+  const [previewingDelete, setPreviewingDelete] = useState(false);
+  const [previewDeleteFailed, setPreviewDeleteFailed] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -62,12 +69,30 @@ export default function GoalsScreen() {
     }
   };
 
-  const remove = async (id: string) => {
+  const prepareRemove = (goal: Goal) => {
+    setDeletingGoal(goal);
+    setDeletionPreview(null);
+    setPreviewDeleteFailed(false);
+    setPreviewingDelete(true);
+    void api<LearningDeletionPreview>(`/goals/${goal.id}/deletion-preview`)
+      .then(setDeletionPreview)
+      .catch(() => setPreviewDeleteFailed(true))
+      .finally(() => setPreviewingDelete(false));
+  };
+
+  const remove = async () => {
+    if (!deletingGoal || deleting) return;
+    const id = deletingGoal.id;
+    setDeleting(true);
     try {
       await api<void>(`/goals/${id}`, { method: 'DELETE' });
+      setGoals((current) => current?.filter((goal) => goal.id !== id) ?? current);
+      setDeletingGoal(null);
       await load();
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -131,7 +156,7 @@ export default function GoalsScreen() {
                     {g.title}
                   </Text>
                   {g.status !== 'done' ? <Pressable onPress={() => router.push({ pathname: '/revision', params: { goalId: g.id } })} accessibilityRole="link" accessibilityLabel={t('review9.goalReview')} style={styles.reviewLink}><Text style={styles.reviewLinkText}>{t('review9.goalReview')}</Text></Pressable> : null}
-                  <Pressable onPress={() => remove(g.id)} accessibilityRole="button" hitSlop={6}>
+                  <Pressable onPress={() => prepareRemove(g)} accessibilityRole="button" accessibilityLabel={t('learningControl.deleteGoal')} hitSlop={6}>
                     <Text style={styles.remove}>✕</Text>
                   </Pressable>
                 </View>
@@ -140,6 +165,26 @@ export default function GoalsScreen() {
           </View>
         );
       })}
+      <Dialog
+        visible={Boolean(deletingGoal)}
+        onClose={() => { if (!deleting) setDeletingGoal(null); }}
+        title={t('learningControl.deleteGoal')}
+        footer={(
+          <>
+            <Button label={t('tutor.cancel')} variant="ghost" disabled={deleting} onPress={() => setDeletingGoal(null)} />
+            <Button
+              label={t('learningControl.deleteGoal')}
+              variant="danger"
+              busy={deleting || previewingDelete}
+              disabled={!deletionPreview || previewDeleteFailed}
+              onPress={() => { void remove(); }}
+            />
+          </>
+        )}
+      >
+        {deletingGoal ? <Text style={styles.goalText}>{deletingGoal.title}</Text> : null}
+        <DeletionImpact preview={deletionPreview} loading={previewingDelete} failed={previewDeleteFailed} />
+      </Dialog>
     </ScrollView>
   );
 }

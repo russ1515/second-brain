@@ -19,6 +19,7 @@ import type {
 import { PrismaService } from '../../prisma/prisma.service';
 import { IngestionService } from '../ingestion/ingestion.service';
 import { DocumentEnrichmentService } from '../enrichment/document-enrichment.service';
+import { DocumentService } from '../document.service';
 import { accountDataLockKey } from '../../common/account-data-lock';
 
 /** A document created within this many days shows on the "Recent" shelf. */
@@ -51,6 +52,7 @@ export class LibraryService {
     private readonly prisma: PrismaService,
     private readonly ingestion: IngestionService,
     private readonly enrichment: DocumentEnrichmentService,
+    private readonly documents: DocumentService,
   ) {}
 
   /** Documents for a shelf, newest first, with metadata + concepts. */
@@ -250,9 +252,21 @@ export class LibraryService {
     return this.hydrate(userId, result.document);
   }
 
+  async permanentlyDelete(userId: string, id: string): Promise<{ deleted: boolean }> {
+    return { deleted: await this.documents.permanentlyDeleteTrashed(userId, id) };
+  }
+
+  async emptyTrash(
+    userId: string,
+    expectedCount: number,
+  ): Promise<{ deletedCount: number }> {
+    return this.documents.emptyTrash(userId, expectedCount);
+  }
+
   /** (Re)run AI enrichment for one document — used to backfill older docs. */
   async enrichNow(userId: string, id: string): Promise<LibraryDocument> {
-    await this.own(userId, id);
+    const owned = await this.own(userId, id);
+    if (owned.deletedAt) throw new NotFoundException('Document not found.');
     await this.enrichment.enrich(id);
     const doc = await this.prisma.document.findUnique({ where: { id } });
     return this.hydrate(userId, doc as Document);

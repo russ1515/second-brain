@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -176,6 +177,31 @@ export class LibraryController {
     @Param('id') id: string,
   ): Promise<LibraryDocument> {
     return this.library.restore(user.userId, id);
+  }
+
+  @Delete('documents/:id/permanent')
+  @HttpCode(HttpStatus.OK)
+  permanentlyDelete(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<{ deleted: boolean }> {
+    return this.library.permanentlyDelete(user.userId, id);
+  }
+
+  @Delete('trash')
+  @HttpCode(HttpStatus.OK)
+  emptyTrash(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body('expectedCount') expectedCount?: unknown,
+  ): Promise<{ deletedCount: number }> {
+    if (
+      typeof expectedCount !== 'number' ||
+      !Number.isSafeInteger(expectedCount) ||
+      expectedCount < 0
+    ) {
+      throw new BadRequestException('A non-negative expectedCount is required.');
+    }
+    return this.library.emptyTrash(user.userId, expectedCount);
   }
 
   /** (Re)run AI enrichment — backfills documents ingested before Sprint 6.1. */
