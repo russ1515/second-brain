@@ -16,6 +16,9 @@ test('privacy exposes a distinct strong learning reset flow', () => {
   assert.match(reset, /confirmation === REQUIRED_CONFIRMATION/);
   assert.match(reset, /testID="learning-reset-password"/);
   assert.match(reset, /testID="learning-reset-confirmation"/);
+  assert.match(reset, /testID="learning-reset-open"/);
+  assert.match(reset, /testID="learning-reset-cancel"/);
+  assert.match(reset, /testID="learning-reset-submit"/);
   assert.match(reset, /\/me\/learning\/reset/);
   const serverReset = reset.indexOf("api<LearningResetResponse>('/me/learning/reset'");
   const localReset = reset.indexOf('clearLocalLearningState(user.id)');

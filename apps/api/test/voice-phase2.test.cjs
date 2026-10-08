@@ -126,12 +126,12 @@ test('language Professor keeps UI, native, support and target roles separate and
   assert.match(prompt, /Never produce arbitrary mixed-language sentences/);
 });
 
-test('Tutor context prefers declared explanation then teaching language without replacing the target', () => {
+test('Tutor context uses the UI locale as support before profile fallbacks without replacing the target', () => {
   const source = read('apps/api/src/tutor/tutor.service.ts');
-  const explanation = source.indexOf('passport?.explanationLanguage');
+  const ui = source.indexOf('passport?.interfaceLanguage', source.indexOf('supportLanguage:'));
+  const explanation = source.indexOf('passport?.explanationLanguage', ui);
   const teaching = source.indexOf('passport?.teachingLanguage', explanation);
-  const ui = source.indexOf('passport?.interfaceLanguage', teaching);
-  assert.ok(explanation >= 0 && teaching > explanation && ui > teaching);
+  assert.ok(ui >= 0 && explanation > ui && teaching > explanation);
   assert.match(source, /targetLanguage:[\s\S]*profile\.normalizedLanguage[\s\S]*passport\?\.targetLanguage/);
 });
 

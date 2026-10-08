@@ -24,6 +24,7 @@ import { TutorService } from '../tutor/tutor.service';
 import { LanguageService } from './language.service';
 import { immersionRatio, languageSystemPrompt, modeSpec } from './language-modes';
 import { ExperienceSessionService } from '../experience-sessions/experience-session.service';
+import { accountDataLockKey } from '../common/account-data-lock';
 
 /**
  * Immersive conversation practice.
@@ -63,14 +64,23 @@ export class ConversationService {
     const scenario = request.scenario ?? courseContext?.objective ?? undefined;
     const effectiveRequest: StartConversationRequest = { ...request, scenario };
 
-    const session = await this.prisma.tutorSession.create({
-      data: {
-        userId,
-        languageProfileId: profile.id,
-        title: scenario?.trim()
-          ? `${profile.language} — ${scenario.trim()}`.slice(0, 200)
-          : `${profile.language} conversation`,
-      },
+    const session = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const activeProfile = await tx.languageProfile.findFirst({
+        where: { id: profile.id, userId },
+        select: { id: true },
+      });
+      if (!activeProfile) throw new BadRequestException('Language profile is no longer available.');
+      return tx.tutorSession.create({
+        data: {
+          userId,
+          languageProfileId: profile.id,
+          title: scenario?.trim()
+            ? `${profile.language} — ${scenario.trim()}`.slice(0, 200)
+            : `${profile.language} conversation`,
+        },
+      });
     });
 
     const teacherPreferences = await this.loadTeacherPreferences(userId);
@@ -81,6 +91,7 @@ export class ConversationService {
       intent: 'practice-language',
     });
     const opening = await this.openingLine(
+      userId,
       profile,
       effectiveRequest,
       courseContext?.level ?? undefined,
@@ -284,6 +295,7 @@ export class ConversationService {
   }
 
   private async openingLine(
+    userId: string,
     profile: LanguageProfile,
     request: StartConversationRequest,
     cefrLevel?: CefrLevel,
@@ -292,7 +304,9 @@ export class ConversationService {
     const scenario = request.scenario;
     const mode = profile.mode as LanguageMode;
     const spec = modeSpec(mode);
+    const roles = await this.languages.promptRoles(userId, profile);
     const system = languageSystemPrompt({
+      ...roles,
       language: profile.language,
       nativeLanguage: profile.nativeLanguage,
       mode,

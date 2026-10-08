@@ -11,6 +11,7 @@
     "prebuild": "prisma generate",
     "build": "nest build",
     "test:learning-data-control": "pnpm run build && node --test test/learning-data-deletion.test.cjs test/learning-report.test.cjs test/learning-reset.test.cjs test/document-deletion-security.test.cjs test/home.test.cjs test/library-v1.test.cjs",
+    "test:global-path": "pnpm run build && node --test test/learning-evidence.test.cjs test/learning-data-deletion.test.cjs test/goals-learning-links.test.cjs test/lesson-flow.test.cjs test/generation-concurrency.test.cjs test/teaching-session-deletion.test.cjs test/language-profile-deletion.test.cjs",
     "test:learning-reset": "pnpm run build && node --test test/learning-reset.test.cjs",
     "dev": "nest start --watch",
     "start": "node dist/main.js",

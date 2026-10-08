@@ -5,6 +5,7 @@ import type { LearningPathItem, LearningStatus, StrengthsWeaknesses, TwinGraph, 
 import type { MemoryEntry, MemorySummary } from './memory';
 import type { KycTeacher } from './onboarding';
 import type { RiskPrediction } from './prediction';
+import type { EvidenceBasedLearningProgress, LearningHistoryView } from './learning-evidence';
 
 export type BrainMaturity = 'sparse' | 'medium' | 'dense';
 export type BrainView = 'overview' | 'knowledge' | 'learning' | 'memory' | 'history';
@@ -19,6 +20,7 @@ export const BRAIN_OVERVIEW_SOURCES = [
   'path',
   'foresight',
   'documents',
+  'evidence',
 ] as const;
 
 export type BrainOverviewSource = (typeof BRAIN_OVERVIEW_SOURCES)[number];
@@ -76,6 +78,8 @@ export interface BrainOverview {
   foresight: BrainForesight | null;
   recentDocuments: BrainDocumentReference[];
   nextBestAction: BrainNextAction | null;
+  evidenceProgress: EvidenceBasedLearningProgress;
+  completionHistory: LearningHistoryView;
   sources: Record<BrainOverviewSource, BrainSourceState>;
   partial: boolean;
 }

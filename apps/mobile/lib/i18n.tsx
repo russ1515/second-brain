@@ -76,6 +76,26 @@ export function extendLocale(
   });
 }
 
+/** Reuse already-reviewed copy from the same locale for small cross-surface
+ * labels. This keeps newly composed screens complete in every registered
+ * language without falling back to English or duplicating generated catalogs. */
+export function extendLocaleAliases(
+  code: Locale,
+  aliases: Record<string, string>,
+): void {
+  const current = registry.get(code);
+  if (!current) return;
+  const additions: Record<string, string> = {};
+  for (const [target, source] of Object.entries(aliases)) {
+    const value = current.catalog[source];
+    if (typeof value === 'string' && value.trim()) additions[target] = value;
+  }
+  registry.set(code, {
+    ...current,
+    catalog: { ...current.catalog, ...additions },
+  });
+}
+
 /** All registered locale codes, English first. */
 export function supportedLocaleCodes(): Locale[] {
   return [...registry.keys()].filter(isSelectableLocale);
@@ -1455,6 +1475,39 @@ const en = {
   'lesson.step': 'Step',
   'lesson.of': 'of',
   'lesson.continue': 'Continue',
+  'lesson.flow.confirmTitle': 'Move to the next step?',
+  'lesson.flow.confirmDetail': 'Once you enter it, earlier steps stay locked until this step is validated.',
+  'lesson.flow.confirmAction': 'Enter the next step',
+  'globalPath.copy': 'Copy',
+  'globalPath.copyDone': 'Copied',
+  'globalPath.insertProposal': 'Insert proposal',
+  'globalPath.replaceSelection': 'Replace selection',
+  'globalPath.anotherProposal': 'Another proposal',
+  'globalPath.undoInsertion': 'Undo insertion',
+  'globalPath.captureDetail': 'Take a photo or read a QR code. Nothing is sent until you confirm.',
+  'globalPath.evidence.title': 'Learning evidence',
+  'globalPath.evidence.detail': 'Only evaluated work can finalize learning and unlock review.',
+  'globalPath.evidence.completedCount': 'Completed items',
+  'globalPath.evidence.knowledge': 'Knowledge',
+  'globalPath.evidence.understanding': 'Understanding',
+  'globalPath.evidence.application': 'Application',
+  'globalPath.evidence.reasoning': 'Reasoning',
+  'globalPath.evidence.criticalReflection': 'Critical reflection',
+  'globalPath.evidence.perspective': 'Perspective',
+  'globalPath.evidence.notEvaluated': 'Not evaluated',
+  'globalPath.evidence.evidenceCount': 'Evidence',
+  'globalPath.calendar.title': 'Learning calendar',
+  'globalPath.calendar.detail': 'A factual timeline of started and finalized learning.',
+  'globalPath.calendar.empty': 'No learning activity for this period.',
+  'globalPath.calendar.started': 'Started',
+  'globalPath.calendar.finalized': 'Finalized',
+  'globalPath.calendar.objective': 'Objective',
+  'globalPath.calendar.result': 'Result',
+  'globalPath.calendar.kind.lesson': 'Lesson',
+  'globalPath.calendar.kind.languageUnit': 'Language unit',
+  'globalPath.result.evaluated': 'Evaluated',
+  'globalPath.result.demonstrated': 'Demonstrated',
+  'globalPath.result.notDemonstrated': 'Not demonstrated',
   'lesson.previous': 'Back',
   'lesson.finish': 'Finish the lesson',
   'lesson.finishSession': 'Finish the session',
@@ -2469,6 +2522,12 @@ const en = {
   'goals.monthly': 'Monthly',
   'goals.none': 'No goal yet.',
   'goals.loading': 'Loading your goals…',
+  'goals.selectLearning': 'Choose the learning journey for this goal',
+  'goals.noLearning': 'Start a lesson or language unit before adding a goal.',
+  'goals.primary': 'Primary goal',
+  'goals.setPrimary': 'Make primary',
+  'goals.edit': 'Edit goal',
+  'goals.save': 'Save',
   // Upcoming Exams (Sprint 5) — preparation derived from ConceptMastery.
   'exams.tileDetail': 'Subjects, dates and readiness',
   'exams.title': 'Upcoming Exams',
@@ -5581,6 +5640,39 @@ const fr: Record<TranslationKey, string> = {
   'lesson.step': 'Étape',
   'lesson.of': 'sur',
   'lesson.continue': 'Continuer',
+  'lesson.flow.confirmTitle': 'Passer à l’étape suivante ?',
+  'lesson.flow.confirmDetail': 'Une fois entrée, les étapes précédentes restent verrouillées jusqu’à la validation de cette étape.',
+  'lesson.flow.confirmAction': 'Entrer dans l’étape suivante',
+  'globalPath.copy': 'Copier',
+  'globalPath.copyDone': 'Copié',
+  'globalPath.insertProposal': 'Insérer la proposition',
+  'globalPath.replaceSelection': 'Remplacer la sélection',
+  'globalPath.anotherProposal': 'Autre proposition',
+  'globalPath.undoInsertion': 'Annuler l’insertion',
+  'globalPath.captureDetail': 'Prends une photo ou lis un code QR. Rien n’est envoyé avant ta confirmation.',
+  'globalPath.evidence.title': 'Preuves d’apprentissage',
+  'globalPath.evidence.detail': 'Seul un travail évalué peut finaliser un apprentissage et ouvrir la révision.',
+  'globalPath.evidence.completedCount': 'Éléments terminés',
+  'globalPath.evidence.knowledge': 'Connaissance',
+  'globalPath.evidence.understanding': 'Compréhension',
+  'globalPath.evidence.application': 'Application',
+  'globalPath.evidence.reasoning': 'Raisonnement',
+  'globalPath.evidence.criticalReflection': 'Réflexion critique',
+  'globalPath.evidence.perspective': 'Mise en perspective',
+  'globalPath.evidence.notEvaluated': 'Non évalué',
+  'globalPath.evidence.evidenceCount': 'Preuves',
+  'globalPath.calendar.title': 'Calendrier d’apprentissage',
+  'globalPath.calendar.detail': 'Une chronologie factuelle des apprentissages commencés et finalisés.',
+  'globalPath.calendar.empty': 'Aucune activité d’apprentissage sur cette période.',
+  'globalPath.calendar.started': 'Commencé',
+  'globalPath.calendar.finalized': 'Finalisé',
+  'globalPath.calendar.objective': 'Objectif',
+  'globalPath.calendar.result': 'Résultat',
+  'globalPath.calendar.kind.lesson': 'Leçon',
+  'globalPath.calendar.kind.languageUnit': 'Unité de langue',
+  'globalPath.result.evaluated': 'Évalué',
+  'globalPath.result.demonstrated': 'Démontré',
+  'globalPath.result.notDemonstrated': 'Non démontré',
   'lesson.previous': 'Précédent',
   'lesson.finish': 'Terminer la leçon',
   'lesson.finishSession': 'Terminer la séance',
@@ -6589,6 +6681,12 @@ const fr: Record<TranslationKey, string> = {
   'goals.monthly': 'Mensuel',
   'goals.none': 'Aucun objectif pour l’instant.',
   'goals.loading': 'Chargement de tes objectifs…',
+  'goals.selectLearning': 'Choisis l’apprentissage associé à cet objectif',
+  'goals.noLearning': 'Commence une leçon ou une unité de langue avant d’ajouter un objectif.',
+  'goals.primary': 'Objectif principal',
+  'goals.setPrimary': 'Définir comme principal',
+  'goals.edit': 'Modifier l’objectif',
+  'goals.save': 'Enregistrer',
   // Examens à venir (Sprint 5) — préparation dérivée de ConceptMastery.
   'exams.tileDetail': 'Matières, dates et préparation',
   'exams.title': 'Examens à venir',

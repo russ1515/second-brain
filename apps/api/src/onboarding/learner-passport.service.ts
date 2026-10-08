@@ -251,6 +251,7 @@ export class LearnerPassportService {
   async tutorContext(
     userId: string,
     includeAdaptiveSignals: boolean,
+    options: { includeLanguageLearningContext?: boolean } = {},
   ): Promise<LearnerPassportTutorContext> {
     const base = await this.loadBase(userId, false);
     const declared = this.declared(base.onboarding, base.profile);
@@ -275,7 +276,7 @@ export class LearnerPassportService {
         `Teaching language: ${declared.teachingLanguage}. Preserve necessary technical terms in that language and, when useful, give a short example in it; keep explanations in the general explanation language.`,
       );
     }
-    if (declared.knownLanguages.length) {
+    if (options.includeLanguageLearningContext && declared.knownLanguages.length) {
       lines.push(
         `Declared known languages and levels: ${declared.knownLanguages
           .slice(0, 12)
@@ -283,7 +284,7 @@ export class LearnerPassportService {
           .join(', ')}. Treat these levels as self-declared until observed evidence confirms them.`,
       );
     }
-    if (declared.languageGoals.targetLanguage) {
+    if (options.includeLanguageLearningContext && declared.languageGoals.targetLanguage) {
       const levels = [
         declared.languageGoals.currentLevel
           ? `current=${declared.languageGoals.currentLevel}`
@@ -296,7 +297,7 @@ export class LearnerPassportService {
         `Declared learning language goal: ${declared.languageGoals.targetLanguage}${levels.length ? ` (${levels.join(', ')})` : ''}.`,
       );
     }
-    if (base.languages.length) {
+    if (options.includeLanguageLearningContext && base.languages.length) {
       lines.push(`Active learning languages and declared levels: ${base.languages.slice(0, 5).map((row) => `${this.promptValue(row.language)}=${this.cefr(row.cefrLevel) ?? 'unassessed'}`).join(', ')}. Increase immersion only from these recorded levels or real observed evidence.`);
     }
     if (includeAdaptiveSignals && base.dna?.maturity && Array.isArray(base.dna.traits)) {

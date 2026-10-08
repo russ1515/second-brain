@@ -43,11 +43,13 @@ export class LanguageWritingService {
     const profile = await this.languages.requireOwned(userId, profileId);
     const mode = profile.mode as LanguageMode;
     const spec = modeSpec(mode);
-    const native = profile.nativeLanguage ?? 'English';
+    const roles = await this.languages.promptRoles(userId, profile);
+    const native = roles.supportLanguage;
     const withGloss = spec.targetLanguageRatio < 1;
 
     const system =
       languageSystemPrompt({
+        ...roles,
         language: profile.language,
         nativeLanguage: profile.nativeLanguage,
         mode,
@@ -76,11 +78,13 @@ export class LanguageWritingService {
     text: string,
   ): Promise<EssayCorrection> {
     const profile = await this.languages.requireOwned(userId, profileId);
-    const native = profile.nativeLanguage ?? 'English';
+    const roles = await this.languages.promptRoles(userId, profile);
+    const native = roles.supportLanguage;
     const essay = text.trim().slice(0, MAX_ESSAY_CHARS);
 
     const system =
       languageSystemPrompt({
+        ...roles,
         language: profile.language,
         nativeLanguage: profile.nativeLanguage,
         mode: profile.mode as LanguageMode,

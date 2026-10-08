@@ -12,6 +12,7 @@ import {
   IMMERSION_INTENSITIES,
   LANGUAGE_CORRECTION_INTENSITIES,
   RLLE_CAN_DO_MAP,
+  RLLE_CURRICULUM,
   RLLE_GAP_KINDS,
   RLLE_LESSON_STAGES,
   RLLE_PROGRESS_DIMENSIONS,
@@ -62,6 +63,7 @@ import { LanguageService } from './language.service';
 import { ConversationService } from './conversation.service';
 import { VocabularyService } from './vocabulary.service';
 import { languageSystemPrompt } from './language-modes';
+import { LearningCompletionService } from '../learning-evidence/learning-completion.service';
 import {
   CEFR_RANK,
   inferGoalDomain,
@@ -124,6 +126,7 @@ export class RealLifeLanguageService {
     private readonly vocabulary: VocabularyService,
     private readonly experiences: ExperienceSessionService,
     private readonly llm: LlmService,
+    private readonly completions: LearningCompletionService,
   ) {}
 
   async course(userId: string, profileId: string): Promise<RlleCourseView> {
@@ -262,6 +265,7 @@ export class RealLifeLanguageService {
     }
 
     const guidance = unitGuidance(unit.id);
+    const promptRoles = await this.languages.promptRoles(userId, profile);
     const survivalSkills = [...new Set(
       RLLE_WORLD_MISSIONS
         .filter((mission) => unit.missionIds.includes(mission.id))
@@ -281,6 +285,7 @@ export class RealLifeLanguageService {
             languageProfileId: profile.id,
             directive: [
               languageSystemPrompt({
+                ...promptRoles,
                 language: profile.language,
                 nativeLanguage: profile.nativeLanguage,
                 mode: profile.mode as LanguageMode,
@@ -335,19 +340,9 @@ export class RealLifeLanguageService {
       unitLastActivityAt: { ...state.unitLastActivityAt, [unit.id]: now },
     };
 
-    // Language-course vocabulary must feed the profile's existing FSRS deck,
-    // not a second deck. Failure is best-effort: the persistent lesson survives.
-    if (lesson.sourceDocumentId) {
-      await this.vocabulary.extract(userId, profile.id, {
-        documentId: lesson.sourceDocumentId,
-        count: 10,
-        experienceSessionId: session.id,
-        sourcePhrase: lesson.topic,
-      }).catch((error) =>
-        this.logger.warn('Learning operation failed.'),
-      );
-      session = await this.experiences.get(userId, session.id);
-    }
+    // Vocabulary cards are intentionally not published here. Opening or merely
+    // generating a unit is not learning evidence; publication happens only
+    // after the unit's controlled verification has been evaluated.
     const production: ExperienceProduction = {
       id: `language-course-lesson:${lesson.id}`,
       kind: 'language-course-lesson',
@@ -415,6 +410,17 @@ export class RealLifeLanguageService {
     if (index !== activeIndex) {
       throw new BadRequestException('Language lesson stages must be completed in order.');
     }
+    if (completedStage === 'verification') {
+      const evaluated = await this.controlledUnitEvidence(userId, current);
+      const known = new Set(state.evidence.map((item) => item.id));
+      state = {
+        ...state,
+        evidence: [
+          ...state.evidence,
+          ...evaluated.filter((item) => !known.has(item.id)),
+        ].slice(-MAX_EVIDENCE),
+      };
+    }
     const now = new Date().toISOString();
     const nextActiveIndex = current.stages.findIndex(
       (stage, stageIndex) => stageIndex > index && stage.status === 'pending',
@@ -442,6 +448,23 @@ export class RealLifeLanguageService {
       unitLastActivityAt: { ...state.unitLastActivityAt, [current.unitId]: now },
     };
     session = await this.persistCourse(userId, profile, session, state);
+    if (finished) {
+      const unit = curriculumForGoal(state.startLevel, state.level.target, state.goalDomain)
+        .find((item) => item.id === current.unitId);
+      if (!unit) throw new UnprocessableEntityException('The completed language unit is not in this curriculum.');
+      const evidenceIds = state.evidence
+        .filter((item) => unit.canDoIds.includes(item.canDoId))
+        .map((item) => item.id);
+      await this.completions.finalizeLanguageUnit(userId, {
+        languageProfileId: profile.id,
+        unitId: current.unitId,
+        experienceSessionId: session.id,
+        evidenceIds,
+        startedAt: session.startedAt,
+      });
+      await this.publishCompletedUnitVocabulary(userId, profile, session, current)
+        .catch(() => this.logger.warn('Learning operation failed.'));
+    }
     const unresolvedRepair = state.repairLoops.some((loop) => loop.currentStage !== 'consolidate');
     const unresolvedMission = Boolean(
       state.currentMission
@@ -807,6 +830,80 @@ export class RealLifeLanguageService {
   }
 
   // ── persistence and projections ───────────────────────────────────────
+
+  /** Derive unit evidence only from persisted Examiner results. A button click
+   * cannot create proof: every generated exercise must have an evaluated
+   * attempt, and the latest verdicts form the unit's controlled assessment. */
+  private async controlledUnitEvidence(
+    userId: string,
+    lesson: RlleLessonOutline,
+  ): Promise<RlleCapabilityEvidence[]> {
+    if (!lesson.lessonId) {
+      throw new UnprocessableEntityException('This language unit has no generated lesson.');
+    }
+    const lessonId = lesson.lessonId;
+    const unit = RLLE_CURRICULUM.find((item) => item.id === lesson.unitId);
+    if (!unit) throw new UnprocessableEntityException('Language curriculum unit not found.');
+    const generated = await this.lessons.get(userId, lessonId);
+    if (generated.exercises.length === 0) {
+      throw new UnprocessableEntityException('This language unit has no controlled final assessment.');
+    }
+    const attempts = await this.prisma.exerciseAttempt.findMany({
+      where: { userId, lessonId },
+      orderBy: { createdAt: 'desc' },
+    });
+    const latestByIndex = new Map<number, (typeof attempts)[number]>();
+    for (const attempt of attempts) {
+      if (!latestByIndex.has(attempt.exerciseIndex)) latestByIndex.set(attempt.exerciseIndex, attempt);
+    }
+    if (generated.exercises.some((_, index) => !latestByIndex.has(index))) {
+      throw new BadRequestException(
+        'Complete every controlled exercise before validating this language unit.',
+      );
+    }
+    const evaluated = [...latestByIndex.values()]
+      .sort((left, right) => left.exerciseIndex - right.exerciseIndex);
+    const dimensions = unit.strands
+      .map((strand) => strand === 'verbs' || strand === 'conjugation' ? 'grammar' : strand)
+      .filter((strand): strand is RlleProgressDimension =>
+        ['vocabulary', 'grammar', 'reading', 'writing'].includes(strand),
+      );
+    return unit.canDoIds.map((canDoId, index) => {
+      const attempt = evaluated[index % evaluated.length];
+      return {
+        id: `controlled-evidence:${attempt.id}:${canDoId}`,
+        canDoId,
+        source: 'controlled-activity',
+        sourceId: attempt.id,
+        result: attempt.correct ? 'demonstrated' : 'not-demonstrated',
+        observedAt: attempt.createdAt.toISOString(),
+        observation: (attempt.feedback || attempt.correction).slice(0, MAX_OBSERVATION),
+        dimensions,
+      };
+    });
+  }
+
+  private async publishCompletedUnitVocabulary(
+    userId: string,
+    profile: LanguageProfile,
+    session: ExperienceSession,
+    lesson: RlleLessonOutline,
+  ): Promise<void> {
+    if (!lesson.lessonId) return;
+    const generated = await this.lessons.get(userId, lesson.lessonId);
+    if (!generated.sourceDocumentId) return;
+    const deckId = await this.languages.ensureVocabDeck(profile);
+    const existing = await this.prisma.card.count({
+      where: { userId, deckId, sourceDocumentId: generated.sourceDocumentId },
+    });
+    if (existing > 0) return;
+    await this.vocabulary.extract(userId, profile.id, {
+      documentId: generated.sourceDocumentId,
+      count: 10,
+      experienceSessionId: session.id,
+      sourcePhrase: generated.topic,
+    });
+  }
 
   private async findCourseSession(userId: string, profileId: string): Promise<ExperienceSession | null> {
     const active = await this.prisma.experienceSession.findFirst({

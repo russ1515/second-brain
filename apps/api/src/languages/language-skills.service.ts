@@ -10,6 +10,7 @@ import type {
 } from '@second-brain/shared';
 import { LlmService } from '../llm/llm.service';
 import { languageSystemPrompt } from './language-modes';
+import { LanguageService } from './language.service';
 
 /**
  * Language skills (Sprint 7.3) — the structured domain around a language beyond
@@ -22,9 +23,12 @@ import { languageSystemPrompt } from './language-modes';
 export class LanguageSkillsService {
   private readonly logger = new Logger(LanguageSkillsService.name);
 
-  constructor(private readonly llm: LlmService) {}
+  constructor(
+    private readonly llm: LlmService,
+    private readonly languages: LanguageService,
+  ) {}
 
-  grammar(profile: LanguageProfile, topic?: string): Promise<LanguageSkillResponse> {
+  grammar(userId: string, profile: LanguageProfile, topic?: string): Promise<LanguageSkillResponse> {
     const focus = topic?.trim()
       ? `the grammar point: "${topic.trim()}"`
       : `one grammar point that matters most at CEFR level ${profile.cefrLevel} (state which)`;
@@ -35,10 +39,10 @@ export class LanguageSkillsService {
       'the most common mistakes learners make, and 3 short practice exercises',
       'followed by an answer key.',
     ].join(' ');
-    return this.generate(profile, `Grammar — ${topic?.trim() || profile.language}`, user);
+    return this.generate(userId, profile, `Grammar — ${topic?.trim() || profile.language}`, user);
   }
 
-  conjugation(profile: LanguageProfile, verb?: string): Promise<LanguageSkillResponse> {
+  conjugation(userId: string, profile: LanguageProfile, verb?: string): Promise<LanguageSkillResponse> {
     const target = verb?.trim()
       ? `the verb "${verb.trim()}"`
       : `one common, useful verb for CEFR level ${profile.cefrLevel} (state which verb you chose)`;
@@ -49,10 +53,10 @@ export class LanguageSkillsService {
       'then 3 example sentences using different persons/tenses, and a short',
       'fill-in-the-blank drill with an answer key.',
     ].join(' ');
-    return this.generate(profile, `Conjugation — ${verb?.trim() || profile.language}`, user);
+    return this.generate(userId, profile, `Conjugation — ${verb?.trim() || profile.language}`, user);
   }
 
-  reading(profile: LanguageProfile, topic?: string): Promise<LanguageSkillResponse> {
+  reading(userId: string, profile: LanguageProfile, topic?: string): Promise<LanguageSkillResponse> {
     const about = topic?.trim() ? ` about "${topic.trim()}"` : '';
     const user = [
       `Write a short reading passage in ${profile.language}${about}, pitched at`,
@@ -61,17 +65,20 @@ export class LanguageSkillsService {
       'key. This passage doubles as listening practice (it can be read aloud), so',
       'keep sentences natural to hear. Markdown.',
     ].join(' ');
-    return this.generate(profile, `Comprehension — ${topic?.trim() || profile.language}`, user);
+    return this.generate(userId, profile, `Comprehension — ${topic?.trim() || profile.language}`, user);
   }
 
   // ── internals ──────────────────────────────────────────────────────────
 
   private async generate(
+    userId: string,
     profile: LanguageProfile,
     title: string,
     user: string,
   ): Promise<LanguageSkillResponse> {
+    const roles = await this.languages.promptRoles(userId, profile);
     const system = languageSystemPrompt({
+      ...roles,
       language: profile.language,
       nativeLanguage: profile.nativeLanguage,
       mode: profile.mode as LanguageMode,

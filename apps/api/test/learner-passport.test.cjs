@@ -137,7 +137,9 @@ test('Onboarding persists the existing ageBand field and a fresh service instanc
 
 test('Tutor context adapts age/languages but explicitly preserves assessment rules', async () => {
   const service = new LearnerPassportService(readPrisma(), { profile: async () => null });
-  const context = await service.tutorContext('u1', true);
+  const context = await service.tutorContext('u1', true, {
+    includeLanguageLearningContext: true,
+  });
 
   assert.equal(context.nativeOrPrimaryLanguage, 'fr');
   assert.equal(context.teachingLanguage, 'en');

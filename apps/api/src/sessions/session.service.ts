@@ -16,6 +16,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { LessonService } from '../lessons/lesson.service';
 import { LearningPathService } from '../concepts/learning-path.service';
 import { MasteryService } from '../concepts/mastery.service';
+import { accountDataLockKey } from '../common/account-data-lock';
 
 const DEFAULT_MINUTES = 20;
 const ACTIONABLE = ['at_risk', 'ready', 'in_progress'];
@@ -78,16 +79,27 @@ export class SessionService {
       ...(conceptId ? { conceptId } : { topic: subject }),
     });
 
-    const session = await this.prisma.studySession.create({
-      data: {
-        userId,
-        conceptId,
-        lessonId: lesson.id,
-        subject,
-        status: 'learning',
-        learningScoreBefore: scoreBefore,
-        masteryBefore,
-      },
+    const session = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const ownedLesson = await tx.lesson.findFirst({
+        where: { id: lesson.id, userId },
+        select: { id: true },
+      });
+      if (!ownedLesson) {
+        throw new UnprocessableEntityException('The lesson is no longer available.');
+      }
+      return tx.studySession.create({
+        data: {
+          userId,
+          conceptId,
+          lessonId: lesson.id,
+          subject,
+          status: 'learning',
+          learningScoreBefore: scoreBefore,
+          masteryBefore,
+        },
+      });
     });
 
     return {

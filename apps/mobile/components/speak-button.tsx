@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import {
   pauseSpeaking,
   PLAYBACK_SUPPORTED,
@@ -10,6 +10,7 @@ import {
 import { useTokens } from '../lib/design/theme';
 import type { ColorScale } from '../lib/design/tokens';
 import { useI18n } from '../lib/i18n';
+import { IconButton } from './ds/core';
 
 /**
  * "Read this aloud."
@@ -76,25 +77,21 @@ export function SpeakButton({
     <>
       <View style={styles.controls}>
         {state === 'idle' || state === 'loading' ? (
-          <Pressable onPress={() => void start()} disabled={state === 'loading'} accessibilityRole="button" style={styles.button}>
-            {state === 'loading'
-              ? <ActivityIndicator size="small" color={c.warning} />
-              : <Text style={styles.label}>🔊 {idleLabel}</Text>}
-          </Pressable>
+          state === 'loading' ? (
+            <View accessibilityLabel={idleLabel} accessibilityRole="progressbar" style={styles.loading}>
+              <ActivityIndicator size="small" color={c.warning} />
+            </View>
+          ) : (
+            <IconButton icon="🔊" label={idleLabel} onPress={() => void start()} />
+          )
         ) : (
           <>
-            <Pressable
+            <IconButton
+              icon={state === 'paused' ? '▶' : '⏸'}
+              label={t(state === 'paused' ? 'voice11.resume' : 'voice11.pause')}
               onPress={state === 'paused' ? () => void resume() : () => void pause()}
-              accessibilityRole="button"
-              style={styles.button}
-            >
-              <Text style={styles.label}>
-                {state === 'paused' ? `▶ ${t('voice11.resume')}` : `⏸ ${t('voice11.pause')}`}
-              </Text>
-            </Pressable>
-            <Pressable onPress={stop} accessibilityRole="button" style={styles.button}>
-              <Text style={styles.label}>⏹ {t('learn.oral.stop')}</Text>
-            </Pressable>
+            />
+            <IconButton icon="⏹" label={t('learn.oral.stop')} onPress={stop} />
           </>
         )}
       </View>
@@ -105,17 +102,6 @@ export function SpeakButton({
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
   controls: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
-  button: {
-    alignSelf: 'flex-start',
-    borderWidth: 1,
-    borderColor: c.border,
-    borderRadius: 999,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    marginTop: 10,
-    minHeight: 32,
-    justifyContent: 'center',
-  },
-  label: { color: c.warning, fontSize: 13, fontWeight: '600' },
+  loading: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   error: { color: c.error, fontSize: 12, marginTop: 6 },
 });

@@ -76,15 +76,16 @@ export class ReviewExperienceService {
     const context = await this.resolveContext(userId, request, now);
     const targetConceptId = context.concept?.id ?? context.examConceptId ?? undefined;
     const cardScope = {
+      completionLinks: { some: { completion: { userId, status: 'verified' as const } } },
       ...(context.language?.vocabDeckId ? { deckId: context.language.vocabDeckId } : {}),
       ...(context.document ? { sourceDocumentId: context.document.documentId } : {}),
       ...(targetConceptId ? { concepts: { some: { conceptId: targetConceptId } } } : {}),
     };
     const activityScope = context.document || context.language
-      ? { id: '__document-scope-has-no-generic-reviewables__' }
+      ? { id: '__document-scope-has-no-generic-reviewables__', completionLinks: { some: { completion: { userId, status: 'verified' as const } } } }
       : targetConceptId
-        ? { kind: 'concept', refId: targetConceptId }
-        : {};
+        ? { kind: 'concept', refId: targetConceptId, completionLinks: { some: { completion: { userId, status: 'verified' as const } } } }
+        : { completionLinks: { some: { completion: { userId, status: 'verified' as const } } } };
     const [stats, flashcardDueCount, activityDueCount, items, overdueCards, overdueActivities, tomorrowCards, tomorrowActivities, nextCard, nextActivity, nextExam] =
       await Promise.all([
         this.cardSessions.stats(userId),
@@ -297,7 +298,11 @@ export class ReviewExperienceService {
     const reviewableIds = parsed.filter((item) => item.engine === 'reviewable').map((item) => item.id);
     const [cards, reviewables] = await Promise.all([
       cardIds.length === 0 ? Promise.resolve([] as EnrichedCard[]) : this.prisma.card.findMany({
-        where: { userId, id: { in: cardIds } },
+        where: {
+          userId,
+          id: { in: cardIds },
+          completionLinks: { some: { completion: { userId, status: 'verified' } } },
+        },
         include: {
           deck: {
             select: {
@@ -309,7 +314,13 @@ export class ReviewExperienceService {
           concepts: { include: { concept: { select: { id: true, name: true } } } },
         },
       }),
-      reviewableIds.length === 0 ? Promise.resolve([] as Reviewable[]) : this.prisma.reviewable.findMany({ where: { userId, id: { in: reviewableIds } } }),
+      reviewableIds.length === 0 ? Promise.resolve([] as Reviewable[]) : this.prisma.reviewable.findMany({
+        where: {
+          userId,
+          id: { in: reviewableIds },
+          completionLinks: { some: { completion: { userId, status: 'verified' } } },
+        },
+      }),
     ]);
     const conceptIds = reviewables.filter((item) => item.kind === 'concept').map((item) => item.refId);
     const concepts = conceptIds.length === 0 ? [] : await this.prisma.concept.findMany({ where: { userId, id: { in: conceptIds } }, select: { id: true, name: true } });

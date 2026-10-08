@@ -28,6 +28,7 @@ import {
   isTeacherPolicySnapshot,
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
+import { accountDataLockKey } from '../common/account-data-lock';
 
 const TERMINAL_STATUSES: readonly PrismaExperienceSessionStatus[] = [
   'completed',
@@ -127,20 +128,10 @@ export class ExperienceSessionService {
   async create(
     userId: string,
     request: CreateExperienceSessionRequest,
+    transaction?: Prisma.TransactionClient,
   ): Promise<ExperienceSession> {
     const idempotencyKey = request.idempotencyKey?.trim() || null;
     const links = this.normalizeLinks(request.links);
-    if (idempotencyKey) {
-      const existing = await this.prisma.experienceSession.findUnique({
-        where: { userId_idempotencyKey: { userId, idempotencyKey } },
-      });
-      if (existing) {
-        this.assertIdempotencyMatch(existing, request.type, links);
-        return this.toView(existing);
-      }
-    }
-
-    await this.assertOwnedLinks(userId, links);
     const activeContexts = createContext(userId, request.activeContexts ?? []);
     const progress = this.normalizeProgress(request.progress);
 
@@ -177,13 +168,16 @@ export class ExperienceSessionService {
       idempotencyKey,
     };
 
-    try {
-      return this.toView(await this.prisma.experienceSession.create({ data }));
-    } catch (error) {
-      // Two identical retried requests can race. The unique key makes the
-      // operation safe; return the winner rather than surfacing a false error.
-      if (idempotencyKey && isUniqueConstraintError(error)) {
-        const existing = await this.prisma.experienceSession.findUnique({
+    const persist = async (
+      tx: Prisma.TransactionClient,
+      acquireOwnerLock: boolean,
+    ): Promise<ExperienceSession> => {
+      if (acquireOwnerLock) {
+        const lockKey = accountDataLockKey(userId);
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      }
+      if (idempotencyKey) {
+        const existing = await tx.experienceSession.findUnique({
           where: { userId_idempotencyKey: { userId, idempotencyKey } },
         });
         if (existing) {
@@ -191,8 +185,34 @@ export class ExperienceSessionService {
           return this.toView(existing);
         }
       }
-      throw error;
-    }
+
+      await this.assertOwnedLinks(userId, links, tx);
+      await this.assertOwnedActiveContexts(userId, activeContexts.items, tx);
+      await this.assertOwnedSourceReferences(userId, request.sourceReferences ?? [], tx);
+      try {
+        return this.toView(await tx.experienceSession.create({ data }));
+      } catch (error) {
+        // Two identical retried requests can race. The unique key makes the
+        // operation safe; return the winner rather than surfacing a false error.
+        if (idempotencyKey && isUniqueConstraintError(error)) {
+          const existing = await tx.experienceSession.findUnique({
+            where: { userId_idempotencyKey: { userId, idempotencyKey } },
+          });
+          if (existing) {
+            this.assertIdempotencyMatch(existing, request.type, links);
+            return this.toView(existing);
+          }
+        }
+        throw error;
+      }
+    };
+
+    // Domain services that already hold the owner advisory lock can include
+    // the experience wrapper in their atomic write. All ordinary callers keep
+    // the existing transaction and lock boundary.
+    return transaction
+      ? persist(transaction, false)
+      : this.prisma.$transaction((tx) => persist(tx, true));
   }
 
   async get(userId: string, id: string): Promise<ExperienceSession> {
@@ -238,21 +258,41 @@ export class ExperienceSessionService {
     }
 
     this.assertBoundedPayload(request);
-    const result = await this.prisma.experienceSession.updateMany({
-      where: {
-        id,
-        userId,
-        version: existing.version,
-        status: existing.status,
-      },
-      data,
-    });
-    if (result.count !== 1) {
-      throw new ConflictException(
-        'Experience session changed concurrently. Reload it and retry.',
-      );
+    const persist = async (
+      db: PrismaService | Prisma.TransactionClient,
+    ): Promise<ExperienceSession> => {
+      const result = await db.experienceSession.updateMany({
+        where: {
+          id,
+          userId,
+          version: existing.version,
+          status: existing.status,
+        },
+        data,
+      });
+      if (result.count !== 1) {
+        throw new ConflictException(
+          'Experience session changed concurrently. Reload it and retry.',
+        );
+      }
+      return this.toView(await this.requireOwned(userId, id, db));
+    };
+
+    if (request.sourceReferences === undefined && request.activeContexts === undefined) {
+      return persist(this.prisma);
     }
-    return this.toView(await this.requireOwned(userId, id));
+
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      if (request.activeContexts !== undefined) {
+        await this.assertOwnedActiveContexts(userId, request.activeContexts, tx);
+      }
+      if (request.sourceReferences !== undefined) {
+        await this.assertOwnedSourceReferences(userId, request.sourceReferences, tx);
+      }
+      return persist(tx);
+    });
   }
 
   pause(userId: string, id: string): Promise<ExperienceSession> {
@@ -327,8 +367,9 @@ export class ExperienceSessionService {
   async findByLesson(
     userId: string,
     lessonId: string,
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<ExperienceSession | null> {
-    const row = await this.prisma.experienceSession.findUnique({
+    const row = await db.experienceSession.findUnique({
       where: {
         userId_idempotencyKey: {
           userId,
@@ -667,14 +708,15 @@ export class ExperienceSessionService {
     request: Omit<CreateExperienceSessionRequest, 'type' | 'idempotencyKey'> & {
       links: Partial<ExperienceSessionLinks> & { lessonId: string };
     },
+    transaction?: Prisma.TransactionClient,
   ): Promise<ExperienceSession> {
-    const existing = await this.findByLesson(userId, request.links.lessonId);
+    const existing = await this.findByLesson(userId, request.links.lessonId, transaction);
     if (existing) return existing;
     return this.create(userId, {
       ...request,
       type: 'learning',
       idempotencyKey: this.lessonIdempotencyKey(request.links.lessonId),
-    });
+    }, transaction);
   }
 
   private async transition(
@@ -759,8 +801,12 @@ export class ExperienceSessionService {
     };
   }
 
-  private async requireOwned(userId: string, id: string): Promise<ExperienceSessionRow> {
-    const row = await this.prisma.experienceSession.findFirst({ where: { id, userId } });
+  private async requireOwned(
+    userId: string,
+    id: string,
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
+  ): Promise<ExperienceSessionRow> {
+    const row = await db.experienceSession.findFirst({ where: { id, userId } });
     if (!row) throw new NotFoundException('Experience session not found.');
     return row;
   }
@@ -816,17 +862,65 @@ export class ExperienceSessionService {
     return { ...incoming, metadata };
   }
 
-  private async assertOwnedLinks(userId: string, links: ExperienceSessionLinks): Promise<void> {
+  private async assertOwnedLinks(
+    userId: string,
+    links: ExperienceSessionLinks,
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
+  ): Promise<void> {
     const checks: Array<Promise<unknown>> = [];
-    if (links.tutorSessionId) checks.push(this.prisma.tutorSession.findFirst({ where: { id: links.tutorSessionId, userId }, select: { id: true } }));
-    if (links.studySessionId) checks.push(this.prisma.studySession.findFirst({ where: { id: links.studySessionId, userId }, select: { id: true } }));
-    if (links.documentId) checks.push(this.prisma.document.findFirst({ where: { id: links.documentId, userId }, select: { id: true } }));
-    if (links.lessonId) checks.push(this.prisma.lesson.findFirst({ where: { id: links.lessonId, userId }, select: { id: true } }));
-    if (links.goalId) checks.push(this.prisma.goal.findFirst({ where: { id: links.goalId, userId }, select: { id: true } }));
-    if (links.languageProfileId) checks.push(this.prisma.languageProfile.findFirst({ where: { id: links.languageProfileId, userId }, select: { id: true } }));
+    if (links.tutorSessionId) checks.push(db.tutorSession.findFirst({ where: { id: links.tutorSessionId, userId }, select: { id: true } }));
+    if (links.studySessionId) checks.push(db.studySession.findFirst({ where: { id: links.studySessionId, userId }, select: { id: true } }));
+    if (links.documentId) checks.push(db.document.findFirst({ where: { id: links.documentId, userId, deletedAt: null }, select: { id: true } }));
+    if (links.lessonId) checks.push(db.lesson.findFirst({ where: { id: links.lessonId, userId }, select: { id: true } }));
+    if (links.goalId) checks.push(db.goal.findFirst({ where: { id: links.goalId, userId }, select: { id: true } }));
+    if (links.languageProfileId) checks.push(db.languageProfile.findFirst({ where: { id: links.languageProfileId, userId }, select: { id: true } }));
     const results = await Promise.all(checks);
     if (results.some((result) => result === null)) {
       throw new BadRequestException('An experience link is invalid for this user.');
+    }
+  }
+
+  private async assertOwnedSourceReferences(
+    userId: string,
+    sources: NonNullable<CreateExperienceSessionRequest['sourceReferences']>,
+    db: PrismaService | Prisma.TransactionClient,
+  ): Promise<void> {
+    const documentIds = [...new Set(sources.filter((source) => source.kind === 'document').map((source) => source.id))];
+    const lessonIds = [...new Set(sources.filter((source) => source.kind === 'lesson').map((source) => source.id))];
+    const [documents, lessons] = await Promise.all([
+      documentIds.length
+        ? db.document.count({ where: { userId, id: { in: documentIds }, deletedAt: null } })
+        : 0,
+      lessonIds.length
+        ? db.lesson.count({ where: { userId, id: { in: lessonIds } } })
+        : 0,
+    ]);
+    if (documents !== documentIds.length || lessons !== lessonIds.length) {
+      throw new BadRequestException('An experience source is unavailable for this user.');
+    }
+  }
+
+  private async assertOwnedActiveContexts(
+    userId: string,
+    contexts: NonNullable<CreateExperienceSessionRequest['activeContexts']>,
+    db: PrismaService | Prisma.TransactionClient,
+  ): Promise<void> {
+    const documentIds = [...new Set(contexts
+      .filter((context) => context.kind === 'document' && context.referenceId)
+      .map((context) => context.referenceId as string))];
+    const lessonIds = [...new Set(contexts
+      .filter((context) => context.kind === 'lesson' && context.referenceId)
+      .map((context) => context.referenceId as string))];
+    const [documents, lessons] = await Promise.all([
+      documentIds.length
+        ? db.document.count({ where: { userId, id: { in: documentIds }, deletedAt: null } })
+        : 0,
+      lessonIds.length
+        ? db.lesson.count({ where: { userId, id: { in: lessonIds } } })
+        : 0,
+    ]);
+    if (documents !== documentIds.length || lessons !== lessonIds.length) {
+      throw new BadRequestException('An experience context is unavailable for this user.');
     }
   }
 

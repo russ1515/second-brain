@@ -20,8 +20,8 @@ import { SourceCitation, SourcePreview } from '../../../components/ds/sources';
 import { SmartErrorState, SmartLoadingState } from '../../../components/ds/states';
 import { WorkspaceAssistant } from '../../../components/workspace/assistant';
 
-type WorkspaceArea = 'plan' | 'work' | 'sources' | 'assistant';
-const AREAS: readonly WorkspaceArea[] = ['plan', 'work', 'sources', 'assistant'];
+type WorkspaceArea = 'plan' | 'work' | 'sources';
+const AREAS: readonly WorkspaceArea[] = ['plan', 'work', 'sources'];
 
 export default function AcademicWorkspaceScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -39,6 +39,7 @@ export default function AcademicWorkspaceScreen() {
   const [error, setError] = useState<string | null>(null);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [library, setLibrary] = useState<LibraryDocument[]>([]);
+  const [assistantUndo, setAssistantUndo] = useState<string | null>(null);
   const revisionRef = useRef(0);
   const lastSavedRef = useRef('');
   const loadedRef = useRef(false);
@@ -122,7 +123,29 @@ export default function AcademicWorkspaceScreen() {
   const insertMarkup = (prefix: string, suffix = '') => {
     const selected = content.slice(selection.start, selection.end);
     const insertion = `${prefix}${selected}${suffix}`;
+    setAssistantUndo(null);
     setContent(`${content.slice(0, selection.start)}${insertion}${content.slice(selection.end)}`);
+  };
+
+  const applyAssistantProposal = (proposal: string, mode: 'insert' | 'replace') => {
+    const normalized = proposal.trim();
+    if (!normalized) return;
+    setAssistantUndo(content);
+    if (mode === 'replace' && selection.end > selection.start) {
+      setContent(`${content.slice(0, selection.start)}${normalized}${content.slice(selection.end)}`);
+      return;
+    }
+    const before = content.slice(0, selection.end);
+    const after = content.slice(selection.end);
+    const leading = before && !before.endsWith('\n') ? '\n\n' : '';
+    const trailing = after && !after.startsWith('\n') ? '\n\n' : '';
+    setContent(`${before}${leading}${normalized}${trailing}${after}`);
+  };
+
+  const undoAssistantInsertion = () => {
+    if (assistantUndo === null) return;
+    setContent(assistantUndo);
+    setAssistantUndo(null);
   };
 
   const openSourcePicker = async () => {
@@ -152,11 +175,19 @@ export default function AcademicWorkspaceScreen() {
   const total = workspace.plan.length;
   const done = workspace.plan.filter((item) => item.completed).length;
   const progress = total ? Math.round((done / total) * 100) : null;
-  const nextSection = workspace.plan.find((item) => !item.completed);
   const planPanel = <PlanPanel workspace={workspace} onUpdate={updatePlan} onMove={movePlan} onRemove={removePlanItem} onAdd={addPlanItem} />;
   const sourcesPanel = <SourcesPanel workspace={workspace} showPicker={showSourcePicker} library={library} onOpenPicker={() => void openSourcePicker()} onToggleDocument={(document) => void toggleDocumentSource(document)} onOpenDocument={(documentId) => router.push(`/library/${documentId}`)} />;
-  const assistantPanel = <WorkspaceAssistant workspaceId={workspace.id} initialHistory={workspace.assistantHistory} selectedText={selectedText} />;
-  const editor = <EditorPanel content={content} saveState={saveState} onChange={setContent} onSelection={setSelection} onInsert={insertMarkup} onSave={() => void save(content)} />;
+  const assistantPanel = (
+    <WorkspaceAssistant
+      workspaceId={workspace.id}
+      initialHistory={workspace.assistantHistory}
+      selectedText={selectedText}
+      onApplyProposal={applyAssistantProposal}
+      onUndo={undoAssistantInsertion}
+      canUndo={assistantUndo !== null}
+    />
+  );
+  const editor = <EditorPanel content={content} saveState={saveState} onChange={(value) => { setAssistantUndo(null); setContent(value); }} onSelection={setSelection} onInsert={insertMarkup} onSave={() => void save(content)} />;
 
   return <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1, backgroundColor: c.background }}>
     <Page width="fluid" style={{ gap: spacing.lg, paddingBottom: spacing.huge }} testID="academic-workspace">
@@ -170,15 +201,23 @@ export default function AcademicWorkspaceScreen() {
       {error ? <Alert tone="error" title={t('state.error')} detail={error} /> : null}
       {!desktop ? <SegmentedControl options={AREAS} value={activeArea} onChange={setActiveArea} labelFor={(value) => t(`workspace10.area.${value}`)} /> : null}
 
-      {desktop ? <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md }}><View style={{ width: 270, gap: spacing.md }}>{planPanel}{sourcesPanel}</View><View style={{ flex: 1, minWidth: 0 }}>{editor}</View><View style={{ width: 340 }}>{assistantPanel}</View></View>
-        : tabletSplit ? <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md }}><View style={{ width: 280 }}>{activeArea === 'assistant' ? assistantPanel : activeArea === 'sources' ? sourcesPanel : planPanel}</View><View style={{ flex: 1, minWidth: 0 }}>{editor}</View></View>
-          : activeArea === 'plan' ? planPanel : activeArea === 'sources' ? sourcesPanel : activeArea === 'assistant' ? assistantPanel : editor}
-
-      <Card style={{ gap: spacing.sm, borderColor: c.aiAccent }}>
-        <Text style={[typography.overline, { color: c.aiAccent }]}>{t('workspace10.next')}</Text>
-        <Text style={[typography.h3, { color: c.textPrimary }]}>{nextSection ? t('workspace10.nextSection').replace('{section}', nextSection.title) : t('workspace10.nextSources')}</Text>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}><Button label={nextSection ? t('workspace10.continue') : t('workspace10.addSource')} onPress={() => setActiveArea(nextSection ? 'work' : 'sources')} /><Button label={t('workspace10.askTutor')} variant="secondary" onPress={() => router.push({ pathname: '/tutor', params: { mode: 'discuss', workspaceId: workspace.id, workspaceTitle: workspace.title } })} /><Button label={t('workspace10.research')} variant="ghost" onPress={() => router.push({ pathname: '/research', params: { q: workspace.objective || workspace.title, workspaceId: workspace.id } })} /></View>
-      </Card>
+      {desktop ? (
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md }}>
+          <View style={{ width: 270, gap: spacing.md }}>{planPanel}{sourcesPanel}</View>
+          <View style={{ flex: 1, minWidth: 0, gap: spacing.md }}>{editor}{assistantPanel}</View>
+        </View>
+      ) : tabletSplit ? (
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md }}>
+          <View style={{ width: 280 }}>{activeArea === 'sources' ? sourcesPanel : planPanel}</View>
+          <View style={{ flex: 1, minWidth: 0, gap: spacing.md }}>{editor}{assistantPanel}</View>
+        </View>
+      ) : (
+        <View style={{ gap: spacing.md }}>
+          {activeArea === 'plan' ? planPanel : activeArea === 'sources' ? sourcesPanel : null}
+          {editor}
+          {assistantPanel}
+        </View>
+      )}
     </Page>
   </ScrollView>;
 }

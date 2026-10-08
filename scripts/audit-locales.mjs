@@ -32,6 +32,7 @@ const RESEARCH_WEB_V1_FILE = path.join(LOCALES_DIR, 'research-web-v1.ts');
 const LEARNING_DATA_CONTROL_EUROPE_FILE = path.join(LOCALES_DIR, 'learning-data-control-europe-v1.ts');
 const LEARNING_DATA_CONTROL_ASIA_FILE = path.join(LOCALES_DIR, 'learning-data-control-asia-v1.ts');
 const LEARNING_DATA_CONTROL_AFRICA_FILE = path.join(LOCALES_DIR, 'learning-data-control-africa-v1.ts');
+const GLOBAL_PATH_V1_FILE = path.join(LOCALES_DIR, 'global-path-v1.ts');
 
 export const ALL_LOCALE_CODES = Object.freeze(['en', 'fr', ...SUPPORTED_CODES]);
 export const PROTECTED_BRANDS = Object.freeze([
@@ -310,6 +311,7 @@ export function auditRepository() {
   const learningDataControlEurope = readTupleCatalog(LEARNING_DATA_CONTROL_EUROPE_FILE, 'learningDataControlEuropeValues', learningDataControlKeys);
   const learningDataControlAsia = readTupleCatalog(LEARNING_DATA_CONTROL_ASIA_FILE, 'learningDataControlAsiaValues', learningDataControlKeys);
   const learningDataControlAfrica = readTupleCatalog(LEARNING_DATA_CONTROL_AFRICA_FILE, 'learningDataControlAfricaValues', learningDataControlKeys);
+  const globalPathAliases = readCatalog(GLOBAL_PATH_V1_FILE, 'aliases');
   const catalogs = new Map([
     ['en', english],
     ['fr', french],
@@ -340,7 +342,7 @@ export function auditRepository() {
       ...(learningDataControlAsia.get(code) ?? new Map()),
       ...(learningDataControlAfrica.get(code) ?? new Map()),
     ]);
-    catalogs.set(code, new Map([
+    const beforeAliases = new Map([
       ...base,
       ...essential,
       ...learnerPassportEssential,
@@ -353,7 +355,14 @@ export function auditRepository() {
       ...failures,
       ...researchWeb,
       ...learningDataControl,
-    ]));
+    ]);
+    const globalPath = new Map(
+      [...globalPathAliases].flatMap(([target, source]) => {
+        const value = beforeAliases.get(source);
+        return typeof value === 'string' && value.trim().length > 0 ? [[target, value]] : [];
+      }),
+    );
+    catalogs.set(code, new Map([...beforeAliases, ...globalPath]));
     layersByLocale.set(code, [
       { name: path.relative(LOCALES_DIR, file).replaceAll('\\', '/'), entries: base },
       { name: 'essential.ts', entries: essential },
@@ -367,6 +376,7 @@ export function auditRepository() {
       { name: 'library-v1.ts:failureLabels', entries: failures },
       { name: 'research-web-v1.ts', entries: researchWeb },
       { name: 'learning-data-control-v1', entries: learningDataControl },
+      { name: 'global-path-v1.ts', entries: globalPath },
     ]);
   }
 

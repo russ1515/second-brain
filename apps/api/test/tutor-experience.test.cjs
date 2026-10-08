@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { tutorRetrievalScope } = require('../dist/tutor/tutor-context-policy.js');
 
 const root = path.resolve(__dirname, '../../..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
@@ -26,7 +27,29 @@ test('Tutor creation carries Learn intent, modality and exact domain contexts', 
   }
   assert.match(tutor, /ensureTutorSession/);
   assert.match(tutor, /resumeTarget: \{ kind: 'route', path: `\/tutor\/\$\{session\.id\}` \}/);
-  assert.match(tutor, /hasDocumentScope \? documentIds : undefined/);
+  assert.match(tutor, /retrievalScope\.explicit/);
+  assert.match(tutor, /\? await this\.retrieveContext\(userId, query, documentIds\)/);
+});
+
+test('a new philosophy request after Swahili has no implicit library scope, while explicit resume sources persist', () => {
+  const afterLanguage = tutorRetrievalScope([
+    { kind: 'language', referenceId: 'swahili-profile', label: 'Swahili' },
+    { kind: 'concept', referenceId: 'philosophy', label: 'Philosophy' },
+  ]);
+  assert.deepEqual(afterLanguage, { explicit: false, documentIds: [], collectionIds: [] });
+
+  const explicit = [
+    { kind: 'document', referenceId: 'philosophy-notes' },
+    { kind: 'document-collection', referenceId: 'ethics-course' },
+  ];
+  const firstTurn = tutorRetrievalScope(explicit);
+  const resumedTurn = tutorRetrievalScope(explicit);
+  assert.deepEqual(firstTurn, {
+    explicit: true,
+    documentIds: ['philosophy-notes'],
+    collectionIds: ['ethics-course'],
+  });
+  assert.deepEqual(resumedTurn, firstTurn);
 });
 
 test('Tutor resume restores server state and local drafts without unbounded reads', () => {
@@ -56,14 +79,21 @@ test('Provider and quota failures preserve work and keep non-AI navigation avail
   assert.match(voice, /transcript: transcript\.text/);
 });
 
-test('Conversation uses structured blocks, real-only progress and responsive secondary actions', () => {
+test('Conversation uses structured blocks, real-only progress and a compact centered composer', () => {
   const screen = read('apps/mobile/app/tutor/[id].tsx');
   const components = read('apps/mobile/components/tutor/experience.tsx');
   assert.match(screen, /<ContextBar/);
   assert.match(screen, /<TutorMessage/);
   assert.match(screen, /<ProgressNarrative/);
   assert.match(screen, /<ResultActionBar/);
-  assert.match(screen, /<Sheet visible=\{optionsOpen\}/);
+  assert.match(screen, /maxWidth: 820/);
+  assert.match(screen, /testID="tutor-send"/);
+  assert.match(screen, /testID="tutor-voice-toggle"/);
+  assert.doesNotMatch(screen, /optionsOpen|secondaryActions|sendPace|STRATEGY_LABEL/);
+  assert.doesNotMatch(screen, /TutorSidebar|conversationSidebar|historySidebar/);
+  assert.match(components, /globalPath\.copy/);
+  assert.match(components, /onSavePdf/);
+  assert.match(read('apps/mobile/components/speak-button.tsx'), /<IconButton icon="🔊"/);
   assert.match(components, /progress\.percent !== undefined/);
   assert.match(components, /session\.twinImpact\?\.changes/);
   assert.doesNotMatch(components, /setInterval|Math\.random/);

@@ -8,10 +8,9 @@ test('Home composition preserves the decision-first order on every viewport', ()
   assert.deepEqual(shared.HOME_CONTENT_ORDER, [
     'next-best-action',
     'resume',
-    'upcoming',
+    'learning-calendar',
     'goal',
     'progress',
-    'quick-actions',
   ]);
   assert.equal(shared.resolveHomeComposition(375), 'single-column');
   assert.equal(shared.resolveHomeComposition(759), 'single-column');
@@ -32,6 +31,22 @@ test('Home overview contract exposes every independently degradable source', () 
     'sessions',
     'goals',
     'calendar',
-    'progress',
+    'evidence',
   ]);
+});
+
+test('canonical learning dimensions are stable and default to not evaluated', () => {
+  assert.deepEqual(shared.LEARNING_EVIDENCE_DIMENSIONS, [
+    'knowledge',
+    'understanding',
+    'application',
+    'reasoning',
+    'critical_reflection',
+    'perspective',
+  ]);
+  const empty = shared.emptyLearningDimensionScores();
+  assert.ok(shared.LEARNING_EVIDENCE_DIMENSIONS.every((key) => empty[key].score === null));
+  assert.equal(shared.isNormalisedLearningScore(0), true);
+  assert.equal(shared.isNormalisedLearningScore(1), true);
+  assert.equal(shared.isNormalisedLearningScore(1.01), false);
 });

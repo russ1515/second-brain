@@ -3,6 +3,7 @@ import type { LearningReportView } from '@second-brain/shared';
 import { toSupportedLanguage } from '@second-brain/shared';
 import { LearnerPassportService } from '../onboarding/learner-passport.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { EvidenceProgressService } from '../learning-evidence/evidence-progress.service';
 
 /** Builds a read-only, non-billable and privacy-minimised learning report. */
 @Injectable()
@@ -10,10 +11,11 @@ export class LearningReportService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly passports: LearnerPassportService,
+    private readonly evidence: EvidenceProgressService,
   ) {}
 
   async get(userId: string, requestedLocale?: string): Promise<LearningReportView> {
-    const [passport, profile, totals, latest, assessment, attempts, correctAttempts] =
+    const [passport, profile, totals, latest, assessment, attempts, correctAttempts, evidenceProgress, completionHistory] =
       await Promise.all([
         this.passports.get(userId),
         this.prisma.profile.findUnique({
@@ -55,6 +57,8 @@ export class LearningReportService {
           _avg: { score: true },
         }),
         this.prisma.exerciseAttempt.count({ where: { userId, correct: true } }),
+        this.evidence.progress(userId),
+        this.evidence.history(userId),
       ]);
 
     const lastLearningActivityAt = latest
@@ -79,7 +83,7 @@ export class LearningReportService {
         learnerProfile: passport.observed.learnerProfile,
         learningDna: passport.observed.learningDna,
         totals: {
-          lessons: totals[0],
+          lessons: completionHistory.items.filter((item) => item.kind === 'lesson').length,
           tutorSessions: totals[1],
           concepts: totals[2],
           completedStudySessions: totals[3],
@@ -94,7 +98,9 @@ export class LearningReportService {
         exerciseAttempts,
         correctExerciseAttempts: correctAttempts,
         averageExerciseScore: attempts._avg.score,
-        evidenceAvailable: assessmentSubmissions + exerciseAttempts > 0,
+        evidenceProgress,
+        completionHistory,
+        evidenceAvailable: completionHistory.items.length > 0,
       },
       exclusions: [
         'RAW_CONVERSATIONS',

@@ -32,7 +32,11 @@ function fixture(overrides = {}) {
   const memory = { page: async () => ({ summary: { lessons: 0, exercises: 0, errors: 0, successes: 0, revisions: 0, conversations: 0, homework: 0, reports: 0, documents: 0, concepts: 0, connections: 0, total: 0 }, entries: [], nextCursor: null }) };
   const onboarding = { get: async () => ({ answers: {}, status: 'completed', currentStep: 'done', completedAt: null, updatedAt: null }) };
   const predictions = { forecast: async () => overrides.forecast ?? ({ predictions: [], topRisk: null, generatedAt: '2026-09-10T10:00:00.000Z' }) };
-  return { service: new BrainService(prisma, mastery, paths, learnerProfiles, dna, memory, onboarding, predictions), prisma };
+  const evidence = {
+    progress: async () => ({ completedCount: 0, dimensions: [], generatedAt: '2026-09-10T10:00:00.000Z' }),
+    history: async () => ({ items: [], generatedAt: '2026-09-10T10:00:00.000Z' }),
+  };
+  return { service: new BrainService(prisma, mastery, paths, learnerProfiles, dna, memory, onboarding, predictions, evidence), prisma };
 }
 
 test('Brain overview stays sparse and hides forecasts without enough evidence', async () => {
@@ -76,18 +80,15 @@ test('Ask Brain is deterministic and grounded in path evidence', async () => {
   assert.deepEqual(answer.concepts.map((item) => item.id), ['c1']);
 });
 
-test('Lot 8 UI exposes one Brain, contextual legacy routes, accessible alternatives and cache', () => {
+test('Brain UI is the canonical evidence-backed assessment view', () => {
   const screen = read('apps/mobile/app/(tabs)/brain.tsx');
-  const components = read('apps/mobile/components/brain/digital-twin.tsx');
-  const graph = read('apps/mobile/components/brain/knowledge-graph.tsx');
   const legacy = read('apps/mobile/components/brain/legacy-brain-redirect.tsx');
   const tutor = read('apps/mobile/app/tutor/[id].tsx');
-  assert.match(screen, /loadBrainCache/);
-  assert.match(screen, /knowledgeMode === 'graph'/);
-  assert.match(screen, /HistoryTimeline/);
-  assert.match(screen, /BrainConceptPanel/);
-  assert.match(components, /accessibilityRole="list"/);
-  assert.match(graph, /accessibilityLabel/);
+  assert.match(screen, /brain-evidence-view/);
+  assert.match(screen, /<EvidenceProgressPanel/);
+  assert.match(screen, /completionHistory\.items/);
+  assert.match(screen, /item\.dimensions/);
+  assert.doesNotMatch(screen, /KnowledgeGraph|BrainConceptPanel|foresight|nextBestAction|ask\(/);
   assert.match(legacy, /pathname: '\/brain'/);
   assert.match(tutor, /brain-impact/);
   assert.match(tutor, /twinImpact\?\.changes\.length/);

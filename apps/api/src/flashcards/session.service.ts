@@ -33,6 +33,7 @@ export class SessionService {
     const reviewLimit = this.clampLimit(options.reviewLimit, DEFAULT_REVIEW_LIMIT);
     const batchLimit = Math.min(this.clampLimit(options.limit, MAX_LIMIT), MAX_LIMIT);
     const scopedWhere = {
+      completionLinks: { some: { completion: { userId, status: 'verified' as const } } },
       ...(options.deckId ? { deckId: options.deckId } : {}),
       ...(options.documentId ? { sourceDocumentId: options.documentId } : {}),
       ...(options.conceptId
@@ -42,10 +43,20 @@ export class SessionService {
 
     const [newIntroducedToday, reviewsDoneToday] = await Promise.all([
       this.prisma.reviewLog.count({
-        where: { userId, state: 'new', reviewedAt: { gte: startOfDay } },
+        where: {
+          userId,
+          state: 'new',
+          reviewedAt: { gte: startOfDay },
+          card: { completionLinks: { some: { completion: { userId, status: 'verified' } } } },
+        },
       }),
       this.prisma.reviewLog.count({
-        where: { userId, state: { not: 'new' }, reviewedAt: { gte: startOfDay } },
+        where: {
+          userId,
+          state: { not: 'new' },
+          reviewedAt: { gte: startOfDay },
+          card: { completionLinks: { some: { completion: { userId, status: 'verified' } } } },
+        },
       }),
     ]);
 
@@ -84,17 +95,41 @@ export class SessionService {
 
     const [due, byState, reviewsToday, totalReviews, goodReviews] =
       await Promise.all([
-        this.prisma.card.count({ where: { userId, due: { lte: now } } }),
+        this.prisma.card.count({
+          where: {
+            userId,
+            due: { lte: now },
+            completionLinks: { some: { completion: { userId, status: 'verified' } } },
+          },
+        }),
         this.prisma.card.groupBy({
           by: ['state'],
-          where: { userId },
+          where: {
+            userId,
+            completionLinks: { some: { completion: { userId, status: 'verified' } } },
+          },
           _count: { _all: true },
         }),
         this.prisma.reviewLog.count({
-          where: { userId, reviewedAt: { gte: startOfDay } },
+          where: {
+            userId,
+            reviewedAt: { gte: startOfDay },
+            card: { completionLinks: { some: { completion: { userId, status: 'verified' } } } },
+          },
         }),
-        this.prisma.reviewLog.count({ where: { userId } }),
-        this.prisma.reviewLog.count({ where: { userId, rating: { gte: 2 } } }),
+        this.prisma.reviewLog.count({
+          where: {
+            userId,
+            card: { completionLinks: { some: { completion: { userId, status: 'verified' } } } },
+          },
+        }),
+        this.prisma.reviewLog.count({
+          where: {
+            userId,
+            rating: { gte: 2 },
+            card: { completionLinks: { some: { completion: { userId, status: 'verified' } } } },
+          },
+        }),
       ]);
 
     const counts = new Map<CardState, number>(

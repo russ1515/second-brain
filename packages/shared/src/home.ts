@@ -1,6 +1,7 @@
 import type { CalendarEntryKind } from './calendar';
 import type { ExperienceProgress, ExperienceSessionStatus, ExperienceSessionType } from './experience-session';
 import type { GoalPeriod } from './goals';
+import type { EvidenceBasedLearningProgress } from './learning-evidence';
 import type { ActionDestination, NextBestAction } from './next-best-action';
 
 export const HOME_OVERVIEW_SOURCES = [
@@ -13,7 +14,7 @@ export const HOME_OVERVIEW_SOURCES = [
   'sessions',
   'goals',
   'calendar',
-  'progress',
+  'evidence',
 ] as const;
 
 export type HomeOverviewSource = (typeof HOME_OVERVIEW_SOURCES)[number];
@@ -90,6 +91,9 @@ export interface HomeOverview {
   mainGoal: HomeGoalPreview | null;
   upcoming: HomeUpcomingItem[];
   progress: HomeProgressSummary | null;
+  /** Canonical proof-backed progression. Null dimension percentages mean that
+   * dimension has not been evaluated, never a zero result. */
+  evidenceProgress: EvidenceBasedLearningProgress;
   sources: Record<HomeOverviewSource, HomeSourceState>;
   partial: boolean;
 }
@@ -99,10 +103,9 @@ export type HomeComposition = 'single-column' | 'adaptive' | 'wide';
 export const HOME_CONTENT_ORDER = [
   'next-best-action',
   'resume',
-  'upcoming',
+  'learning-calendar',
   'goal',
   'progress',
-  'quick-actions',
 ] as const;
 
 /** Structural responsive decision used by Home and covered by contract tests. */

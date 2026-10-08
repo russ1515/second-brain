@@ -30,6 +30,7 @@ import {
 import { localeDirective, resolveLocale } from '../common/learning-locale';
 import { LlmService } from '../llm/llm.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { accountDataLockKey } from '../common/account-data-lock';
 
 const MAX_ASSISTANT_HISTORY = 30;
 const MAX_SOURCE_CONTEXT_CHARS = 6_000;
@@ -46,7 +47,6 @@ export class AcademicWorkspaceService {
     if (!title) throw new BadRequestException('A title is required.');
     if (!WORKSPACE_TEMPLATES.includes(request.template)) throw new BadRequestException('Unknown workspace template.');
     const sources = this.normalizeSources(request.sources ?? []);
-    await this.assertOwnedSources(userId, sources);
     const locale = await resolveLocale(this.prisma, userId);
     const plan = this.normalizePlan(request.plan?.length ? request.plan : defaultWorkspacePlan(locale));
     const progress = workspaceProgressFromPlan(plan);
@@ -64,8 +64,11 @@ export class AcademicWorkspaceService {
       visibility: 'visible',
     }]);
 
-    const [, row] = await this.prisma.$transaction([
-      this.prisma.experienceSession.create({ data: {
+    const row = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await this.assertOwnedSources(userId, sources, tx);
+      await tx.experienceSession.create({ data: {
         id: experienceSessionId,
         userId,
         type: 'workspace',
@@ -84,8 +87,8 @@ export class AcademicWorkspaceService {
         }))),
         resumeTarget: asJson(resumeTarget),
         workspaceRef: workspaceId,
-      } }),
-      this.prisma.academicWorkspace.create({ data: {
+      } });
+      return tx.academicWorkspace.create({ data: {
         id: workspaceId,
         userId,
         title,
@@ -101,8 +104,8 @@ export class AcademicWorkspaceService {
         experienceSessionId,
         resumeTarget: asJson(resumeTarget),
         createdAt: now,
-      } }),
-    ]);
+      } });
+    });
     return this.toView(row);
   }
 
@@ -147,9 +150,10 @@ export class AcademicWorkspaceService {
     if (request.dueAt !== undefined) data.dueAt = request.dueAt ? new Date(request.dueAt) : null;
     if (request.status !== undefined) data.status = request.status;
     if (request.mode !== undefined) data.mode = request.mode;
+    let normalizedSources: WorkspaceSourceReference[] | null = null;
     if (request.sources !== undefined) {
       const sources = this.normalizeSources(request.sources);
-      await this.assertOwnedSources(userId, sources);
+      normalizedSources = sources;
       data.sources = asJson(sources);
     }
     if (request.plan !== undefined) {
@@ -159,7 +163,16 @@ export class AcademicWorkspaceService {
     } else if (request.progress !== undefined) {
       data.progress = asJson(request.progress);
     }
-    const row = await this.prisma.academicWorkspace.update({ where: { id }, data });
+    const row = normalizedSources
+      ? await this.prisma.$transaction(async (tx) => {
+          const lockKey = accountDataLockKey(userId);
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+          await this.assertOwnedSources(userId, normalizedSources!, tx);
+          const owned = await tx.academicWorkspace.findFirst({ where: { id, userId }, select: { id: true } });
+          if (!owned) throw new NotFoundException('Workspace not found.');
+          return tx.academicWorkspace.update({ where: { id }, data });
+        })
+      : await this.prisma.academicWorkspace.update({ where: { id }, data });
     await this.syncExperience(row, request.status);
     return this.toView(row);
   }
@@ -284,14 +297,18 @@ export class AcademicWorkspaceService {
     });
   }
 
-  private async assertOwnedSources(userId: string, sources: WorkspaceSourceReference[]): Promise<void> {
+  private async assertOwnedSources(
+    userId: string,
+    sources: WorkspaceSourceReference[],
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
+  ): Promise<void> {
     const documentIds = sources.filter((source) => source.kind === 'document').map((source) => source.id);
     const collectionIds = sources.filter((source) => source.kind === 'collection').map((source) => source.id);
     const researchIds = sources.filter((source) => source.kind === 'research-source').map((source) => source.id);
     const [documents, collections, research] = await Promise.all([
-      documentIds.length ? this.prisma.document.count({ where: { id: { in: documentIds }, userId, deletedAt: null } }) : 0,
-      collectionIds.length ? this.prisma.collection.count({ where: { id: { in: collectionIds }, userId } }) : 0,
-      researchIds.length ? this.prisma.experienceSession.count({ where: { id: { in: researchIds }, userId, type: 'research' } }) : 0,
+      documentIds.length ? db.document.count({ where: { id: { in: documentIds }, userId, deletedAt: null } }) : 0,
+      collectionIds.length ? db.collection.count({ where: { id: { in: collectionIds }, userId } }) : 0,
+      researchIds.length ? db.experienceSession.count({ where: { id: { in: researchIds }, userId, type: 'research' } }) : 0,
     ]);
     if (documents !== new Set(documentIds).size || collections !== new Set(collectionIds).size || research !== new Set(researchIds).size) {
       throw new BadRequestException('One or more workspace sources are unavailable.');

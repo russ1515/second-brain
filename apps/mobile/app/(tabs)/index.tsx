@@ -6,7 +6,6 @@ import type {
   ActionDestination,
   HomeOverview,
   HomeResumableSession,
-  HomeUpcomingItem,
   LearningDeletionPreview,
 } from '@second-brain/shared';
 import { resolveHomeComposition } from '@second-brain/shared';
@@ -16,19 +15,17 @@ import { useI18n } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
 import { actionDestinationHref } from '../../lib/action-destination';
-import { Alert, Skeleton } from '../../components/ds/core';
+import { Alert, Button, Skeleton } from '../../components/ds/core';
 import { Page } from '../../components/ds/layout';
 import { SmartErrorState, SmartState } from '../../components/ds/states';
 import {
   HomeContextHeader,
-  HomeQuickActions,
   MainGoalEmpty,
   MainGoalPreview,
   NextBestActionCard,
-  ProgressSummary,
   ResumeSection,
-  UpcomingSection,
 } from '../../components/home/decision';
+import { EvidenceProgressPanel } from '../../components/learning/evidence-progress';
 
 /**
  * Accueil is a decision surface: one server-ranked next action, then continuity
@@ -45,7 +42,6 @@ export default function HomeScreen() {
   const composition = resolveHomeComposition(width);
   const overviewQueryKey = ['home', 'overview', locale, user?.id] as const;
   const [deletingResumeId, setDeletingResumeId] = useState<string | null>(null);
-  const [deletingUpcomingId, setDeletingUpcomingId] = useState<string | null>(null);
   const [deletingGoalId, setDeletingGoalId] = useState<string | null>(null);
   const [deleteFailed, setDeleteFailed] = useState(false);
 
@@ -63,7 +59,6 @@ export default function HomeScreen() {
     router.push(actionDestinationHref(destination) as never);
   };
   const resume = (session: HomeResumableSession) => open(session.destination);
-  const openUpcoming = (item: HomeUpcomingItem) => open(item.destination);
   const invalidateLearningViews = async () => {
     await queryClient.invalidateQueries({
       predicate: ({ queryKey }) => [
@@ -93,35 +88,6 @@ export default function HomeScreen() {
       setDeleteFailed(true);
     } finally {
       setDeletingResumeId(null);
-    }
-  };
-  const previewUpcoming = (item: HomeUpcomingItem) => {
-    const action = item.deletion;
-    if (!action || action.kind === 'details-only') throw new Error('No deletion target.');
-    return api<LearningDeletionPreview>(action.kind === 'lesson'
-      ? `/lessons/${action.targetId}/deletion-preview`
-      : `/calendar/events/${action.targetId}/deletion-preview`);
-  };
-  const deleteUpcoming = async (item: HomeUpcomingItem) => {
-    const action = item.deletion;
-    if (!action || action.kind === 'details-only' || deletingUpcomingId) return;
-    setDeletingUpcomingId(item.id);
-    setDeleteFailed(false);
-    await queryClient.cancelQueries({ queryKey: overviewQueryKey });
-    const previous = queryClient.getQueryData<HomeOverview>(overviewQueryKey);
-    queryClient.setQueryData<HomeOverview>(overviewQueryKey, (current) => current
-      ? { ...current, upcoming: current.upcoming.filter((candidate) => candidate.id !== item.id) }
-      : current);
-    try {
-      await api(action.kind === 'lesson'
-        ? `/lessons/${action.targetId}`
-        : `/calendar/events/${action.targetId}`, { method: 'DELETE' });
-      await invalidateLearningViews();
-    } catch {
-      if (previous) queryClient.setQueryData(overviewQueryKey, previous);
-      setDeleteFailed(true);
-    } finally {
-      setDeletingUpcomingId(null);
     }
   };
   const previewGoal = (goalId: string) =>
@@ -167,9 +133,7 @@ export default function HomeScreen() {
   const data = overview.data;
   const name = user.displayName?.trim().split(' ')[0] ?? '';
   const showSplit = composition !== 'single-column';
-  const hasResume = data.resumableSessions.length > 0;
   const hasGoal = data.mainGoal !== null;
-  const hasProgress = data.progress !== null;
 
   const resumeSection = (
     <ResumeSection
@@ -178,16 +142,6 @@ export default function HomeScreen() {
       onDelete={(session) => { void deleteResume(session); }}
       onPreviewDelete={previewResume}
       deletingSessionId={deletingResumeId}
-    />
-  );
-  const upcomingSection = (
-    <UpcomingSection
-      items={data.upcoming}
-      onOpen={openUpcoming}
-      onPlanning={() => router.push('/calendar' as never)}
-      onDelete={(item) => { void deleteUpcoming(item); }}
-      onPreviewDelete={previewUpcoming}
-      deletingItemId={deletingUpcomingId}
     />
   );
   const goalSection = data.mainGoal ? (
@@ -201,9 +155,13 @@ export default function HomeScreen() {
   ) : (
     <MainGoalEmpty onCreate={() => router.push('/goals' as never)} />
   );
-  const progressSection = data.progress ? (
-    <ProgressSummary progress={data.progress} onOpen={() => router.push('/brain' as never)} />
-  ) : null;
+  const progressSection = (
+    <EvidenceProgressPanel
+      progress={data.evidenceProgress}
+      compact
+      onOpen={() => router.push('/brain' as never)}
+    />
+  );
 
   return (
     <ScrollView
@@ -237,19 +195,17 @@ export default function HomeScreen() {
           <Alert tone="warning" title={t('home4.unavailable')} detail={t('home4.partial')} />
         )}
 
-        {showSplit && hasResume ? (
-          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.xl }}>
-            <View style={{ flex: composition === 'wide' ? 1.25 : 1, minWidth: 0 }}>{resumeSection}</View>
-            <View style={{ flex: 1, minWidth: 0 }}>{upcomingSection}</View>
-          </View>
-        ) : (
-          <>
-            {resumeSection}
-            {upcomingSection}
-          </>
-        )}
+        {resumeSection}
+        <View style={{ alignItems: 'flex-start' }}>
+          <Button
+            testID="home-learning-calendar"
+            label={t('home4.planning')}
+            variant="secondary"
+            onPress={() => router.push('/calendar' as never)}
+          />
+        </View>
 
-        {showSplit && hasGoal && hasProgress ? (
+        {showSplit && hasGoal ? (
           <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.xl }}>
             <View style={{ flex: 1, minWidth: 0 }}>{goalSection}</View>
             <View style={{ flex: 1, minWidth: 0 }}>{progressSection}</View>
@@ -261,12 +217,6 @@ export default function HomeScreen() {
           </>
         )}
 
-        <HomeQuickActions
-          onWrite={() => router.push('/tutor' as never)}
-          onSpeak={() => router.push('/tutor?mode=voice' as never)}
-          onScan={() => router.push('/scan' as never)}
-          onImport={() => router.push('/library?action=import' as never)}
-        />
       </Page>
     </ScrollView>
   );

@@ -261,6 +261,7 @@ export class LanguageController {
   ): Promise<LanguageLessonResponse> {
     const profile = await this.languages.requireOwned(user.userId, id);
     const mode = profile.mode as LanguageMode;
+    const promptRoles = await this.languages.promptRoles(user.userId, profile);
     const lesson = await this.lessons.generate(
       user.userId,
       {
@@ -273,6 +274,7 @@ export class LanguageController {
         // The mode's pedagogical contract steers the lesson the same way it
         // steers conversation, so the learner meets one consistent teacher.
         directive: languageSystemPrompt({
+          ...promptRoles,
           language: profile.language,
           nativeLanguage: profile.nativeLanguage,
           mode,
@@ -330,7 +332,7 @@ export class LanguageController {
     @Body() dto: LanguageSkillDto,
   ): Promise<LanguageSkillResponse> {
     const profile = await this.languages.requireOwned(user.userId, id);
-    return this.skills.grammar(profile, dto.topic);
+    return this.skills.grammar(user.userId, profile, dto.topic);
   }
 
   /** Conjugation practice (Sprint 7.3). */
@@ -343,7 +345,7 @@ export class LanguageController {
     @Body() dto: ConjugationDto,
   ): Promise<LanguageSkillResponse> {
     const profile = await this.languages.requireOwned(user.userId, id);
-    return this.skills.conjugation(profile, dto.verb);
+    return this.skills.conjugation(user.userId, profile, dto.verb);
   }
 
   /** Reading / listening comprehension passage + questions (Sprint 7.3). */
@@ -356,7 +358,7 @@ export class LanguageController {
     @Body() dto: LanguageSkillDto,
   ): Promise<LanguageSkillResponse> {
     const profile = await this.languages.requireOwned(user.userId, id);
-    return this.skills.reading(profile, dto.topic);
+    return this.skills.reading(user.userId, profile, dto.topic);
   }
 
   /** Read a phrase aloud (multipart field `audio`) and have it scored. */

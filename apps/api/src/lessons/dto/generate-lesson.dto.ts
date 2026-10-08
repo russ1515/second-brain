@@ -33,4 +33,13 @@ export class GenerateLessonDto implements GenerateLessonRequest {
   @IsOptional()
   @IsBoolean()
   flashcards?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  goalTitle?: string;
+
+  @IsOptional()
+  @IsIn(['daily', 'weekly', 'monthly'])
+  goalPeriod?: 'daily' | 'weekly' | 'monthly';
 }

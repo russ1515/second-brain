@@ -48,8 +48,15 @@ test('learning report separates declared, observed and assessed evidence without
       },
     }),
   };
+  const evidence = {
+    progress: async () => ({ completedCount: 3, dimensions: [], generatedAt: at.toISOString() }),
+    history: async () => ({
+      items: [1, 2, 3].map((index) => ({ kind: 'lesson', completionId: `c${index}` })),
+      generatedAt: at.toISOString(),
+    }),
+  };
 
-  const report = await new LearningReportService(prisma, passport).get('user-1', 'fr-FR');
+  const report = await new LearningReportService(prisma, passport, evidence).get('user-1', 'fr-FR');
 
   assert.equal(report.locale, 'fr');
   assert.equal(report.declared.source, 'DECLARED');
@@ -100,7 +107,11 @@ test('learning report remains honest when no assessed evidence exists', async ()
       observed: { learnerProfile: null, learningDna: null },
     }),
   };
-  const report = await new LearningReportService(prisma, passport).get('user-2');
+  const evidence = {
+    progress: async () => ({ completedCount: 0, dimensions: [], generatedAt: at.toISOString() }),
+    history: async () => ({ items: [], generatedAt: at.toISOString() }),
+  };
+  const report = await new LearningReportService(prisma, passport, evidence).get('user-2');
   assert.equal(report.assessed.evidenceAvailable, false);
   assert.equal(report.assessed.averageAssessmentScore, null);
   assert.equal(report.observed.lastLearningActivityAt, null);

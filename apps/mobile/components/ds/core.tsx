@@ -98,7 +98,7 @@ export function Button({
 }
 
 // ── IconButton ───────────────────────────────────────────────────────────────
-export function IconButton({ icon, onPress, label, disabled }: { icon: string; onPress?: () => void; label: string; disabled?: boolean }) {
+export function IconButton({ icon, onPress, label, disabled, testID }: { icon: string; onPress?: () => void; label: string; disabled?: boolean; testID?: string }) {
   const { colors: c, radius } = useTokens();
   const [focused, setFocused] = useState(false);
   return (
@@ -107,6 +107,7 @@ export function IconButton({ icon, onPress, label, disabled }: { icon: string; o
       disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel={label}
+      testID={testID}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={({ pressed }) => [

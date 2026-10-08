@@ -58,6 +58,50 @@ export interface LessonSummary {
   createdAt: string;
 }
 
+export const LESSON_FLOW_STEP_KEYS = [
+  'intro',
+  'explanation',
+  'examples',
+  'questions',
+  'exercises',
+  'correction',
+  'summary',
+  'keyPoints',
+  'flashcards',
+  'revision',
+] as const;
+
+export type LessonFlowStepKey = (typeof LESSON_FLOW_STEP_KEYS)[number];
+
+/** Persisted, server-authoritative navigation state for a lesson. */
+export interface LessonFlowProgress {
+  stepKeys: LessonFlowStepKey[];
+  activeIndex: number;
+  activeStepKey: LessonFlowStepKey;
+  validatedStepKeys: LessonFlowStepKey[];
+  /** True only after the last mandatory step and evaluated exercise evidence. */
+  completed: boolean;
+  updatedAt: string;
+}
+
+/** Derive the exact visible flow in one place so API locks and UI composition
+ * cannot disagree when an optional section is absent. */
+export function lessonFlowStepKeys(
+  lesson: Pick<
+    LessonView,
+    'examples' | 'questions' | 'exercises' | 'summary' | 'homework' | 'keyPoints'
+  >,
+): LessonFlowStepKey[] {
+  const keys: LessonFlowStepKey[] = ['intro', 'explanation'];
+  if (lesson.examples.length > 0) keys.push('examples');
+  if (lesson.questions.length > 0) keys.push('questions');
+  if (lesson.exercises.length > 0) keys.push('exercises', 'correction');
+  if (lesson.summary || lesson.homework) keys.push('summary');
+  if (lesson.keyPoints.length > 0) keys.push('keyPoints');
+  keys.push('flashcards', 'revision');
+  return keys;
+}
+
 /** Generate a written lesson. Provide a topic, or a concept/session to derive it from. */
 export interface GenerateLessonRequest {
   topic?: string;
@@ -69,4 +113,7 @@ export interface GenerateLessonRequest {
   level?: 'beginner' | 'intermediate' | 'advanced';
   /** Auto-generate flashcards from the lesson (default true). */
   flashcards?: boolean;
+  /** A public Learn journey starts with an explicit learner-authored goal. */
+  goalTitle?: string;
+  goalPeriod?: 'daily' | 'weekly' | 'monthly';
 }

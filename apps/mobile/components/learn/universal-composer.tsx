@@ -30,7 +30,6 @@ import {
 import type { CapturedImage } from '../../lib/capture/types';
 import {
   isImageDocument,
-  pickLearnDocument,
   type PickedLearnDocument,
 } from '../../lib/learn/document-picker';
 
@@ -177,24 +176,9 @@ export function UniversalComposer({
     void run(next);
   };
 
-  const chooseFile = async () => {
-    setError(null);
-    try {
-      const picked = await pickLearnDocument();
-      if (picked) {
-        setAttachment(picked);
-        setPendingConfirmation(null);
-        setCaptureOpen(false);
-        setPhotoOpen(false);
-      }
-    } catch (reason) {
-      setError((reason as Error).message || t('learn5.attachment.error'));
-    }
-  };
-
-  const openScan = (mode: 'document' | 'qr') => {
+  const openQr = () => {
     setCaptureOpen(false);
-    onNavigate(`/scan?mode=${mode}&source=learn`);
+    onNavigate('/scan?mode=qr&source=learn');
   };
 
   const attachPhoto = (image: CapturedImage) => {
@@ -281,8 +265,7 @@ export function UniversalComposer({
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
               <Button size="sm" variant="secondary" label={t('learn5.examples.understand')} onPress={() => { setIntent('understand'); setText(t('learn5.examples.understandPrompt')); }} />
               <Button size="sm" variant="secondary" label={t('learn5.examples.practice')} onPress={() => { setIntent('practice'); setText(t('learn5.examples.practicePrompt')); }} />
-              <Button size="sm" variant="secondary" label={t('learn5.examples.scan')} onPress={() => setCaptureOpen(true)} />
-              <Button size="sm" variant="secondary" label={t('learn5.examples.import')} onPress={() => setCaptureOpen(true)} />
+              <Button size="sm" variant="secondary" label={t('learn5.modality.capture')} onPress={() => setCaptureOpen(true)} />
             </View>
           </View>
         ) : null}
@@ -388,15 +371,6 @@ export function UniversalComposer({
           />
           {!RECORDING_SUPPORTED ? <Text style={[typography.caption, { color: c.textMuted }]}>{t('learn5.voice.unavailable')}</Text> : null}
           <Button label={t('learn5.modality.capture')} icon="▣" variant="ghost" onPress={() => setCaptureOpen(true)} />
-          <Button label={t('learn5.modality.import')} icon="＋" variant="ghost" onPress={() => void chooseFile()} />
-          <Button
-            testID="learn-composer-export"
-            label={t('learn5.modality.export')}
-            accessibilityLabel={t('learn5.modality.exportData')}
-            icon="⇩"
-            variant="ghost"
-            onPress={() => onNavigate('/privacy')}
-          />
           <View style={{ flex: 1 }} />
           {(text || attachment || intent || contexts.length > stableInitialContexts.length) ? <Button label={t('learn5.draft.clear')} variant="ghost" onPress={clearAll} /> : null}
           <Button
@@ -411,12 +385,10 @@ export function UniversalComposer({
         </View>
       </Card>
 
-      <Sheet visible={captureOpen} onClose={() => setCaptureOpen(false)} title={t('learn5.capture.title')}>
-        <Text style={[typography.body, { color: c.textSecondary }]}>{t('learn5.capture.detail')}</Text>
+      <Sheet visible={captureOpen} onClose={() => setCaptureOpen(false)} title={t('learn5.modality.capture')}>
+        <Text style={[typography.body, { color: c.textSecondary }]}>{t('globalPath.captureDetail')}</Text>
         <Button fullWidth label={t('learn5.capture.photo')} icon="📷" onPress={() => { setCaptureOpen(false); setPhotoOpen(true); }} />
-        <Button fullWidth label={t('learn5.capture.document')} icon="▣" variant="secondary" onPress={() => openScan('document')} />
-        <Button fullWidth label={t('learn5.capture.qr')} icon="⌗" variant="secondary" onPress={() => openScan('qr')} />
-        <Button fullWidth label={t('learn5.capture.file')} icon="＋" variant="secondary" onPress={() => void chooseFile()} />
+        <Button fullWidth label={t('learn5.capture.qr')} icon="⌗" variant="secondary" onPress={openQr} />
         <Button fullWidth label={t('learn5.cancel')} variant="ghost" onPress={() => setCaptureOpen(false)} />
       </Sheet>
 
@@ -425,7 +397,6 @@ export function UniversalComposer({
           mode="photo"
           onCapture={attachPhoto}
           onCancel={() => setPhotoOpen(false)}
-          onImport={() => { setPhotoOpen(false); void chooseFile(); }}
         />
       </Sheet>
     </View>

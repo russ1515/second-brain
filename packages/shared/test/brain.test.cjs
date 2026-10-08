@@ -25,6 +25,6 @@ test('learning status keeps the existing FSRS and prerequisite thresholds', () =
 test('Brain overview sources can degrade independently', () => {
   assert.deepEqual(shared.BRAIN_OVERVIEW_SOURCES, [
     'knowledge', 'strengths', 'learningDna', 'learnerProfile', 'declaredProfile',
-    'memory', 'path', 'foresight', 'documents',
+    'memory', 'path', 'foresight', 'documents', 'evidence',
   ]);
 });

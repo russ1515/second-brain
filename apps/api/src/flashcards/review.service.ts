@@ -26,7 +26,12 @@ export class ReviewService {
       throw new NotFoundException('Deck not found.');
     }
     const cards = await this.prisma.card.findMany({
-      where: { deckId, due: { lte: new Date() } },
+      where: {
+        deckId,
+        userId,
+        due: { lte: new Date() },
+        completionLinks: { some: { completion: { userId, status: 'verified' } } },
+      },
       orderBy: { due: 'asc' },
       take: Math.min(Math.max(limit, 1), MAX_DUE_LIMIT),
     });
@@ -39,8 +44,14 @@ export class ReviewService {
     cardId: string,
     rating: ReviewRating,
   ): Promise<ReviewResult> {
-    const card = await this.prisma.card.findUnique({ where: { id: cardId } });
-    if (!card || card.userId !== userId) {
+    const card = await this.prisma.card.findFirst({
+      where: {
+        id: cardId,
+        userId,
+        completionLinks: { some: { completion: { userId, status: 'verified' } } },
+      },
+    });
+    if (!card) {
       throw new NotFoundException('Card not found.');
     }
 

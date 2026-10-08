@@ -61,6 +61,7 @@ import { ResearchModule } from './research/research.module';
 import { AcademicWorkspaceModule } from './workspaces/academic-workspace.module';
 import { RequestContextModule } from './common/request-context.module';
 import { DiagnosticsModule } from './diagnostics/diagnostics.module';
+import { LearningEvidenceModule } from './learning-evidence/learning-evidence.module';
 
 @Module({
   imports: [
@@ -100,6 +101,7 @@ import { DiagnosticsModule } from './diagnostics/diagnostics.module';
     HomeworkModule,
     SessionModule,
     ExperienceSessionModule,
+    LearningEvidenceModule,
     HomeModule,
     BrainModule,
     ResearchModule,

@@ -57,6 +57,32 @@ export class DocumentService {
     });
   }
 
+  /** Persist generated text inside a domain transaction. The caller must queue
+   * indexing only after commit, otherwise workers can race an uncommitted row. */
+  createFromTextInTransaction(
+    userId: string,
+    input: {
+      title: string;
+      content: string;
+      sourceRef?: string | null;
+      contentType?: 'NOTE' | 'LESSON_AI';
+    },
+    transaction: Prisma.TransactionClient,
+  ): Promise<DocumentDetail> {
+    return this.persist(userId, {
+      title: input.title.trim(),
+      content: input.content,
+      source: 'text',
+      sourceRef: input.sourceRef ?? null,
+      contentType: input.contentType ?? 'NOTE',
+    }, transaction, false);
+  }
+
+  queuePostCreateProcessing(documentId: string): void {
+    void this.ingestion.ingest(documentId);
+    void this.enrichment.enrich(documentId);
+  }
+
   /** Resolve a durable ingestion idempotency marker for this owner only. */
   async findBySourceRef(userId: string, sourceRef: string): Promise<DocumentDetail | null> {
     const doc = await this.prisma.document.findFirst({
@@ -775,6 +801,8 @@ export class DocumentService {
       fingerprint?: string | null;
       original?: Buffer;
     },
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
+    queueProcessing = true,
   ): Promise<DocumentDetail> {
     const content = data.content.trim();
     if (!data.title) {
@@ -789,7 +817,7 @@ export class DocumentService {
       );
     }
 
-    const doc = await this.prisma.document.create({
+    const doc = await db.document.create({
       data: {
         userId,
         title: data.title,
@@ -822,10 +850,9 @@ export class DocumentService {
 
     // Fire-and-forget embedding pipeline; it advances status and records errors
     // on the row itself, so a failure never breaks the create response.
-    void this.ingestion.ingest(doc.id);
-    // Fire-and-forget Smart-Library enrichment (summary/subject/language/…);
-    // best-effort and independent of indexing — a failure leaves fields null.
-    void this.enrichment.enrich(doc.id);
+    if (queueProcessing) {
+      this.queuePostCreateProcessing(doc.id);
+    }
 
     return this.toDetail(doc);
   }

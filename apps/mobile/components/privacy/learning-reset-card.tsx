@@ -95,6 +95,7 @@ export function LearningResetCard() {
           variant="danger"
           label={t('priv.learningReset.button')}
           onPress={() => { void open(); }}
+          testID="learning-reset-open"
         />
       ) : (
         <>
@@ -173,7 +174,7 @@ export function LearningResetCard() {
           />
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <View style={{ flex: 1 }}>
-              <Button variant="ghost" label={t('priv.cancel')} onPress={cancel} />
+              <Button variant="ghost" label={t('priv.cancel')} onPress={cancel} testID="learning-reset-cancel" />
             </View>
             <View style={{ flex: 1 }}>
               <Button
@@ -182,6 +183,7 @@ export function LearningResetCard() {
                 busy={busy}
                 disabled={!ready}
                 onPress={() => { void execute(); }}
+                testID="learning-reset-submit"
               />
             </View>
           </View>

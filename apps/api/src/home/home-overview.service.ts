@@ -37,6 +37,7 @@ import { RecommendationService } from '../recommendation/recommendation.service'
 import { RevisionEngineService } from '../revision/revision-engine.service';
 import { MentorService } from '../mentor/mentor.service';
 import { PredictionService } from '../prediction/prediction.service';
+import { EvidenceProgressService } from '../learning-evidence/evidence-progress.service';
 
 const SESSION_VALIDITY_MS = 30 * 86_400_000;
 
@@ -59,6 +60,7 @@ export class HomeOverviewService {
     private readonly calendar: CalendarService,
     private readonly mentor: MentorService,
     private readonly localization: LocalizationService,
+    private readonly evidence: EvidenceProgressService,
   ) {}
 
   async overview(userId: string, now = new Date()): Promise<HomeOverview> {
@@ -73,9 +75,10 @@ export class HomeOverviewService {
       this.goals.list(userId),
       this.calendar.view(userId),
       this.mentor.overview(userId, now),
+      this.evidence.progress(userId),
     ] as const);
 
-    const [recommendationResult, coachResult, initiativeResult, foresightResult, reviewResult, examResult, sessionResult, goalResult, calendarResult, progressResult] = results;
+    const [recommendationResult, coachResult, initiativeResult, foresightResult, reviewResult, examResult, sessionResult, goalResult, calendarResult, mentorResult, evidenceResult] = results;
     const sources = this.sourceStates({
       recommendations: recommendationResult,
       coach: coachResult,
@@ -86,7 +89,7 @@ export class HomeOverviewService {
       sessions: sessionResult,
       goals: goalResult,
       calendar: calendarResult,
-      progress: progressResult,
+      evidence: evidenceResult,
     });
 
     const reviews = fulfilled(reviewResult, [] as ReviewableView[]);
@@ -94,7 +97,12 @@ export class HomeOverviewService {
     const rawSessions = fulfilled(sessionResult, { items: [], nextCursor: null }).items;
     const resumableSessions = rawSessions.map((session) => this.toResumableSession(session)).filter(isPresent).slice(0, 3);
     const goals = fulfilled(goalResult, [] as Goal[]);
-    const mentor = fulfilled(progressResult, null as MentorOverview | null);
+    const mentor = fulfilled(mentorResult, null as MentorOverview | null);
+    const evidenceProgress = fulfilled(evidenceResult, {
+      completedCount: 0,
+      dimensions: [],
+      generatedAt: now.toISOString(),
+    });
     const coach = fulfilled(coachResult, null as ProactiveBriefing | null);
     const initiatives = fulfilled(initiativeResult, [] as InitiativeView[]);
     const foresight = fulfilled(foresightResult, null as LearningPredictionView | null);
@@ -139,6 +147,7 @@ export class HomeOverviewService {
       mainGoal,
       upcoming,
       progress,
+      evidenceProgress,
       sources,
       partial: Object.values(sources).some((state) => state === 'unavailable'),
     });

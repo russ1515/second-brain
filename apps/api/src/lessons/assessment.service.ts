@@ -22,7 +22,6 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
 import { RootCauseService } from '../concepts/root-cause.service';
-import { RevisionEngineService } from '../revision/revision-engine.service';
 import { localeDirective, resolveLocale } from '../common/learning-locale';
 import { ExperienceSessionService } from '../experience-sessions/experience-session.service';
 
@@ -88,7 +87,6 @@ export class AssessmentService {
     private readonly prisma: PrismaService,
     private readonly llm: LlmService,
     private readonly rootCause: RootCauseService,
-    private readonly revision: RevisionEngineService,
     private readonly experienceSessions: ExperienceSessionService,
   ) {}
 
@@ -121,6 +119,7 @@ export class AssessmentService {
       data: {
         userId,
         lessonId,
+        contentVersion: lesson.contentVersion,
         exerciseIndex,
         question: exercise.question,
         expectedAnswer: exercise.answer,
@@ -139,16 +138,6 @@ export class AssessmentService {
         rootCauseConceptId: gap?.conceptId ?? null,
       },
     });
-
-    // Feed the FSRS Revision Engine: an exercise is a reviewable activity, and
-    // its score drives the grade (task 5.1). Best-effort — never blocks marking.
-    await this.revision.gradeActivity(
-      userId,
-      'exercise',
-      `${lessonId}:${exerciseIndex}`,
-      exercise.question,
-      { score: verdict.score },
-    );
 
     return { attempt: this.toView(attempt), rootCause: gap };
   }

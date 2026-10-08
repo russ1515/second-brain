@@ -51,12 +51,20 @@ export class CalendarService {
 
     const [reviewables, cardsDue, events] = await Promise.all([
       this.prisma.reviewable.findMany({
-        where: { userId, due: { gte: start, lt: horizon } },
+        where: {
+          userId,
+          due: { gte: start, lt: horizon },
+          completionLinks: { some: { completion: { userId, status: 'verified' } } },
+        },
         select: { id: true, kind: true, refId: true, title: true, due: true },
       }),
       this.prisma.card.groupBy({
         by: ['due'],
-        where: { userId, due: { gte: start, lt: horizon } },
+        where: {
+          userId,
+          due: { gte: start, lt: horizon },
+          completionLinks: { some: { completion: { userId, status: 'verified' } } },
+        },
         _count: { _all: true },
       }),
       this.prisma.calendarEvent.findMany({
@@ -181,12 +189,11 @@ export class CalendarService {
         homework: 0,
         reviewItems: 0,
         cards: 0,
-        documentsMovedToTrash: 0,
+        documentsDeleted: 0,
         workspaceReferences: 0,
         recommendations: 0,
         calendarEvents: 1,
       },
-      reversibleDocuments: false,
       sharedDocumentsPreserved: 0,
     };
   }

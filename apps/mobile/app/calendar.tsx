@@ -1,229 +1,84 @@
-import { useCallback, useEffect, useState, useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import type {
-  CalendarEntry,
-  CalendarEntryKind,
-  CalendarView,
-  UserEventKind,
-} from '@second-brain/shared';
+import { useQuery } from '@tanstack/react-query';
+import { RefreshControl, ScrollView, Text, View } from 'react-native';
+import type { LearningHistoryEntry, LearningHistoryView } from '@second-brain/shared';
 import { api } from '../lib/client';
-import { useTokens } from '../lib/design/theme';
-import type { ColorScale } from '../lib/design/tokens';
+import { useAuth } from '../lib/auth-context';
 import { useI18n, type TranslationKey } from '../lib/i18n';
-import { Button, Card, ErrorBanner, Loading } from '../components/ui';
+import { useTokens } from '../lib/design/theme';
+import { Badge, Card } from '../components/ds/core';
+import { Page } from '../components/ds/layout';
+import { SmartEmptyState, SmartErrorState, SmartLoadingState, SmartState } from '../components/ds/states';
 
-const KIND_ICON: Record<CalendarEntryKind, string> = {
-  exam: '📝',
-  homework: '📚',
-  practical: '🔬',
-  language: '🗣️',
-  aiSession: '🎓',
-  revision: '🔁',
-  quiz: '❓',
-  objective: '🎯',
-  deadline: '⏰',
-};
-const KIND_KEY: Record<CalendarEntryKind, TranslationKey> = {
-  exam: 'cal.k.exam',
-  homework: 'cal.k.homework',
-  practical: 'cal.k.practical',
-  language: 'cal.k.language',
-  aiSession: 'cal.k.aiSession',
-  revision: 'cal.k.revision',
-  quiz: 'cal.k.quiz',
-  objective: 'cal.k.objective',
-  deadline: 'cal.k.deadline',
-};
-const USER_KINDS: { kind: UserEventKind; key: TranslationKey }[] = [
-  { kind: 'exam', key: 'cal.k.exam' },
-  { kind: 'objective', key: 'cal.k.objective' },
-  { kind: 'deadline', key: 'cal.k.deadline' },
-];
-const DAY_OFFSETS: { key: TranslationKey; days: number }[] = [
-  { key: 'cal.today', days: 0 },
-  { key: 'cal.tomorrow', days: 1 },
-  { key: 'cal.in3', days: 3 },
-  { key: 'cal.in7', days: 7 },
-];
-
-/**
- * Smart Calendar (task 5.4). Not a classic agenda: it's assembled automatically
- * from everything the engines scheduled — revisions, homework, practicals,
- * languages, quizzes and AI sessions — over which the learner overlays their own
- * exams and objectives. AI entries are read-only (priority); user entries can be
- * removed.
- */
+/** Historical learning calendar: only server-verified completions belong here. */
 export default function CalendarScreen() {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
+  const { user } = useAuth();
   const { t, formatLocale } = useI18n();
-  const [view, setView] = useState<CalendarView | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [title, setTitle] = useState('');
-  const [kind, setKind] = useState<UserEventKind>('exam');
-  const [offset, setOffset] = useState(1);
-  const [busy, setBusy] = useState(false);
+  const { colors: c, spacing, typography } = useTokens();
+  const history = useQuery<LearningHistoryView>({
+    queryKey: ['calendar', 'learning-history', user?.id],
+    queryFn: ({ signal }) => api<LearningHistoryView>('/calendar/learning-history', { signal }),
+    enabled: Boolean(user),
+    staleTime: 30_000,
+    retry: 1,
+    placeholderData: (previous) => previous,
+  });
 
-  const load = useCallback(async () => {
-    try {
-      setView(await api<CalendarView>('/calendar'));
-      setError(null);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const addEvent = async () => {
-    if (!title.trim()) return;
-    setBusy(true);
-    try {
-      const d = new Date(Date.now() + offset * 86_400_000);
-      const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      await api<CalendarEntry>('/calendar/events', { method: 'POST', body: { date, kind, title: title.trim() } });
-      setTitle('');
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const removeEvent = async (id: string) => {
-    try {
-      await api<void>(`/calendar/events/${id}`, { method: 'DELETE' });
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
-  if (error && !view) {
-    return (
-      <ScrollView contentContainerStyle={styles.container}>
-        <ErrorBanner message={error} />
-        <Button variant="ghost" label={t('app.tryAgain')} onPress={() => void load()} />
-      </ScrollView>
-    );
+  if (history.isPending || !user) return <SmartLoadingState title={t('globalPath.calendar.title')} />;
+  if (!history.data) {
+    return <Page width="reading"><SmartErrorState title={t('brain8.error.load')} retryable onRetry={() => { void history.refetch(); }} /></Page>;
   }
-  if (!view) return <Loading label={t('cal.loading')} />;
-
-  const days = view.days.filter((d) => d.today || d.entries.length > 0);
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <View style={styles.masthead}>
-        <Text style={styles.kicker}>🗓️ {t('cal.title')}</Text>
-        <Text style={styles.intro}>{t('cal.intro')}</Text>
-      </View>
-
-      {error ? <ErrorBanner message={error} /> : null}
-
-      {/* Add one of the learner's own events (the AI keeps priority). */}
-      <Card style={styles.addCard}>
-        <Text style={styles.addLabel}>{t('cal.add')}</Text>
-        <TextInput
-          style={styles.input}
-          placeholder={t('cal.titlePlaceholder')}
-          placeholderTextColor={c.textMuted}
-          value={title}
-          onChangeText={setTitle}
-        />
-        <View style={styles.chips}>
-          {USER_KINDS.map((k) => (
-            <Chip key={k.kind} label={t(k.key)} on={kind === k.kind} onPress={() => setKind(k.kind)} />
-          ))}
+    <ScrollView
+      style={{ flex: 1, backgroundColor: c.background }}
+      contentContainerStyle={{ flexGrow: 1 }}
+      refreshControl={<RefreshControl refreshing={history.isRefetching} onRefresh={() => { void history.refetch(); }} tintColor={c.primary} colors={[c.primary]} />}
+    >
+      <Page width="reading" style={{ gap: spacing.lg, paddingBottom: spacing.huge }} testID="completed-learning-calendar">
+        <View style={{ gap: spacing.xs }}>
+          <Text accessibilityRole="header" style={[typography.h1, { color: c.textPrimary }]}>{t('globalPath.calendar.title')}</Text>
+          <Text style={[typography.body, { color: c.textSecondary }]}>{t('globalPath.calendar.detail')}</Text>
         </View>
-        <View style={styles.chips}>
-          {DAY_OFFSETS.map((o) => (
-            <Chip key={o.days} label={t(o.key)} on={offset === o.days} onPress={() => setOffset(o.days)} />
-          ))}
-        </View>
-        <Button label={t('cal.addBtn')} onPress={addEvent} busy={busy} disabled={!title.trim()} />
-      </Card>
-
-      {days.map((day) => (
-        <View key={day.date} style={styles.day}>
-          <Text style={[styles.dayLabel, day.today && styles.dayToday]}>
-            {formatDay(day.date, formatLocale)}{day.today ? ` · ${t('cal.todayTag')}` : ''}
-          </Text>
-          {day.entries.length === 0 ? (
-            <Text style={styles.empty}>{t('cal.nothing')}</Text>
-          ) : (
-            day.entries.map((e) => (
-              <View key={e.id} style={[styles.entry, e.source === 'ai' && styles.entryAi]}>
-                <Text style={styles.entryIcon}>{KIND_ICON[e.kind]}</Text>
-                <View style={styles.entryBody}>
-                  <Text style={styles.entryKind}>{t(KIND_KEY[e.kind])}</Text>
-                  <Text style={styles.entryTitle} numberOfLines={1}>{e.title}</Text>
-                </View>
-                {e.source === 'ai' ? (
-                  <Text style={styles.aiBadge}>🤖</Text>
-                ) : (
-                  <Pressable onPress={() => removeEvent(e.id)} accessibilityRole="button" hitSlop={8}>
-                    <Text style={styles.remove}>✕</Text>
-                  </Pressable>
-                )}
-              </View>
-            ))
-          )}
-        </View>
-      ))}
+        {history.error ? <SmartState state="stale" detail={t('home4.stale')} /> : null}
+        {history.data.items.length === 0 ? (
+          <SmartEmptyState title={t('globalPath.calendar.empty')} />
+        ) : (
+          <View style={{ gap: spacing.sm }}>
+            {history.data.items.map((item) => <HistoryCard key={item.completionId} item={item} formatLocale={formatLocale} />)}
+          </View>
+        )}
+      </Page>
     </ScrollView>
   );
 }
 
-function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
-  const { colors: c } = useTokens();
-  const styles = useMemo(() => makeStyles(c), [c]);
+function HistoryCard({ item, formatLocale }: { item: LearningHistoryEntry; formatLocale: string }) {
+  const { t } = useI18n();
+  const { colors: c, spacing, typography } = useTokens();
+  const fallback = t('priv.learningReport.notAvailable');
   return (
-    <Pressable style={[styles.chip, on && styles.chipOn]} onPress={onPress} accessibilityRole="button">
-      <Text style={[styles.chipText, on && styles.chipTextOn]}>{label}</Text>
-    </Pressable>
+    <Card style={{ gap: spacing.sm }} testID={`calendar-completion-${item.completionId}`}>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs }}>
+        <Badge tone="neutral" label={t(`globalPath.calendar.kind.${item.kind === 'language_unit' ? 'languageUnit' : 'lesson'}` as TranslationKey)} />
+        <Text style={[typography.title, { color: c.textPrimary, flex: 1 }]}>{item.title}</Text>
+      </View>
+      <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('globalPath.calendar.started')}: {dateLabel(item.startedAt, formatLocale, fallback)}</Text>
+      <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('globalPath.calendar.finalized')}: {dateLabel(item.finalizedAt, formatLocale, fallback)}</Text>
+      {item.objective ? <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('globalPath.calendar.objective')}: {item.objective}</Text> : null}
+      <Text style={[typography.label, { color: c.primary }]}>
+        {t('globalPath.calendar.result')}: {t(`globalPath.result.${resultKey(item.result.outcome)}` as TranslationKey)}
+        {item.result.score === null ? '' : ` · ${Math.round(item.result.score * 100)}%`}
+      </Text>
+    </Card>
   );
 }
 
-function formatDay(date: string, formatLocale: string): string {
-  return new Date(`${date}T12:00:00`).toLocaleDateString(formatLocale, {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-  });
+function resultKey(outcome: LearningHistoryEntry['result']['outcome']): 'evaluated' | 'demonstrated' | 'notDemonstrated' {
+  return outcome === 'not_demonstrated' ? 'notDemonstrated' : outcome;
 }
 
-const makeStyles = (c: ColorScale) => StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
-  masthead: { gap: 4 },
-  kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
-  intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
-  addCard: { gap: 10 },
-  addLabel: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.8 },
-  input: {
-    backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border, borderRadius: 10,
-    padding: 12, fontSize: 15, color: c.textPrimary,
-  },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { borderWidth: 1, borderColor: c.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: c.surfaceElevated },
-  chipOn: { borderColor: c.primary, backgroundColor: c.primary },
-  chipText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
-  chipTextOn: { color: c.onPrimary },
-  day: { gap: 6, marginTop: 6 },
-  dayLabel: { fontSize: 13, fontWeight: '700', color: c.textSecondary, textTransform: 'capitalize' },
-  dayToday: { color: c.primary },
-  empty: { fontSize: 13, color: c.textMuted },
-  entry: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, borderRadius: 12, padding: 12,
-  },
-  entryAi: { borderLeftWidth: 3, borderLeftColor: c.primary },
-  entryIcon: { fontSize: 20 },
-  entryBody: { flex: 1, gap: 1 },
-  entryKind: { fontSize: 10, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.6 },
-  entryTitle: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
-  aiBadge: { fontSize: 14 },
-  remove: { fontSize: 18, color: c.error, fontWeight: '700', paddingHorizontal: 4 },
-});
+function dateLabel(value: string | null, formatLocale: string, fallback: string): string {
+  if (!value) return fallback;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? fallback : date.toLocaleString(formatLocale, { dateStyle: 'medium', timeStyle: 'short' });
+}

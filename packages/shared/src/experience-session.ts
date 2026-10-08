@@ -164,7 +164,7 @@ export interface LearningDeletionCounts {
   homework: number;
   reviewItems: number;
   cards: number;
-  documentsMovedToTrash: number;
+  documentsDeleted: number;
   workspaceReferences: number;
   recommendations: number;
   calendarEvents: number;
@@ -175,9 +175,8 @@ export interface LearningDeletionPreview {
   id: string;
   title: string | null;
   counts: LearningDeletionCounts;
-  /** Generated lesson documents are hidden from active retrieval and moved to
-   * the existing Library trash; shared documents/concepts/collections remain. */
-  reversibleDocuments: boolean;
+  /** Generated documents exclusively owned by the deleted learning are hard
+   * deleted; independently shared sources remain available. */
   sharedDocumentsPreserved: number;
 }
 

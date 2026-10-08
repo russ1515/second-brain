@@ -8,8 +8,6 @@ import type {
   RlleMissionEvaluation,
   RlleMissionTurnResponse,
   SendTutorMessageResponse,
-  TeachingStrategy,
-  TutorPace,
   TutorSessionDetail,
   TutorSessionSummary,
   TranscriptionResult,
@@ -29,9 +27,9 @@ import {
   saveTutorSessionDraft,
 } from '../../lib/tutor/session-draft';
 import { teacherRoleLabel } from '../../lib/teacher-role';
-import { Alert, Badge, Button, Card } from '../../components/ds/core';
+import { saveTutorReplyAsPdf } from '../../lib/tutor-reply-pdf';
+import { Alert, Badge, Button, Card, IconButton } from '../../components/ds/core';
 import { Page } from '../../components/ds/layout';
-import { Sheet } from '../../components/ds/overlays';
 import { SmartErrorState, SmartLoadingState, SmartState } from '../../components/ds/states';
 import { ContextBar } from '../../components/context/context-bar';
 import { SpeakButton } from '../../components/speak-button';
@@ -45,17 +43,6 @@ import {
   type ResultAction,
   type TutorWorkState,
 } from '../../components/tutor/experience';
-
-const STRATEGY_LABEL: Record<TeachingStrategy, TranslationKey> = {
-  socratic: 'strategy.socratic',
-  project_based: 'strategy.project_based',
-  problem_solving: 'strategy.problem_solving',
-  case_study: 'strategy.case_study',
-  task_based: 'strategy.task_based',
-  guided_demonstration: 'strategy.guided_demonstration',
-  active_learning: 'strategy.active_learning',
-  experiential: 'strategy.experiential',
-};
 
 type TurnFailure =
   | { kind: 'quota'; quota: QuotaErrorContract }
@@ -97,7 +84,6 @@ export default function TutorSessionScreen() {
   const [failure, setFailure] = useState<TurnFailure | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [missionFeedback, setMissionFeedback] = useState<RlleMissionEvaluation | null>(null);
-  const [optionsOpen, setOptionsOpen] = useState(false);
   const recorder = useRef<Recorder | null>(null);
   const lastRecording = useRef<Recording | null>(null);
   const recordingStartedAt = useRef(0);
@@ -170,7 +156,7 @@ export default function TutorSessionScreen() {
     return () => clearTimeout(timer);
   }, [draft, draftReady, id, user?.id]);
 
-  const postTurn = async (content: string, pace?: TutorPace, viaVoice = false) => {
+  const postTurn = async (content: string, viaVoice = false) => {
     if (!id) return;
     setWorkState('THINKING');
     setFailure(null);
@@ -193,7 +179,7 @@ export default function TutorSessionScreen() {
       } else {
         const response = await api<SendTutorMessageResponse>(`/tutor/sessions/${id}/messages`, {
           method: 'POST',
-          body: { content, ...(pace ? { pace } : {}), ...(viaVoice ? { viaVoice: true } : {}) },
+          body: { content, ...(viaVoice ? { viaVoice: true } : {}) },
         });
         spokenReply = response.message.content;
       }
@@ -222,12 +208,7 @@ export default function TutorSessionScreen() {
 
   const send = () => {
     const content = draft.trim();
-    if (content) void postTurn(content, undefined, voiceDraft);
-  };
-
-  const sendPace = (pace: TutorPace) => {
-    setOptionsOpen(false);
-    void postTurn(t(pace === 'slower' ? 'tutor.slowerMsg' : 'tutor.fasterMsg'), pace);
+    if (content) void postTurn(content, voiceDraft);
   };
 
   const startRecording = async () => {
@@ -360,18 +341,6 @@ export default function TutorSessionScreen() {
     router.replace('/tutor');
   };
 
-  const complete = async () => {
-    const experience = session?.experienceSession;
-    if (!experience || experience.status !== 'active') return;
-    setOptionsOpen(false);
-    try {
-      const completed = await api<ExperienceSession>(`/experience-sessions/${experience.id}/complete`, { method: 'POST' });
-      setSession((current) => current ? { ...current, experienceSession: completed } : current);
-    } catch (error) {
-      setFailure(toFailure(error));
-    }
-  };
-
   if (loading && !session) {
     return <SmartLoadingState title={t('tutor.opening')} detail={t('tutor6.loading.detail')} />;
   }
@@ -394,7 +363,6 @@ export default function TutorSessionScreen() {
   const objective = experience?.currentStep?.label ?? experience?.intent ?? session.title ?? t('tutor.discussion');
   const contexts = experience?.activeContexts.items ?? [];
   const targetLanguage = activeSpeechLanguage;
-  const canPace = session.messages.some((message) => message.role === 'assistant') && !recording;
   const continueCompleted = () => {
     if (!experience) return;
     const document = contexts.find((item) => item.kind === 'document' && item.referenceId);
@@ -420,31 +388,6 @@ export default function TutorSessionScreen() {
     ? resultActions(session, experience, t, (href) => router.push(href), continueCompleted)
     : [];
 
-  const strategy = session.strategy ? (
-    <Card style={{ gap: spacing.xs }}>
-      <Text style={[typography.label, { color: c.aiAccent }]}>{t('tutor6.strategy')}</Text>
-      <Text style={[typography.title, { color: c.textPrimary }]}>{t(STRATEGY_LABEL[session.strategy])}</Text>
-      <Text style={[typography.bodySmall, { color: c.textSecondary }]}>
-        {session.strategyReasonCode
-          ? t(session.strategyReasonCode as TranslationKey)
-          : session.strategyReason}
-      </Text>
-    </Card>
-  ) : null;
-
-  const secondaryActions = (
-    <>
-      {canPace ? (
-        <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-          <Button label={t('tutor.slower')} variant="secondary" onPress={() => sendPace('slower')} disabled={busy} />
-          <Button label={t('tutor.faster')} variant="secondary" onPress={() => sendPace('faster')} disabled={busy} />
-        </View>
-      ) : null}
-      {!missionContext && experience?.status === 'active' ? <Button label={t('tutor6.complete')} variant="ghost" onPress={() => void complete()} /> : null}
-      <Button label={t('tutor6.pause')} variant="ghost" onPress={() => void pauseAndLeave()} />
-    </>
-  );
-
   return (
     <View style={{ flex: 1, backgroundColor: c.background }} testID="tutor-session-experience">
       <ScrollView
@@ -453,7 +396,7 @@ export default function TutorSessionScreen() {
         contentContainerStyle={{ flexGrow: 1 }}
         keyboardShouldPersistTaps="handled"
       >
-        <Page width="wide" style={{ paddingBottom: spacing.xl }}>
+        <Page width="reading" style={{ paddingBottom: spacing.xl }}>
           <View style={{ gap: spacing.sm }}>
             <Button label={t('tutor6.backTutor')} variant="ghost" size="sm" onPress={() => void pauseAndLeave()} />
             <Text style={[typography.label, { color: c.aiAccent }]}>{t('tutor6.objective')}</Text>
@@ -522,30 +465,24 @@ export default function TutorSessionScreen() {
             </Card>
           ) : null}
 
-          <View style={mode === 'wide' ? { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.xl } : { gap: spacing.lg }}>
-            <View style={{ flex: 1, minWidth: 0, gap: spacing.lg }}>
-              {compact ? strategy : null}
-              {session.messages.length === 0 ? (
-                <Card>
-                  <Text style={[typography.body, { color: c.textSecondary }]}>{t('tutor6.empty')}</Text>
-                </Card>
-              ) : session.messages.map((message) => (
-                <TutorMessage
-                  key={message.id}
-                  message={message}
-                  onOpenSource={(documentId) => router.push(`/library/${documentId}`)}
-                  trailing={message.role === 'assistant' ? <SpeakButton text={message.content} language={targetLanguage} /> : undefined}
-                />
-              ))}
-              {experience ? <ProgressNarrative session={experience} /> : null}
-              <ResultActionBar actions={actions} />
-            </View>
-            {mode === 'wide' ? (
-              <View style={{ width: 300, flexShrink: 0, gap: spacing.md }}>
-                {strategy}
-                {secondaryActions}
-              </View>
-            ) : null}
+          <View style={{ width: '100%', maxWidth: 820, alignSelf: 'center', gap: spacing.lg }}>
+            {session.messages.length === 0 ? (
+              <Card>
+                <Text style={[typography.body, { color: c.textSecondary }]}>{t('tutor6.empty')}</Text>
+              </Card>
+            ) : session.messages.map((message) => (
+              <TutorMessage
+                key={message.id}
+                message={message}
+                onOpenSource={(documentId) => router.push(`/library/${documentId}`)}
+                onSavePdf={message.role === 'assistant'
+                  ? () => void saveTutorReplyAsPdf(objective, message.content, formatLocale).catch((caught) => setFailure(toFailure(caught)))
+                  : undefined}
+                trailing={message.role === 'assistant' ? <SpeakButton text={message.content} language={targetLanguage} /> : undefined}
+              />
+            ))}
+            {experience ? <ProgressNarrative session={experience} /> : null}
+            <ResultActionBar actions={actions} />
           </View>
         </Page>
       </ScrollView>
@@ -563,60 +500,64 @@ export default function TutorSessionScreen() {
             elevation.low,
           ]}
         >
-          <View style={{ width: '100%', maxWidth: 980, alignSelf: 'center', gap: spacing.sm }}>
+          <View style={{ width: '100%', maxWidth: 820, alignSelf: 'center', gap: spacing.xs }}>
             {voiceFocused || recording || voiceDraft || lastRecording.current ? (
               <VoiceState state={workState} elapsedSeconds={recording || elapsedSeconds ? elapsedSeconds : undefined} transcript={voiceDraft ? draft : undefined} />
             ) : null}
-            <TextInput
-              style={{
-                minHeight: 56,
-                maxHeight: 150,
-                borderWidth: 1,
-                borderColor: c.border,
-                borderRadius: radius.md,
-                backgroundColor: c.surface,
-                color: c.textPrimary,
-                paddingHorizontal: spacing.md,
-                paddingVertical: spacing.sm,
-                textAlignVertical: 'top',
-              }}
-              placeholder={t('tutor.placeholder')}
-              placeholderTextColor={c.textMuted}
-              value={draft}
-              onChangeText={setDraft}
-              multiline
-              editable={!busy && !recording}
-              maxLength={4_000}
-              testID="tutor-input"
-            />
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.sm }}>
-              <Button label={t('tutor.send')} onPress={send} loading={workState === 'THINKING'} disabled={!draft.trim() || recording} />
-              {voicePlayback === 'playing' ? <Button label={t('voice11.pause')} variant="secondary" onPress={() => void pausePlayback()} /> : null}
-              {voicePlayback === 'paused' ? <Button label={t('voice11.resume')} variant="secondary" onPress={() => void resumePlayback()} /> : null}
-              {voicePlayback ? <Button label={t('learn.oral.stop')} variant="ghost" onPress={stopPlayback} /> : null}
-              {RECORDING_SUPPORTED ? (
-                voicePlayback ? null : recording ? (
-                  <>
-                    <Button label={t('voice11.transcribe')} variant="ai" onPress={() => void stopAndTranscribe()} />
-                    {workState === 'PAUSED'
-                      ? <Button label={t('voice11.resume')} variant="secondary" onPress={() => void resumeRecording()} />
-                      : <Button label={t('voice11.pause')} variant="secondary" onPress={() => void pauseRecording()} />}
-                    <Button label={t('tutor.cancel')} variant="ghost" onPress={cancelRecording} />
-                  </>
-                ) : (
-                  <Button label={t('tutor.speak')} variant="secondary" onPress={() => void startRecording()} disabled={busy} />
-                )
+            <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: spacing.xs, borderWidth: 1, borderColor: c.border, borderRadius: radius.lg, backgroundColor: c.surface, padding: spacing.xs }}>
+              <TextInput
+                style={{
+                  flex: 1,
+                  minHeight: 44,
+                  maxHeight: 132,
+                  color: c.textPrimary,
+                  paddingHorizontal: spacing.sm,
+                  paddingVertical: spacing.sm,
+                  textAlignVertical: 'top',
+                }}
+                placeholder={t('tutor.placeholder')}
+                placeholderTextColor={c.textMuted}
+                value={draft}
+                onChangeText={setDraft}
+                multiline
+                editable={!busy && !recording}
+                maxLength={4_000}
+                testID="tutor-input"
+              />
+              {RECORDING_SUPPORTED && !voicePlayback ? (
+                <IconButton
+                  icon={recording ? '■' : '🎙'}
+                  label={recording ? t('voice11.transcribe') : t('tutor.speak')}
+                  onPress={recording ? () => void stopAndTranscribe() : () => void startRecording()}
+                  disabled={busy && !recording}
+                  testID="tutor-voice-toggle"
+                />
               ) : null}
-              {mode !== 'wide' ? <Button label={t('tutor6.options')} variant="ghost" onPress={() => setOptionsOpen(true)} /> : null}
+              <IconButton
+                icon="↑"
+                label={t('tutor.send')}
+                onPress={send}
+                disabled={!draft.trim() || recording || busy}
+                testID="tutor-send"
+              />
+            </View>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs }}>
+              {voicePlayback === 'playing' ? <IconButton icon="⏸" label={t('voice11.pause')} onPress={() => void pausePlayback()} /> : null}
+              {voicePlayback === 'paused' ? <IconButton icon="▶" label={t('voice11.resume')} onPress={() => void resumePlayback()} /> : null}
+              {voicePlayback ? <IconButton icon="⏹" label={t('learn.oral.stop')} onPress={stopPlayback} /> : null}
+              {recording ? (
+                <>
+                  {workState === 'PAUSED'
+                    ? <IconButton icon="▶" label={t('voice11.resume')} onPress={() => void resumeRecording()} />
+                    : <IconButton icon="⏸" label={t('voice11.pause')} onPress={() => void pauseRecording()} />}
+                  <IconButton icon="✕" label={t('tutor.cancel')} onPress={cancelRecording} />
+                </>
+              ) : null}
             </View>
           </View>
         </View>
       ) : null}
 
-      <Sheet visible={optionsOpen} onClose={() => setOptionsOpen(false)} title={t('tutor6.options')}>
-        {secondaryActions}
-        <Button label={t('tutor.cancel')} variant="ghost" onPress={() => setOptionsOpen(false)} />
-      </Sheet>
     </View>
   );
 }

@@ -26,7 +26,7 @@ const MODES: Record<LanguageMode, ModeSpec> = {
     directive:
       'Assume no prior knowledge. Use very short sentences and high-frequency ' +
       'words only. Introduce at most one new structure at a time. Gloss every ' +
-      'target-language sentence in the learner\'s native language immediately ' +
+      'target-language sentence in the designated support language immediately ' +
       'after it. Use present tense until the learner is solid.',
     level: 'beginner',
     targetLanguageRatio: 0.3,
@@ -171,9 +171,11 @@ export function languageSystemPrompt(params: {
     correctionIntensity,
   } = params;
   const spec = modeSpec(mode);
+  const target = targetLanguage ?? language;
+  const support = supportLanguage ?? interfaceLanguage ?? nativeLanguage ?? 'English';
   const native = nativeLanguage
     ? `The learner's native language is ${nativeLanguage}.`
-    : 'The learner has not stated a native language; default to English for glosses.';
+    : 'The learner has not stated a native language; do not guess one.';
   const aim = goal ? ` Their stated goal: "${goal}". Keep the work tied to it.` : '';
   const cefr = cefrLevel
     ? ` The learner is at CEFR level ${cefrLevel}; pitch vocabulary, grammar and complexity exactly to that level.`
@@ -183,7 +185,7 @@ export function languageSystemPrompt(params: {
   // mode uses its static directive.
   const directive =
     mode === 'immersion'
-      ? immersionDirective(language, nativeLanguage, cefrLevel)
+      ? immersionDirective(language, support, cefrLevel)
       : spec.directive;
 
   const immersion = immersionIntensity
@@ -206,8 +208,6 @@ export function languageSystemPrompt(params: {
           ' Correction intensity is detailed: explicitly correct meaningful grammar, vocabulary and phrasing errors, while still letting the learner finish.',
       }[correctionIntensity]
     : '';
-  const target = targetLanguage ?? language;
-  const support = supportLanguage ?? interfaceLanguage ?? nativeLanguage ?? 'English';
   const languageRoles =
     ` Language roles are explicit and independent: interface=${interfaceLanguage ?? 'not declared'}; ` +
     `native=${nativeLanguage ?? 'not declared'}; explanation/support=${support}; learning/target=${target}. ` +

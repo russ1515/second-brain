@@ -55,3 +55,4 @@ import './learning-control-v1';
 import './learning-data-control-europe-v1';
 import './learning-data-control-asia-v1';
 import './learning-data-control-africa-v1';
+import './global-path-v1';

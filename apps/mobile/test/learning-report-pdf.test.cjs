@@ -27,8 +27,10 @@ const copy = {
   currentCountry: 'Pays', teachingLanguage: 'Langue', subjects: 'Matières', goals: 'Objectifs',
   preferences: 'Préférences', learningProfile: 'Profil', lessons: 'Leçons', tutorSessions: 'Sessions',
   concepts: 'Concepts', completedSessions: 'Terminées', reviews: 'Révisions', lastActivity: 'Activité',
-  assessmentSubmissions: 'Évaluations', averageAssessmentScore: 'Score', exerciseAttempts: 'Tentatives',
-  correctAttempts: 'Réussies', averageExerciseScore: 'Score exercices', noEvidence: 'Aucune preuve',
+  completedLearning: 'Apprentissages finalisés', knowledge: 'Connaissances', understanding: 'Compréhension',
+  application: 'Application', reasoning: 'Raisonnement', criticalReflection: 'Réflexion critique',
+  perspective: 'Vision d’ensemble', evidenceCount: 'Preuves', started: 'Début', finalized: 'Finalisation',
+  objective: 'Objectif', result: 'Résultat', noEvidence: 'Aucune preuve',
   notAvailable: 'Indisponible', privacyNote: 'Données privées exclues.', provenanceNote: 'Provenance claire.',
 };
 
@@ -43,7 +45,16 @@ function fixture() {
       learningPreferences: ['guided'], teacher: null, timezone: 'Europe/Berlin',
     } },
     observed: { source: 'OBSERVED', learnerProfile: null, learningDna: null, totals: { lessons: 2, tutorSessions: 1, concepts: 4, completedStudySessions: 1, reviews: 7 }, lastLearningActivityAt: null },
-    assessed: { source: 'ASSESSED', assessmentSubmissions: 0, averageAssessmentScore: null, exerciseAttempts: 0, correctExerciseAttempts: 0, averageExerciseScore: null, evidenceAvailable: false },
+    assessed: {
+      source: 'ASSESSED', assessmentSubmissions: 0, averageAssessmentScore: null, exerciseAttempts: 0,
+      correctExerciseAttempts: 0, averageExerciseScore: null, evidenceAvailable: false,
+      evidenceProgress: {
+        completedCount: 0, generatedAt: '2026-10-06T10:00:00.000Z',
+        dimensions: ['knowledge', 'understanding', 'application', 'reasoning', 'critical_reflection', 'perspective']
+          .map((dimension) => ({ dimension, percent: null, evaluatedEvidenceCount: 0, latestEvidenceAt: null, completionIds: [] })),
+      },
+      completionHistory: { items: [], generatedAt: '2026-10-06T10:00:00.000Z' },
+    },
     exclusions: ['RAW_CONVERSATIONS', 'FULL_DOCUMENTS', 'AUTH_SECRETS', 'FINANCIAL_DETAILS'],
   };
 }
@@ -57,6 +68,7 @@ test('A4 learning report supports RTL and separates evidence provenance', () => 
   assert.match(html, />Évalué</);
   assert.match(html, /Amina/);
   assert.match(html, /Aucune preuve/);
+  assert.doesNotMatch(html, /Score exercices|Tentatives/);
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /&lt;script&gt;CD&lt;\/script&gt;/);
 });
@@ -65,6 +77,15 @@ test('learning report surface contains no raw conversation, document or financia
   const html = learningReportHtml(fixture(), copy, 'fr-FR', 'ltr');
   assert.doesNotMatch(html, /password|accessToken|invoice|payment|tutorMessage|documentContent/i);
   assert.match(html, /Données privées exclues/);
+});
+
+test('learning report uses the canonical six evidence dimensions and completion provenance', () => {
+  assert.match(source, /assessed\.evidenceProgress\.dimensions/);
+  assert.match(source, /critical_reflection: copy\.criticalReflection/);
+  assert.match(source, /perspective: copy\.perspective/);
+  assert.match(source, /assessed\.completionHistory\.items/);
+  assert.match(source, /item\.provenance\.evidenceRefIds\.length/);
+  assert.doesNotMatch(source, /score\(assessed\.averageAssessmentScore|averageExerciseScore \* 100/);
 });
 
 test('Privacy makes the A4 learning report primary while retaining JSON portability', () => {

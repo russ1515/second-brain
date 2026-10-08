@@ -61,7 +61,10 @@ import {
 } from '../teaching/teacher-role';
 import type { CreateTutorSessionDto } from './dto/create-tutor-session.dto';
 import { ExperienceSessionService } from '../experience-sessions/experience-session.service';
+import { LearningDataDeletionService } from '../experience-sessions/learning-data-deletion.service';
 import { LearnerPassportService } from '../onboarding/learner-passport.service';
+import { tutorRetrievalScope } from './tutor-context-policy';
+import { accountDataLockKey } from '../common/account-data-lock';
 
 const HISTORY_LIMIT = 12;
 const CONTEXT_LIMIT = 5;
@@ -179,6 +182,7 @@ export class TutorService {
     private readonly usage: UsageService,
     private readonly experienceSessions: ExperienceSessionService,
     private readonly learnerPassport: LearnerPassportService,
+    private readonly learningDeletions: LearningDataDeletionService,
   ) {}
 
   async createSession(
@@ -189,15 +193,19 @@ export class TutorService {
     if (dto.focusConceptId) {
       focusName = await this.requireOwnedConcept(userId, dto.focusConceptId);
     }
-    await this.assertOwnedTutorReferences(userId, dto);
     const title = this.sessionTitle(dto.title, dto.objective, focusName);
-    const session = await this.prisma.tutorSession.create({
-      data: {
-        userId,
-        focusConceptId: dto.focusConceptId ?? null,
-        languageProfileId: dto.languageProfileId ?? null,
-        title,
-      },
+    const session = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await this.assertOwnedTutorReferences(userId, dto, tx);
+      return tx.tutorSession.create({
+        data: {
+          userId,
+          focusConceptId: dto.focusConceptId ?? null,
+          languageProfileId: dto.languageProfileId ?? null,
+          title,
+        },
+      });
     });
     const experience = await this.ensureExperience(userId, session, {
       objective: dto.objective,
@@ -241,9 +249,17 @@ export class TutorService {
       mastery: target.mastery,
       level: target.level,
     };
-    const { block, citations } = await this.retrieveContext(userId, target.name);
+    // A focused concept is not permission to search every document the learner
+    // owns. Notes only enter Tutor through an explicit document/collection
+    // context; this proactive opener therefore uses the concept itself.
+    const block = '';
+    const citations: Citation[] = [];
     const focusLocale = await resolveLocale(this.prisma, userId);
-    const passport = await this.loadPassportContext(userId, teacherPolicy.automaticAdaptation);
+    const passport = await this.loadPassportContext(
+      userId,
+      teacherPolicy.automaticAdaptation,
+      false,
+    );
     const opening = await this.callLlm([
       {
         role: 'system',
@@ -350,7 +366,11 @@ export class TutorService {
         `and ask what they would like to learn or work on today. 1-2 sentences.`;
 
     const resumeLocale = await resolveLocale(this.prisma, userId);
-    const passport = await this.loadPassportContext(userId, teacherPolicy.automaticAdaptation);
+    const passport = await this.loadPassportContext(
+      userId,
+      teacherPolicy.automaticAdaptation,
+      false,
+    );
     const opening = await this.callLlm([
       {
         role: 'system',
@@ -432,34 +452,10 @@ export class TutorService {
   }
 
   async deleteSession(userId: string, id: string): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      const owned = await tx.tutorSession.findFirst({
-        where: { id, userId },
-        select: { id: true },
-      });
-      if (!owned) {
-        throw new NotFoundException('Tutor session not found.');
-      }
-
-      // A TutorSession FK is SetNull. Explicitly terminalize its resumable UX
-      // envelopes before deleting the domain session so no active/paused row
-      // survives with a dead route after the FK is cleared.
-      await tx.experienceSession.updateMany({
-        where: {
-          userId,
-          tutorSessionId: id,
-          status: { in: ['active', 'paused'] },
-        },
-        data: {
-          status: 'abandoned',
-          pausedAt: null,
-          resumeTarget: Prisma.JsonNull,
-          nextBestAction: Prisma.JsonNull,
-          version: { increment: 1 },
-        },
-      });
-      await tx.tutorSession.delete({ where: { id } });
-    });
+    const result = await this.learningDeletions.deleteTutorSession(userId, id);
+    if (!result.deleted && result.alreadyDeleted) {
+      throw new NotFoundException('Tutor session not found.');
+    }
   }
 
   async sendMessage(
@@ -501,7 +497,17 @@ export class TutorService {
       }
     }
 
-    const passport = await this.loadPassportContext(userId, adaptationEnabled);
+    const hasExplicitLanguageContext = Boolean(
+      session.languageProfileId ||
+      experience.activeContexts.items.some(
+        (item) => item.kind === 'language' && item.referenceId,
+      ),
+    );
+    const passport = await this.loadPassportContext(
+      userId,
+      adaptationEnabled,
+      hasExplicitLanguageContext,
+    );
     // Language steering: language-practice sessions get the Professor role.
     const language = await this.loadLanguage(
       userId,
@@ -569,28 +575,24 @@ export class TutorService {
 
     // Bias retrieval toward the focused concept when present.
     const query = focus ? `${focus.name}. ${content}` : content;
-    const directDocumentIds = experience.activeContexts.items
-      .filter((item) => item.kind === 'document' && item.referenceId)
-      .map((item) => item.referenceId as string);
-    const collectionIds = experience.activeContexts.items
-      .filter((item) => item.kind === 'document-collection' && item.referenceId)
-      .map((item) => item.referenceId as string);
-    const collectionDocuments = collectionIds.length > 0
+    const retrievalScope = tutorRetrievalScope(experience.activeContexts.items);
+    const collectionDocuments = retrievalScope.collectionIds.length > 0
       ? await this.prisma.document.findMany({
-          where: { userId, deletedAt: null, collectionId: { in: collectionIds } },
+          where: {
+            userId,
+            deletedAt: null,
+            collectionId: { in: retrievalScope.collectionIds },
+          },
           select: { id: true },
         })
       : [];
     const documentIds = [...new Set([
-      ...directDocumentIds,
+      ...retrievalScope.documentIds,
       ...collectionDocuments.map((document) => document.id),
     ])];
-    const hasDocumentScope = directDocumentIds.length > 0 || collectionIds.length > 0;
-    const { block, citations } = await this.retrieveContext(
-      userId,
-      query,
-      hasDocumentScope ? documentIds : undefined,
-    );
+    const { block, citations } = retrievalScope.explicit
+      ? await this.retrieveContext(userId, query, documentIds)
+      : { block: '', citations: [] as Citation[] };
     const researchBlock = await this.researchContextBlock(userId, experience.activeContexts.items);
     const activeContextLabels = experience.activeContexts.items
       .filter((item) => item.visibility !== 'hidden')
@@ -792,9 +794,9 @@ export class TutorService {
         ?? null,
       interfaceLanguage: passport?.interfaceLanguage ?? null,
       supportLanguage:
-        passport?.explanationLanguage
+        passport?.interfaceLanguage
+        ?? passport?.explanationLanguage
         ?? passport?.teachingLanguage
-        ?? passport?.interfaceLanguage
         ?? passport?.nativeOrPrimaryLanguage
         ?? null,
       nativeLanguage: profile.nativeLanguage ?? passport?.nativeOrPrimaryLanguage ?? null,
@@ -945,10 +947,13 @@ export class TutorService {
   private async loadPassportContext(
     userId: string,
     includeAdaptiveSignals: boolean,
+    includeLanguageLearningContext: boolean,
   ): Promise<LearnerPassportTutorContext> {
     // Passport state is authoritative for declared adaptation. Failing closed
     // avoids silently replacing a persisted age band with an unadapted default.
-    return this.learnerPassport.tutorContext(userId, includeAdaptiveSignals);
+    return this.learnerPassport.tutorContext(userId, includeAdaptiveSignals, {
+      includeLanguageLearningContext,
+    });
   }
 
   /**
@@ -1167,6 +1172,7 @@ export class TutorService {
   private async assertOwnedTutorReferences(
     userId: string,
     dto: CreateTutorSessionDto,
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<void> {
     const contexts = dto.activeContexts ?? [];
     // Validate the bounded, secret-free context contract before persisting the
@@ -1189,13 +1195,13 @@ export class TutorService {
     const exams = unique(ids('exam'));
     const researchSessions = unique(ids('research'));
     const checks = await Promise.all([
-      documents.length ? this.prisma.document.count({ where: { userId, id: { in: documents }, deletedAt: null } }) : 0,
-      collections.length ? this.prisma.collection.count({ where: { userId, id: { in: collections } } }) : 0,
-      concepts.length ? this.prisma.concept.count({ where: { userId, id: { in: concepts } } }) : 0,
-      goals.length ? this.prisma.goal.count({ where: { userId, id: { in: goals } } }) : 0,
-      languages.length ? this.prisma.languageProfile.count({ where: { userId, id: { in: languages } } }) : 0,
-      exams.length ? this.prisma.exam.count({ where: { userId, id: { in: exams } } }) : 0,
-      researchSessions.length ? this.prisma.experienceSession.count({ where: { userId, id: { in: researchSessions }, type: 'research' } }) : 0,
+      documents.length ? db.document.count({ where: { userId, id: { in: documents }, deletedAt: null } }) : 0,
+      collections.length ? db.collection.count({ where: { userId, id: { in: collections } } }) : 0,
+      concepts.length ? db.concept.count({ where: { userId, id: { in: concepts } } }) : 0,
+      goals.length ? db.goal.count({ where: { userId, id: { in: goals } } }) : 0,
+      languages.length ? db.languageProfile.count({ where: { userId, id: { in: languages } } }) : 0,
+      exams.length ? db.exam.count({ where: { userId, id: { in: exams } } }) : 0,
+      researchSessions.length ? db.experienceSession.count({ where: { userId, id: { in: researchSessions }, type: 'research' } }) : 0,
     ]);
     if (
       checks[0] !== documents.length || checks[1] !== collections.length ||

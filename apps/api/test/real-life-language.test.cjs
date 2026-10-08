@@ -22,6 +22,8 @@ const profile = {
 
 function harness() {
   const sessions = new Map();
+  const attempts = [];
+  const finalizedUnits = [];
   let nextId = 1;
   let conversationStarts = 0;
   const toSession = (request, id = `experience-${nextId++}`) => ({
@@ -87,21 +89,38 @@ function harness() {
       },
     },
     card: { count: async () => 0 },
+    exerciseAttempt: {
+      findMany: async ({ where }) => attempts
+        .filter((attempt) => attempt.userId === where.userId && attempt.lessonId === where.lessonId)
+        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime()),
+    },
   };
   const languages = {
     requireOwned: async (userId, id) => {
       if (userId !== profile.userId || id !== profile.id) throw new Error('not found');
       return profile;
     },
+    promptRoles: async () => ({
+      interfaceLanguage: 'fr', supportLanguage: 'fr', targetLanguage: 'English',
+    }),
+    ensureVocabDeck: async () => 'deck-1',
   };
+  const lessonExercises = [
+    { type: 'qcm', question: 'Choose.', answer: 'Hello', options: ['Hello', 'Bye', 'Thanks'] },
+    { type: 'open', question: 'Introduce yourself.', answer: 'My name is…' },
+    { type: 'exercise', question: 'Reply politely.', answer: 'Nice to meet you.' },
+    { type: 'case', question: 'Meet a colleague.', answer: 'Greet and introduce yourself.' },
+  ];
   const lessons = {
     generate: async () => ({
       id: 'lesson-1', languageProfileId: profile.id, topic: 'First contact',
       objective: 'Introduce yourself in a real exchange.', sourceDocumentId: null,
+      exercises: lessonExercises,
     }),
     get: async () => ({
       id: 'lesson-1', languageProfileId: profile.id, topic: 'First contact',
       objective: 'Introduce yourself in a real exchange.', sourceDocumentId: null,
+      exercises: lessonExercises,
     }),
   };
   const conversations = {
@@ -125,8 +144,17 @@ function harness() {
     { extract: async () => ({ cards: [] }) },
     experiences,
     { generate: async () => ({ text: '{}' }) },
+    {
+      finalizeLanguageUnit: async (_userId, input) => {
+        finalizedUnits.push(input);
+        return { id: 'completion-1' };
+      },
+    },
   );
-  return { service, sessions, experiences, conversationStarts: () => conversationStarts };
+  return {
+    service, sessions, experiences, attempts, finalizedUnits,
+    conversationStarts: () => conversationStarts,
+  };
 }
 
 test('course from zero keeps the complete A1→B1 spine and distinguishes declared/evaluated levels', async () => {
@@ -216,8 +244,8 @@ test('a paused World Mission resumes the same Tutor context and keeps its repair
   assert.equal(conversationStarts(), 1);
 });
 
-test('structured lesson progression is ordered and completing it does not validate a Can-Do', async () => {
-  const { service } = harness();
+test('structured lesson requires evaluated controlled evidence before unit finalization', async () => {
+  const { service, attempts, finalizedUnits } = harness();
   await service.startCourse('user-1', 'language-1', {
     startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
   });
@@ -230,11 +258,32 @@ test('structured lesson progression is ordered and completing it does not valida
   );
   let course = started.course;
   assert.ok(outline.stages.some((stage) => stage.status === 'skipped'));
-  for (const stage of outline.stages.filter((item) => item.status !== 'skipped')) {
+  const stages = outline.stages.filter((item) => item.status !== 'skipped');
+  for (const stage of stages.slice(0, stages.findIndex((item) => item.kind === 'verification'))) {
+    course = await service.advanceLesson('user-1', 'language-1', started.session.id, outline.lessonId, stage.kind);
+  }
+  await assert.rejects(
+    () => service.advanceLesson('user-1', 'language-1', started.session.id, outline.lessonId, 'verification'),
+    /controlled exercise/i,
+  );
+  for (let index = 0; index < 4; index += 1) {
+    attempts.push({
+      id: `attempt-${index}`, userId: 'user-1', lessonId: outline.lessonId,
+      exerciseIndex: index, correct: true, score: 1,
+      feedback: `Evaluated answer ${index + 1}.`, correction: 'Correct.',
+      createdAt: new Date(`2026-09-14T08:1${index}:00.000Z`),
+    });
+  }
+  const verificationIndex = stages.findIndex((item) => item.kind === 'verification');
+  for (const stage of stages.slice(verificationIndex)) {
     course = await service.advanceLesson('user-1', 'language-1', started.session.id, outline.lessonId, stage.kind);
   }
   assert.equal(course.progress.completedUnits, 1);
-  assert.equal(course.canDoMap.every((item) => item.status === 'not-evaluated'), true);
+  const unitCanDoIds = new Set(shared.RLLE_CURRICULUM.find((item) => item.id === outline.unitId).canDoIds);
+  assert.equal(course.canDoMap.filter((item) => unitCanDoIds.has(item.id)).every((item) => item.status === 'validated'), true);
+  assert.equal(finalizedUnits.length, 1);
+  assert.equal(finalizedUnits[0].unitId, outline.unitId);
+  assert.ok(finalizedUnits[0].evidenceIds.length > 0);
 });
 
 test('Mistake Memory moves observed → repeated → confirmed using actual distinct evidence', () => {

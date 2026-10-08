@@ -33,12 +33,14 @@ export function Button({
   disabled,
   busy,
   variant = 'primary',
+  testID,
 }: {
   label: string;
   onPress: () => void;
   disabled?: boolean;
   busy?: boolean;
   variant?: 'primary' | 'ghost' | 'danger';
+  testID?: string;
 }) {
   return (
     <DesignSystemButton
@@ -48,6 +50,7 @@ export function Button({
       loading={busy}
       variant={variant}
       fullWidth
+      testID={testID}
     />
   );
 }

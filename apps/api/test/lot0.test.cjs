@@ -170,6 +170,140 @@ test('experience sessions: foreign domain links are rejected', async () => {
   assert.equal(prisma.rows.length, 0);
 });
 
+test('experience sessions: source updates lock, revalidate, and cannot race a purge', async () => {
+  const prisma = inMemoryPrisma();
+  const service = new ExperienceSessionService(prisma);
+  const session = await service.create('u1', { type: 'learning' });
+  const availableDocuments = new Set(['doc-ok', 'doc-race']);
+  const events = [];
+  const updateMany = prisma.experienceSession.updateMany;
+  let lockBarrier = null;
+  let notifyLockWait = null;
+
+  prisma.$transaction = async (operation) => {
+    events.push('transaction:start');
+    const tx = {
+      ...prisma,
+      experienceSession: {
+        ...prisma.experienceSession,
+        updateMany: async (args) => {
+          events.push('session:write');
+          return updateMany(args);
+        },
+      },
+      document: {
+        ...prisma.document,
+        count: async ({ where }) => {
+          const ids = where.id.in;
+          events.push(`sources:validate:${ids.join(',')}`);
+          return ids.filter((id) => availableDocuments.has(id)).length;
+        },
+      },
+      async $executeRaw(_query, lockKey) {
+        events.push(`lock:wait:${lockKey}`);
+        if (lockBarrier) {
+          notifyLockWait?.();
+          await lockBarrier;
+        }
+        events.push(`lock:acquired:${lockKey}`);
+        return 1;
+      },
+    };
+    try {
+      const result = await operation(tx);
+      events.push('transaction:commit');
+      return result;
+    } catch (error) {
+      events.push('transaction:rollback');
+      throw error;
+    }
+  };
+
+  const updated = await service.updateState('u1', session.id, {
+    sourceReferences: [{ kind: 'document', id: 'doc-ok', title: 'Available source' }],
+  });
+  assert.deepEqual(updated.sourceReferences, [
+    { kind: 'document', id: 'doc-ok', title: 'Available source' },
+  ]);
+  assert.deepEqual(events, [
+    'transaction:start',
+    'lock:wait:account-data:u1',
+    'lock:acquired:account-data:u1',
+    'sources:validate:doc-ok',
+    'session:write',
+    'transaction:commit',
+  ]);
+
+  events.length = 0;
+  let releaseOwnerLock;
+  lockBarrier = new Promise((resolve) => { releaseOwnerLock = resolve; });
+  const lockWaited = new Promise((resolve) => { notifyLockWait = resolve; });
+  const racedUpdate = service.updateState('u1', session.id, {
+    sourceReferences: [{ kind: 'document', id: 'doc-race', title: 'Purged source' }],
+  });
+  const raceState = await Promise.race([
+    lockWaited.then(() => 'waiting-for-owner-lock'),
+    racedUpdate.then(() => 'updated-without-lock', () => 'rejected-before-lock'),
+  ]);
+  assert.equal(raceState, 'waiting-for-owner-lock');
+
+  events.push('purge:commit');
+  availableDocuments.delete('doc-race');
+  releaseOwnerLock();
+  await assert.rejects(
+    racedUpdate,
+    (error) => error instanceof BadRequestException,
+  );
+  assert.deepEqual(events, [
+    'transaction:start',
+    'lock:wait:account-data:u1',
+    'purge:commit',
+    'lock:acquired:account-data:u1',
+    'sources:validate:doc-race',
+    'transaction:rollback',
+  ]);
+  const unchanged = await service.get('u1', session.id);
+  assert.equal(unchanged.version, updated.version);
+  assert.deepEqual(unchanged.sourceReferences, updated.sourceReferences);
+
+  events.length = 0;
+  availableDocuments.add('doc-context-race');
+  lockBarrier = new Promise((resolve) => { releaseOwnerLock = resolve; });
+  const contextLockWaited = new Promise((resolve) => { notifyLockWait = resolve; });
+  const racedContextUpdate = service.updateState('u1', session.id, {
+    activeContexts: [{
+      id: 'document:doc-context-race',
+      kind: 'document',
+      scope: 'active-object',
+      referenceId: 'doc-context-race',
+      priority: 90,
+      visibility: 'visible',
+    }],
+  });
+  assert.equal(await Promise.race([
+    contextLockWaited.then(() => 'waiting-for-owner-lock'),
+    racedContextUpdate.then(() => 'updated-without-lock', () => 'rejected-before-lock'),
+  ]), 'waiting-for-owner-lock');
+  events.push('purge:commit');
+  availableDocuments.delete('doc-context-race');
+  releaseOwnerLock();
+  await assert.rejects(
+    racedContextUpdate,
+    (error) => error instanceof BadRequestException,
+  );
+  assert.deepEqual(events, [
+    'transaction:start',
+    'lock:wait:account-data:u1',
+    'purge:commit',
+    'lock:acquired:account-data:u1',
+    'sources:validate:doc-context-race',
+    'transaction:rollback',
+  ]);
+  const contextUnchanged = await service.get('u1', session.id);
+  assert.equal(contextUnchanged.version, updated.version);
+  assert.equal(contextUnchanged.activeContexts.items.length, 0);
+});
+
 test('experience sessions: public keys cannot claim server namespaces and collisions are strict', async () => {
   const prisma = inMemoryPrisma();
   const service = new ExperienceSessionService(prisma);
@@ -630,8 +764,11 @@ function inMemoryPrisma() {
       return found.slice(0, take);
     },
   };
-  const ownedDelegate = { findFirst: async () => ({ id: 'owned' }) };
-  return {
+  const ownedDelegate = {
+    findFirst: async () => ({ id: 'owned' }),
+    count: async () => 1,
+  };
+  const prisma = {
     rows,
     experienceSession,
     tutorSession: ownedDelegate,
@@ -640,7 +777,10 @@ function inMemoryPrisma() {
     lesson: ownedDelegate,
     goal: ownedDelegate,
     languageProfile: ownedDelegate,
+    async $executeRaw() { return 1; },
   };
+  prisma.$transaction = async (operation) => operation(prisma);
+  return prisma;
 }
 
 function walk(directory) {

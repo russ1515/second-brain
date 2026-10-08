@@ -17,15 +17,21 @@ interface WorkspaceSourceUpdate {
   sources: WorkspaceSourceReference[];
 }
 
+type LearningDataClient = PrismaService | Prisma.TransactionClient;
+
 interface SessionDeletionPlan {
   preview: LearningDeletionPreview;
   selectedSessionId: string | null;
+  selectedTutorSessionId: string | null;
   sessionIds: string[];
   lessonIds: string[];
   tutorSessionIds: string[];
   studySessionIds: string[];
   homeworkIds: string[];
   documentIds: string[];
+  completionIds: string[];
+  cardIds: string[];
+  candidateGoalIds: string[];
   reviewableIds: string[];
   recommendationIds: string[];
   workspaceUpdates: WorkspaceSourceUpdate[];
@@ -42,7 +48,7 @@ const EMPTY_COUNTS = (): LearningDeletionCounts => ({
   homework: 0,
   reviewItems: 0,
   cards: 0,
-  documentsMovedToTrash: 0,
+  documentsDeleted: 0,
   workspaceReferences: 0,
   recommendations: 0,
   calendarEvents: 0,
@@ -74,8 +80,35 @@ export class LearningDataDeletionService {
       where: { id, userId },
       select: { id: true },
     });
-    if (!selected) return { deleted: false, alreadyDeleted: true, preview: null };
+    if (!selected) {
+      await this.invalidateUserViews(userId, true);
+      return { deleted: false, alreadyDeleted: true, preview: null };
+    }
     return this.execute(userId, await this.planSession(userId, id));
+  }
+
+  /** Domain-specific Tutor deletion enters the same authoritative purge path
+   * as Home/Learn instead of merely abandoning its resumable envelope. */
+  async deleteTutorSession(userId: string, id: string): Promise<LearningDeletionResult> {
+    const tutor = await this.prisma.tutorSession.findFirst({
+      where: { id, userId },
+      select: { id: true, title: true },
+    });
+    if (!tutor) {
+      await this.invalidateUserViews(userId, true);
+      return { deleted: false, alreadyDeleted: true, preview: null };
+    }
+    const plan = await this.buildPlan(userId, {
+      target: 'experience-session',
+      targetId: id,
+      title: tutor.title,
+      selectedSessionId: null,
+      selectedTutorSessionId: id,
+      lessonIds: [],
+      tutorSessionIds: [id],
+      studySessionIds: [],
+    });
+    return this.execute(userId, plan);
   }
 
   async deleteLesson(userId: string, id: string): Promise<LearningDeletionResult> {
@@ -83,7 +116,10 @@ export class LearningDataDeletionService {
       where: { id, userId },
       select: { id: true },
     });
-    if (!selected) return { deleted: false, alreadyDeleted: true, preview: null };
+    if (!selected) {
+      await this.invalidateUserViews(userId, true);
+      return { deleted: false, alreadyDeleted: true, preview: null };
+    }
     return this.execute(userId, await this.planLesson(userId, id));
   }
 
@@ -106,7 +142,6 @@ export class LearningDataDeletionService {
       // Linked sessions are detached, not deleted. The preview reports only
       // destructive effects so completed learning is never presented as lost.
       counts: { ...EMPTY_COUNTS(), recommendations },
-      reversibleDocuments: false,
       sharedDocumentsPreserved: 0,
     };
   }
@@ -123,6 +158,10 @@ export class LearningDataDeletionService {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const owned = await tx.goal.findFirst({ where: { id, userId }, select: { id: true } });
       if (!owned) return;
+      const affectedLinks = await tx.learningGoalLink.findMany({
+        where: { userId, goalId: id },
+        select: { experienceSessionId: true },
+      });
       await tx.experienceSession.updateMany({
         where: { userId, goalId: id },
         data: { goalId: null, version: { increment: 1 } },
@@ -139,6 +178,29 @@ export class LearningDataDeletionService {
       // Goal removal intentionally preserves completed lessons, documents,
       // concepts and learning evidence.
       await tx.goal.deleteMany({ where: { id, userId } });
+      for (const { experienceSessionId } of affectedLinks) {
+        // Deleting a secondary goal must not silently replace the learner's
+        // explicit primary goal with the oldest remaining link. Only promote
+        // the oldest remaining goal when the deleted goal actually left the
+        // learning journey without a primary.
+        const currentPrimary = await tx.learningGoalLink.findFirst({
+          where: { userId, experienceSessionId, isPrimary: true },
+        });
+        const replacement = currentPrimary ?? await tx.learningGoalLink.findFirst({
+          where: { userId, experienceSessionId },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (replacement && !currentPrimary) {
+          await tx.learningGoalLink.update({
+            where: { id: replacement.id },
+            data: { isPrimary: true },
+          });
+        }
+        await tx.experienceSession.updateMany({
+          where: { id: experienceSessionId, userId },
+          data: { goalId: replacement?.goalId ?? null, version: { increment: 1 } },
+        });
+      }
     });
     await this.invalidateUserViews(userId, false);
     return { deleted: true, alreadyDeleted: false, preview };
@@ -152,6 +214,7 @@ export class LearningDataDeletionService {
       targetId: id,
       title: session.title,
       selectedSessionId: id,
+      selectedTutorSessionId: null,
       lessonIds: session.lessonId ? [session.lessonId] : [],
       tutorSessionIds: session.tutorSessionId ? [session.tutorSessionId] : [],
       studySessionIds: session.studySessionId ? [session.studySessionId] : [],
@@ -166,6 +229,7 @@ export class LearningDataDeletionService {
       targetId: id,
       title: lesson.topic,
       selectedSessionId: null,
+      selectedTutorSessionId: null,
       lessonIds: [id],
       tutorSessionIds: [],
       studySessionIds: [],
@@ -179,14 +243,16 @@ export class LearningDataDeletionService {
       targetId: string;
       title: string | null;
       selectedSessionId: string | null;
+      selectedTutorSessionId: string | null;
       lessonIds: string[];
       tutorSessionIds: string[];
       studySessionIds: string[];
     },
+    db: LearningDataClient = this.prisma,
   ): Promise<SessionDeletionPlan> {
     const lessonIds = new Set(seed.lessonIds);
     if (seed.tutorSessionIds.length) {
-      const generated = await this.prisma.lesson.findMany({
+      const generated = await db.lesson.findMany({
         where: { userId, tutorSessionId: { in: seed.tutorSessionIds } },
         select: { id: true },
       });
@@ -196,7 +262,7 @@ export class LearningDataDeletionService {
     // Study sessions derived from a lesson are exclusive activities. A study
     // session selected on its own does not delete its referenced lesson.
     const derivedStudy = lessonIds.size
-      ? await this.prisma.studySession.findMany({
+      ? await db.studySession.findMany({
           where: { userId, lessonId: { in: [...lessonIds] } },
           select: { id: true },
         })
@@ -207,31 +273,49 @@ export class LearningDataDeletionService {
     ]);
 
     const lessons = lessonIds.size
-      ? await this.prisma.lesson.findMany({
+      ? await db.lesson.findMany({
           where: { userId, id: { in: [...lessonIds] } },
-          select: { id: true, sourceDocumentId: true },
+          select: { id: true, sourceDocumentId: true, tutorSessionId: true },
         })
       : [];
     const existingLessonIds = lessons.map((row) => row.id);
 
+    const tutorSessionIds = new Set(seed.tutorSessionIds);
+    for (const tutorSessionId of new Set(
+      lessons.map((lesson) => lesson.tutorSessionId).filter((id): id is string => Boolean(id)),
+    )) {
+      if (tutorSessionIds.has(tutorSessionId)) continue;
+      const survivingLessons = await db.lesson.count({
+        where: {
+          userId,
+          tutorSessionId,
+          ...(existingLessonIds.length ? { id: { notIn: existingLessonIds } } : {}),
+        },
+      });
+      if (survivingLessons === 0) tutorSessionIds.add(tutorSessionId);
+    }
+
     const sessionWhere: Prisma.ExperienceSessionWhereInput[] = [];
     if (seed.selectedSessionId) sessionWhere.push({ id: seed.selectedSessionId });
     if (existingLessonIds.length) sessionWhere.push({ lessonId: { in: existingLessonIds } });
-    if (seed.tutorSessionIds.length) sessionWhere.push({ tutorSessionId: { in: seed.tutorSessionIds } });
+    if (tutorSessionIds.size) sessionWhere.push({ tutorSessionId: { in: [...tutorSessionIds] } });
     if (studySessionIds.size) sessionWhere.push({ studySessionId: { in: [...studySessionIds] } });
     const linkedSessions = sessionWhere.length
-      ? await this.prisma.experienceSession.findMany({
+      ? await db.experienceSession.findMany({
           where: { userId, OR: sessionWhere },
-          select: { id: true },
+          select: { id: true, goalId: true },
         })
       : [];
     const sessionIds = [...new Set(linkedSessions.map((row) => row.id))];
+    const legacySessionGoalIds = linkedSessions
+      .map((row) => row.goalId)
+      .filter((goalId): goalId is string => Boolean(goalId));
 
     const sourceDocumentIds = [...new Set(lessons
       .map((row) => row.sourceDocumentId)
       .filter((value): value is string => Boolean(value)))];
     const documents = sourceDocumentIds.length
-      ? await this.prisma.document.findMany({
+      ? await db.document.findMany({
           where: { userId, id: { in: sourceDocumentIds } },
           select: { id: true, sourceRef: true, contentType: true },
         })
@@ -241,11 +325,11 @@ export class LearningDataDeletionService {
     // continuity and must not silently start pointing at a trashed document.
     const [survivingSessions, workspaces] = sourceDocumentIds.length
       ? await Promise.all([
-          this.prisma.experienceSession.findMany({
+          db.experienceSession.findMany({
             where: { userId, ...(sessionIds.length ? { id: { notIn: sessionIds } } : {}) },
-            select: { documentId: true, sourceReferences: true },
+            select: { documentId: true, sourceReferences: true, activeContexts: true },
           }),
-          this.prisma.academicWorkspace.findMany({
+          db.academicWorkspace.findMany({
             where: { userId },
             select: { sources: true },
           }),
@@ -260,7 +344,7 @@ export class LearningDataDeletionService {
       const isGeneratedForDeletedLesson =
         document.contentType === 'LESSON_AI' &&
         Boolean(originatingLessonId && lessonIds.has(originatingLessonId));
-      const otherReferences = await this.prisma.lesson.count({
+      const otherReferences = await db.lesson.count({
         where: {
           userId,
           sourceDocumentId: document.id,
@@ -269,7 +353,8 @@ export class LearningDataDeletionService {
       });
       const referencedBySurvivingSession = survivingSessions.some((session) =>
         session.documentId === document.id ||
-        jsonContainsDocumentReference(session.sourceReferences, document.id),
+        jsonContainsDocumentReference(session.sourceReferences, document.id) ||
+        contextContainsDocumentReference(session.activeContexts, document.id),
       );
       const referencedByWorkspace = workspaces.some((workspace) =>
         workspaceContainsDocumentReference(workspace.sources, document.id),
@@ -287,13 +372,41 @@ export class LearningDataDeletionService {
     }
 
     const homeworkRows = existingLessonIds.length
-      ? await this.prisma.homework.findMany({
+      ? await db.homework.findMany({
           where: { userId, lessonId: { in: existingLessonIds } },
           select: { id: true },
         })
       : [];
     const homeworkIds = homeworkRows.map((row) => row.id);
-    const reviewables = await this.prisma.reviewable.findMany({
+    const completionRows = sessionIds.length || existingLessonIds.length
+      ? await db.learningCompletion.findMany({
+          where: {
+            userId,
+            OR: [
+              ...(existingLessonIds.length ? [{ lessonId: { in: existingLessonIds } }] : []),
+              ...(sessionIds.length ? [{ experienceSessionId: { in: sessionIds } }] : []),
+            ],
+          },
+          select: {
+            id: true,
+            cards: { select: { cardId: true } },
+            reviewables: { select: { reviewableId: true } },
+            goals: { select: { goalId: true } },
+          },
+        })
+      : [];
+    const completionIds = completionRows.map((row) => row.id);
+    const completionCardIds = completionRows.flatMap((row) => row.cards.map((link) => link.cardId));
+    const completionReviewableIds = completionRows.flatMap((row) => row.reviewables.map((link) => link.reviewableId));
+    const canonicalGoalIds = completionRows.flatMap((row) => row.goals.map((link) => link.goalId));
+    const sessionGoalIds = sessionIds.length
+      ? (await db.learningGoalLink.findMany({
+          where: { userId, experienceSessionId: { in: sessionIds } },
+          select: { goalId: true },
+        })).map((link) => link.goalId)
+      : [];
+
+    const reviewables = await db.reviewable.findMany({
       where: {
         userId,
         OR: [
@@ -312,20 +425,33 @@ export class LearningDataDeletionService {
       select: { id: true },
     });
 
-    const [tutorMessages, exerciseAttempts, cards] = await Promise.all([
-      seed.tutorSessionIds.length
-        ? this.prisma.tutorMessage.count({ where: { sessionId: { in: seed.tutorSessionIds } } })
+    const [tutorMessages, exerciseAttempts, documentCards] = await Promise.all([
+      tutorSessionIds.size
+        ? db.tutorMessage.count({ where: { sessionId: { in: [...tutorSessionIds] } } })
         : 0,
       existingLessonIds.length
-        ? this.prisma.exerciseAttempt.count({ where: { userId, lessonId: { in: existingLessonIds } } })
+        ? db.exerciseAttempt.count({ where: { userId, lessonId: { in: existingLessonIds } } })
         : 0,
       documentIds.length
-        ? this.prisma.card.count({ where: { userId, sourceDocumentId: { in: documentIds } } })
-        : 0,
+        ? db.card.findMany({
+            where: { userId, sourceDocumentId: { in: documentIds } },
+            select: { id: true },
+          })
+        : [],
     ]);
+    const cardIds = [...new Set([...completionCardIds, ...documentCards.map((card) => card.id)])];
+    const reviewableIds = [...new Set([
+      ...reviewables.map((row) => row.id),
+      ...completionReviewableIds,
+    ])];
+    const candidateGoalIds = [...new Set([
+      ...canonicalGoalIds,
+      ...sessionGoalIds,
+      ...legacySessionGoalIds,
+    ])];
 
     const recommendationRows = documentIds.length || existingLessonIds.length
-      ? await this.prisma.recommendation.findMany({
+      ? await db.recommendation.findMany({
           where: {
             userId,
             OR: [
@@ -339,9 +465,9 @@ export class LearningDataDeletionService {
       : [];
 
     const { updates: workspaceUpdates, removed: workspaceReferences } =
-      await this.workspaceSourceUpdates(userId, documentIds);
+      await this.workspaceSourceUpdates(userId, documentIds, db);
     const detachedWorkspaceIds = sessionIds.length
-      ? (await this.prisma.academicWorkspace.findMany({
+      ? (await db.academicWorkspace.findMany({
           where: { userId, experienceSessionId: { in: sessionIds } },
           select: { id: true },
         })).map((row) => row.id)
@@ -351,6 +477,7 @@ export class LearningDataDeletionService {
       sessionIds,
       existingLessonIds,
       documentIds,
+      db,
     );
 
     const counts: LearningDeletionCounts = {
@@ -361,9 +488,9 @@ export class LearningDataDeletionService {
       studySessions: studySessionIds.size,
       exerciseAttempts,
       homework: homeworkIds.length,
-      reviewItems: reviewables.length,
-      cards,
-      documentsMovedToTrash: documentIds.length,
+      reviewItems: reviewableIds.length,
+      cards: cardIds.length,
+      documentsDeleted: documentIds.length,
       workspaceReferences: workspaceReferences + detachedWorkspaceIds.length + remainingSessionSourceUpdates.length,
       recommendations: recommendationRows.length,
     };
@@ -373,17 +500,20 @@ export class LearningDataDeletionService {
         id: seed.targetId,
         title: seed.title,
         counts,
-        reversibleDocuments: documentIds.length > 0,
         sharedDocumentsPreserved,
       },
       selectedSessionId: seed.selectedSessionId,
+      selectedTutorSessionId: seed.selectedTutorSessionId,
       sessionIds,
       lessonIds: existingLessonIds,
-      tutorSessionIds: seed.tutorSessionIds,
+      tutorSessionIds: [...tutorSessionIds],
       studySessionIds: [...studySessionIds],
       homeworkIds,
       documentIds,
-      reviewableIds: reviewables.map((row) => row.id),
+      completionIds,
+      cardIds,
+      candidateGoalIds,
+      reviewableIds,
       recommendationIds: recommendationRows.map((row) => row.id),
       workspaceUpdates,
       detachedWorkspaceIds,
@@ -392,99 +522,210 @@ export class LearningDataDeletionService {
   }
 
   private async execute(userId: string, plan: SessionDeletionPlan): Promise<LearningDeletionResult> {
-    // Remove vectors first. This operation is idempotent and no database row is
-    // hidden until every external index accepted the deletion.
-    for (const documentId of plan.documentIds) {
-      await this.qdrant.deleteByDocument(DOCUMENT_CHUNKS_COLLECTION, documentId);
+    let committedPlan: SessionDeletionPlan | null;
+    try {
+      // Commit a durable visibility barrier before touching Qdrant. If the
+      // external purge succeeds but PostgreSQL later fails to commit, the
+      // document remains hidden in `deleting` state instead of becoming an
+      // active source whose vectors have disappeared. Retrying the same
+      // deletion is safe because the target learning record still exists and
+      // Qdrant document deletion is idempotent.
+      await this.prisma.$transaction(async (tx) => {
+        const lockKey = accountDataLockKey(userId);
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+        const stagedPlan = await this.rebuildPlanForExecution(userId, plan, tx);
+        if (!stagedPlan?.documentIds.length) return;
+        await tx.document.updateMany({
+          where: { userId, id: { in: stagedPlan.documentIds } },
+          data: {
+            deletedAt: new Date(),
+            status: 'processing',
+            stage: 'deleting',
+            error: null,
+          },
+        });
+      }, { maxWait: 10_000, timeout: 120_000 });
+
+      committedPlan = await this.prisma.$transaction(async (tx): Promise<SessionDeletionPlan | null> => {
+        // The lock is deliberately held across the fresh dependency read,
+        // PostgreSQL purge and idempotent Qdrant purge. All learning writers
+        // use the same owner lock, so no child/reference can be inserted after
+        // the final dependency snapshot and survive detached.
+        const lockKey = accountDataLockKey(userId);
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+
+        const freshPlan = await this.rebuildPlanForExecution(userId, plan, tx);
+        if (!freshPlan) return null;
+
+        if (freshPlan.documentIds.length) {
+          await tx.document.updateMany({
+            where: { userId, id: { in: freshPlan.documentIds } },
+            data: {
+              deletedAt: new Date(),
+              status: 'processing',
+              stage: 'deleting',
+              error: null,
+            },
+          });
+          await tx.documentChunk.deleteMany({ where: { documentId: { in: freshPlan.documentIds } } });
+          await tx.studyResource.deleteMany({ where: { userId, documentId: { in: freshPlan.documentIds } } });
+          await tx.conceptDocument.deleteMany({ where: { documentId: { in: freshPlan.documentIds } } });
+          await tx.card.deleteMany({ where: { userId, sourceDocumentId: { in: freshPlan.documentIds } } });
+          await tx.document.deleteMany({ where: { userId, id: { in: freshPlan.documentIds } } });
+        }
+        if (freshPlan.completionIds.length) {
+          await tx.learningCompletion.deleteMany({ where: { userId, id: { in: freshPlan.completionIds } } });
+        }
+        if (freshPlan.cardIds.length) {
+          await tx.card.deleteMany({
+            where: {
+              userId,
+              id: { in: freshPlan.cardIds },
+              completionLinks: { none: {} },
+            },
+          });
+        }
+        if (freshPlan.reviewableIds.length) {
+          await tx.reviewable.deleteMany({ where: { userId, id: { in: freshPlan.reviewableIds } } });
+        }
+        if (freshPlan.recommendationIds.length) {
+          await tx.recommendation.deleteMany({ where: { userId, id: { in: freshPlan.recommendationIds } } });
+        }
+        for (const update of freshPlan.workspaceUpdates) {
+          await tx.academicWorkspace.updateMany({
+            where: { id: update.id, userId },
+            data: { sources: update.sources as unknown as Prisma.InputJsonValue },
+          });
+        }
+        if (freshPlan.detachedWorkspaceIds.length) {
+          await tx.academicWorkspace.updateMany({
+            where: { userId, id: { in: freshPlan.detachedWorkspaceIds } },
+            data: { experienceSessionId: null },
+          });
+        }
+        for (const update of freshPlan.remainingSessionSourceUpdates) {
+          await tx.experienceSession.updateMany({
+            where: { id: update.id, userId },
+            data: { sourceReferences: update.sourceReferences, version: { increment: 1 } },
+          });
+        }
+        if (freshPlan.sessionIds.length) {
+          await tx.experienceSession.deleteMany({ where: { userId, id: { in: freshPlan.sessionIds } } });
+        }
+        if (freshPlan.studySessionIds.length) {
+          await tx.studySession.deleteMany({ where: { userId, id: { in: freshPlan.studySessionIds } } });
+        }
+        if (freshPlan.lessonIds.length) {
+          await tx.lesson.deleteMany({ where: { userId, id: { in: freshPlan.lessonIds } } });
+        }
+        if (freshPlan.tutorSessionIds.length) {
+          await tx.tutorSession.deleteMany({ where: { userId, id: { in: freshPlan.tutorSessionIds } } });
+        }
+        if (freshPlan.candidateGoalIds.length) {
+          await tx.goal.deleteMany({
+            where: {
+              userId,
+              id: { in: freshPlan.candidateGoalIds },
+              experienceSessions: { none: {} },
+              learningLinks: { none: {} },
+              completionLinks: { none: {} },
+            },
+          });
+        }
+
+        // Purge the external index last. The separately committed tombstone
+        // above makes both failure directions retryable: a Qdrant failure rolls
+        // this SQL purge back, while a later SQL commit failure cannot expose an
+        // active document without vectors.
+        for (const documentId of freshPlan.documentIds) {
+          await this.qdrant.deleteByDocument(DOCUMENT_CHUNKS_COLLECTION, documentId);
+        }
+        return freshPlan;
+      }, { maxWait: 10_000, timeout: 120_000 });
+    } catch (error) {
+      await this.invalidateUserViews(userId, true);
+      throw error;
     }
 
-    let deleted = false;
-    await this.prisma.$transaction(async (tx) => {
-      const lockKey = accountDataLockKey(userId);
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
-      if (plan.selectedSessionId) {
-        const selected = await tx.experienceSession.findFirst({
-          where: { id: plan.selectedSessionId, userId },
-          select: { id: true },
-        });
-        if (!selected) return;
-      } else {
-        const selected = await tx.lesson.findFirst({
-          where: { id: plan.preview.id, userId },
-          select: { id: true },
-        });
-        if (!selected) return;
-      }
-
-      const now = new Date();
-      if (plan.documentIds.length) {
-        // Visibility barrier: active Library/RAG/Professor queries all require
-        // deletedAt=null. Restore remains explicit through the existing Trash.
-        await tx.document.updateMany({
-          where: { userId, id: { in: plan.documentIds } },
-          data: { deletedAt: now },
-        });
-        await tx.documentChunk.deleteMany({ where: { documentId: { in: plan.documentIds } } });
-        await tx.studyResource.deleteMany({ where: { userId, documentId: { in: plan.documentIds } } });
-        await tx.conceptDocument.deleteMany({ where: { documentId: { in: plan.documentIds } } });
-        await tx.card.deleteMany({ where: { userId, sourceDocumentId: { in: plan.documentIds } } });
-      }
-      if (plan.reviewableIds.length) {
-        await tx.reviewable.deleteMany({ where: { userId, id: { in: plan.reviewableIds } } });
-      }
-      if (plan.recommendationIds.length) {
-        await tx.recommendation.deleteMany({ where: { userId, id: { in: plan.recommendationIds } } });
-      }
-      for (const update of plan.workspaceUpdates) {
-        await tx.academicWorkspace.updateMany({
-          where: { id: update.id, userId },
-          data: { sources: update.sources as unknown as Prisma.InputJsonValue },
-        });
-      }
-      if (plan.detachedWorkspaceIds.length) {
-        await tx.academicWorkspace.updateMany({
-          where: { userId, id: { in: plan.detachedWorkspaceIds } },
-          data: { experienceSessionId: null },
-        });
-      }
-      for (const update of plan.remainingSessionSourceUpdates) {
-        await tx.experienceSession.updateMany({
-          where: { id: update.id, userId },
-          data: { sourceReferences: update.sourceReferences, version: { increment: 1 } },
-        });
-      }
-      if (plan.sessionIds.length) {
-        await tx.experienceSession.deleteMany({ where: { userId, id: { in: plan.sessionIds } } });
-      }
-      if (plan.studySessionIds.length) {
-        await tx.studySession.deleteMany({ where: { userId, id: { in: plan.studySessionIds } } });
-      }
-      if (plan.lessonIds.length) {
-        // Attempts and Homework are relational children with Cascade; shared
-        // concepts, collections and imported documents are SetNull/preserved.
-        await tx.lesson.deleteMany({ where: { userId, id: { in: plan.lessonIds } } });
-      }
-      if (plan.tutorSessionIds.length) {
-        await tx.tutorSession.deleteMany({ where: { userId, id: { in: plan.tutorSessionIds } } });
-      }
-      deleted = true;
-    });
-
-    if (deleted) await this.invalidateUserViews(userId, plan.documentIds.length > 0);
+    const deleted = committedPlan !== null;
+    await this.invalidateUserViews(userId, Boolean(committedPlan?.documentIds.length));
     return {
       deleted,
       alreadyDeleted: !deleted,
-      preview: deleted ? plan.preview : null,
+      preview: deleted ? committedPlan?.preview ?? plan.preview : null,
     };
+  }
+
+  private async rebuildPlanForExecution(
+    userId: string,
+    plan: SessionDeletionPlan,
+    tx: Prisma.TransactionClient,
+  ): Promise<SessionDeletionPlan | null> {
+    if (plan.selectedSessionId) {
+      const selected = await tx.experienceSession.findFirst({
+        where: { id: plan.selectedSessionId, userId },
+        select: {
+          id: true,
+          title: true,
+          lessonId: true,
+          tutorSessionId: true,
+          studySessionId: true,
+        },
+      });
+      if (!selected) return null;
+      return this.buildPlan(userId, {
+        target: 'experience-session',
+        targetId: selected.id,
+        title: selected.title,
+        selectedSessionId: selected.id,
+        selectedTutorSessionId: null,
+        lessonIds: selected.lessonId ? [selected.lessonId] : [],
+        tutorSessionIds: selected.tutorSessionId ? [selected.tutorSessionId] : [],
+        studySessionIds: selected.studySessionId ? [selected.studySessionId] : [],
+      }, tx);
+    }
+    if (plan.selectedTutorSessionId) {
+      const selected = await tx.tutorSession.findFirst({
+        where: { id: plan.selectedTutorSessionId, userId },
+        select: { id: true, title: true },
+      });
+      if (!selected) return null;
+      return this.buildPlan(userId, {
+        target: 'experience-session',
+        targetId: selected.id,
+        title: selected.title,
+        selectedSessionId: null,
+        selectedTutorSessionId: selected.id,
+        lessonIds: [],
+        tutorSessionIds: [selected.id],
+        studySessionIds: [],
+      }, tx);
+    }
+    const selected = await tx.lesson.findFirst({
+      where: { id: plan.preview.id, userId },
+      select: { id: true, topic: true },
+    });
+    if (!selected) return null;
+    return this.buildPlan(userId, {
+      target: 'lesson',
+      targetId: selected.id,
+      title: selected.topic,
+      selectedSessionId: null,
+      selectedTutorSessionId: null,
+      lessonIds: [selected.id],
+      tutorSessionIds: [],
+      studySessionIds: [],
+    }, tx);
   }
 
   private async workspaceSourceUpdates(
     userId: string,
     deletedDocumentIds: readonly string[],
+    db: LearningDataClient = this.prisma,
   ): Promise<{ updates: WorkspaceSourceUpdate[]; removed: number }> {
     if (!deletedDocumentIds.length) return { updates: [], removed: 0 };
     const deleted = new Set(deletedDocumentIds);
-    const rows = await this.prisma.academicWorkspace.findMany({
+    const rows = await db.academicWorkspace.findMany({
       where: { userId },
       select: { id: true, sources: true },
     });
@@ -522,11 +763,12 @@ export class LearningDataDeletionService {
     removedSessionIds: readonly string[],
     lessonIds: readonly string[],
     documentIds: readonly string[],
+    db: LearningDataClient = this.prisma,
   ): Promise<Array<{ id: string; sourceReferences: Prisma.InputJsonValue }>> {
     if (!lessonIds.length && !documentIds.length) return [];
     const lessons = new Set(lessonIds);
     const documents = new Set(documentIds);
-    const rows = await this.prisma.experienceSession.findMany({
+    const rows = await db.experienceSession.findMany({
       where: { userId, ...(removedSessionIds.length ? { id: { notIn: [...removedSessionIds] } } : {}) },
       select: { id: true, sourceReferences: true },
     });
@@ -574,6 +816,15 @@ function jsonContainsDocumentReference(value: Prisma.JsonValue, documentId: stri
   if (!Array.isArray(value)) return false;
   return value.some((entry) =>
     isRecord(entry) && entry.kind === 'document' && entry.id === documentId,
+  );
+}
+
+function contextContainsDocumentReference(value: Prisma.JsonValue, documentId: string): boolean {
+  if (!isRecord(value) || !Array.isArray(value.items)) return false;
+  return value.items.some((entry) =>
+    isRecord(entry) &&
+    entry.kind === 'document' &&
+    entry.referenceId === documentId,
   );
 }
 

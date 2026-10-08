@@ -11,4 +11,8 @@ export class CreateGoalDto implements CreateGoalRequest {
   @IsNotEmpty()
   @MaxLength(200)
   title!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  experienceSessionId!: string;
 }

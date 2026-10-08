@@ -44,9 +44,10 @@ export class PronunciationService {
     durationSeconds?: number,
   ): Promise<PronunciationAssessment> {
     const profile = await this.languages.requireOwned(userId, profileId);
+    const promptRoles = await this.languages.promptRoles(userId, profile);
     const heard = await this.transcribe(audio, profile, durationSeconds);
     const { words, accuracy } = alignWords(targetPhrase, heard);
-    const feedback = await this.coach(profile, targetPhrase, heard, accuracy);
+    const feedback = await this.coach(profile, targetPhrase, heard, accuracy, promptRoles);
 
     return { targetPhrase, heard, accuracy, words, feedback };
   }
@@ -65,13 +66,14 @@ export class PronunciationService {
     durationSeconds?: number,
   ): Promise<PronunciationCoaching> {
     const profile = await this.languages.requireOwned(userId, profileId);
+    const promptRoles = await this.languages.promptRoles(userId, profile);
     if (!this.speech.supportsAnalysis) {
       throw new ServiceUnavailableException(
         'Spoken coaching needs an audio-native speech provider; it is not enabled here.',
       );
     }
 
-    const instruction = this.coachInstruction(profile, context);
+    const instruction = this.coachInstruction(profile, context, promptRoles);
     let raw: string;
     try {
       const result = await this.speech.analyze(audio.buffer, {
@@ -100,8 +102,13 @@ export class PronunciationService {
   // ── internals ────────────────────────────────────────────────────────────
 
   /** The coach's brief + the exact JSON schema we parse back. */
-  private coachInstruction(profile: LanguageProfile, context?: string): string {
+  private coachInstruction(
+    profile: LanguageProfile,
+    context: string | undefined,
+    promptRoles: { interfaceLanguage: string; supportLanguage: string; targetLanguage: string },
+  ): string {
     const persona = languageSystemPrompt({
+      ...promptRoles,
       language: profile.language,
       nativeLanguage: profile.nativeLanguage,
       mode: profile.mode,
@@ -235,9 +242,11 @@ export class PronunciationService {
     target: string,
     heard: string,
     accuracy: number,
+    promptRoles: { interfaceLanguage: string; supportLanguage: string; targetLanguage: string },
   ): Promise<string> {
     const system =
       languageSystemPrompt({
+        ...promptRoles,
         language: profile.language,
         nativeLanguage: profile.nativeLanguage,
         mode: profile.mode,

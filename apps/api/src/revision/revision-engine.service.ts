@@ -90,8 +90,14 @@ export class RevisionEngineService {
     id: string,
     input: { rating?: 1 | 2 | 3 | 4; score?: number },
   ): Promise<ReviewableView> {
-    const item = await this.prisma.reviewable.findUnique({ where: { id } });
-    if (!item || item.userId !== userId) {
+    const item = await this.prisma.reviewable.findFirst({
+      where: {
+        id,
+        userId,
+        completionLinks: { some: { completion: { userId, status: 'verified' } } },
+      },
+    });
+    if (!item) {
       throw new NotFoundException('Reviewable not found.');
     }
     const grade =
@@ -119,7 +125,12 @@ export class RevisionEngineService {
 
   /** The whole review queue, most urgent first. */
   async queue(userId: string): Promise<ReviewableView[]> {
-    const items = await this.prisma.reviewable.findMany({ where: { userId } });
+    const items = await this.prisma.reviewable.findMany({
+      where: {
+        userId,
+        completionLinks: { some: { completion: { userId, status: 'verified' } } },
+      },
+    });
     const now = new Date();
     return items
       .map((i) => this.toView(i, now))
@@ -142,7 +153,11 @@ export class RevisionEngineService {
     const HORIZON_DAYS = 60;
     const now = new Date();
     const items = await this.prisma.reviewable.findMany({
-      where: { userId, reps: { gt: 0 } },
+      where: {
+        userId,
+        reps: { gt: 0 },
+        completionLinks: { some: { completion: { userId, status: 'verified' } } },
+      },
     });
 
     const forecasts: RevisionForecast[] = [];
@@ -170,7 +185,11 @@ export class RevisionEngineService {
   async due(userId: string, limit?: number): Promise<ReviewableView[]> {
     const now = new Date();
     const items = await this.prisma.reviewable.findMany({
-      where: { userId, due: { lte: now } },
+      where: {
+        userId,
+        due: { lte: now },
+        completionLinks: { some: { completion: { userId, status: 'verified' } } },
+      },
       ...(limit === undefined ? {} : { take: Math.min(Math.max(limit, 1), 200) }),
     });
     return items

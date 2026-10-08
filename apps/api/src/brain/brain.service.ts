@@ -27,6 +27,7 @@ import { MemoryService } from '../memory/memory.service';
 import { OnboardingService } from '../onboarding/onboarding.service';
 import { PredictionService } from '../prediction/prediction.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { EvidenceProgressService } from '../learning-evidence/evidence-progress.service';
 
 const GRAPH_LIMIT_MAX = 100;
 const SEARCH_LIMIT_MAX = 20;
@@ -44,6 +45,7 @@ export class BrainService {
     private readonly memory: MemoryService,
     private readonly onboarding: OnboardingService,
     private readonly predictions: PredictionService,
+    private readonly evidence: EvidenceProgressService,
   ) {}
 
   async overview(userId: string, now = new Date()): Promise<BrainOverview> {
@@ -57,8 +59,9 @@ export class BrainService {
       this.paths.next(userId),
       this.predictions.forecast(userId, now),
       this.recentDocuments(userId),
+      Promise.all([this.evidence.progress(userId), this.evidence.history(userId)]),
     ] as const);
-    const [knowledgeResult, strengthsResult, dnaResult, profileResult, declaredResult, memoryResult, pathResult, predictionResult, documentsResult] = results;
+    const [knowledgeResult, strengthsResult, dnaResult, profileResult, declaredResult, memoryResult, pathResult, predictionResult, documentsResult, evidenceResult] = results;
     const knowledge = fulfilled(knowledgeResult, { conceptCount: 0, edgeCount: 0 });
     const memory = fulfilled(memoryResult, null);
     const profile = fulfilled(profileResult, null);
@@ -75,6 +78,7 @@ export class BrainService {
       path: pathResult,
       foresight: predictionResult,
       documents: documentsResult,
+      evidence: evidenceResult,
     });
 
     const nextPathItems = path.items.filter((item) => item.status !== 'mastered').slice(0, 5);
@@ -82,6 +86,10 @@ export class BrainService {
     const foresight = profile && profile.interactions >= 5 && topRisk && topRisk.level !== 'low' && topRisk.reasons.length > 0
       ? { prediction: topRisk, generatedAt: prediction.generatedAt, isForecast: true as const }
       : null;
+    const [evidenceProgress, completionHistory] = fulfilled(evidenceResult, [
+      { completedCount: 0, dimensions: [], generatedAt: now.toISOString() },
+      { items: [], generatedAt: now.toISOString() },
+    ]);
 
     return {
       generatedAt: now.toISOString(),
@@ -109,6 +117,8 @@ export class BrainService {
       foresight,
       recentDocuments: fulfilled(documentsResult, []),
       nextBestAction: this.nextAction(nextPathItems),
+      evidenceProgress,
+      completionHistory,
       sources,
       partial: Object.values(sources).some((state) => state === 'unavailable'),
     };

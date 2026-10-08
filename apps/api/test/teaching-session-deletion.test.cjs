@@ -161,38 +161,43 @@ function assertOnlyResumableLinkedRowsWereTerminalized(fixture) {
   ]);
 }
 
-test('Tutor deletion abandons only its owned resumable ExperienceSessions before delete', async () => {
-  const fixture = deletionFixture('tutorSession', 'tutorSessionId', 'tutor-1');
-  const service = new TutorService(fixture.prisma, {}, {}, {}, {}, {}, {});
+test('Tutor deletion delegates to the canonical permanent learning purge', async () => {
+  const calls = [];
+  const service = new TutorService({}, {}, {}, {}, {}, {}, {}, {}, {
+    async deleteTutorSession(userId, id) {
+      calls.push([userId, id]);
+      return { deleted: true, alreadyDeleted: false, preview: null };
+    },
+  });
 
-  await service.deleteSession(fixture.ownerId, 'tutor-1');
+  await service.deleteSession('owner-1', 'tutor-1');
 
-  assertOnlyResumableLinkedRowsWereTerminalized(fixture);
+  assert.deepEqual(calls, [['owner-1', 'tutor-1']]);
 });
 
-test('Lesson deletion abandons only its owned resumable ExperienceSessions before delete', async () => {
-  const fixture = deletionFixture('lesson', 'lessonId', 'lesson-1');
-  const service = new LessonService(fixture.prisma, {}, {}, {}, {}, {}, {}, {}, {});
+test('Lesson deletion delegates to the canonical permanent learning purge', async () => {
+  const calls = [];
+  const service = new LessonService({}, {}, {}, {}, {}, {}, {}, {
+    async deleteLesson(userId, id) {
+      calls.push([userId, id]);
+      return { deleted: true, alreadyDeleted: false, preview: null };
+    },
+  }, {}, {});
 
-  await service.remove(fixture.ownerId, 'lesson-1');
+  await service.remove('owner-1', 'lesson-1');
 
-  assertOnlyResumableLinkedRowsWereTerminalized(fixture);
+  assert.deepEqual(calls, [['owner-1', 'lesson-1']]);
 });
 
-test('a missing or foreign TutorSession rolls back without touching ExperienceSessions', async () => {
-  const fixture = deletionFixture('tutorSession', 'tutorSessionId', 'tutor-1', false);
-  const service = new TutorService(fixture.prisma, {}, {}, {}, {}, {}, {});
+test('a missing or foreign TutorSession remains indistinguishable through the canonical purge', async () => {
+  const service = new TutorService({}, {}, {}, {}, {}, {}, {}, {}, {
+    async deleteTutorSession() {
+      return { deleted: false, alreadyDeleted: true, preview: null };
+    },
+  });
 
   await assert.rejects(
-    () => service.deleteSession(fixture.ownerId, 'tutor-1'),
+    () => service.deleteSession('owner-1', 'tutor-1'),
     { name: 'NotFoundException', message: 'Tutor session not found.' },
   );
-
-  assert.deepEqual(fixture.events, [
-    'transaction-start',
-    'owner-check',
-    'transaction-rollback',
-  ]);
-  assert.equal(fixture.experiences[0].status, 'active');
-  assert.equal(fixture.experiences[0].version, 2);
 });

@@ -10,6 +10,7 @@ import { RecommendationModule } from '../recommendation/recommendation.module';
 import { RevisionModule } from '../revision/revision.module';
 import { HomeController } from './home.controller';
 import { HomeOverviewService } from './home-overview.service';
+import { LearningEvidenceModule } from '../learning-evidence/learning-evidence.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { HomeOverviewService } from './home-overview.service';
     MentorModule,
     IntelligenceModule,
     PredictionModule,
+    LearningEvidenceModule,
   ],
   controllers: [HomeController],
   providers: [HomeOverviewService],

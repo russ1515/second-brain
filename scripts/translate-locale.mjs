@@ -25,6 +25,7 @@ const RESEARCH_WEB_V1_FILE = path.join(OUT_DIR, 'research-web-v1.ts');
 const LEARNING_DATA_CONTROL_EUROPE_FILE = path.join(OUT_DIR, 'learning-data-control-europe-v1.ts');
 const LEARNING_DATA_CONTROL_ASIA_FILE = path.join(OUT_DIR, 'learning-data-control-asia-v1.ts');
 const LEARNING_DATA_CONTROL_AFRICA_FILE = path.join(OUT_DIR, 'learning-data-control-africa-v1.ts');
+const GLOBAL_PATH_V1_FILE = path.join(OUT_DIR, 'global-path-v1.ts');
 const PROGRESS_DIR = path.join(OUT_DIR, '.translation-progress');
 const DEFAULT_MANIFEST = path.join(PROGRESS_DIR, 'manifest.json');
 const JOB_LOCK = path.join(PROGRESS_DIR, 'apply.lock');
@@ -304,6 +305,7 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
     'learningDataControlAfricaValues',
     learningDataControlKeys,
   );
+  const globalPathAliases = readCatalog(GLOBAL_PATH_V1_FILE, 'aliases');
   const libraryOrganization = readTupleCatalog(
     LIBRARY_V1_FILE,
     'organizationLabels',
@@ -349,6 +351,11 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
       ...researchWeb,
       ...learningDataControl,
     ]);
+    for (const [key, sourceKey] of globalPathAliases) {
+      const value = effective.get(sourceKey);
+      invariant(value, `${code} is missing global-path alias source ${sourceKey}`);
+      effective.set(key, value);
+    }
     const missingKeys = [...english.keys()].filter((key) => !effective.has(key));
 
     for (const key of effective.keys()) {
@@ -385,6 +392,7 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
       learningDataControlEurope: sha256(fs.readFileSync(LEARNING_DATA_CONTROL_EUROPE_FILE)),
       learningDataControlAsia: sha256(fs.readFileSync(LEARNING_DATA_CONTROL_ASIA_FILE)),
       learningDataControlAfrica: sha256(fs.readFileSync(LEARNING_DATA_CONTROL_AFRICA_FILE)),
+      globalPathV1: sha256(fs.readFileSync(GLOBAL_PATH_V1_FILE)),
     },
     batchSize,
     locales,

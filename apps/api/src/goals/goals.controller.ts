@@ -17,6 +17,8 @@ import type { AuthenticatedUser } from '../auth/auth.types';
 import { GoalsService } from './goals.service';
 import { ExamsService } from './exams.service';
 import { CreateGoalDto } from './dto/create-goal.dto';
+import { UpdateGoalDto } from './dto/update-goal.dto';
+import { SetPrimaryGoalDto } from './dto/set-primary-goal.dto';
 import { CreateExamDto } from './dto/create-exam.dto';
 
 /** Goals & Exams (Sprint 5 persistence + Study screens). */
@@ -42,6 +44,24 @@ export class GoalsController {
     @Body() dto: CreateGoalDto,
   ): Promise<Goal> {
     return this.goals.create(user.userId, dto);
+  }
+
+  @Patch('goals/:id')
+  updateGoal(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateGoalDto,
+  ): Promise<Goal> {
+    return this.goals.update(user.userId, id, dto);
+  }
+
+  @Patch('goals/:id/primary')
+  setPrimaryGoal(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: SetPrimaryGoalDto,
+  ): Promise<Goal> {
+    return this.goals.setPrimary(user.userId, id, dto);
   }
 
   /** Toggle a goal done / pending. */

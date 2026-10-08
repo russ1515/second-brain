@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   ActionDestination,
   ContextItem,
@@ -10,6 +10,7 @@ import type {
   ExperienceSessionPage,
   HomeResumableSession,
   LearnReadyDecision,
+  LearningDeletionPreview,
   TutorSessionSummary,
   VoiceTurnResponse,
 } from '@second-brain/shared';
@@ -22,9 +23,10 @@ import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
 import { actionDestinationHref } from '../../lib/action-destination';
 import { appendLearnDocument, isImageDocument } from '../../lib/learn/document-picker';
-import { Alert, Button, Card, Skeleton } from '../../components/ds/core';
+import { Alert, Badge, Button, Card, Skeleton } from '../../components/ds/core';
 import { Page, Section } from '../../components/ds/layout';
-import { ResumeSection } from '../../components/home/decision';
+import { Dialog } from '../../components/ds/overlays';
+import { DeletionImpact } from '../../components/home/decision';
 import {
   UniversalComposer,
   type LearnComposerExecutionResult,
@@ -46,11 +48,15 @@ const SPACES = [
   { key: 'workspace', icon: '▧', route: '/library/workspace' },
 ] as const;
 
+const INITIAL_HISTORY_LIMIT = 4;
+const EXPANDED_HISTORY_LIMIT = 12;
+
 /** Learn is the intention-led entry point; existing engines remain behind it. */
 export default function LearnScreen() {
   const { user } = useAuth();
   const { t } = useI18n();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const params = useLocalSearchParams<{
     documentId?: string | string[];
     documentTitle?: string | string[];
@@ -65,12 +71,15 @@ export default function LearnScreen() {
   const { width } = useResponsive();
   const composition = resolveLearnComposition(width);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [historyLimit, setHistoryLimit] = useState(INITIAL_HISTORY_LIMIT);
+  const [hiddenSessionIds, setHiddenSessionIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const scanUpload = useRef<{ signature: string; requestId: string } | null>(null);
 
   const contexts = useMemo(() => contextFromParams(params, t), [params, t]);
   const resumable = useQuery<ExperienceSessionPage>({
-    queryKey: ['learn', 'resumable', user?.id],
-    queryFn: ({ signal }) => api<ExperienceSessionPage>('/experience-sessions/resumable?limit=3', { signal }),
+    queryKey: ['learn', 'resumable', user?.id, historyLimit],
+    queryFn: ({ signal }) => api<ExperienceSessionPage>(`/experience-sessions/resumable?limit=${historyLimit}`, { signal }),
     enabled: Boolean(user),
     staleTime: 30_000,
     gcTime: 5 * 60_000,
@@ -78,9 +87,28 @@ export default function LearnScreen() {
     placeholderData: (previous) => previous,
   });
 
-  const sessions = (resumable.data?.items ?? []).map(toResumableSession).filter(isPresent).slice(0, 3);
+  const sessions = (resumable.data?.items ?? [])
+    .map(toResumableSession)
+    .filter(isPresent)
+    .filter((session) => !hiddenSessionIds.has(session.id));
   const open = (destination: string | ActionDestination) => {
     router.push((typeof destination === 'string' ? destination : actionDestinationHref(destination)) as never);
+  };
+  const deleteHistorySession = async (session: HomeResumableSession) => {
+    if (deletingSessionId) return;
+    setDeletingSessionId(session.id);
+    try {
+      await api(`/experience-sessions/${session.id}`, { method: 'DELETE' });
+      setHiddenSessionIds((current) => new Set([...current, session.id]));
+      await queryClient.invalidateQueries({
+        predicate: ({ queryKey }) => [
+          'home', 'learn', 'calendar', 'goals', 'lessons', 'revision', 'recommendations',
+          'brain', 'tutor', 'library', 'research', 'workspace',
+        ].includes(String(queryKey[0] ?? '')),
+      });
+    } finally {
+      setDeletingSessionId(null);
+    }
   };
 
   const execute = async (decision: LearnReadyDecision, payload: LearnComposerPayload): Promise<LearnComposerExecutionResult> => {
@@ -155,7 +183,15 @@ export default function LearnScreen() {
     <UniversalComposer ownerUserId={user.id} initialContexts={contexts} onExecute={execute} onNavigate={open} />
   ) : null;
   const resume = resumable.isPending ? <ResumeSkeleton /> : (
-    <ResumeSection sessions={sessions} onResume={(session) => open(session.destination)} />
+    <CompactLearnHistory
+      sessions={sessions}
+      hasMore={Boolean(resumable.data?.nextCursor) && historyLimit < EXPANDED_HISTORY_LIMIT}
+      loadingMore={resumable.isFetching && !resumable.isPending}
+      deletingSessionId={deletingSessionId}
+      onMore={() => setHistoryLimit(EXPANDED_HISTORY_LIMIT)}
+      onResume={(session) => open(session.destination)}
+      onDelete={(session) => deleteHistorySession(session)}
+    />
   );
 
   return (
@@ -232,6 +268,162 @@ export default function LearnScreen() {
         </View>
       </Page>
     </ScrollView>
+  );
+}
+
+function CompactLearnHistory({
+  sessions,
+  hasMore,
+  loadingMore,
+  deletingSessionId,
+  onMore,
+  onResume,
+  onDelete,
+}: {
+  sessions: HomeResumableSession[];
+  hasMore: boolean;
+  loadingMore: boolean;
+  deletingSessionId: string | null;
+  onMore: () => void;
+  onResume: (session: HomeResumableSession) => void;
+  onDelete: (session: HomeResumableSession) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const { spacing } = useTokens();
+  if (sessions.length === 0) return null;
+  return (
+    <Section title={t('home4.resume')} description={t('home4.resumeDetail')}>
+      <View style={{ gap: spacing.xxs }} testID="learn-compact-history">
+        {sessions.map((session) => (
+          <CompactLearnHistoryRow
+            key={session.id}
+            session={session}
+            deleting={deletingSessionId === session.id}
+            onResume={() => onResume(session)}
+            onDelete={() => onDelete(session)}
+          />
+        ))}
+        {hasMore ? (
+          <Button
+            testID="learn-history-more"
+            size="sm"
+            variant="ghost"
+            label={t('library7.more')}
+            loading={loadingMore}
+            onPress={onMore}
+          />
+        ) : null}
+      </View>
+    </Section>
+  );
+}
+
+function CompactLearnHistoryRow({
+  session,
+  deleting,
+  onResume,
+  onDelete,
+}: {
+  session: HomeResumableSession;
+  deleting: boolean;
+  onResume: () => void;
+  onDelete: () => Promise<void>;
+}) {
+  const { t, formatLocale } = useI18n();
+  const { colors: c, radius, spacing, typography } = useTokens();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [preview, setPreview] = useState<LearningDeletionPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const typeLabel = t(`home4.session.type.${session.type}` as TranslationKey);
+  const title = session.title ?? typeLabel;
+  const date = new Date(session.updatedAt);
+  const dateLabel = Number.isNaN(date.getTime())
+    ? t('home4.date.unknown')
+    : new Intl.DateTimeFormat(formatLocale, { dateStyle: 'medium' }).format(date);
+
+  const openDelete = () => {
+    setConfirmingDelete(true);
+    setPreview(null);
+    setPreviewFailed(false);
+    setPreviewing(true);
+    void api<LearningDeletionPreview>(`/experience-sessions/${session.id}/deletion-preview`)
+      .then(setPreview)
+      .catch(() => setPreviewFailed(true))
+      .finally(() => setPreviewing(false));
+  };
+
+  return (
+    <>
+      <View
+        testID={`learn-history-row-${session.id}`}
+        style={{
+          minHeight: 58,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: spacing.sm,
+          paddingVertical: spacing.xs,
+          borderBottomWidth: 1,
+          borderBottomColor: c.borderSubtle,
+        }}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${title} — ${dateLabel}`}
+          onPress={onResume}
+          style={({ pressed }) => ({
+            flex: 1,
+            minWidth: 0,
+            gap: 2,
+            padding: spacing.xs,
+            borderRadius: radius.xs,
+            backgroundColor: pressed ? c.surfaceSunken : 'transparent',
+          })}
+        >
+          <Text numberOfLines={1} style={[typography.bodySmall, { color: c.textPrimary, fontWeight: '700' }]}>{title}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.xs }}>
+            <Badge tone="neutral" label={typeLabel} />
+            <Text style={[typography.caption, { color: c.textMuted }]}>{dateLabel}</Text>
+            <Text style={[typography.caption, { color: c.textMuted }]}>
+              {t(`workspace10.status.${session.status}` as TranslationKey)}
+            </Text>
+          </View>
+        </Pressable>
+        <Button size="sm" variant="ghost" label={t('home4.resumeAction')} onPress={onResume} />
+        <Button
+          testID={`learn-history-delete-${session.id}`}
+          size="sm"
+          variant="ghost"
+          icon="⌫"
+          label={t('learningControl.delete')}
+          disabled={deleting}
+          onPress={openDelete}
+        />
+      </View>
+      <Dialog
+        visible={confirmingDelete}
+        onClose={() => { if (!deleting) setConfirmingDelete(false); }}
+        title={t('learningControl.delete')}
+        footer={(
+          <>
+            <Button label={t('tutor.cancel')} variant="ghost" disabled={deleting} onPress={() => setConfirmingDelete(false)} />
+            <Button
+              testID={`learn-history-delete-confirm-${session.id}`}
+              label={t('learningControl.delete')}
+              variant="danger"
+              loading={deleting || previewing}
+              disabled={!preview || previewFailed}
+              onPress={() => {
+                void onDelete().then(() => setConfirmingDelete(false));
+              }}
+            />
+          </>
+        )}
+      >
+        <Text style={[typography.body, { color: c.textSecondary }]}>{title}</Text>
+        <DeletionImpact preview={preview} loading={previewing} failed={previewFailed} />
+      </Dialog>
+    </>
   );
 }
 

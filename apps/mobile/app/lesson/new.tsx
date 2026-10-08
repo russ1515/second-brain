@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import { useCallback, useState, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { LessonView } from '@second-brain/shared';
@@ -6,7 +6,7 @@ import { api } from '../../lib/client';
 import { useTokens } from '../../lib/design/theme';
 import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n } from '../../lib/i18n';
-import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
+import { Button, Card, ErrorBanner } from '../../components/ui';
 
 /**
  * "The learner enters today's lesson."
@@ -28,11 +28,8 @@ export default function NewLessonScreen() {
   const { t } = useI18n();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [subject, setSubject] = useState('');
-  const started = useRef(false);
-
-  // A target was passed in → create straight away. No target → ask first.
-  const autoCreate = Boolean(conceptId || topic);
+  const [subject, setSubject] = useState(topic ?? '');
+  const [objective, setObjective] = useState('');
 
   const create = useCallback(
     async (body: Record<string, string>) => {
@@ -48,15 +45,6 @@ export default function NewLessonScreen() {
     [router],
   );
 
-  useEffect(() => {
-    if (!autoCreate || started.current) return; // StrictMode / re-render must not bill two lessons
-    started.current = true;
-    void create({
-      ...(conceptId ? { conceptId } : {}),
-      ...(topic ? { topic } : {}),
-    });
-  }, [autoCreate, conceptId, topic, create]);
-
   if (error) {
     return (
       <ScrollView contentContainerStyle={styles.container}>
@@ -66,15 +54,14 @@ export default function NewLessonScreen() {
     );
   }
 
-  // "Teach me" entry: name the subject, the professor builds the lesson.
-  if (!autoCreate) {
-    const ready = subject.trim().length > 0;
-    return (
-      <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.kicker}>👨‍🏫 {t('teach.kicker')}</Text>
-        <Text style={styles.title}>{t('teach.title')}</Text>
-        <Text style={styles.detail}>{t('teach.subtitle')}</Text>
-        <Card style={styles.card}>
+  const ready = Boolean(conceptId || subject.trim()) && objective.trim().length > 0;
+  return (
+    <ScrollView contentContainerStyle={styles.container}>
+      <Text style={styles.kicker}>👨‍🏫 {t('teach.kicker')}</Text>
+      <Text style={styles.title}>{title ?? t('teach.title')}</Text>
+      <Text style={styles.detail}>{t('teach.subtitle')}</Text>
+      <Card style={styles.card}>
+        {!conceptId ? (
           <TextInput
             style={styles.input}
             value={subject}
@@ -83,24 +70,30 @@ export default function NewLessonScreen() {
             placeholderTextColor={c.textMuted}
             multiline
             editable={!busy}
-            onSubmitEditing={() => ready && create({ topic: subject.trim() })}
           />
-          <Button
-            label={t('teach.submit')}
-            busy={busy}
-            disabled={!ready}
-            onPress={() => create({ topic: subject.trim() })}
-          />
-        </Card>
-      </ScrollView>
-    );
-  }
-
-  return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>{title ?? t('lessonNew.writing')}</Text>
-      <Text style={styles.detail}>{t('lessonNew.detail')}</Text>
-      <Loading />
+        ) : null}
+        <Text style={styles.label}>{t('lesson.objectiveLabel')}</Text>
+        <TextInput
+          style={styles.input}
+          value={objective}
+          onChangeText={setObjective}
+          placeholder={t('goals.placeholder')}
+          placeholderTextColor={c.textMuted}
+          multiline
+          editable={!busy}
+          testID="lesson-goal-input"
+        />
+        <Button
+          label={t('teach.submit')}
+          busy={busy}
+          disabled={!ready}
+          onPress={() => create({
+            ...(conceptId ? { conceptId } : { topic: subject.trim() }),
+            goalTitle: objective.trim(),
+            goalPeriod: 'weekly',
+          })}
+        />
+      </Card>
     </ScrollView>
   );
 }
@@ -111,6 +104,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   title: { fontSize: 24, fontWeight: '700', color: c.textPrimary },
   detail: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
   card: { gap: 14, marginTop: 4 },
+  label: { fontSize: 14, fontWeight: '700', color: c.textPrimary },
   input: {
     minHeight: 88,
     borderWidth: 1,

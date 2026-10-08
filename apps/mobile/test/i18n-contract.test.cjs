@@ -207,9 +207,11 @@ for (const group of learningDataControlGroups) {
     learningDataControlCatalogs.set(code, translations);
   }
 }
+const globalPathAliases = catalog(path.join(LOCALES_DIR, 'global-path-v1.ts'), 'aliases');
 const overlayFiles = new Set([
   'auth-errors.ts',
   'essential.ts',
+  'global-path-v1.ts',
   'index.ts',
   'learning-control-v1.ts',
   'learning-data-control-africa-v1.ts',
@@ -252,7 +254,7 @@ const localeResources = fs.readdirSync(LOCALES_DIR)
 
 function effectiveCatalog(resource) {
   const { code, file, variableName } = resource;
-  return new Map([
+  const translations = new Map([
     ...catalog(path.join(LOCALES_DIR, file), variableName),
     ...(essentials.get(code) ?? new Map()),
     ...(learnerPassportEssentials.get(code) ?? new Map()),
@@ -266,6 +268,12 @@ function effectiveCatalog(resource) {
     ...(researchWebV1.get(code) ?? new Map()),
     ...(learningDataControlCatalogs.get(code) ?? new Map()),
   ]);
+  for (const [key, sourceKey] of globalPathAliases) {
+    const value = translations.get(sourceKey);
+    assert.ok(value, `${code} alias source ${sourceKey} is missing`);
+    translations.set(key, value);
+  }
+  return translations;
 }
 
 test('the UI registry exposes 34 unique targets without fake empty runtime resources', () => {

@@ -3,6 +3,7 @@ import type {
   LearnerPassportLearningDna,
 } from './learner-passport';
 import type { LearnerProfile } from './learner-profile';
+import type { EvidenceBasedLearningProgress, LearningHistoryView } from './learning-evidence';
 
 /**
  * A privacy-minimised learning report. It deliberately separates what the
@@ -39,6 +40,8 @@ export interface LearningReportView {
     exerciseAttempts: number;
     correctExerciseAttempts: number;
     averageExerciseScore: number | null;
+    evidenceProgress: EvidenceBasedLearningProgress;
+    completionHistory: LearningHistoryView;
     /** Honest when no official or scored evidence exists. */
     evidenceAvailable: boolean;
   };

@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { Text, View } from 'react-native';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Clipboard, Text, View } from 'react-native';
 import type {
   ExperienceSession,
   TutorMessageBlock,
@@ -9,7 +9,7 @@ import { indeterminateAIWorkState } from '@second-brain/shared';
 import { useTokens } from '../../lib/design/theme';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { Markdown } from '../markdown';
-import { Badge, Button, Card, Progress } from '../ds/core';
+import { Badge, Button, Card, IconButton, Progress } from '../ds/core';
 import { AIWorkStateIndicator } from '../ds/states';
 import { SourceCitation } from '../ds/sources';
 
@@ -60,14 +60,21 @@ export function TutorAIState({ state }: { state: TutorWorkState }) {
 export function TutorMessage({
   message,
   onOpenSource,
+  onSavePdf,
   trailing,
 }: {
   message: TutorMessageView;
   onOpenSource?: (documentId: string) => void;
+  onSavePdf?: () => void;
   trailing?: ReactNode;
 }) {
   const { t } = useI18n();
   const { colors: c, radius, spacing, typography } = useTokens();
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+  }, []);
   const mine = message.role === 'user';
   const blocks = message.blocks?.length
     ? message.blocks
@@ -85,6 +92,13 @@ export function TutorMessage({
       </View>
     );
   }
+
+  const copy = () => {
+    Clipboard.setString(message.content);
+    setCopied(true);
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    copiedTimer.current = setTimeout(() => setCopied(false), 1_500);
+  };
 
   return (
     <View style={{ gap: spacing.sm, maxWidth: 820 }}>
@@ -124,7 +138,11 @@ export function TutorMessage({
           </View>
         );
       })}
-      {trailing}
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs }}>
+        {trailing}
+        <IconButton icon={copied ? '✓' : '⧉'} label={t(copied ? 'globalPath.copyDone' : 'globalPath.copy')} onPress={copy} />
+        {onSavePdf ? <IconButton icon="⇩" label={t('lesson.savePdf')} onPress={onSavePdf} /> : null}
+      </View>
     </View>
   );
 }

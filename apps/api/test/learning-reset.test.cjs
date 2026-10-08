@@ -9,6 +9,8 @@ const argon2 = require('argon2');
 const { LearningResetService } = require('../dist/privacy/learning-reset.service.js');
 
 const PEDAGOGICAL_MODELS = [
+  'learningGoalLink',
+  'learningCompletion',
   'reviewLog',
   'documentChunk',
   'conceptEdge',

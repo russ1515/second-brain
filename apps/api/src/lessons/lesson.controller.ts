@@ -17,8 +17,11 @@ import type {
   LessonSummary,
   LessonView,
   LearningDeletionPreview,
+  LessonFlowProgress,
+  LessonFlowStepKey,
   SubmitAttemptResponse,
 } from '@second-brain/shared';
+import { LESSON_FLOW_STEP_KEYS } from '@second-brain/shared';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import type { AuthenticatedUser } from '../auth/auth.types';
@@ -43,6 +46,9 @@ export class LessonController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: GenerateLessonDto,
   ): Promise<LessonView> {
+    if (!dto.goalTitle?.trim() && !dto.language && !dto.tutorSessionId) {
+      throw new BadRequestException({ code: 'LEARNING_GOAL_REQUIRED' });
+    }
     return this.lessons.generate(user.userId, dto);
   }
 
@@ -57,6 +63,32 @@ export class LessonController {
     @Param('id') id: string,
   ): Promise<LessonView> {
     return this.lessons.get(user.userId, id);
+  }
+
+  @Get(':id/flow')
+  flow(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<LessonFlowProgress> {
+    return this.lessons.flow(user.userId, id);
+  }
+
+  @Post(':id/flow/:step/validate')
+  validateFlowStep(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('step') step: string,
+  ): Promise<LessonFlowProgress> {
+    return this.lessons.validateFlowStep(user.userId, id, this.parseStep(step));
+  }
+
+  @Post(':id/flow/:step/enter')
+  enterFlowStep(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('step') step: string,
+  ): Promise<LessonFlowProgress> {
+    return this.lessons.enterFlowStep(user.userId, id, this.parseStep(step));
   }
 
   @Get(':id/deletion-preview')
@@ -123,5 +155,12 @@ export class LessonController {
       throw new BadRequestException('Exercise index must be a non-negative integer.');
     }
     return index;
+  }
+
+  private parseStep(raw: string): LessonFlowStepKey {
+    if (!(LESSON_FLOW_STEP_KEYS as readonly string[]).includes(raw)) {
+      throw new BadRequestException('Unknown lesson step.');
+    }
+    return raw as LessonFlowStepKey;
   }
 }

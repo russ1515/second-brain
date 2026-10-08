@@ -112,6 +112,8 @@ model User {
   supportCaseNotes        SupportCaseNote[]        @relation("SupportCaseNotesByActor")
   incidentTimelineEvents  IncidentTimelineEvent[]  @relation("IncidentTimelineByActor")
   diagnosticsRequested    BugDiagnostic[]          @relation("BugDiagnosticsRequestedBy")
+  learningCompletions     LearningCompletion[]
+  learningGoalLinks       LearningGoalLink[]
 
   @@index([lastActiveAt])
   @@index([createdAt])
@@ -157,13 +159,13 @@ model Document {
 
   /// Product-facing kind. Kept as a string so new source kinds remain additive
   /// without repeatedly altering a PostgreSQL enum.
-  contentType String @default("DOCUMENT")
+  contentType String  @default("DOCUMENT")
   /// Original media metadata. The bytes themselves live in private persistent
   /// storage and are never exposed as public static files.
   mimeType    String?
   sizeBytes   Int?
   fingerprint String?
-  pageCount   Int    @default(0)
+  pageCount   Int     @default(0)
 
   // ── Smart Library (Sprint 6.1) ──
   /// Pinned by the learner → the Favorites shelf.
@@ -229,19 +231,19 @@ model StudyResource {
 
 /// A user-defined shelf grouping documents in the Smart Library (Sprint 6.1).
 model Collection {
-  id        String   @id @default(cuid())
-  userId    String
-  name      String
+  id             String   @id @default(cuid())
+  userId         String
+  name           String
   /// Trimmed lower-case key used to prevent case-only duplicates per owner.
   normalizedName String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   documents Document[]
 
-  @@index([userId])
   @@unique([userId, normalizedName])
+  @@index([userId])
   @@map("collections")
 }
 
@@ -493,11 +495,12 @@ model Card {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  deck           Deck          @relation(fields: [deckId], references: [id], onDelete: Cascade)
-  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  sourceDocument Document?     @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
-  reviewLogs     ReviewLog[]
-  concepts       ConceptCard[]
+  deck            Deck                     @relation(fields: [deckId], references: [id], onDelete: Cascade)
+  user            User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceDocument  Document?                @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+  reviewLogs      ReviewLog[]
+  concepts        ConceptCard[]
+  completionLinks LearningCompletionCard[]
 
   @@index([deckId])
   @@index([userId, due])
@@ -565,12 +568,13 @@ model LanguageProfile {
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
 
-  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  vocabDeck          Deck?               @relation(fields: [vocabDeckId], references: [id], onDelete: SetNull)
-  lessons            Lesson[]
-  tutorSessions      TutorSession[]
-  planItems          DailyPlanItem[]
-  experienceSessions ExperienceSession[]
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vocabDeck           Deck?                @relation(fields: [vocabDeckId], references: [id], onDelete: SetNull)
+  lessons             Lesson[]
+  tutorSessions       TutorSession[]
+  planItems           DailyPlanItem[]
+  experienceSessions  ExperienceSession[]
+  learningCompletions LearningCompletion[]
 
   @@unique([userId, normalizedLanguage])
   @@index([userId])
@@ -671,6 +675,9 @@ model ExerciseAttempt {
   id             String @id @default(cuid())
   userId         String
   lessonId       String
+  /// Immutable lesson content identity captured when the attempt is submitted.
+  /// An attempt for an older version must never prove a newer lesson version.
+  contentVersion Int    @default(1)
   /// Index into the lesson's `exercises` JSON array.
   exerciseIndex  Int
   /// Snapshotted so the attempt stays readable even if the lesson is deleted.
@@ -704,10 +711,11 @@ model ExerciseAttempt {
 
   createdAt DateTime @default(now())
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  lesson    Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  concept   Concept? @relation("AttemptConcept", fields: [conceptId], references: [id], onDelete: SetNull)
-  rootCause Concept? @relation("AttemptRootCause", fields: [rootCauseConceptId], references: [id], onDelete: SetNull)
+  user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson             Lesson               @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  concept            Concept?             @relation("AttemptConcept", fields: [conceptId], references: [id], onDelete: SetNull)
+  rootCause          Concept?             @relation("AttemptRootCause", fields: [rootCauseConceptId], references: [id], onDelete: SetNull)
+  completionEvidence LearningCompletion[]
 
   // No unique key: retrying an exercise is the point. Every attempt is history.
   @@index([userId])
@@ -906,16 +914,22 @@ model Lesson {
   revisionSheet     String
   /// The Document this lesson was indexed as, for retrieval / long-term memory.
   sourceDocumentId  String?
+  /// Monotonic content identity used by canonical completion evidence. Existing
+  /// lessons start at version 1; a future content edit must increment it rather
+  /// than silently reusing evidence for different material.
+  contentVersion    Int      @default(1)
   createdAt         DateTime @default(now())
 
-  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tutorSession       TutorSession?       @relation(fields: [tutorSessionId], references: [id], onDelete: SetNull)
-  concept            Concept?            @relation(fields: [conceptId], references: [id], onDelete: SetNull)
-  sourceDocument     Document?           @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
-  languageProfile    LanguageProfile?    @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
-  attempts           ExerciseAttempt[]
-  assignment         Homework?
-  experienceSessions ExperienceSession[]
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tutorSession        TutorSession?        @relation(fields: [tutorSessionId], references: [id], onDelete: SetNull)
+  concept             Concept?             @relation(fields: [conceptId], references: [id], onDelete: SetNull)
+  sourceDocument      Document?            @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+  languageProfile     LanguageProfile?     @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
+  attempts            ExerciseAttempt[]
+  assignment          Homework?
+  experienceSessions  ExperienceSession[]
+  assessments         Assessment[]
+  learningCompletions LearningCompletion[]
 
   @@index([userId])
   @@map("lessons")
@@ -933,8 +947,10 @@ model Goal {
   createdAt   DateTime  @default(now())
   completedAt DateTime?
 
-  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
   experienceSessions ExperienceSession[]
+  completionLinks    LearningCompletionGoal[]
+  learningLinks      LearningGoalLink[]
 
   @@index([userId])
   @@map("goals")
@@ -1033,7 +1049,8 @@ model Reviewable {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user            User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  completionLinks LearningCompletionReviewable[]
 
   @@unique([userId, kind, refId])
   @@index([userId, due])
@@ -1134,13 +1151,15 @@ model ExperienceSession {
   pausedAt       DateTime?
   completedAt    DateTime?
 
-  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tutorSession    TutorSession?    @relation(fields: [tutorSessionId], references: [id], onDelete: SetNull)
-  studySession    StudySession?    @relation(fields: [studySessionId], references: [id], onDelete: SetNull)
-  document        Document?        @relation(fields: [documentId], references: [id], onDelete: SetNull)
-  lesson          Lesson?          @relation(fields: [lessonId], references: [id], onDelete: SetNull)
-  goal            Goal?            @relation(fields: [goalId], references: [id], onDelete: SetNull)
-  languageProfile LanguageProfile? @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tutorSession        TutorSession?        @relation(fields: [tutorSessionId], references: [id], onDelete: SetNull)
+  studySession        StudySession?        @relation(fields: [studySessionId], references: [id], onDelete: SetNull)
+  document            Document?            @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  lesson              Lesson?              @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  goal                Goal?                @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  languageProfile     LanguageProfile?     @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
+  learningCompletions LearningCompletion[]
+  learningGoalLinks   LearningGoalLink[]
 
   @@unique([userId, idempotencyKey])
   @@index([userId, status, updatedAt])
@@ -1217,24 +1236,30 @@ model Homework {
 /// mock exam, or an oral evaluation. Questions carry their answer key/rubric so
 /// grading is grounded; the key is stripped before the questions reach a client.
 model Assessment {
-  id        String   @id @default(cuid())
-  userId    String
+  id             String   @id @default(cuid())
+  userId         String
   /// mcq | open | dissertation | exercise | case_study | mock_exam | oral
-  type      String
-  topic     String
-  title     String
+  type           String
+  topic          String
+  title          String
   /// Difficulty it was pitched at (beginner|intermediate|advanced), for audit.
-  level     String?
+  level          String?
   /// Optional concept this assesses.
-  conceptId String?
+  conceptId      String?
+  /// Optional immutable lesson provenance. Null means the assessment is
+  /// standalone and therefore cannot prove completion of a lesson.
+  lessonId       String?
+  contentVersion Int?
   /// AssessmentQuestion[] WITH answer keys/rubrics — never sent raw to clients.
-  questions Json
-  createdAt DateTime @default(now())
+  questions      Json
+  createdAt      DateTime @default(now())
 
   user        User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   submissions AssessmentSubmission[]
+  lesson      Lesson?                @relation(fields: [lessonId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
+  @@index([lessonId])
   @@map("assessments")
 }
 
@@ -1257,11 +1282,145 @@ model AssessmentSubmission {
   advice       String
   createdAt    DateTime @default(now())
 
-  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
-  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assessment         Assessment           @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  completionEvidence LearningCompletion[]
 
   @@index([assessmentId])
   @@map("assessment_submissions")
+}
+
+/// A server-verified statement that one version of a learning unit was
+/// finalized with observable evidence. Completion is deliberately distinct
+/// from mastery: `result` records what the evidence showed while FSRS/mastery
+/// engines remain separate consumers.
+enum LearningCompletionKind {
+  lesson
+  language_unit
+}
+
+enum LearningCompletionStatus {
+  verified
+  revoked
+}
+
+enum LearningEvidenceSourceKind {
+  exercise_attempt
+  assessment_submission
+  language_capability
+}
+
+model LearningCompletion {
+  id                     String                     @id @default(cuid())
+  userId                 String
+  kind                   LearningCompletionKind
+  /// Stable lesson id or profile-scoped language-unit reference. Paired with
+  /// owner, kind and version to make finalization idempotent.
+  learningRefId          String
+  contentVersion         Int
+  status                 LearningCompletionStatus   @default(verified)
+  evidenceSource         LearningEvidenceSourceKind
+  /// Primary evidence id; additional controlled evidence belongs in provenance.
+  evidenceRefId          String
+  lessonId               String?
+  languageProfileId      String?
+  experienceSessionId    String?
+  exerciseAttemptId      String?
+  assessmentSubmissionId String?
+  /// Machine-readable evaluated criteria. A missing measurement stays absent;
+  /// no product threshold is inferred here.
+  criteria               Json
+  /// Observable result, separate from completion and from mastery.
+  result                 Json
+  /// Auditable source/version/timestamps, never hidden model reasoning.
+  provenance             Json
+  /// Six nullable product dimensions. Null means not evaluated, never zero.
+  dimensionScores        Json
+  startedAt              DateTime?
+  finalizedAt            DateTime                   @default(now())
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
+
+  user                 User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson               Lesson?                        @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  languageProfile      LanguageProfile?               @relation(fields: [languageProfileId], references: [id], onDelete: Cascade)
+  experienceSession    ExperienceSession?             @relation(fields: [experienceSessionId], references: [id], onDelete: SetNull)
+  exerciseAttempt      ExerciseAttempt?               @relation(fields: [exerciseAttemptId], references: [id], onDelete: SetNull)
+  assessmentSubmission AssessmentSubmission?          @relation(fields: [assessmentSubmissionId], references: [id], onDelete: SetNull)
+  goals                LearningCompletionGoal[]
+  cards                LearningCompletionCard[]
+  reviewables          LearningCompletionReviewable[]
+
+  @@unique([userId, kind, learningRefId, contentVersion])
+  @@index([userId, status, finalizedAt])
+  @@index([lessonId])
+  @@index([languageProfileId])
+  @@index([experienceSessionId])
+  @@index([evidenceSource, evidenceRefId])
+  @@map("learning_completions")
+}
+
+model LearningCompletionGoal {
+  completionId String
+  goalId       String
+  createdAt    DateTime @default(now())
+
+  completion LearningCompletion @relation(fields: [completionId], references: [id], onDelete: Cascade)
+  goal       Goal               @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@id([completionId, goalId])
+  @@index([goalId])
+  @@map("learning_completion_goals")
+}
+
+model LearningCompletionCard {
+  completionId String
+  cardId       String
+  createdAt    DateTime @default(now())
+
+  completion LearningCompletion @relation(fields: [completionId], references: [id], onDelete: Cascade)
+  card       Card               @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@id([completionId, cardId])
+  @@index([cardId])
+  @@map("learning_completion_cards")
+}
+
+model LearningCompletionReviewable {
+  completionId String
+  reviewableId String
+  createdAt    DateTime @default(now())
+
+  completion LearningCompletion @relation(fields: [completionId], references: [id], onDelete: Cascade)
+  reviewable Reviewable         @relation(fields: [reviewableId], references: [id], onDelete: Cascade)
+
+  @@id([completionId, reviewableId])
+  @@index([reviewableId])
+  @@map("learning_completion_reviewables")
+}
+
+/// Durable multi-goal attachment for a learning journey while it is in
+/// progress. `ExperienceSession.goalId` stays as a compatibility pointer; this
+/// relation is the authoritative additive list. Ownership and the single
+/// primary invariant are enforced transactionally and by the partial unique
+/// PostgreSQL index created in the migration.
+model LearningGoalLink {
+  id                  String   @id @default(cuid())
+  userId              String
+  experienceSessionId String
+  goalId              String
+  isPrimary           Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  experienceSession ExperienceSession @relation(fields: [experienceSessionId], references: [id], onDelete: Cascade)
+  goal              Goal              @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@unique([experienceSessionId, goalId])
+  @@index([userId, experienceSessionId])
+  @@index([goalId])
+  @@map("learning_goal_links")
 }
 
 /// Writing coach (Sprint 7.7): a piece of writing the learner submitted and the

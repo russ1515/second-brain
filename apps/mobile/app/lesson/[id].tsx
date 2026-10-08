@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { CardView, LessonExercise, LessonView } from '@second-brain/shared';
+import type {
+  CardView,
+  LessonExercise,
+  LessonFlowProgress,
+  LessonFlowStepKey,
+  LessonView,
+} from '@second-brain/shared';
 import { api } from '../../lib/client';
 import { saveLessonAsPdf } from '../../lib/lesson-pdf';
 import { useTokens } from '../../lib/design/theme';
@@ -14,7 +20,7 @@ import { SpeakButton } from '../../components/speak-button';
 
 /** One step of the pedagogical flow. */
 interface FlowStep {
-  key: string;
+  key: LessonFlowStepKey;
   title: string;
   /** Emoji shown in the section header — gives each step a textbook identity. */
   icon: string;
@@ -41,15 +47,21 @@ export default function LessonScreen() {
   const [cards, setCards] = useState<CardView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState(0);
+  const [flow, setFlow] = useState<LessonFlowProgress | null>(null);
+  const [flowBusy, setFlowBusy] = useState(false);
+  const [confirmNext, setConfirmNext] = useState<LessonFlowStepKey | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [l, c] = await Promise.all([
+      const [l, c, f] = await Promise.all([
         api<LessonView>(`/lessons/${id}`),
         api<CardView[]>(`/lessons/${id}/flashcards`).catch(() => []),
+        api<LessonFlowProgress>(`/lessons/${id}/flow`),
       ]);
       setLesson(l);
       setCards(c);
+      setFlow(f);
+      setStep(f.activeIndex);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -137,6 +149,7 @@ export default function LessonScreen() {
             attemptUrl={`/lessons/${lesson.id}/exercises/${index}/attempt`}
             index={index}
             exercise={exercise}
+            onAttempt={() => setError(null)}
           />
         )),
       });
@@ -241,11 +254,65 @@ export default function LessonScreen() {
       </ScrollView>
     );
   }
-  if (!lesson) return <Loading label={t('lesson.opening')} />;
+  if (!lesson || !flow) return <Loading label={t('lesson.opening')} />;
 
   const total = steps.length;
   const clamped = Math.min(step, total - 1);
   const isLast = clamped === total - 1;
+  const activeValidated = flow.validatedStepKeys.includes(flow.activeStepKey);
+  const viewingPast = clamped < flow.activeIndex;
+  const canGoBack = clamped > 0 && (flow.completed || activeValidated);
+
+  const continueFlow = async () => {
+    if (viewingPast) {
+      setStep((current) => Math.min(current + 1, flow.activeIndex));
+      return;
+    }
+    if (flow.completed) {
+      router.replace(session ? `/session/${session}?phase=end` : '/');
+      return;
+    }
+    setFlowBusy(true);
+    setError(null);
+    try {
+      let current = flow;
+      if (!activeValidated) {
+        current = await api<LessonFlowProgress>(
+          `/lessons/${id}/flow/${flow.activeStepKey}/validate`,
+          { method: 'POST' },
+        );
+        setFlow(current);
+      }
+      if (current.completed) {
+        await load();
+        return;
+      }
+      setConfirmNext(current.stepKeys[current.activeIndex + 1]);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setFlowBusy(false);
+    }
+  };
+
+  const enterConfirmedStep = async () => {
+    if (!confirmNext) return;
+    setFlowBusy(true);
+    setError(null);
+    try {
+      const next = await api<LessonFlowProgress>(
+        `/lessons/${id}/flow/${confirmNext}/enter`,
+        { method: 'POST' },
+      );
+      setFlow(next);
+      setStep(next.activeIndex);
+      setConfirmNext(null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setFlowBusy(false);
+    }
+  };
 
   return (
     <View style={styles.flex}>
@@ -272,7 +339,7 @@ export default function LessonScreen() {
                 key={s.key}
                 style={[
                   styles.dot,
-                  i < clamped && styles.dotDone,
+                  flow.validatedStepKeys.includes(s.key) && styles.dotDone,
                   i === clamped && styles.dotCurrent,
                 ]}
               />
@@ -303,7 +370,26 @@ export default function LessonScreen() {
 
       {/* Guided navigation — advance one step at a time; no jumping ahead. */}
       <View style={styles.nav}>
-        {clamped > 0 ? (
+        {confirmNext ? (
+          <View style={styles.confirmation} accessibilityRole="alert">
+            <Text style={styles.confirmationTitle}>{t('lesson.flow.confirmTitle')}</Text>
+            <Text style={styles.confirmationText}>{t('lesson.flow.confirmDetail')}</Text>
+            <View style={styles.confirmationActions}>
+              <Button
+                variant="ghost"
+                label={t('learn5.cancel')}
+                onPress={() => setConfirmNext(null)}
+                disabled={flowBusy}
+              />
+              <Button
+                label={t('lesson.flow.confirmAction')}
+                onPress={() => void enterConfirmedStep()}
+                busy={flowBusy}
+              />
+            </View>
+          </View>
+        ) : null}
+        {canGoBack && !confirmNext ? (
           <View style={styles.flex}>
             <Button variant="ghost" label={t('lesson.previous')} onPress={() => setStep(clamped - 1)} />
           </View>
@@ -311,18 +397,15 @@ export default function LessonScreen() {
           <View style={styles.flex} />
         )}
         <View style={styles.flex}>
-          {isLast ? (
+          {!confirmNext ? (
             <Button
-              label={session ? t('lesson.finishSession') : t('lesson.finish')}
-              onPress={() =>
-                router.replace(
-                  session ? `/session/${session}?phase=end` : '/',
-                )
-              }
+              label={flow.completed
+                ? (session ? t('lesson.finishSession') : t('lesson.finish'))
+                : isLast ? t('lesson.finish') : t('lesson.continue')}
+              onPress={() => void continueFlow()}
+              busy={flowBusy}
             />
-          ) : (
-            <Button label={t('lesson.continue')} onPress={() => setStep(clamped + 1)} />
-          )}
+          ) : null}
         </View>
       </View>
     </View>
@@ -578,6 +661,7 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   stepCard: { marginTop: 2 },
   nav: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
     padding: 16,
     paddingBottom: 20,
@@ -588,6 +672,18 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
   },
+  confirmation: {
+    width: '100%',
+    gap: 6,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: 12,
+    backgroundColor: c.surfaceElevated,
+  },
+  confirmationTitle: { fontSize: 15, fontWeight: '800', color: c.textPrimary },
+  confirmationText: { fontSize: 13, lineHeight: 19, color: c.textSecondary },
+  confirmationActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
   label: {
     fontSize: 11,
     fontWeight: '700',

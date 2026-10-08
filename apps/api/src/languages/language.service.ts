@@ -13,15 +13,21 @@ import type {
 } from '@second-brain/shared';
 import { SUPPORTED_LANGUAGES, toSupportedLanguage } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
+import { resolveLocale } from '../common/learning-locale';
 import type { CreateLanguageProfileDto } from './dto/create-language-profile.dto';
 import type { UpdateLanguageProfileDto } from './dto/update-language-profile.dto';
 import { immersionRatio } from './language-modes';
+import { LearningDataDeletionService } from '../experience-sessions/learning-data-deletion.service';
+import { accountDataLockKey } from '../common/account-data-lock';
 
 /** Per-language state for the learner. Vocabulary is not a new SRS: each profile
  *  owns an ordinary Deck whose cards ride the existing FSRS engine. */
 @Injectable()
 export class LanguageService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly learningDeletions: LearningDataDeletionService,
+  ) {}
 
   async create(
     userId: string,
@@ -126,10 +132,68 @@ export class LanguageService {
 
   async remove(userId: string, id: string): Promise<void> {
     await this.requireOwned(userId, id);
-    // The vocabulary deck is deliberately left behind: those are real FSRS cards
-    // with real review history, and dropping a language should not silently
-    // destroy the learner's memory of it.
-    await this.prisma.languageProfile.delete({ where: { id } });
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const [lessons, tutors, sessions] = await Promise.all([
+        this.prisma.lesson.findMany({
+          where: { userId, languageProfileId: id },
+          select: { id: true },
+        }),
+        this.prisma.tutorSession.findMany({
+          where: { userId, languageProfileId: id },
+          select: { id: true },
+        }),
+        this.prisma.experienceSession.findMany({
+          where: { userId, languageProfileId: id },
+          select: { id: true },
+        }),
+      ]);
+
+      // Every specialized entry point uses the same permanent purge boundary.
+      // Each step is idempotent; a transient external-index failure leaves the
+      // profile present so the learner can safely retry the deletion.
+      for (const lesson of lessons) await this.learningDeletions.deleteLesson(userId, lesson.id);
+      for (const tutor of tutors) await this.learningDeletions.deleteTutorSession(userId, tutor.id);
+      for (const session of sessions) await this.learningDeletions.deleteSession(userId, session.id);
+
+      const removed = await this.prisma.$transaction(async (tx) => {
+        const lockKey = accountDataLockKey(userId);
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+        const owned = await tx.languageProfile.findFirst({
+          where: { id, userId },
+          select: { id: true, vocabDeckId: true },
+        });
+        if (!owned) return true;
+
+        // A writer that completed between the outer snapshot and this lock is
+        // handled by another canonical purge pass, never detached by SetNull.
+        const [remainingLessons, remainingTutors, remainingSessions] = await Promise.all([
+          tx.lesson.count({ where: { userId, languageProfileId: id } }),
+          tx.tutorSession.count({ where: { userId, languageProfileId: id } }),
+          tx.experienceSession.count({ where: { userId, languageProfileId: id } }),
+        ]);
+        if (remainingLessons + remainingTutors + remainingSessions > 0) return false;
+
+        await tx.learningCompletion.deleteMany({ where: { userId, languageProfileId: id } });
+        await tx.reviewable.deleteMany({
+          where: { userId, kind: 'language', refId: { startsWith: `${id}:` } },
+        });
+        await tx.dailyPlanItem.deleteMany({ where: { languageProfileId: id } });
+        await tx.languageProfile.delete({ where: { id } });
+
+        if (owned.vocabDeckId) {
+          const [otherProfiles, resources] = await Promise.all([
+            tx.languageProfile.count({ where: { vocabDeckId: owned.vocabDeckId } }),
+            tx.studyResource.count({ where: { userId, deckId: owned.vocabDeckId } }),
+          ]);
+          if (otherProfiles === 0 && resources === 0) {
+            await tx.deck.deleteMany({ where: { id: owned.vocabDeckId, userId } });
+          }
+        }
+        return true;
+      });
+      if (removed) return;
+    }
+    throw new ConflictException('Language learning changed during deletion. Please retry.');
   }
 
   /** Load an owned profile, or 404. Shared with the other language services. */
@@ -143,27 +207,72 @@ export class LanguageService {
     return profile;
   }
 
+  /**
+   * Resolve the three language roles used by every language-learning prompt.
+   *
+   * UI/support copy follows the learner's current interface locale; the target
+   * remains the language profile. Keeping this in one server-side resolver
+   * prevents individual activities from silently falling back to English or
+   * from confusing the language being learned with the language of guidance.
+   */
+  async promptRoles(
+    userId: string,
+    profile: Pick<LanguageProfile, 'language' | 'normalizedLanguage'>,
+  ): Promise<{
+    interfaceLanguage: string;
+    supportLanguage: string;
+    targetLanguage: string;
+  }> {
+    const interfaceLanguage = await resolveLocale(this.prisma, userId);
+    const code =
+      toSupportedLanguage(profile.normalizedLanguage) ??
+      toSupportedLanguage(profile.language);
+    const targetLanguage = code
+      ? SUPPORTED_LANGUAGES[code].englishName
+      : profile.language;
+    return {
+      interfaceLanguage,
+      supportLanguage: interfaceLanguage,
+      targetLanguage,
+    };
+  }
+
   /** Every profile gets a vocabulary deck at creation, but the FK is SetNull —
    *  re-create it if the deck was deleted out from under us. */
   async ensureVocabDeck(profile: LanguageProfile): Promise<string> {
-    if (profile.vocabDeckId) {
-      const deck = await this.prisma.deck.findUnique({
-        where: { id: profile.vocabDeckId },
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(profile.userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+
+      // The caller can hold a stale profile while a permanent deletion is in
+      // flight. Re-read it under the same owner lock used by deletion so a
+      // deck can never be created and then left orphaned by a failed attach.
+      const current = await tx.languageProfile.findFirst({
+        where: { id: profile.id, userId: profile.userId },
       });
-      if (deck) return deck.id;
-    }
-    const deck = await this.prisma.deck.create({
-      data: {
-        userId: profile.userId,
-        name: `Vocabulary — ${profile.language}`.slice(0, 200),
-        description: `Vocabulary for ${profile.language}, reviewed with FSRS.`,
-      },
+      if (!current) throw new NotFoundException('Language profile not found.');
+
+      if (current.vocabDeckId) {
+        const deck = await tx.deck.findFirst({
+          where: { id: current.vocabDeckId, userId: profile.userId },
+          select: { id: true },
+        });
+        if (deck) return deck.id;
+      }
+
+      const deck = await tx.deck.create({
+        data: {
+          userId: profile.userId,
+          name: `Vocabulary — ${current.language}`.slice(0, 200),
+          description: `Vocabulary for ${current.language}, reviewed with FSRS.`,
+        },
+      });
+      await tx.languageProfile.update({
+        where: { id: current.id },
+        data: { vocabDeckId: deck.id },
+      });
+      return deck.id;
     });
-    await this.prisma.languageProfile.update({
-      where: { id: profile.id },
-      data: { vocabDeckId: deck.id },
-    });
-    return deck.id;
   }
 
   // ── internals ────────────────────────────────────────────────────────────

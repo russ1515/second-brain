@@ -7,6 +7,8 @@ import { FlashcardsModule } from '../flashcards/flashcards.module';
 import { ConceptModule } from '../concepts/concept.module';
 import { RevisionModule } from '../revision/revision.module';
 import { ExperienceSessionModule } from '../experience-sessions/experience-session.module';
+import { LearningEvidenceModule } from '../learning-evidence/learning-evidence.module';
+import { GoalsModule } from '../goals/goals.module';
 
 /** Written-first learning engine + the Examiner (Phase 5, Educational Engine).
  *  Turns topics / concepts / tutoring interactions into complete written
@@ -20,6 +22,8 @@ import { ExperienceSessionModule } from '../experience-sessions/experience-sessi
     ConceptModule,
     RevisionModule,
     ExperienceSessionModule,
+    LearningEvidenceModule,
+    GoalsModule,
   ],
   controllers: [LessonController],
   providers: [LessonService, AssessmentService],

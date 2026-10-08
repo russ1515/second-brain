@@ -9,19 +9,29 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import type { CalendarEntry, CalendarView, LearningDeletionPreview } from '@second-brain/shared';
+import type { CalendarEntry, CalendarView, LearningDeletionPreview, LearningHistoryView } from '@second-brain/shared';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CalendarService } from './calendar.service';
 import { CreateCalendarEventDto } from './dto/create-calendar-event.dto';
+import { EvidenceProgressService } from '../learning-evidence/evidence-progress.service';
 
 /** Smart Calendar (task 5.4): the auto-generated calendar + the learner's own
  *  events. AI entries are read-only; only user events can be created/deleted. */
 @UseGuards(JwtAccessGuard)
 @Controller('calendar')
 export class CalendarController {
-  constructor(private readonly calendar: CalendarService) {}
+  constructor(
+    private readonly calendar: CalendarService,
+    private readonly evidence: EvidenceProgressService,
+  ) {}
+
+  /** Historical calendar of proof-backed completed learning only. */
+  @Get('learning-history')
+  learningHistory(@CurrentUser() user: AuthenticatedUser): Promise<LearningHistoryView> {
+    return this.evidence.history(user.userId);
+  }
 
   /** The assembled calendar over the horizon, day by day. */
   @Get()

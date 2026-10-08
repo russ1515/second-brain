@@ -125,9 +125,16 @@ test('Lot 10 screens keep research, production, citations, autosave and transiti
   assert.match(workspace, /expectedRevision/);
   assert.match(workspace, /1_200/);
   assert.match(workspace, /workspace-editor/);
+  assert.ok(workspace.indexOf('{editor}{assistantPanel}') >= 0);
+  assert.doesNotMatch(workspace, /workspace10\.next|width: 340|activeArea === 'assistant'/);
   assert.match(home, /WORKSPACE_TEMPLATES/);
   assert.match(assistant, /selectedText/);
   assert.match(assistant, /WORKSPACE_ASSIST_ACTIONS/);
+  assert.match(assistant, /workspace-assistant-history/);
+  assert.match(assistant, /globalPath\.insertProposal/);
+  assert.match(assistant, /globalPath\.replaceSelection/);
+  assert.match(assistant, /globalPath\.anotherProposal/);
+  assert.match(assistant, /globalPath\.undoInsertion/);
   assert.match(research, /CitationLinks/);
   assert.match(tutor, /researchContextBlock/);
   assert.match(tutor, /type: 'research'/);

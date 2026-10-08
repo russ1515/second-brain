@@ -24,10 +24,12 @@ export function ExerciseCard({
   attemptUrl,
   index,
   exercise,
+  onAttempt,
 }: {
   attemptUrl: string;
   index: number;
   exercise: LessonExercise;
+  onAttempt?: (result: SubmitAttemptResponse) => void;
 }) {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
@@ -44,12 +46,12 @@ export function ExerciseCard({
     setBusy(true);
     setError(null);
     try {
-      setResult(
-        await api<SubmitAttemptResponse>(attemptUrl, {
+      const submitted = await api<SubmitAttemptResponse>(attemptUrl, {
           method: 'POST',
           body: { answer },
-        }),
-      );
+        });
+      setResult(submitted);
+      onAttempt?.(submitted);
     } catch (e) {
       setError((e as Error).message);
     } finally {

@@ -11,6 +11,8 @@ import type {
   CardView,
   ExerciseType,
   LessonExercise,
+  LessonFlowProgress,
+  LessonFlowStepKey,
   LessonSummary,
   LessonView,
   KycTeacher,
@@ -19,24 +21,25 @@ import {
   resolveTeacherPolicy,
   TEACHER_POLICY_METADATA_SOURCE,
   teacherPolicyDirective,
+  lessonFlowStepKeys,
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
 import { RetrievalService } from '../documents/retrieval/retrieval.service';
 import { DocumentService } from '../documents/document.service';
-import { CardGenerationService } from '../flashcards/card-generation.service';
 import { toCardView } from '../flashcards/card.mapper';
 import { ConceptService } from '../concepts/concept.service';
 import { MasteryService } from '../concepts/mastery.service';
-import { RevisionEngineService } from '../revision/revision-engine.service';
 import { localeDirective, resolveLocale } from '../common/learning-locale';
 import type { GenerateLessonDto } from './dto/generate-lesson.dto';
 import { ExperienceSessionService } from '../experience-sessions/experience-session.service';
 import { LearningDataDeletionService } from '../experience-sessions/learning-data-deletion.service';
 import type { LearningDeletionPreview } from '@second-brain/shared';
+import { LearningCompletionService } from '../learning-evidence/learning-completion.service';
+import { GoalsService } from '../goals/goals.service';
+import { accountDataLockKey } from '../common/account-data-lock';
 
 const CONTEXT_LIMIT = 5;
-const FLASHCARD_COUNT = 8;
 
 const SYSTEM_PROMPT = [
   'You are a master teacher building a complete written lesson for a learner.',
@@ -45,7 +48,9 @@ const SYSTEM_PROMPT = [
   'lesson in them. Respond with ONLY a JSON object (no markdown, no code fences)',
   'with these string/array fields, forming a standard teaching flow:',
   '"objective" (what the learner will be able to do), "intro", "explanation"',
-  '(the main teaching, may use markdown), "examples" (array of worked examples),',
+  '(a progressive main lesson with definitions, purpose/utility, prerequisites and',
+  'step-by-step reasoning; may use markdown), "examples" (array of worked examples),',
+  '"commonMisconceptions" (array of concrete misunderstandings and their correction),',
   '"questions" (array of 3-5 guided, open-ended comprehension questions that make',
   'the learner think — NOT graded, distinct from the exercises), "exercises"',
   '(a MIX of 4-6 items, each {"type","question","answer","options"?}: include at',
@@ -80,6 +85,7 @@ interface RawLesson {
   intro: string;
   explanation: string;
   examples: string[];
+  commonMisconceptions: string[];
   questions: string[];
   exercises: LessonExercise[];
   homework: string;
@@ -99,12 +105,12 @@ export class LessonService {
     private readonly llm: LlmService,
     private readonly retrieval: RetrievalService,
     private readonly documents: DocumentService,
-    private readonly cardGeneration: CardGenerationService,
     private readonly concepts: ConceptService,
     private readonly mastery: MasteryService,
-    private readonly revision: RevisionEngineService,
     private readonly experienceSessions: ExperienceSessionService,
     private readonly learningDeletions: LearningDataDeletionService,
+    private readonly completions: LearningCompletionService,
+    private readonly goals: GoalsService,
   ) {}
 
   async generate(
@@ -146,8 +152,25 @@ export class LessonService {
       trustedDirective,
     );
 
-    const lesson = await this.prisma.lesson.create({
-      data: {
+    const { lesson, doc, experience } = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      if (tutorSessionId) {
+        const tutor = await tx.tutorSession.findFirst({
+          where: { id: tutorSessionId, userId },
+          select: { id: true },
+        });
+        if (!tutor) throw new BadRequestException('Tutor session is no longer available.');
+      }
+      if (internal.languageProfileId) {
+        const profile = await tx.languageProfile.findFirst({
+          where: { id: internal.languageProfileId, userId },
+          select: { id: true },
+        });
+        if (!profile) throw new BadRequestException('Language profile is no longer available.');
+      }
+      const createdLesson = await tx.lesson.create({
+        data: {
         userId,
         tutorSessionId: tutorSessionId ?? null,
         conceptId: conceptId ?? null,
@@ -165,55 +188,68 @@ export class LessonService {
         summary: raw.summary,
         keyPoints: raw.keyPoints as unknown as Prisma.InputJsonValue,
         revisionSheet: raw.revisionSheet,
-      },
-    });
-
-    // Freeze the effective policy with the lesson. Corrections later in this
-    // lesson must not silently change because Profile preferences were edited.
-    await this.experienceSessions.ensureLessonSession(userId, {
-      title: `Lesson — ${topic}`.slice(0, 300),
-      intent: 'learn',
-      inputModality: 'text',
-      currentStep: {
-        id: 'lesson',
-        label: topic,
-        state: 'active',
-        metadata: {
-          teacherPolicy,
-          teacherPolicySource: TEACHER_POLICY_METADATA_SOURCE,
         },
-      },
-      resumeTarget: { kind: 'route', path: `/lesson/${lesson.id}` },
-      links: { lessonId: lesson.id },
+      });
+
+      // Freeze the effective policy with the lesson. Corrections later in this
+      // lesson must not silently change because Profile preferences were edited.
+      const initialFlow = this.initialFlow(this.toView(createdLesson, 0));
+      const createdExperience = await this.experienceSessions.ensureLessonSession(userId, {
+        title: `Lesson — ${topic}`.slice(0, 300),
+        intent: 'learn',
+        inputModality: 'text',
+        currentStep: {
+          id: 'lesson',
+          label: topic,
+          state: 'active',
+          metadata: {
+            teacherPolicy,
+            teacherPolicySource: TEACHER_POLICY_METADATA_SOURCE,
+            lessonFlow: initialFlow,
+          },
+        },
+        resumeTarget: { kind: 'route', path: `/lesson/${createdLesson.id}` },
+        links: { lessonId: createdLesson.id },
+      }, tx);
+
+      // Keep the source document in the same owner-locked transaction as the
+      // lesson and its experience wrapper. A concurrent permanent purge can
+      // therefore observe either the whole graph or none of it, never an
+      // orphan LESSON_AI document created after its lesson was removed.
+      const createdDoc = await this.documents.createFromTextInTransaction(userId, {
+        title: `Lesson — ${topic}`.slice(0, 300),
+        content: this.assemblePlainText(topic, raw),
+        sourceRef: `lesson:${createdLesson.id}`,
+        contentType: 'LESSON_AI',
+      }, tx);
+      const linkedLesson = await tx.lesson.update({
+        where: { id: createdLesson.id },
+        data: { sourceDocumentId: createdDoc.id },
+      });
+      return { lesson: linkedLesson, doc: createdDoc, experience: createdExperience };
     });
 
-    // Index into long-term memory via the existing document pipeline (chunk+embed).
-    const doc = await this.documents.createFromText(userId, {
-      title: `Lesson — ${topic}`.slice(0, 300),
-      content: this.assemblePlainText(topic, raw),
-      sourceRef: `lesson:${lesson.id}`,
-      contentType: 'LESSON_AI',
-    });
-    await this.prisma.lesson.update({
-      where: { id: lesson.id },
-      data: { sourceDocumentId: doc.id },
-    });
+    // Workers must only see the generated document after its transaction has
+    // committed. Their own durable status/error handling remains unchanged.
+    this.documents.queuePostCreateProcessing(doc.id);
 
-    // Auto-generate flashcards for FSRS revision, and wire everything to the
-    // concept when one is targeted. Best-effort: never fail the lesson over these.
-    let cardCount = 0;
-    if (dto.flashcards !== false) {
-      cardCount = await this.spinUpFlashcards(userId, doc.id, conceptId);
+    if (dto.goalTitle?.trim()) {
+      await this.goals.create(userId, {
+        title: dto.goalTitle.trim(),
+        period: dto.goalPeriod ?? 'weekly',
+        experienceSessionId: experience.id,
+      });
     }
+
+    // A generated lesson is a draft learning artifact, not evidence of learning.
+    // Flashcards and Reviewable rows are materialized only by the completion
+    // service after every required step and a real evaluated attempt.
+    const cardCount = 0;
     if (conceptId) {
       await this.concepts
         .linkDocument(userId, conceptId, doc.id)
         .catch((e) => this.logger.warn('Learning operation failed.'));
     }
-
-    // Register the lesson itself for spaced repetition — a course is a
-    // reviewable activity, not just its flashcards (task 5.1).
-    await this.revision.track(userId, 'lesson', lesson.id, `Lesson — ${topic}`.slice(0, 200));
 
     return this.toView({ ...lesson, sourceDocumentId: doc.id }, cardCount);
   }
@@ -243,6 +279,89 @@ export class LessonService {
     return this.toView(lesson, cardCount);
   }
 
+  /** Server-authoritative guided navigation. The state lives on the existing
+   * ExperienceSession so refresh/deep-link cannot unlock future steps. */
+  async flow(userId: string, id: string): Promise<LessonFlowProgress> {
+    const lesson = await this.requireOwned(userId, id);
+    const session = await this.ensureFlowSession(userId, lesson);
+    const current = this.readFlow(session.currentStep?.metadata?.lessonFlow, lesson);
+    if (session.currentStep?.metadata?.lessonFlow) return current;
+    await this.writeFlow(userId, session.id, session.currentStep, current);
+    return current;
+  }
+
+  async validateFlowStep(
+    userId: string,
+    id: string,
+    stepKey: LessonFlowStepKey,
+  ): Promise<LessonFlowProgress> {
+    const lesson = await this.requireOwned(userId, id);
+    const session = await this.ensureFlowSession(userId, lesson);
+    const flow = this.readFlow(session.currentStep?.metadata?.lessonFlow, lesson);
+    if (flow.activeStepKey !== stepKey) {
+      throw new BadRequestException('Only the active lesson step can be validated.');
+    }
+    if (flow.validatedStepKeys.includes(stepKey)) return flow;
+
+    if (stepKey === 'exercises' || stepKey === 'correction' || stepKey === 'revision') {
+      await this.requireExerciseCoverage(userId, lesson);
+    }
+    const isFinal = flow.activeIndex === flow.stepKeys.length - 1;
+    if (isFinal) {
+      const attempt = await this.prisma.exerciseAttempt.findFirst({
+        where: { userId, lessonId: lesson.id, contentVersion: lesson.contentVersion },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      if (!attempt) {
+        throw new BadRequestException('An evaluated exercise is required to finish this lesson.');
+      }
+      await this.completions.finalizeLesson(userId, {
+        lessonId: lesson.id,
+        experienceSessionId: session.id,
+        evidence: { kind: 'exercise_attempt', id: attempt.id },
+        startedAt: session.startedAt,
+      });
+    }
+
+    const next: LessonFlowProgress = {
+      ...flow,
+      validatedStepKeys: [...flow.validatedStepKeys, stepKey],
+      completed: isFinal,
+      updatedAt: new Date().toISOString(),
+    };
+    await this.writeFlow(userId, session.id, session.currentStep, next);
+    if (isFinal && session.status !== 'completed') {
+      await this.experienceSessions.complete(userId, session.id);
+    }
+    return next;
+  }
+
+  async enterFlowStep(
+    userId: string,
+    id: string,
+    stepKey: LessonFlowStepKey,
+  ): Promise<LessonFlowProgress> {
+    const lesson = await this.requireOwned(userId, id);
+    const session = await this.ensureFlowSession(userId, lesson);
+    const flow = this.readFlow(session.currentStep?.metadata?.lessonFlow, lesson);
+    if (!flow.validatedStepKeys.includes(flow.activeStepKey)) {
+      throw new BadRequestException('Validate the active lesson step before continuing.');
+    }
+    const nextIndex = flow.activeIndex + 1;
+    if (nextIndex >= flow.stepKeys.length || flow.stepKeys[nextIndex] !== stepKey) {
+      throw new BadRequestException('Lesson steps must be entered in order.');
+    }
+    const next: LessonFlowProgress = {
+      ...flow,
+      activeIndex: nextIndex,
+      activeStepKey: stepKey,
+      updatedAt: new Date().toISOString(),
+    };
+    await this.writeFlow(userId, session.id, session.currentStep, next);
+    return next;
+  }
+
   previewRemoval(userId: string, id: string): Promise<LearningDeletionPreview> {
     return this.learningDeletions.previewLesson(userId, id);
   }
@@ -252,6 +371,99 @@ export class LessonService {
   }
 
   // ── internals ────────────────────────────────────────────────────────────
+
+  private initialFlow(lesson: LessonView): LessonFlowProgress {
+    const stepKeys = lessonFlowStepKeys(lesson);
+    return {
+      stepKeys,
+      activeIndex: 0,
+      activeStepKey: stepKeys[0],
+      validatedStepKeys: [],
+      completed: false,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  private readFlow(value: unknown, lesson: Lesson): LessonFlowProgress {
+    const expected = lessonFlowStepKeys(this.toView(lesson, 0));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return this.initialFlow(this.toView(lesson, 0));
+    }
+    const raw = value as Partial<LessonFlowProgress>;
+    const sameSteps = Array.isArray(raw.stepKeys)
+      && raw.stepKeys.length === expected.length
+      && raw.stepKeys.every((step, index) => step === expected[index]);
+    const activeIndex = Number.isInteger(raw.activeIndex) ? raw.activeIndex as number : -1;
+    if (!sameSteps || activeIndex < 0 || activeIndex >= expected.length) {
+      return this.initialFlow(this.toView(lesson, 0));
+    }
+    const validSet = new Set(expected);
+    const validatedStepKeys = Array.isArray(raw.validatedStepKeys)
+      ? raw.validatedStepKeys.filter(
+          (step): step is LessonFlowStepKey =>
+            typeof step === 'string' && validSet.has(step as LessonFlowStepKey),
+        )
+      : [];
+    return {
+      stepKeys: expected,
+      activeIndex,
+      activeStepKey: expected[activeIndex],
+      validatedStepKeys: [...new Set(validatedStepKeys)],
+      completed: raw.completed === true && activeIndex === expected.length - 1,
+      updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
+    };
+  }
+
+  private async ensureFlowSession(userId: string, lesson: Lesson) {
+    return this.experienceSessions.ensureLessonSession(userId, {
+      title: `Lesson — ${lesson.topic}`.slice(0, 300),
+      intent: 'learn',
+      inputModality: 'text',
+      currentStep: {
+        id: 'lesson',
+        label: lesson.topic,
+        state: 'active',
+        metadata: { lessonFlow: this.initialFlow(this.toView(lesson, 0)) },
+      },
+      resumeTarget: { kind: 'route', path: `/lesson/${lesson.id}` },
+      links: { lessonId: lesson.id },
+    });
+  }
+
+  private writeFlow(
+    userId: string,
+    sessionId: string,
+    currentStep: { id: string; label?: string; index?: number; state?: 'pending' | 'active' | 'completed' | 'failed'; metadata?: Record<string, unknown> } | null,
+    flow: LessonFlowProgress,
+  ) {
+    return this.experienceSessions.updateState(userId, sessionId, {
+      currentStep: {
+        ...(currentStep ?? { id: 'lesson' }),
+        state: flow.completed ? 'completed' : 'active',
+        metadata: { ...(currentStep?.metadata ?? {}), lessonFlow: flow },
+      },
+      progress: {
+        completed: flow.validatedStepKeys.length,
+        total: flow.stepKeys.length,
+      },
+    });
+  }
+
+  private async requireExerciseCoverage(userId: string, lesson: Lesson): Promise<void> {
+    const exercises = (lesson.exercises as unknown as LessonExercise[]) ?? [];
+    if (exercises.length === 0) {
+      throw new BadRequestException('This lesson has no evaluable final exercise.');
+    }
+    const attempts = await this.prisma.exerciseAttempt.findMany({
+      where: { userId, lessonId: lesson.id, contentVersion: lesson.contentVersion },
+      distinct: ['exerciseIndex'],
+      select: { exerciseIndex: true },
+    });
+    const attempted = new Set(attempts.map((attempt) => attempt.exerciseIndex));
+    if (exercises.some((_, index) => !attempted.has(index))) {
+      throw new BadRequestException('Complete every lesson exercise before continuing.');
+    }
+  }
 
   private async resolveTopic(
     userId: string,
@@ -420,65 +632,84 @@ export class LessonService {
     }
     const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
     const objective = str(parsed.objective);
+    const intro = str(parsed.intro);
     const explanation = str(parsed.explanation);
-    if (!objective && !explanation) {
-      throw new UnprocessableEntityException(
-        'The teacher did not return a usable lesson. Try again.',
-      );
-    }
-    const examples = Array.isArray(parsed.examples)
-      ? parsed.examples.filter((e): e is string => typeof e === 'string')
-      : [];
-    const questions = Array.isArray(parsed.questions)
-      ? parsed.questions
-          .filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
-          .map((q) => q.trim())
-      : [];
-    const keyPoints = Array.isArray(parsed.keyPoints)
-      ? parsed.keyPoints
-          .filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
-          .map((p) => p.trim())
-      : [];
+    const summary = str(parsed.summary);
+    const revisionSheet = str(parsed.revisionSheet);
+    const examples = this.nonEmptyStrings(parsed.examples);
+    const commonMisconceptions = this.nonEmptyStrings(parsed.commonMisconceptions);
+    const questions = this.nonEmptyStrings(parsed.questions);
+    const keyPoints = this.nonEmptyStrings(parsed.keyPoints);
     const exercises = Array.isArray(parsed.exercises)
       ? parsed.exercises
-          .filter(
-            (e): e is LessonExercise =>
-              !!e &&
-              typeof (e as LessonExercise).question === 'string' &&
-              typeof (e as LessonExercise).answer === 'string',
-          )
-          .map((e) => this.normalizeExercise(e))
+          .map((exercise) => this.normalizeExercise(exercise))
+          .filter((exercise): exercise is LessonExercise => exercise !== null)
       : [];
+    const exerciseTypes = new Set(exercises.map((exercise) => exercise.type));
+    const structurallyComplete =
+      Boolean(objective && intro && explanation && summary && revisionSheet) &&
+      examples.length >= 1 &&
+      commonMisconceptions.length >= 1 &&
+      questions.length >= 3 && questions.length <= 5 &&
+      exercises.length >= 4 && exercises.length <= 6 &&
+      (['qcm', 'open', 'exercise', 'case'] as const).every((type) => exerciseTypes.has(type)) &&
+      keyPoints.length >= 3 && keyPoints.length <= 5;
+    if (!structurallyComplete) {
+      throw new UnprocessableEntityException(
+        'The teacher did not return a complete, usable lesson. Try again.',
+      );
+    }
     return {
       objective,
-      intro: str(parsed.intro),
-      explanation,
+      intro,
+      explanation: [
+        explanation,
+        ...commonMisconceptions.map((item) => `> ⚠️ ${item}`),
+      ].join('\n\n'),
       examples,
+      commonMisconceptions,
       questions,
       exercises,
       homework: str(parsed.homework),
-      summary: str(parsed.summary),
+      summary,
       keyPoints,
-      revisionSheet: str(parsed.revisionSheet),
+      revisionSheet,
     };
   }
 
-  /** Keep only known exercise types and valid QCM options. */
-  private normalizeExercise(e: LessonExercise): LessonExercise {
+  private nonEmptyStrings(value: unknown): string[] {
+    return Array.isArray(value)
+      ? value
+          .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          .map((item) => item.trim())
+      : [];
+  }
+
+  /** Accept only complete, known exercise shapes. Invalid QCM data is rejected
+   * instead of being silently downgraded to an ungraded generic exercise. */
+  private normalizeExercise(value: unknown): LessonExercise | null {
+    if (!value || typeof value !== 'object') return null;
+    const e = value as Record<string, unknown>;
     const types: ExerciseType[] = ['qcm', 'open', 'exercise', 'case'];
-    const type = types.includes(e.type as ExerciseType) ? e.type : 'exercise';
+    if (!types.includes(e.type as ExerciseType)) return null;
+    const type = e.type as ExerciseType;
+    const question = typeof e.question === 'string' ? e.question.trim() : '';
+    const answer = typeof e.answer === 'string' ? e.answer.trim() : '';
+    if (!question || !answer) return null;
     const base: LessonExercise = {
-      question: e.question,
-      answer: e.answer,
+      question,
+      answer,
       type,
     };
-    if (type === 'qcm' && Array.isArray(e.options)) {
+    if (type === 'qcm') {
+      if (!Array.isArray(e.options)) return null;
       const options = e.options.filter(
         (o): o is string => typeof o === 'string' && o.trim().length > 0,
-      );
-      // A QCM needs choices to be a QCM; otherwise it's just an exercise.
-      if (options.length >= 2) return { ...base, options };
-      return { ...base, type: 'exercise' };
+      ).map((option) => option.trim());
+      const uniqueOptions = [...new Set(options)];
+      if (uniqueOptions.length < 3 || uniqueOptions.length > 4) return null;
+      if (uniqueOptions.filter((option) => option === answer).length !== 1) return null;
+      return { ...base, options: uniqueOptions };
     }
     return base;
   }
@@ -496,31 +727,6 @@ export class LessonService {
       l.revisionSheet ? `## Revision sheet\n${l.revisionSheet}` : '',
     ];
     return parts.filter(Boolean).join('\n\n');
-  }
-
-  private async spinUpFlashcards(
-    userId: string,
-    documentId: string,
-    conceptId?: string,
-  ): Promise<number> {
-    try {
-      const result = await this.cardGeneration.generateFromDocument(
-        userId,
-        documentId,
-        { count: FLASHCARD_COUNT },
-      );
-      if (conceptId) {
-        for (const card of result.cards) {
-          await this.concepts
-            .linkCard(userId, conceptId, card.id)
-            .catch(() => undefined);
-        }
-      }
-      return result.created;
-    } catch (error) {
-      this.logger.warn('Learning operation failed.');
-      return 0;
-    }
   }
 
   /** The flashcards this lesson generated (standard-flow step 9). They are the

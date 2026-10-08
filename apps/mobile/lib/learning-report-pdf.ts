@@ -23,11 +23,18 @@ export interface LearningReportPdfCopy {
   completedSessions: string;
   reviews: string;
   lastActivity: string;
-  assessmentSubmissions: string;
-  averageAssessmentScore: string;
-  exerciseAttempts: string;
-  correctAttempts: string;
-  averageExerciseScore: string;
+  completedLearning: string;
+  knowledge: string;
+  understanding: string;
+  application: string;
+  reasoning: string;
+  criticalReflection: string;
+  perspective: string;
+  evidenceCount: string;
+  started: string;
+  finalized: string;
+  objective: string;
+  result: string;
   noEvidence: string;
   notAvailable: string;
   privacyNote: string;
@@ -52,10 +59,6 @@ function row(label: string, value: unknown, fallback: string): string {
   return `<div class="row"><dt>${esc(label)}</dt><dd><bdi dir="auto">${esc(present(value, fallback))}</bdi></dd></div>`;
 }
 
-function score(value: number | null, fallback: string): string {
-  return value === null ? fallback : `${Math.round(value * 10) / 10}%`;
-}
-
 /** Pure, deterministic HTML used by Expo Print on native and Web. */
 export function learningReportHtml(
   report: LearningReportView,
@@ -77,6 +80,32 @@ export function learningReportHtml(
     ? new Date(observed.lastLearningActivityAt).toLocaleDateString(formatLocale)
     : copy.notAvailable;
   const generated = new Date(report.generatedAt).toLocaleString(formatLocale);
+  const dimensionLabels = {
+    knowledge: copy.knowledge,
+    understanding: copy.understanding,
+    application: copy.application,
+    reasoning: copy.reasoning,
+    critical_reflection: copy.criticalReflection,
+    perspective: copy.perspective,
+  } as const;
+  const dimensionMetrics = assessed.evidenceProgress.dimensions.map((dimension) => `
+    <div class="metric"><strong>${dimension.percent === null ? esc(copy.notAvailable) : `${Math.round(dimension.percent)}%`}</strong>${esc(dimensionLabels[dimension.dimension])}
+      <small>${dimension.evaluatedEvidenceCount} · ${esc(copy.evidenceCount)}</small>
+    </div>`).join('');
+  const completionHistory = assessed.completionHistory.items.map((item) => {
+    const started = item.startedAt ? new Date(item.startedAt).toLocaleString(formatLocale) : copy.notAvailable;
+    const finalized = new Date(item.finalizedAt).toLocaleString(formatLocale);
+    const result = item.result.score === null
+      ? item.result.outcome
+      : `${item.result.outcome} · ${Math.round(item.result.score * 100)}%`;
+    return `<article class="completion"><h3>${esc(item.title)}</h3><dl>
+      ${row(copy.started, started, copy.notAvailable)}
+      ${row(copy.finalized, finalized, copy.notAvailable)}
+      ${row(copy.objective, item.objective, copy.notAvailable)}
+      ${row(copy.result, result, copy.notAvailable)}
+      ${row(`${item.provenance.evidenceRefIds.length} · ${copy.evidenceCount}`, new Date(item.provenance.evaluatedAt).toLocaleString(formatLocale), copy.notAvailable)}
+    </dl></article>`;
+  }).join('');
 
   return `<!doctype html>
 <html lang="${esc(report.locale)}" dir="${direction}">
@@ -99,6 +128,9 @@ export function learningReportHtml(
   .metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3mm; }
   .metric { padding: 3mm; background: #f7f6fb; border-radius: 3mm; }
   .metric strong { display: block; font-size: 17pt; color: #332a8e; }
+  .metric small { display: block; margin-top: 1mm; color: #777687; }
+  .completion { margin-top: 4mm; padding-top: 3mm; border-top: 1px solid #eeedf3; break-inside: avoid; }
+  .completion h3 { margin: 0 0 2mm; font-size: 11pt; }
   .empty { color: #777687; font-style: italic; }
   footer { margin-top: 9mm; padding-top: 4mm; border-top: 1px solid #dedce9; color: #666577; font-size: 8.5pt; }
   @media print { section { break-inside: avoid-page; } }
@@ -125,13 +157,8 @@ export function learningReportHtml(
 </div><dl>${row(copy.lastActivity, lastActivity, copy.notAvailable)}
 ${observed.learnerProfile ? row(copy.learningProfile, `${observed.learnerProfile.level.score ?? copy.notAvailable} / 100 · ${observed.learnerProfile.interactions}`, copy.notAvailable) : `<p class="empty">${esc(copy.noEvidence)}</p>`}</dl></section>
 <section><h2>${esc(copy.assessed)}</h2><span class="source">${esc(copy.assessed)}</span>
-${assessed.evidenceAvailable ? `<dl>
-  ${row(copy.assessmentSubmissions, assessed.assessmentSubmissions, copy.notAvailable)}
-  ${row(copy.averageAssessmentScore, score(assessed.averageAssessmentScore, copy.notAvailable), copy.notAvailable)}
-  ${row(copy.exerciseAttempts, assessed.exerciseAttempts, copy.notAvailable)}
-  ${row(copy.correctAttempts, assessed.correctExerciseAttempts, copy.notAvailable)}
-  ${row(copy.averageExerciseScore, score(assessed.averageExerciseScore === null ? null : assessed.averageExerciseScore * 100, copy.notAvailable), copy.notAvailable)}
-</dl>` : `<p class="empty">${esc(copy.noEvidence)}</p>`}
+${assessed.evidenceAvailable ? `<div class="metrics">${dimensionMetrics}</div>
+  <h3>${esc(copy.completedLearning)}</h3>${completionHistory || `<p class="empty">${esc(copy.noEvidence)}</p>`}` : `<p class="empty">${esc(copy.noEvidence)}</p>`}
 </section>
 <footer><p>${esc(copy.provenanceNote)}</p><p>${esc(copy.privacyNote)}</p></footer>
 </body></html>`;

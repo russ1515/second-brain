@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import type { Goal, GoalPeriod, LearningDeletionPreview } from '@second-brain/shared';
+import type {
+  ExperienceSession,
+  ExperienceSessionPage,
+  Goal,
+  GoalPeriod,
+  LearningDeletionPreview,
+} from '@second-brain/shared';
 import { api } from '../lib/client';
 import { useTokens } from '../lib/design/theme';
 import type { ColorScale } from '../lib/design/tokens';
@@ -23,6 +29,8 @@ export default function GoalsScreen() {
   const { t } = useI18n();
   const router = useRouter();
   const [goals, setGoals] = useState<Goal[] | null>(null);
+  const [learningSessions, setLearningSessions] = useState<ExperienceSession[]>([]);
+  const [experienceSessionId, setExperienceSessionId] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [period, setPeriod] = useState<GoalPeriod>('daily');
@@ -32,10 +40,21 @@ export default function GoalsScreen() {
   const [previewingDelete, setPreviewingDelete] = useState(false);
   const [previewDeleteFailed, setPreviewDeleteFailed] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
 
   const load = useCallback(async () => {
     try {
-      setGoals(await api<Goal[]>('/goals'));
+      const [nextGoals, sessions] = await Promise.all([
+        api<Goal[]>('/goals'),
+        api<ExperienceSessionPage>('/experience-sessions?limit=50'),
+      ]);
+      const eligible = sessions.items.filter((session) =>
+        (session.type === 'learning' || session.type === 'language') &&
+        session.status !== 'abandoned' && session.status !== 'failed');
+      setGoals(nextGoals);
+      setLearningSessions(eligible);
+      setExperienceSessionId((current) => current || eligible[0]?.id || '');
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -47,11 +66,45 @@ export default function GoalsScreen() {
   }, [load]);
 
   const add = async () => {
-    if (!title.trim()) return;
+    if (!title.trim() || !experienceSessionId) return;
     setBusy(true);
     try {
-      await api<Goal>('/goals', { method: 'POST', body: { period, title: title.trim() } });
+      await api<Goal>('/goals', {
+        method: 'POST',
+        body: { period, title: title.trim(), experienceSessionId },
+      });
       setTitle('');
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveEdit = async (goal: Goal) => {
+    const nextTitle = editingTitle.trim();
+    if (!nextTitle) return;
+    setBusy(true);
+    try {
+      await api<Goal>(`/goals/${goal.id}`, { method: 'PATCH', body: { title: nextTitle } });
+      setEditingGoalId(null);
+      setEditingTitle('');
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setPrimary = async (goal: Goal, sessionId: string) => {
+    setBusy(true);
+    try {
+      await api<Goal>(`/goals/${goal.id}/primary`, {
+        method: 'PATCH',
+        body: { experienceSessionId: sessionId },
+      });
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -116,6 +169,32 @@ export default function GoalsScreen() {
       {error ? <ErrorBanner message={error} /> : null}
 
       <Card style={styles.addCard}>
+        <Text style={styles.sectionTitle}>{t('goals.selectLearning')}</Text>
+        {learningSessions.length ? (
+          <View style={styles.chips}>
+            {learningSessions.map((session) => (
+              <Pressable
+                key={session.id}
+                style={[styles.learningChip, experienceSessionId === session.id && styles.chipOn]}
+                onPress={() => setExperienceSessionId(session.id)}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: experienceSessionId === session.id }}
+              >
+                <Text
+                  numberOfLines={1}
+                  style={[styles.chipText, experienceSessionId === session.id && styles.chipTextOn]}
+                >
+                  {session.title ?? session.intent ?? session.type}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : (
+          <View style={styles.noLearning}>
+            <Text style={styles.empty}>{t('goals.noLearning')}</Text>
+            <Button label={t('teach.title')} onPress={() => router.push('/learn' as never)} />
+          </View>
+        )}
         <TextInput
           style={styles.input}
           placeholder={t('goals.placeholder')}
@@ -134,7 +213,12 @@ export default function GoalsScreen() {
             </Pressable>
           ))}
         </View>
-        <Button label={t('goals.addBtn')} onPress={add} busy={busy} disabled={!title.trim()} />
+        <Button
+          label={t('goals.addBtn')}
+          onPress={add}
+          busy={busy}
+          disabled={!title.trim() || !experienceSessionId}
+        />
       </Card>
 
       {PERIODS.map((p) => {
@@ -152,9 +236,58 @@ export default function GoalsScreen() {
                       {g.status === 'done' ? '☑' : '☐'}
                     </Text>
                   </Pressable>
-                  <Text style={[styles.goalText, g.status === 'done' && styles.goalDone]} numberOfLines={2}>
-                    {g.title}
-                  </Text>
+                  <View style={styles.goalBody}>
+                    {editingGoalId === g.id ? (
+                      <View style={styles.editRow}>
+                        <TextInput
+                          style={[styles.input, styles.editInput]}
+                          value={editingTitle}
+                          onChangeText={setEditingTitle}
+                          autoFocus
+                          editable={!busy}
+                        />
+                        <Button
+                          label={t('goals.save')}
+                          variant="ghost"
+                          disabled={!editingTitle.trim() || busy}
+                          onPress={() => { void saveEdit(g); }}
+                        />
+                      </View>
+                    ) : (
+                      <Text style={[styles.goalText, g.status === 'done' && styles.goalDone]} numberOfLines={2}>
+                        {g.title}
+                      </Text>
+                    )}
+                    {g.learningLinks.map((link) => (
+                      <View key={link.experienceSessionId} style={styles.linkRow}>
+                        <Text style={styles.learningLabel} numberOfLines={1}>
+                          {link.learningTitle ?? link.learningType}
+                        </Text>
+                        {link.isPrimary ? (
+                          <Text style={styles.primaryLabel}>{t('goals.primary')}</Text>
+                        ) : (
+                          <Pressable
+                            onPress={() => { void setPrimary(g, link.experienceSessionId); }}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('goals.setPrimary')}
+                          >
+                            <Text style={styles.reviewLinkText}>{t('goals.setPrimary')}</Text>
+                          </Pressable>
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                  <Pressable
+                    onPress={() => {
+                      setEditingGoalId(g.id);
+                      setEditingTitle(g.title);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('goals.edit')}
+                    hitSlop={6}
+                  >
+                    <Text style={styles.edit}>✎</Text>
+                  </Pressable>
                   {g.status !== 'done' ? <Pressable onPress={() => router.push({ pathname: '/revision', params: { goalId: g.id } })} accessibilityRole="link" accessibilityLabel={t('review9.goalReview')} style={styles.reviewLink}><Text style={styles.reviewLinkText}>{t('review9.goalReview')}</Text></Pressable> : null}
                   <Pressable onPress={() => prepareRemove(g)} accessibilityRole="button" accessibilityLabel={t('learningControl.deleteGoal')} hitSlop={6}>
                     <Text style={styles.remove}>✕</Text>
@@ -195,9 +328,11 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   kicker: { fontSize: 13, fontWeight: '700', color: c.primary, textTransform: 'uppercase', letterSpacing: 1.2 },
   intro: { fontSize: 15, color: c.textSecondary, lineHeight: 21 },
   addCard: { gap: 10 },
+  noLearning: { gap: 10, alignItems: 'flex-start' },
   input: { backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12, fontSize: 15, color: c.textPrimary },
   chips: { flexDirection: 'row', gap: 8 },
   chip: { borderWidth: 1, borderColor: c.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, backgroundColor: c.surfaceElevated },
+  learningChip: { maxWidth: 260, borderWidth: 1, borderColor: c.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: c.surfaceElevated },
   chipOn: { borderColor: c.primary, backgroundColor: c.primary },
   chipText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
   chipTextOn: { color: c.onPrimary },
@@ -211,6 +346,13 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   check: { fontSize: 22, color: c.textSecondary },
   checkOn: { color: c.success },
   goalText: { flex: 1, fontSize: 15, color: c.textPrimary },
+  goalBody: { flex: 1, minWidth: 0, gap: 6 },
+  editRow: { gap: 8 },
+  editInput: { minHeight: 44 },
+  linkRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  learningLabel: { flexShrink: 1, fontSize: 12, color: c.textMuted },
+  primaryLabel: { fontSize: 12, color: c.success, fontWeight: '700' },
+  edit: { fontSize: 18, color: c.primary, fontWeight: '700', paddingHorizontal: 4 },
   goalDone: { color: c.textMuted, textDecorationLine: 'line-through' },
   remove: { fontSize: 16, color: c.error, fontWeight: '700', paddingHorizontal: 4 },
   reviewLink: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 6 },

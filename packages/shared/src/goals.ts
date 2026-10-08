@@ -8,6 +8,14 @@
 export type GoalPeriod = 'daily' | 'weekly' | 'monthly';
 export type GoalStatus = 'pending' | 'done';
 
+export interface GoalLearningLink {
+  experienceSessionId: string;
+  learningTitle: string | null;
+  learningType: 'learning' | 'language';
+  learningStatus: 'active' | 'paused' | 'completed' | 'abandoned' | 'failed';
+  isPrimary: boolean;
+}
+
 export interface Goal {
   id: string;
   period: GoalPeriod;
@@ -15,11 +23,23 @@ export interface Goal {
   status: GoalStatus;
   createdAt: string;
   completedAt: string | null;
+  /** A goal is always attached to at least one owned learning journey. */
+  learningLinks: GoalLearningLink[];
 }
 
 export interface CreateGoalRequest {
   period: GoalPeriod;
   title: string;
+  experienceSessionId: string;
+}
+
+export interface UpdateGoalRequest {
+  period?: GoalPeriod;
+  title?: string;
+}
+
+export interface SetPrimaryGoalRequest {
+  experienceSessionId: string;
 }
 
 export type ExamPriority = 'low' | 'medium' | 'high';

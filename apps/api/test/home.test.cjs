@@ -157,10 +157,10 @@ test('Home degrades partially, keeps verified data and scopes every source to on
   assert.equal(overview.partial, true);
   assert.equal(overview.sources.calendar, 'unavailable');
   assert.equal(overview.nextBestAction.destination.path, '/revision');
-  assert.equal(calls.length, 10);
+  assert.equal(calls.length, 11);
   assert.ok(calls.every((call) => call.userId === 'owned-user'));
   assert.deepEqual(calls.map((call) => call.source).sort(), [
-    'calendar', 'coach', 'exams', 'foresight', 'goals', 'initiatives', 'progress', 'recommendations', 'reviews', 'sessions',
+    'calendar', 'coach', 'evidence', 'exams', 'foresight', 'goals', 'initiatives', 'progress', 'recommendations', 'reviews', 'sessions',
   ]);
 });
 
@@ -177,6 +177,7 @@ test('Home does not invent a priority when all business sources are unavailable'
     goalsError: error,
     calendarError: error,
     progressError: error,
+    evidenceError: error,
   });
   const overview = await service.overview('u1', NOW);
   assert.equal(overview.nextBestAction, null);
@@ -222,7 +223,7 @@ test('Mobile Home consumes one aggregate endpoint and keeps the compact content 
   assert.match(source, /placeholderData:/);
   assert.match(source, /queryFn: \(\{ signal \}\)/);
   const content = source.slice(source.indexOf('return (', source.indexOf('const data =')));
-  const order = ['<NextBestActionCard', '{resumeSection}', '{upcomingSection}', '{goalSection}', '{progressSection}', '<HomeQuickActions'];
+  const order = ['<NextBestActionCard', '{resumeSection}', 'home-learning-calendar', '{goalSection}', '{progressSection}'];
   let previous = -1;
   for (const marker of order) {
     const current = content.indexOf(marker, previous + 1);
@@ -230,7 +231,8 @@ test('Mobile Home consumes one aggregate endpoint and keeps the compact content 
     previous = current;
   }
   const decisionComponents = fs.readFileSync(path.resolve(__dirname, '../../mobile/components/home/decision.tsx'), 'utf8');
-  assert.match(decisionComponents, /accessibilityState=\{\{ expanded: whyOpen \}\}/);
+  assert.doesNotMatch(decisionComponents, /whyOpen|UpcomingSection|HomeQuickActions/);
+  assert.match(source, /<EvidenceProgressPanel/);
   assert.match(decisionComponents, /isReduceMotionEnabled/);
 });
 
@@ -247,13 +249,10 @@ test('Home resume cards preview and invoke the central learning deletion operati
   assert.match(screen, /invalidateLearningViews/);
 });
 
-test('Home upcoming and main goal expose ownership-checked preview before deletion', () => {
+test('Home main goal exposes ownership-checked preview before deletion', () => {
   const screen = fs.readFileSync(path.resolve(__dirname, '../../mobile/app/(tabs)/index.tsx'), 'utf8');
   const components = fs.readFileSync(path.resolve(__dirname, '../../mobile/components/home/decision.tsx'), 'utf8');
-  assert.match(screen, /\/lessons\/\$\{action\.targetId\}\/deletion-preview/);
-  assert.match(screen, /\/calendar\/events\/\$\{action\.targetId\}\/deletion-preview/);
   assert.match(screen, /\/goals\/\$\{goalId\}\/deletion-preview/);
-  assert.match(components, /item\.deletion\?\.kind === 'details-only'/);
   assert.match(components, /<DeletionImpact/);
   assert.match(components, /export function MainGoalEmpty/);
   assert.match(components, /t\('goals\.none'\)/);
@@ -354,6 +353,13 @@ function makeService(options = {}) {
   const localization = {
     localizeForUser: async (_userId, texts) => options.translate ? options.translate(texts) : texts,
   };
+  const evidence = {
+    progress: call('evidence', options.evidenceProgress ?? {
+      completedCount: 0,
+      dimensions: [],
+      generatedAt: NOW.toISOString(),
+    }, options.evidenceError),
+  };
   return {
     calls,
     service: new HomeOverviewService(
@@ -369,6 +375,7 @@ function makeService(options = {}) {
       calendar,
       mentor,
       localization,
+      evidence,
     ),
   };
 }
