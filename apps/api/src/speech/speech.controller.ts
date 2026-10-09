@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Logger,
   NotImplementedException,
+  Optional,
   Post,
   ServiceUnavailableException,
   UploadedFile,
@@ -14,11 +15,18 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
 import type {
   SpeechCapabilities,
   SynthesisResult,
   TranscriptionResult,
+} from '@second-brain/shared';
+import {
+  LANGUAGE_MASTERY_POLICY_VERSION,
+  RLLE_LANGUAGE_MASTERY_MAPPING_AUDIT,
+  type LanguageMasterySpeechCoverage,
+  type UXFeatureFlags,
 } from '@second-brain/shared';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import type { UploadedFileLike } from '../documents/extraction/text-extraction.service';
@@ -38,15 +46,44 @@ import { SynthesizeDto } from './dto/synthesize.dto';
 export class SpeechController {
   private readonly logger = new Logger(SpeechController.name);
 
-  constructor(private readonly speech: SpeechService) {}
+  constructor(
+    private readonly speech: SpeechService,
+    @Optional() private readonly config?: ConfigService,
+  ) {}
 
   @Get('capabilities')
   capabilities(): SpeechCapabilities {
+    const configured = this.config?.get<Omit<LanguageMasterySpeechCoverage, 'enabled' | 'policyVersion'>>(
+      'speech.languageMasteryV1',
+    );
+    const features = this.config?.get<UXFeatureFlags>('features');
+    const transcriptionLanguageCodes = configured?.transcriptionLanguageCodes ?? [];
+    const synthesisLanguageCodes = configured?.synthesisLanguageCodes ?? [];
+    const pronunciationAssessmentLanguageCodes =
+      configured?.pronunciationAssessmentLanguageCodes ?? [];
+    const fullyCoveredLanguage = transcriptionLanguageCodes.some((languageCode) =>
+      synthesisLanguageCodes.includes(languageCode)
+      && pronunciationAssessmentLanguageCodes.includes(languageCode));
+    const strictPathEnabled = features?.languageMasteryV1 === true
+      && RLLE_LANGUAGE_MASTERY_MAPPING_AUDIT.activationReady
+      && this.speech.supportsSynthesis
+      && this.speech.supportsAnalysis
+      && fullyCoveredLanguage;
     return {
       provider: this.speech.activeProvider,
       transcription: true,
       synthesis: this.speech.supportsSynthesis,
       audioAnalysis: this.speech.supportsAnalysis,
+      languageMasteryV1: {
+        // This is an activation claim, not merely a configured feature flag.
+        // The client still applies the returned per-language allowlists before
+        // presenting a language as completable.
+        enabled: strictPathEnabled,
+        policyVersion: LANGUAGE_MASTERY_POLICY_VERSION,
+        transcriptionLanguageCodes,
+        synthesisLanguageCodes,
+        pronunciationAssessmentLanguageCodes,
+      },
     };
   }
 

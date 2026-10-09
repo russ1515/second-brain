@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -26,6 +28,7 @@ import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
 import { localeDirective, resolveLocale } from '../common/learning-locale';
+import { accountDataLockKey } from '../common/account-data-lock';
 
 /** A question as stored — carries the answer key/rubric used for grounded
  *  grading. The key is NEVER sent to a client (see toQuestionView). */
@@ -45,6 +48,30 @@ interface StoredAssessmentPayload {
   version: 2;
   teacherPolicy: TeacherPolicySnapshot;
   questions: StoredQuestion[];
+  languageMastery?: LanguageMasteryAssessmentMetadata;
+}
+
+export interface LanguageMasteryAssessmentMetadata {
+  policyVersion: string;
+  profileId: string;
+  courseSessionId: string;
+  unitId: string;
+  lessonId: string;
+  attemptId: string;
+  helpUsed: boolean;
+  answerLeak: boolean;
+  /** Once a graded submission is sealed, help/leak flags can no longer race
+   * with its mastery decision. Null/undefined denotes a legacy active attempt. */
+  sealedAt?: string | null;
+  createdAt: string;
+}
+
+export interface InternalAssessmentCreateOptions {
+  /** Trusted server directive; never accepted from a public DTO. */
+  directive?: string;
+  languageMastery?: Omit<LanguageMasteryAssessmentMetadata, 'helpUsed' | 'answerLeak' | 'sealedAt' | 'createdAt'>;
+  lessonId?: string;
+  contentVersion?: number;
 }
 
 const EXAMINER_PERSONA =
@@ -120,11 +147,24 @@ export class ExaminerService {
   async create(
     userId: string,
     dto: CreateAssessmentRequest,
+    internal: InternalAssessmentCreateOptions = {},
   ): Promise<AssessmentView> {
     const type = dto.type;
     const topic = dto.topic.trim();
     const difficulty: AssessmentDifficulty = dto.difficulty ?? 'intermediate';
     const brief = TYPE_BRIEF[type];
+    if (internal.languageMastery && type !== 'open') {
+      throw new BadRequestException('Language autonomy assessments must use open production questions.');
+    }
+    if (internal.lessonId) {
+      const lesson = await this.prisma.lesson.findFirst({
+        where: { id: internal.lessonId, userId },
+        select: { id: true, contentVersion: true },
+      });
+      if (!lesson || lesson.contentVersion !== internal.contentVersion) {
+        throw new BadRequestException('Assessment lesson provenance is invalid.');
+      }
+    }
     const count =
       brief.fixedCount ??
       Math.min(20, Math.max(1, dto.questionCount ?? brief.defaultCount));
@@ -145,6 +185,8 @@ export class ExaminerService {
       brief,
       locale,
       teacherPolicy,
+      internal.directive,
+      Boolean(internal.languageMastery),
     );
     if (questions.length === 0) {
       throw new ServiceUnavailableException(
@@ -160,10 +202,21 @@ export class ExaminerService {
         title: this.titleFor(type, topic),
         level: difficulty,
         conceptId: dto.conceptId ?? null,
+        lessonId: internal.lessonId ?? null,
+        contentVersion: internal.contentVersion ?? null,
         questions: {
           version: 2,
           teacherPolicy,
           questions,
+          ...(internal.languageMastery ? {
+            languageMastery: {
+              ...this.validateLanguageMasteryMetadata(internal.languageMastery),
+              helpUsed: false,
+              answerLeak: false,
+              sealedAt: null,
+              createdAt: new Date().toISOString(),
+            },
+          } : {}),
         } as unknown as object,
       },
     });
@@ -201,6 +254,94 @@ export class ExaminerService {
     return this.toView(assessment, latest);
   }
 
+  async languageMasteryMetadata(
+    userId: string,
+    id: string,
+  ): Promise<LanguageMasteryAssessmentMetadata> {
+    const assessment = await this.requireOwned(userId, id);
+    const metadata = this.readPayload(assessment.questions).languageMastery;
+    if (!metadata) throw new BadRequestException('Assessment is not a language mastery attempt.');
+    return { ...metadata };
+  }
+
+  async markLanguageMasteryHelpUsed(
+    userId: string,
+    id: string,
+  ): Promise<LanguageMasteryAssessmentMetadata> {
+    return this.markLanguageMasteryFlag(userId, id, 'helpUsed');
+  }
+
+  async markLanguageMasteryAnswerLeak(
+    userId: string,
+    id: string,
+  ): Promise<LanguageMasteryAssessmentMetadata> {
+    return this.markLanguageMasteryFlag(userId, id, 'answerLeak');
+  }
+
+  async sealLanguageMasterySubmission(
+    userId: string,
+    id: string,
+  ): Promise<LanguageMasteryAssessmentMetadata> {
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const assessment = await tx.assessment.findUnique({ where: { id } });
+      if (!assessment || assessment.userId !== userId) {
+        throw new NotFoundException('Assessment not found.');
+      }
+      const submission = await tx.assessmentSubmission.findFirst({
+        where: { assessmentId: id, userId },
+        select: { id: true },
+      });
+      if (!submission) {
+        throw new ConflictException('The language mastery submission is not graded yet.');
+      }
+      const payload = this.readPayload(assessment.questions);
+      if (!payload.languageMastery) {
+        throw new BadRequestException('Assessment is not a language mastery attempt.');
+      }
+      if (payload.languageMastery.sealedAt) return { ...payload.languageMastery };
+      const languageMastery = {
+        ...payload.languageMastery,
+        sealedAt: new Date().toISOString(),
+      };
+      await tx.assessment.update({
+        where: { id },
+        data: {
+          questions: {
+            version: 2,
+            teacherPolicy: payload.teacherPolicy,
+            questions: payload.questions,
+            languageMastery,
+          } as unknown as object,
+        },
+      });
+      return languageMastery;
+    });
+  }
+
+  assessmentResultTotals(results: readonly GradedAnswer[]): {
+    awarded: number;
+    maximum: number;
+    ratio: number;
+  } | null {
+    if (!Array.isArray(results) || results.length === 0) return null;
+    let awarded = 0;
+    let maximum = 0;
+    for (const item of results) {
+      if (
+        !Number.isFinite(item.awarded)
+        || !Number.isFinite(item.max)
+        || item.max <= 0
+        || item.awarded < 0
+        || item.awarded > item.max
+      ) return null;
+      awarded += item.awarded;
+      maximum += item.max;
+    }
+    return maximum > 0 ? { awarded, maximum, ratio: awarded / maximum } : null;
+  }
+
   async submit(
     userId: string,
     id: string,
@@ -223,6 +364,7 @@ export class ExaminerService {
             version: 2,
             teacherPolicy,
             questions,
+            ...(payload.languageMastery ? { languageMastery: payload.languageMastery } : {}),
           } as unknown as object,
         },
       });
@@ -269,6 +411,8 @@ export class ExaminerService {
     brief: (typeof TYPE_BRIEF)[AssessmentType],
     locale: string,
     teacherPolicy: TeacherPolicySnapshot,
+    internalDirective?: string,
+    openOnly = false,
   ): Promise<StoredQuestion[]> {
     const countLine =
       brief.fixedCount === 1
@@ -281,6 +425,10 @@ export class ExaminerService {
       'Return ONLY JSON: {"questions":[{"prompt": string, "format": "mcq"|"open",',
       '"options": string[] (only for mcq), "points": number,',
       '"answerKey": string, "rubric": string}]}.',
+      openOnly
+        ? 'This is an autonomy assessment: return only open production questions. No MCQ, options, hint, translation of the expected answer, model to copy or correction before submission.'
+        : '',
+      internalDirective?.trim().slice(0, 4_000) ?? '',
       localeDirective(locale),
     ].join(' ');
 
@@ -308,6 +456,7 @@ export class ExaminerService {
     const list = parsed && Array.isArray(parsed.questions) ? parsed.questions : [];
     return list
       .filter((q): q is Record<string, unknown> => typeof q === 'object' && q !== null)
+      .filter((q) => !openOnly || q.format === 'open')
       .map((q) => {
         const format: QuestionFormat = q.format === 'mcq' ? 'mcq' : 'open';
         const options =
@@ -510,12 +659,13 @@ export class ExaminerService {
   private readPayload(value: unknown): {
     questions: StoredQuestion[];
     teacherPolicy: TeacherPolicySnapshot | null;
+    languageMastery: LanguageMasteryAssessmentMetadata | null;
   } {
     if (Array.isArray(value)) {
-      return { questions: value as StoredQuestion[], teacherPolicy: null };
+      return { questions: value as StoredQuestion[], teacherPolicy: null, languageMastery: null };
     }
     if (!value || typeof value !== 'object') {
-      return { questions: [], teacherPolicy: null };
+      return { questions: [], teacherPolicy: null, languageMastery: null };
     }
     const payload = value as Partial<StoredAssessmentPayload>;
     return {
@@ -525,7 +675,77 @@ export class ExaminerService {
       teacherPolicy: isTeacherPolicySnapshot(payload.teacherPolicy)
         ? payload.teacherPolicy
         : null,
+      languageMastery: this.isLanguageMasteryMetadata(payload.languageMastery)
+        ? payload.languageMastery
+        : null,
     };
+  }
+
+  private async markLanguageMasteryFlag(
+    userId: string,
+    id: string,
+    flag: 'helpUsed' | 'answerLeak',
+  ): Promise<LanguageMasteryAssessmentMetadata> {
+    // Both flags are irreversible evidence. Serialize their read/modify/write so
+    // concurrent help and answer-leak signals cannot overwrite each other.
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const assessment = await tx.assessment.findUnique({ where: { id } });
+      if (!assessment || assessment.userId !== userId) {
+        throw new NotFoundException('Assessment not found.');
+      }
+      const payload = this.readPayload(assessment.questions);
+      if (!payload.languageMastery) {
+        throw new BadRequestException('Assessment is not a language mastery attempt.');
+      }
+      if (payload.languageMastery[flag]) return { ...payload.languageMastery };
+      if (payload.languageMastery.sealedAt) {
+        throw new ConflictException('This autonomy submission is already sealed.');
+      }
+      const languageMastery = { ...payload.languageMastery, [flag]: true };
+      await tx.assessment.update({
+        where: { id },
+        data: {
+          questions: {
+            version: 2,
+            teacherPolicy: payload.teacherPolicy,
+            questions: payload.questions,
+            languageMastery,
+          } as unknown as object,
+        },
+      });
+      return languageMastery;
+    });
+  }
+
+  private validateLanguageMasteryMetadata(
+    value: Omit<LanguageMasteryAssessmentMetadata, 'helpUsed' | 'answerLeak' | 'sealedAt' | 'createdAt'>,
+  ): Omit<LanguageMasteryAssessmentMetadata, 'helpUsed' | 'answerLeak' | 'sealedAt' | 'createdAt'> {
+    for (const [key, candidate] of Object.entries(value)) {
+      if (typeof candidate !== 'string' || candidate.trim().length === 0 || candidate.length > 240) {
+        throw new BadRequestException(`Invalid language mastery ${key}.`);
+      }
+    }
+    return { ...value };
+  }
+
+  private isLanguageMasteryMetadata(value: unknown): value is LanguageMasteryAssessmentMetadata {
+    if (!value || typeof value !== 'object') return false;
+    const item = value as Partial<LanguageMasteryAssessmentMetadata>;
+    return [
+      item.policyVersion,
+      item.profileId,
+      item.courseSessionId,
+      item.unitId,
+      item.lessonId,
+      item.attemptId,
+      item.createdAt,
+    ].every((candidate) => typeof candidate === 'string' && candidate.length > 0)
+      && typeof item.helpUsed === 'boolean'
+      && typeof item.answerLeak === 'boolean'
+      && (item.sealedAt === undefined || item.sealedAt === null
+        || (typeof item.sealedAt === 'string' && item.sealedAt.length > 0));
   }
 
   private asDifficulty(value: string | null): AssessmentDifficulty | null {

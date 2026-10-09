@@ -3,6 +3,11 @@ import type { CefrLevel, ImmersionIntensity, LanguageCorrectionIntensity } from 
 import type { ActionDestination, NextBestAction } from './next-best-action';
 import type { SupportedLanguageCode } from './languages';
 import type { TutorMessageView } from './tutor';
+import type { AssessmentSubmissionView, AssessmentView } from './assessment';
+import type {
+  LanguageMasteryDecision,
+  LanguageTrainingEvidence,
+} from './language-mastery';
 
 /**
  * Real Life Language Engine (RLLE)
@@ -105,7 +110,51 @@ export interface RlleCurriculumUnitTemplate {
   canDoIds: readonly string[];
 }
 
-export type RlleUnitStatus = 'locked' | 'available' | 'in-progress' | 'completed';
+export type RlleUnitStatus =
+  | 'locked'
+  | 'available'
+  | 'in-progress'
+  | 'completed'
+  | 'legacy-unverified';
+
+export type RlleMilestoneMasteryStatus =
+  | 'training'
+  | 'autonomy-ready'
+  | 'autonomy-starting'
+  | 'autonomy-active'
+  | 'autonomy-grading'
+  | 'remediation'
+  | 'remediation-starting'
+  | 'not-evaluable'
+  | 'mastered'
+  | 'legacy-unverified';
+
+export interface RlleAutonomyAttemptSummary {
+  id: string;
+  assessmentId: string | null;
+  status: 'starting' | 'active' | 'grading' | 'evaluated' | 'technical-error';
+  helpUsed: boolean;
+  answerLeak: boolean;
+  decision: LanguageMasteryDecision | null;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+export interface RlleMilestoneMasteryState {
+  unitId: string;
+  status: RlleMilestoneMasteryStatus;
+  trainingEvidence: LanguageTrainingEvidence[];
+  attempts: RlleAutonomyAttemptSummary[];
+  activeAttemptId: string | null;
+  remediation: null | {
+    sourceAttemptId: string;
+    requiredExerciseCount: number;
+    completedExerciseCount: number;
+    generationKey?: string;
+    lessonId?: string;
+  };
+  masteredAt: string | null;
+}
 
 export interface RlleCurriculumUnit extends RlleCurriculumUnitTemplate {
   status: RlleUnitStatus;
@@ -284,13 +333,19 @@ export interface RlleCourseView {
   correctionIntensity: LanguageCorrectionIntensity;
   status: 'not-started' | 'active' | 'paused' | 'completed';
   units: RlleCurriculumUnit[];
+  /** Server-authoritative proof state. Historical completions that predate the
+   * policy are explicitly legacy-unverified and are never backfilled as 90%. */
+  masteryPolicyVersion: string;
+  milestoneMastery: RlleMilestoneMasteryState[];
   currentLesson: RlleLessonOutline | null;
   currentMission: RlleWorldMissionAttempt | null;
   canDoMap: RlleCanDoCapability[];
   gaps: RlleFunctionalGap[];
   mistakeMemory: RlleMistakeMemoryItem[];
   repairLoops: RlleRepairLoop[];
-  latestAssessment: RlleAssessment | null;
+  /** Latest open-production autonomy assessment for the current milestone.
+   * Placement/level assessment remains represented separately by RlleAssessment. */
+  latestAssessment: AssessmentView | null;
   progress: RlleCourseProgress;
   experienceSession: ExperienceSession | null;
   nextBestAction: NextBestAction | null;
@@ -336,6 +391,47 @@ export interface CompleteRlleLessonRequest {
   /** Only stages the server actually persisted as completed. */
   completedStages: RlleLessonStageKind[];
   controlledEvidence?: RecordRlleEvidenceRequest[];
+}
+
+export interface StartRlleAutonomyRequest {
+  experienceSessionId: string;
+  lessonId: string;
+  idempotencyKey: string;
+}
+
+export interface RlleAutonomyStartResponse {
+  assessment: AssessmentView;
+  course: RlleCourseView;
+}
+
+export interface MarkRlleAutonomyHelpRequest {
+  experienceSessionId: string;
+  lessonId: string;
+  assessmentId: string;
+}
+
+export interface RlleAutonomyHelpResponse {
+  invalidatedForMastery: true;
+  course: RlleCourseView;
+}
+
+export interface SubmitRlleAutonomyRequest {
+  experienceSessionId: string;
+  lessonId: string;
+  assessmentId: string;
+  answers: string[];
+}
+
+export interface StartRlleRemediationRequest {
+  experienceSessionId: string;
+  lessonId: string;
+  idempotencyKey: string;
+}
+
+export interface RlleAutonomySubmissionResponse {
+  submission: AssessmentSubmissionView;
+  decision: LanguageMasteryDecision;
+  course: RlleCourseView;
 }
 
 export interface RlleMissionTurnRequest {

@@ -7,9 +7,10 @@ const ROOT = path.resolve(__dirname, '../../..');
 const dockerfile = fs.readFileSync(path.join(ROOT, 'Dockerfile.p1-user'), 'utf8');
 const nginx = fs.readFileSync(path.join(ROOT, 'deploy/nginx/p1-user.conf'), 'utf8');
 
-test('P1 User export defaults the two approved UX flags off and ignores dotenv', () => {
+test('P1 User export defaults the approved UX flags off and ignores dotenv', () => {
   assert.match(dockerfile, /^ARG EXPO_PUBLIC_FEATURE_NEW_APP_SHELL=false$/m);
   assert.match(dockerfile, /^ARG EXPO_PUBLIC_FEATURE_NEW_LANDING=false$/m);
+  assert.match(dockerfile, /^ARG EXPO_PUBLIC_FEATURE_LANGUAGE_MASTERY_V1=false$/m);
   assert.match(dockerfile, /^\s*EXPO_NO_DOTENV=1 \\$/m);
   assert.match(
     dockerfile,
@@ -19,6 +20,10 @@ test('P1 User export defaults the two approved UX flags off and ignores dotenv',
     dockerfile,
     /^\s*EXPO_PUBLIC_FEATURE_NEW_LANDING=\$\{EXPO_PUBLIC_FEATURE_NEW_LANDING\} \\$/m,
   );
+  assert.match(
+    dockerfile,
+    /^\s*EXPO_PUBLIC_FEATURE_LANGUAGE_MASTERY_V1=\$\{EXPO_PUBLIC_FEATURE_LANGUAGE_MASTERY_V1\} \\$/m,
+  );
 
   const publicFeatureNames = [...new Set(
     [...dockerfile.matchAll(/\b(EXPO_PUBLIC_FEATURE_[A-Z0-9_]+)/g)].map((match) => match[1]),
@@ -26,6 +31,7 @@ test('P1 User export defaults the two approved UX flags off and ignores dotenv',
   assert.deepEqual(publicFeatureNames, [
     'EXPO_PUBLIC_FEATURE_NEW_APP_SHELL',
     'EXPO_PUBLIC_FEATURE_NEW_LANDING',
+    'EXPO_PUBLIC_FEATURE_LANGUAGE_MASTERY_V1',
   ]);
 });
 

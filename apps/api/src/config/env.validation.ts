@@ -205,6 +205,18 @@ class EnvironmentVariables {
   @IsString()
   SPEECH_VOICE?: string;
 
+  @IsOptional()
+  @IsString()
+  LANGUAGE_MASTERY_TRANSCRIPTION_LANGUAGES?: string;
+
+  @IsOptional()
+  @IsString()
+  LANGUAGE_MASTERY_SYNTHESIS_LANGUAGES?: string;
+
+  @IsOptional()
+  @IsString()
+  LANGUAGE_MASTERY_PRONUNCIATION_ASSESSMENT_LANGUAGES?: string;
+
   // ── Daily journey notifications (Phase 5) ──
   @IsOptional()
   @IsString()
@@ -242,6 +254,10 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   FEATURE_NEW_LANDING?: string;
+
+  @IsOptional()
+  @IsString()
+  FEATURE_LANGUAGE_MASTERY_V1?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>) {

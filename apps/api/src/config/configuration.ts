@@ -1,4 +1,4 @@
-import { resolveUXFeatureFlags } from '@second-brain/shared';
+import { resolveUXFeatureFlags, verifiedLanguageCodes } from '@second-brain/shared';
 
 /** Typed application configuration, assembled from validated environment variables. */
 function strictBooleanEnvironment(name: string, fallback: boolean): boolean {
@@ -105,6 +105,20 @@ export default () => ({
     // Gemini key is shared with the LLM layer.
     geminiApiKey: process.env.GEMINI_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
+    // A provider accepting a language hint is not sufficient evidence that a
+    // mandatory mastery activity is evaluable. Operations must explicitly
+    // list each language verified with the active provider/model deployment.
+    languageMasteryV1: {
+      transcriptionLanguageCodes: verifiedLanguageCodes(
+        process.env.LANGUAGE_MASTERY_TRANSCRIPTION_LANGUAGES,
+      ),
+      synthesisLanguageCodes: verifiedLanguageCodes(
+        process.env.LANGUAGE_MASTERY_SYNTHESIS_LANGUAGES,
+      ),
+      pronunciationAssessmentLanguageCodes: verifiedLanguageCodes(
+        process.env.LANGUAGE_MASTERY_PRONUNCIATION_ASSESSMENT_LANGUAGES,
+      ),
+    },
   },
   auth: {
     accessSecret: process.env.JWT_ACCESS_SECRET as string,
@@ -181,6 +195,7 @@ export default () => ({
     documentIntelligence: process.env.FEATURE_DOCUMENT_INTELLIGENCE,
     newTutorExperience: process.env.FEATURE_NEW_TUTOR_EXPERIENCE,
     newLanding: process.env.FEATURE_NEW_LANDING,
+    languageMasteryV1: process.env.FEATURE_LANGUAGE_MASTERY_V1,
   }),
 });
 

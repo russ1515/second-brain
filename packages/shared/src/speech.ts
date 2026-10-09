@@ -3,6 +3,7 @@
 
 import type { LessonView } from './lesson';
 import type { TutorMessageView } from './tutor';
+import type { LanguageMasterySpeechCoverage } from './language-oral-capability';
 
 export type SpeechProviderName = 'gemini' | 'openai' | 'fake';
 
@@ -23,6 +24,9 @@ export interface SpeechCapabilities {
   transcription: boolean;
   synthesis: boolean;
   audioAnalysis: boolean;
+  /** Strict mastery rollout and per-language coverage verified for the active
+   * provider/model deployment. Missing lists mean no language is claimed. */
+  languageMasteryV1: LanguageMasterySpeechCoverage;
 }
 
 export interface SynthesisResult {

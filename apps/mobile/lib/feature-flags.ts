@@ -13,4 +13,5 @@ export const featureFlags = resolveUXFeatureFlags({
   documentIntelligence: process.env.EXPO_PUBLIC_FEATURE_DOCUMENT_INTELLIGENCE,
   newTutorExperience: process.env.EXPO_PUBLIC_FEATURE_NEW_TUTOR_EXPERIENCE,
   newLanding: process.env.EXPO_PUBLIC_FEATURE_NEW_LANDING,
+  languageMasteryV1: process.env.EXPO_PUBLIC_FEATURE_LANGUAGE_MASTERY_V1,
 });

@@ -105,16 +105,44 @@ export interface FinalizeLessonCompletionInput {
   dimensions?: Partial<Record<LearningEvidenceDimension, number | null>>;
 }
 
-export interface FinalizeLanguageUnitCompletionInput {
+export interface FinalizeLegacyLanguageUnitCompletionInput {
   languageProfileId: string;
   unitId: string;
   experienceSessionId: string;
-  /** Controlled evidence ids already persisted in the owned RLLE session. */
+  /** Capability evidence used by the currently deployed RLLE path while the
+   * stricter mastery policy remains behind its rollout gate. */
   evidenceIds: string[];
   startedAt?: string;
   goalIds?: string[];
   dimensions?: Partial<Record<LearningEvidenceDimension, number | null>>;
 }
+
+export interface FinalizeMasteryLanguageUnitCompletionInput {
+  languageProfileId: string;
+  unitId: string;
+  experienceSessionId: string;
+  /** The exact generated lesson revision assessed by the autonomy attempt. */
+  lessonId: string;
+  lessonContentVersion: number;
+  /** Owned, fully graded autonomy proof. The API recomputes its raw score from
+   * rubric points; callers cannot promote the rounded display score. */
+  assessmentSubmissionId: string;
+  policyVersion: import('./language-mastery').LanguageMasteryDecision['policyVersion'];
+  /** Candidate server-side milestone proof. The completion gate validates it
+   * against the owned lesson attempts and sealed assessment submission before
+   * the RLLE course state is allowed to unlock. */
+  mastery: import('./real-life-language').RlleMilestoneMasteryState;
+  /** @deprecated Pre-mastery capability ids remain readable in historical
+   * session state but cannot prove a new-policy completion. */
+  evidenceIds?: string[];
+  startedAt?: string;
+  goalIds?: string[];
+  dimensions?: Partial<Record<LearningEvidenceDimension, number | null>>;
+}
+
+export type FinalizeLanguageUnitCompletionInput =
+  | FinalizeLegacyLanguageUnitCompletionInput
+  | FinalizeMasteryLanguageUnitCompletionInput;
 
 export interface LearningDimensionProgress {
   dimension: LearningEvidenceDimension;

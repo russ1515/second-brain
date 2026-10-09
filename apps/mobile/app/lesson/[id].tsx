@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type {
@@ -7,6 +7,8 @@ import type {
   LessonFlowProgress,
   LessonFlowStepKey,
   LessonView,
+  PronunciationCoaching,
+  SubmitAttemptResponse,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
 import { saveLessonAsPdf } from '../../lib/lesson-pdf';
@@ -17,6 +19,10 @@ import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
 import { Markdown } from '../../components/markdown';
 import { ExerciseCard } from '../../components/exercise-card';
 import { SpeakButton } from '../../components/speak-button';
+import { LanguagePracticeRunner } from '../../components/language/practice-runner';
+import { createRecorder, type Recorder } from '../../lib/recorder';
+import { submitRllePronunciationTraining } from '../../lib/language-rll-client';
+import { featureFlags } from '../../lib/feature-flags';
 
 /** One step of the pedagogical flow. */
 interface FlowStep {
@@ -40,7 +46,11 @@ interface FlowStep {
 export default function LessonScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
-  const { id, session } = useLocalSearchParams<{ id: string; session?: string }>();
+  const { id, session, returnTo } = useLocalSearchParams<{
+    id: string;
+    session?: string;
+    returnTo?: string;
+  }>();
   const router = useRouter();
   const { t, formatLocale } = useI18n();
   const [lesson, setLesson] = useState<LessonView | null>(null);
@@ -143,7 +153,16 @@ export default function LessonScreen() {
         key: 'exercises',
         title: t('lesson.exercises'),
         icon: '✍️',
-        node: lesson.exercises.map((exercise, index) => (
+        node: lesson.exercises.map((exercise, index) =>
+          featureFlags.languageMasteryV1 && exercise.languageFormat ? (
+          <LanguageTrainingExercise
+            key={index}
+            exercise={exercise}
+            experienceSessionId={session}
+            index={index}
+            lesson={lesson}
+          />
+        ) : (
           <ExerciseCard
             key={index}
             attemptUrl={`/lessons/${lesson.id}/exercises/${index}/attempt`}
@@ -245,7 +264,7 @@ export default function LessonScreen() {
     });
 
     return s;
-  }, [lesson, cards, t, router]);
+  }, [lesson, cards, t, router, session]);
 
   if (error && !lesson) {
     return (
@@ -269,7 +288,13 @@ export default function LessonScreen() {
       return;
     }
     if (flow.completed) {
-      router.replace(session ? `/session/${session}?phase=end` : '/');
+      router.replace((
+        returnTo?.startsWith('/') && !returnTo.startsWith('//')
+          ? returnTo
+          : session
+            ? `/session/${session}?phase=end`
+            : '/'
+      ) as never);
       return;
     }
     setFlowBusy(true);
@@ -400,7 +425,7 @@ export default function LessonScreen() {
           {!confirmNext ? (
             <Button
               label={flow.completed
-                ? (session ? t('lesson.finishSession') : t('lesson.finish'))
+                ? (session && !returnTo ? t('lesson.finishSession') : t('lesson.finish'))
                 : isLast ? t('lesson.finish') : t('lesson.continue')}
               onPress={() => void continueFlow()}
               busy={flowBusy}
@@ -417,6 +442,131 @@ export default function LessonScreen() {
  * lesson's real flashcard due dates. New cards are due now, so we frame the
  * FSRS promise; once reviewed, FSRS pushes the next review out and we say when.
  */
+function LanguageTrainingExercise({
+  exercise,
+  experienceSessionId,
+  index,
+  lesson,
+}: {
+  exercise: LessonExercise;
+  experienceSessionId?: string;
+  index: number;
+  lesson: LessonView;
+}) {
+  const { colors: c } = useTokens();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const { t } = useI18n();
+  const recorder = useRef<Recorder | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<SubmitAttemptResponse | null>(null);
+  const [coaching, setCoaching] = useState<PronunciationCoaching | null>(null);
+
+  useEffect(() => () => recorder.current?.cancel(), []);
+
+  const submitWritten = async (answer: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(await api<SubmitAttemptResponse>(
+        `/lessons/${lesson.id}/exercises/${index}/attempt`,
+        { method: 'POST', body: { answer } },
+      ));
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleVoice = async () => {
+    if (!lesson.languageProfileId || !experienceSessionId) return;
+    setError(null);
+    setCoaching(null);
+    if (!recording) {
+      try {
+        recorder.current = createRecorder();
+        await recorder.current.start();
+        setRecording(true);
+      } catch (cause) {
+        recorder.current?.cancel();
+        recorder.current = null;
+        setError((cause as Error).message);
+      }
+      return;
+    }
+
+    setRecording(false);
+    setBusy(true);
+    try {
+      const active = recorder.current;
+      if (!active) throw new Error(t('voice.error.notRecording'));
+      const recordingPayload = await active.stop();
+      const response = await submitRllePronunciationTraining(lesson.languageProfileId, {
+        experienceSessionId,
+        lessonId: lesson.id,
+        exerciseIndex: index,
+        recording: recordingPayload,
+      });
+      setCoaching(response.coaching);
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      recorder.current = null;
+      setBusy(false);
+    }
+  };
+
+  const attempt = result?.attempt;
+  return (
+    <View style={styles.practiceBlock}>
+      <LanguagePracticeRunner
+        busy={busy}
+        exercise={exercise}
+        index={index}
+        language={lesson.language}
+        onSubmit={(answer) => void submitWritten(answer)}
+        onVoice={lesson.languageProfileId && experienceSessionId
+          ? () => void toggleVoice()
+          : undefined}
+        voiceActive={recording}
+      />
+      {error ? <ErrorBanner message={error} /> : null}
+      {attempt ? (
+        <Card style={styles.practiceFeedback} testID={`language-feedback-${index}`}>
+          <Text style={[styles.practiceVerdict, attempt.correct ? styles.practiceOk : styles.practiceRetry]}>
+            {attempt.correct ? t('lesson.correct') : t('lesson.notQuite')} · {Math.round(attempt.score * 100)}%
+          </Text>
+          <Text style={styles.practiceBody}>{attempt.feedback}</Text>
+          {attempt.why ? <Text style={styles.practiceBody}>{attempt.why}</Text> : null}
+          {attempt.how ? <Text style={styles.practiceBody}>{attempt.how}</Text> : null}
+        </Card>
+      ) : null}
+      {coaching ? (
+        <Card style={styles.practiceFeedback} testID={`language-voice-feedback-${index}`}>
+          <Text style={styles.practiceVerdict}>
+            {t('lang.heard').replace('{text}', coaching.transcript)}
+          </Text>
+          <Text style={styles.practiceBody}>{coaching.summary}</Text>
+          {coaching.why ? (
+            <>
+              <Text style={styles.practiceLabel}>{t('lang.whyMatters')}</Text>
+              <Text style={styles.practiceBody}>{coaching.why}</Text>
+            </>
+          ) : null}
+          {coaching.howToImprove ? (
+            <>
+              <Text style={styles.practiceLabel}>{t('lang.howImprove')}</Text>
+              <Text style={styles.practiceBody}>{coaching.howToImprove}</Text>
+            </>
+          ) : null}
+        </Card>
+      ) : null}
+    </View>
+  );
+}
+
 function scheduleMessage(cards: CardView[], t: (k: TranslationKey) => string): string {
   if (cards.length === 0) return t('lesson.scheduleWhy');
   const now = Date.now();
@@ -546,6 +696,13 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   flex: { flex: 1 },
   hidden: { display: 'none' },
   container: { padding: 20, gap: 12, maxWidth: 1280, width: '100%', alignSelf: 'center' },
+  practiceBlock: { gap: 10 },
+  practiceFeedback: { gap: 8, borderColor: c.border },
+  practiceVerdict: { color: c.textPrimary, fontSize: 15, fontWeight: '700' },
+  practiceOk: { color: c.success },
+  practiceRetry: { color: c.warning },
+  practiceLabel: { color: c.textMuted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
+  practiceBody: { color: c.textSecondary, fontSize: 14, lineHeight: 21 },
   masthead: { gap: 4 },
   kicker: {
     fontSize: 12,

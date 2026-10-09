@@ -7,6 +7,7 @@ export const UX_FEATURE_FLAG_KEYS = [
   'documentIntelligence',
   'newTutorExperience',
   'newLanding',
+  'languageMasteryV1',
 ] as const;
 
 export type UXFeatureFlag = (typeof UX_FEATURE_FLAG_KEYS)[number];
@@ -21,6 +22,7 @@ export const DISABLED_UX_FEATURE_FLAGS: UXFeatureFlags = {
   documentIntelligence: false,
   newTutorExperience: false,
   newLanding: false,
+  languageMasteryV1: false,
 };
 
 /** Resolve only explicit true values. Missing/invalid flags fail closed. */

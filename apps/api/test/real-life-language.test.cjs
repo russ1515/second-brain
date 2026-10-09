@@ -20,10 +20,11 @@ const profile = {
   updatedAt: new Date('2026-09-14T08:00:00.000Z'),
 };
 
-function harness() {
+function harness(options = {}) {
   const sessions = new Map();
   const attempts = [];
   const finalizedUnits = [];
+  const assessments = new Map();
   let nextId = 1;
   let conversationStarts = 0;
   const toSession = (request, id = `experience-${nextId++}`) => ({
@@ -91,8 +92,14 @@ function harness() {
     card: { count: async () => 0 },
     exerciseAttempt: {
       findMany: async ({ where }) => attempts
-        .filter((attempt) => attempt.userId === where.userId && attempt.lessonId === where.lessonId)
+        .filter((attempt) => attempt.userId === where.userId && attempt.lessonId === where.lessonId
+          && (where.contentVersion === undefined || attempt.contentVersion === where.contentVersion))
         .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime()),
+    },
+    lesson: {
+      findFirst: async ({ where }) => where.id === 'lesson-1' && where.userId === 'user-1'
+        ? { contentVersion: 1 }
+        : null,
     },
   };
   const languages = {
@@ -105,12 +112,22 @@ function harness() {
     }),
     ensureVocabDeck: async () => 'deck-1',
   };
-  const lessonExercises = [
-    { type: 'qcm', question: 'Choose.', answer: 'Hello', options: ['Hello', 'Bye', 'Thanks'] },
-    { type: 'open', question: 'Introduce yourself.', answer: 'My name is…' },
-    { type: 'exercise', question: 'Reply politely.', answer: 'Nice to meet you.' },
-    { type: 'case', question: 'Meet a colleague.', answer: 'Greet and introduce yourself.' },
-  ];
+  const lessonExercises = shared.LANGUAGE_TRAINING_FORMATS.map((languageFormat, index) => ({
+    type: ['recognition-mcq', 'contextual-discrimination', 'register-matching'].includes(languageFormat)
+      ? 'qcm'
+      : 'open',
+    question: `Training ${index + 1}`,
+    answer: `Answer ${index + 1}`,
+    options: ['recognition-mcq', 'contextual-discrimination', 'register-matching'].includes(languageFormat)
+      ? [`Answer ${index + 1}`, 'Distractor']
+      : undefined,
+    languageFormat,
+    ...(languageFormat === 'sentence-reconstruction' ? { tokens: ['I', 'am', 'ready'] } : {}),
+    ...(languageFormat === 'listening-discrimination' || languageFormat === 'voice-pronunciation'
+      ? { audioText: `Audio ${index + 1}` }
+      : {}),
+    ...(languageFormat === 'mini-dialogue' ? { dialogueTurns: ['Hello', 'Hi'] } : {}),
+  }));
   const lessons = {
     generate: async () => ({
       id: 'lesson-1', languageProfileId: profile.id, topic: 'First contact',
@@ -147,12 +164,81 @@ function harness() {
     {
       finalizeLanguageUnit: async (_userId, input) => {
         finalizedUnits.push(input);
+        if (options.rejectFinalizer) throw new Error('late-help-finalizer-rejected');
         return { id: 'completion-1' };
       },
     },
+    {
+      create: async (_userId, _dto, internal) => {
+        const assessment = {
+          id: 'assessment-1', type: 'open', topic: 'Autonomy', title: 'Autonomy',
+          level: 'beginner',
+          questions: [1, 2, 3].map((index) => ({
+            id: `question-${index}`, prompt: `Produce answer ${index}.`, format: 'open', points: 10,
+          })),
+          teacherPolicy: null, createdAt: '2026-09-14T08:30:00.000Z', latestSubmission: null,
+        };
+        assessments.set(assessment.id, {
+          view: assessment,
+          metadata: {
+            ...internal.languageMastery,
+            helpUsed: false,
+            answerLeak: false,
+            sealedAt: null,
+            createdAt: '2026-09-14T08:30:00.000Z',
+          },
+        });
+        return assessment;
+      },
+      get: async (_userId, id) => assessments.get(id).view,
+      languageMasteryMetadata: async (_userId, id) => assessments.get(id).metadata,
+      sealLanguageMasterySubmission: async (_userId, id) => {
+        const item = assessments.get(id);
+        item.metadata = { ...item.metadata, sealedAt: '2026-09-14T08:40:01.000Z' };
+        return item.metadata;
+      },
+      markLanguageMasteryHelpUsed: async (_userId, id) => {
+        const item = assessments.get(id);
+        item.metadata = { ...item.metadata, helpUsed: true };
+        return item.metadata;
+      },
+      submit: async (_userId, id, answers) => {
+        const item = assessments.get(id);
+        const submission = {
+          id: 'submission-1', assessmentId: id, score: 90,
+          results: item.view.questions.map((question, index) => ({
+            questionId: question.id, prompt: question.prompt, learnerAnswer: answers[index],
+            awarded: 9, max: 10, verdict: 'partial', why: 'Observed production.', how: 'Keep practising.',
+            errorMade: 'Minor detail.', howToAvoid: 'Review it.',
+          })),
+          summary: 'Autonomous production reached the threshold.', advice: 'Continue.',
+          createdAt: '2026-09-14T08:40:00.000Z',
+        };
+        item.view = { ...item.view, latestSubmission: submission };
+        return submission;
+      },
+    },
+    {
+      coachSpeaking: async () => ({
+        transcript: 'Hello', summary: 'Understandable spoken attempt.',
+        dimensions: [], why: 'The message was understood.', howToImprove: 'Keep practising.', exercises: [],
+      }),
+    },
+    { enabled: () => options.featureFlag !== false },
+    {
+      get: () => ({
+        transcriptionLanguageCodes: ['en'],
+        synthesisLanguageCodes: ['en'],
+        pronunciationAssessmentLanguageCodes: ['en'],
+      }),
+    },
+    { supportsSynthesis: true, supportsAnalysis: true },
   );
+  if (!options.useRealActivationGate) {
+    service.strictMasteryAvailable = () => options.strictMastery !== false;
+  }
   return {
-    service, sessions, experiences, attempts, finalizedUnits,
+    service, sessions, experiences, attempts, finalizedUnits, lessonExercises,
     conversationStarts: () => conversationStarts,
   };
 }
@@ -244,8 +330,8 @@ test('a paused World Mission resumes the same Tutor context and keeps its repair
   assert.equal(conversationStarts(), 1);
 });
 
-test('structured lesson requires evaluated controlled evidence before unit finalization', async () => {
-  const { service, attempts, finalizedUnits } = harness();
+test('structured lesson navigation never grants mastery; ten formats and autonomous 90% proof do', async () => {
+  const { service, attempts, finalizedUnits, lessonExercises } = harness();
   await service.startCourse('user-1', 'language-1', {
     startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
   });
@@ -264,26 +350,173 @@ test('structured lesson requires evaluated controlled evidence before unit final
   }
   await assert.rejects(
     () => service.advanceLesson('user-1', 'language-1', started.session.id, outline.lessonId, 'verification'),
-    /controlled exercise/i,
+    /required training format/i,
   );
-  for (let index = 0; index < 4; index += 1) {
+  for (let index = 0; index < lessonExercises.length; index += 1) {
+    if (lessonExercises[index].languageFormat === 'voice-pronunciation') continue;
     attempts.push({
       id: `attempt-${index}`, userId: 'user-1', lessonId: outline.lessonId,
+      contentVersion: 1,
       exerciseIndex: index, correct: true, score: 1,
       feedback: `Evaluated answer ${index + 1}.`, correction: 'Correct.',
       createdAt: new Date(`2026-09-14T08:1${index}:00.000Z`),
     });
   }
+  await service.recordVoiceTraining(
+    'user-1',
+    'language-1',
+    { experienceSessionId: started.session.id, lessonId: outline.lessonId, exerciseIndex: 8 },
+    { buffer: Buffer.from('technical-audio'), mimetype: 'audio/webm', originalname: 'training.webm', size: 15 },
+    2,
+  );
   const verificationIndex = stages.findIndex((item) => item.kind === 'verification');
   for (const stage of stages.slice(verificationIndex)) {
     course = await service.advanceLesson('user-1', 'language-1', started.session.id, outline.lessonId, stage.kind);
   }
+  assert.equal(course.progress.completedUnits, 0);
+  assert.equal(course.currentLesson.status, 'active');
+  assert.equal(course.milestoneMastery.find((item) => item.unitId === outline.unitId).status, 'autonomy-ready');
+  assert.equal(finalizedUnits.length, 0);
+
+  const autonomy = await service.startAutonomy('user-1', 'language-1', {
+    experienceSessionId: started.session.id,
+    lessonId: outline.lessonId,
+    idempotencyKey: 'autonomy-attempt-0001',
+  });
+  assert.equal(autonomy.assessment.questions.every((question) => question.format === 'open'), true);
+  const evaluated = await service.submitAutonomy('user-1', 'language-1', {
+    experienceSessionId: started.session.id,
+    lessonId: outline.lessonId,
+    assessmentId: autonomy.assessment.id,
+    answers: ['One', 'Two', 'Three'],
+  });
+  course = evaluated.course;
+  assert.equal(evaluated.decision.verdict, 'mastered');
+  assert.equal(evaluated.decision.rawScore, 0.9);
   assert.equal(course.progress.completedUnits, 1);
   const unitCanDoIds = new Set(shared.RLLE_CURRICULUM.find((item) => item.id === outline.unitId).canDoIds);
   assert.equal(course.canDoMap.filter((item) => unitCanDoIds.has(item.id)).every((item) => item.status === 'validated'), true);
   assert.equal(finalizedUnits.length, 1);
   assert.equal(finalizedUnits[0].unitId, outline.unitId);
-  assert.ok(finalizedUnits[0].evidenceIds.length > 0);
+  assert.equal(finalizedUnits[0].assessmentSubmissionId, 'submission-1');
+  assert.equal(finalizedUnits[0].lessonContentVersion, 1);
+  assert.equal(finalizedUnits[0].policyVersion, shared.LANGUAGE_MASTERY_POLICY_VERSION);
+});
+
+test('the real activation gate keeps the deployed RLLE path legacy while mandatory content is incomplete', async () => {
+  const { service } = harness({ useRealActivationGate: true });
+  const started = await service.startCourse('user-1', 'language-1', {
+    startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
+  });
+  assert.equal(started.course.masteryPolicyVersion, 'legacy');
+  assert.equal(started.session.currentStep.metadata.rlleCourse.masteryPolicyVersion, null);
+  await assert.rejects(
+    () => service.startAutonomy('user-1', 'language-1', {
+      experienceSessionId: started.session.id,
+      lessonId: 'lesson-1',
+      idempotencyKey: 'blocked-autonomy-attempt',
+    }),
+    /not available/i,
+  );
+});
+
+test('feature-off lessons retain the deployed completion and finalizer flow', async () => {
+  const { service, attempts, finalizedUnits, lessonExercises } = harness({
+    strictMastery: false,
+  });
+  await service.startCourse('user-1', 'language-1', {
+    startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
+  });
+  const started = await service.startLesson(
+    'user-1',
+    'language-1',
+    { unitId: 'a1-first-contact' },
+  );
+  const outline = started.course.currentLesson;
+  for (let index = 0; index < lessonExercises.length; index += 1) {
+    attempts.push({
+      id: 'legacy-attempt-' + index,
+      userId: 'user-1',
+      lessonId: outline.lessonId,
+      contentVersion: 1,
+      exerciseIndex: index,
+      correct: true,
+      score: 1,
+      feedback: 'Evaluated legacy answer.',
+      correction: 'Correct.',
+      createdAt: new Date('2026-09-14T08:' + String(10 + index) + ':00.000Z'),
+    });
+  }
+  let course = started.course;
+  for (const stage of outline.stages.filter((item) => item.status !== 'skipped')) {
+    course = await service.advanceLesson(
+      'user-1',
+      'language-1',
+      started.session.id,
+      outline.lessonId,
+      stage.kind,
+    );
+  }
+  assert.equal(course.currentLesson.status, 'completed');
+  assert.equal(course.progress.completedUnits, 1);
+  assert.equal(course.masteryPolicyVersion, 'legacy');
+  assert.equal(finalizedUnits.length, 1);
+  assert.deepEqual(finalizedUnits[0].evidenceIds.length > 0, true);
+  assert.equal(Object.hasOwn(finalizedUnits[0], 'policyVersion'), false);
+});
+
+test('a rejected late-help finalizer never persists mastered progress or unlocks the next unit', async () => {
+  const runtime = harness({ rejectFinalizer: true });
+  const { service, attempts, lessonExercises, sessions } = runtime;
+  await service.startCourse('user-1', 'language-1', {
+    startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
+  });
+  const started = await service.startLesson('user-1', 'language-1', { unitId: 'a1-first-contact' });
+  const outline = started.course.currentLesson;
+  const stages = outline.stages.filter((item) => item.status !== 'skipped');
+  const verificationIndex = stages.findIndex((item) => item.kind === 'verification');
+  for (const stage of stages.slice(0, verificationIndex)) {
+    await service.advanceLesson('user-1', 'language-1', started.session.id, outline.lessonId, stage.kind);
+  }
+  for (let index = 0; index < lessonExercises.length; index += 1) {
+    if (lessonExercises[index].languageFormat === 'voice-pronunciation') continue;
+    attempts.push({
+      id: `attempt-late-${index}`, userId: 'user-1', lessonId: outline.lessonId,
+      contentVersion: 1, exerciseIndex: index, correct: true, score: 1,
+      feedback: 'Evaluated.', correction: 'Correct.',
+      createdAt: new Date(`2026-09-14T08:2${index}:00.000Z`),
+    });
+  }
+  await service.recordVoiceTraining(
+    'user-1',
+    'language-1',
+    { experienceSessionId: started.session.id, lessonId: outline.lessonId, exerciseIndex: 8 },
+    { buffer: Buffer.from('technical-audio'), mimetype: 'audio/webm', originalname: 'training.webm', size: 15 },
+    2,
+  );
+  for (const stage of stages.slice(verificationIndex)) {
+    await service.advanceLesson('user-1', 'language-1', started.session.id, outline.lessonId, stage.kind);
+  }
+  const autonomy = await service.startAutonomy('user-1', 'language-1', {
+    experienceSessionId: started.session.id,
+    lessonId: outline.lessonId,
+    idempotencyKey: 'late-help-race-attempt',
+  });
+  await assert.rejects(
+    () => service.submitAutonomy('user-1', 'language-1', {
+      experienceSessionId: started.session.id,
+      lessonId: outline.lessonId,
+      assessmentId: autonomy.assessment.id,
+      answers: ['One', 'Two', 'Three'],
+    }),
+    /late-help-finalizer-rejected/,
+  );
+  const persisted = sessions.get(started.session.id);
+  const state = persisted.currentStep.metadata.rlleCourse;
+  assert.deepEqual(state.completedUnitIds, []);
+  assert.equal(state.currentUnitId, outline.unitId);
+  assert.notEqual(state.milestoneMastery[outline.unitId].status, 'mastered');
+  assert.equal(persisted.twinImpact, null);
 });
 
 test('Mistake Memory moves observed → repeated → confirmed using actual distinct evidence', () => {

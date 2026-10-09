@@ -23,6 +23,7 @@ import {
   LANGUAGE_CORRECTION_INTENSITIES,
   LANGUAGE_PRACTICE_FORMATS,
   languageNextAction,
+  languageOralCapabilityMatrix,
 } from '@second-brain/shared';
 import type {
   EssayCorrection as EssayCorrectionResult,
@@ -44,7 +45,9 @@ import { SmartErrorState, SmartLoadingState } from '../../components/ds/states';
 import { ContextBar } from '../../components/context/context-bar';
 import { useAuth } from '../../lib/auth-context';
 import { CourseEntryCard } from '../../components/language/course-ui';
+import { OralCapabilityCard } from '../../components/language/oral-capability-card';
 import { loadRlleCourse, type RlleCourseLoad } from '../../lib/language-rll-client';
+import { featureFlags } from '../../lib/feature-flags';
 
 function firstParam(value?: string | string[]): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -82,6 +85,8 @@ export default function LanguageExperienceScreen() {
   const [error, setError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SpeechCapabilities | null>(null);
   const [course, setCourse] = useState<RlleCourseLoad | null>(null);
+  const [audioCaptureVerified, setAudioCaptureVerified] = useState<boolean | null>(null);
+  const [probingAudioCapture, setProbingAudioCapture] = useState(false);
 
   const load = useCallback(async () => {
     if (!profileId) return;
@@ -104,6 +109,41 @@ export default function LanguageExperienceScreen() {
   }, [profileId, requestedPractice]);
 
   useEffect(() => { void load(); }, [load]);
+  const strictServerEnabled = capabilities?.languageMasteryV1.enabled === true;
+  const strictCapabilities = useMemo(() => {
+    if (!profile?.languageCode || !capabilities || !strictServerEnabled) return null;
+    return languageOralCapabilityMatrix({
+      featureEnabled: true,
+      languageCode: profile.languageCode,
+      provider: {
+        transcription: capabilities.transcription,
+        synthesis: capabilities.synthesis,
+        audioAnalysis: capabilities.audioAnalysis,
+      },
+      coverage: capabilities.languageMasteryV1,
+      audioCapture: audioCaptureVerified,
+    });
+  }, [audioCaptureVerified, capabilities, profile?.languageCode, strictServerEnabled]);
+
+  const probeAudioCapture = useCallback(async () => {
+    if (!RECORDING_SUPPORTED) {
+      setAudioCaptureVerified(false);
+      return;
+    }
+    setProbingAudioCapture(true);
+    const probe = createRecorder();
+    try {
+      await probe.start();
+      probe.cancel();
+      setAudioCaptureVerified(true);
+    } catch {
+      probe.cancel();
+      setAudioCaptureVerified(false);
+    } finally {
+      setProbingAudioCapture(false);
+    }
+  }, []);
+
   if (!profile && !error) return <SmartLoadingState />;
   if (!profile) return <SmartErrorState detail={error ?? undefined} retryable onRetry={() => void load()} />;
 
@@ -128,6 +168,16 @@ export default function LanguageExperienceScreen() {
           secondaryWidth={320}
           primary={
             <View style={{ gap: spacing.md }}>
+              {featureFlags.languageMasteryV1 && !strictServerEnabled ? (
+                <Alert tone="warning" title={t('rlle.ui.capabilities.strictDisabled')} />
+              ) : null}
+              {featureFlags.languageMasteryV1 && strictCapabilities ? (
+                <OralCapabilityCard
+                  matrix={strictCapabilities}
+                  onProbeCapture={() => void probeAudioCapture()}
+                  probing={probingAudioCapture}
+                />
+              ) : null}
               <CourseEntryCard
                 profile={profile}
                 course={course}

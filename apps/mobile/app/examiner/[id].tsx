@@ -5,22 +5,40 @@ import type {
   AssessmentSubmissionView,
   AssessmentView,
   GradedAnswer,
+  LanguageMasteryDecision,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
+import {
+  loadRlleCourse,
+  markRlleAutonomyHelp,
+  submitRlleAutonomy,
+} from '../../lib/language-rll-client';
 import { useTokens } from '../../lib/design/theme';
 import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
+import { featureFlags } from '../../lib/feature-flags';
 
 export default function AssessmentScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
-  const { t } = useI18n();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { t, formatLocale } = useI18n();
+  const params = useLocalSearchParams<{
+    id: string;
+    autonomy?: string;
+    languageProfileId?: string;
+    experienceSessionId?: string;
+    lessonId?: string;
+  }>();
+  const { id } = params;
+  const autonomy = featureFlags.languageMasteryV1
+    && params.autonomy === '1'
+    && Boolean(params.languageProfileId && params.experienceSessionId && params.lessonId);
   const router = useRouter();
   const [assessment, setAssessment] = useState<AssessmentView | null>(null);
   const [answers, setAnswers] = useState<string[]>([]);
   const [result, setResult] = useState<AssessmentSubmissionView | null>(null);
+  const [masteryDecision, setMasteryDecision] = useState<LanguageMasteryDecision | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -30,10 +48,19 @@ export default function AssessmentScreen() {
       setAssessment(a);
       setAnswers(a.questions.map(() => ''));
       setResult(a.latestSubmission);
+      if (autonomy && params.languageProfileId) {
+        const loaded = await loadRlleCourse(params.languageProfileId);
+        if (loaded.kind === 'live') {
+          const attempt = loaded.course.milestoneMastery
+            .flatMap((item) => item.attempts)
+            .find((item) => item.assessmentId === id);
+          setMasteryDecision(attempt?.decision ?? null);
+        }
+      }
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [id]);
+  }, [autonomy, id, params.languageProfileId]);
 
   useEffect(() => {
     void load();
@@ -46,14 +73,41 @@ export default function AssessmentScreen() {
     setBusy(true);
     setError(null);
     try {
-      setResult(
-        await api<AssessmentSubmissionView>(`/examiner/${id}/submit`, {
+      if (autonomy && params.languageProfileId && params.experienceSessionId && params.lessonId) {
+        const response = await submitRlleAutonomy(params.languageProfileId, {
+          experienceSessionId: params.experienceSessionId,
+          lessonId: params.lessonId,
+          assessmentId: id,
+          answers,
+        });
+        setResult(response.submission);
+        setMasteryDecision(response.decision);
+      } else {
+        setResult(await api<AssessmentSubmissionView>(`/examiner/${id}/submit`, {
           method: 'POST',
           body: { answers },
-        }),
-      );
+        }));
+      }
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const leaveForHelp = async () => {
+    if (!autonomy || !params.languageProfileId || !params.experienceSessionId || !params.lessonId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await markRlleAutonomyHelp(params.languageProfileId, {
+        experienceSessionId: params.experienceSessionId,
+        lessonId: params.lessonId,
+        assessmentId: id,
+      });
+      router.replace(`/languages/${params.languageProfileId}/course/lesson` as never);
+    } catch (cause) {
+      setError((cause as Error).message);
     } finally {
       setBusy(false);
     }
@@ -95,9 +149,25 @@ export default function AssessmentScreen() {
         </Card>
       ) : null}
 
+      {autonomy && !result ? (
+        <Card style={styles.rulesCard} testID="language-autonomy-rules">
+          <Text style={styles.rulesTitle}>{t('teacher.exam.helpNone')}</Text>
+          <Text style={styles.rulesDetail}>{t('rlle.ui.autonomy.notice' as TranslationKey)}</Text>
+        </Card>
+      ) : null}
+
       {result ? (
         <Card style={styles.scoreCard} testID="assessment-score">
-          <Text style={styles.scoreBig}>{result.score}/100</Text>
+          <Text style={styles.scoreBig}>
+            {masteryDecision?.rawScore !== null && masteryDecision?.rawScore !== undefined
+              ? `${new Intl.NumberFormat(formatLocale, { maximumFractionDigits: 1 }).format(masteryDecision.rawScore * 100)}/100`
+              : `${result.score}/100`}
+          </Text>
+          {masteryDecision ? (
+            <Text style={styles.rulesLine}>
+              {t(`rlle.ui.autonomy.verdict.${masteryDecision.verdict}` as TranslationKey)}
+            </Text>
+          ) : null}
           {result.summary ? <Text style={styles.summary}>{result.summary}</Text> : null}
         </Card>
       ) : null}
@@ -153,12 +223,22 @@ export default function AssessmentScreen() {
       })}
 
       {!result ? (
-        <Button
-          label={t('examiner.submit')}
-          onPress={submit}
-          busy={busy}
-          disabled={!allAnswered}
-        />
+        <View style={styles.actions}>
+          <Button
+            label={t('examiner.submit')}
+            onPress={submit}
+            busy={busy}
+            disabled={!allAnswered}
+          />
+          {autonomy ? (
+            <Button
+              variant="ghost"
+              label={t('rlle.ui.autonomy.leaveForHelp' as TranslationKey)}
+              onPress={() => void leaveForHelp()}
+              disabled={busy}
+            />
+          ) : null}
+        </View>
       ) : result.advice ? (
         <Card style={styles.adviceCard}>
           <Text style={styles.adviceLabel}>{t('examiner.next')}</Text>
@@ -166,7 +246,15 @@ export default function AssessmentScreen() {
         </Card>
       ) : null}
 
-      <Button variant="ghost" label={t('examiner.back')} onPress={() => router.replace('/examiner')} />
+      <Button
+        variant="ghost"
+        label={t('examiner.back')}
+        onPress={() => router.replace((
+          autonomy && params.languageProfileId
+            ? `/languages/${params.languageProfileId}/course/lesson`
+            : '/examiner'
+        ) as never)}
+      />
     </ScrollView>
   );
 }
@@ -227,4 +315,5 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   adviceCard: { borderColor: c.primary, gap: 6 },
   adviceLabel: { fontSize: 12, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
   advice: { fontSize: 14, color: c.textPrimary, lineHeight: 20 },
+  actions: { gap: 8 },
 });

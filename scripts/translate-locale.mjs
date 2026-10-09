@@ -26,6 +26,7 @@ const LEARNING_DATA_CONTROL_EUROPE_FILE = path.join(OUT_DIR, 'learning-data-cont
 const LEARNING_DATA_CONTROL_ASIA_FILE = path.join(OUT_DIR, 'learning-data-control-asia-v1.ts');
 const LEARNING_DATA_CONTROL_AFRICA_FILE = path.join(OUT_DIR, 'learning-data-control-africa-v1.ts');
 const GLOBAL_PATH_V1_FILE = path.join(OUT_DIR, 'global-path-v1.ts');
+const LANGUAGE_MASTERY_V1_FILE = path.join(OUT_DIR, 'language-mastery-v1.ts');
 const PROGRESS_DIR = path.join(OUT_DIR, '.translation-progress');
 const DEFAULT_MANIFEST = path.join(PROGRESS_DIR, 'manifest.json');
 const JOB_LOCK = path.join(PROGRESS_DIR, 'apply.lock');
@@ -306,6 +307,10 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
     learningDataControlKeys,
   );
   const globalPathAliases = readCatalog(GLOBAL_PATH_V1_FILE, 'aliases');
+  const languageMasteryAliases = readCatalog(
+    LANGUAGE_MASTERY_V1_FILE,
+    'languageMasteryAliases',
+  );
   const libraryOrganization = readTupleCatalog(
     LIBRARY_V1_FILE,
     'organizationLabels',
@@ -356,6 +361,11 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
       invariant(value, `${code} is missing global-path alias source ${sourceKey}`);
       effective.set(key, value);
     }
+    for (const [key, sourceKey] of languageMasteryAliases) {
+      const value = effective.get(sourceKey);
+      invariant(value, `${code} is missing language-mastery alias source ${sourceKey}`);
+      effective.set(key, value);
+    }
     const missingKeys = [...english.keys()].filter((key) => !effective.has(key));
 
     for (const key of effective.keys()) {
@@ -393,6 +403,7 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
       learningDataControlAsia: sha256(fs.readFileSync(LEARNING_DATA_CONTROL_ASIA_FILE)),
       learningDataControlAfrica: sha256(fs.readFileSync(LEARNING_DATA_CONTROL_AFRICA_FILE)),
       globalPathV1: sha256(fs.readFileSync(GLOBAL_PATH_V1_FILE)),
+      languageMasteryV1: sha256(fs.readFileSync(LANGUAGE_MASTERY_V1_FILE)),
     },
     batchSize,
     locales,
@@ -1233,7 +1244,8 @@ function assertPlanInputsUnchanged(plan) {
     && sha256(fs.readFileSync(REVIEW_FILE)) === plan.overlayFileChecksums.review
     && sha256(fs.readFileSync(AUTH_ERRORS_FILE)) === plan.overlayFileChecksums.authErrors
     && sha256(fs.readFileSync(VOICE_PHASE2_FILE)) === plan.overlayFileChecksums.voicePhase2
-    && sha256(fs.readFileSync(LIBRARY_V1_FILE)) === plan.overlayFileChecksums.libraryV1,
+    && sha256(fs.readFileSync(LIBRARY_V1_FILE)) === plan.overlayFileChecksums.libraryV1
+    && sha256(fs.readFileSync(LANGUAGE_MASTERY_V1_FILE)) === plan.overlayFileChecksums.languageMasteryV1,
     'Locale overlays changed during translation; stop and rebuild the plan',
   );
   for (const locale of plan.locales) {

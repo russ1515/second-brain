@@ -11,6 +11,8 @@ import { LessonModule } from '../lessons/lesson.module';
 import { ExperienceSessionModule } from '../experience-sessions/experience-session.module';
 import { RealLifeLanguageService } from './real-life-language.service';
 import { LearningEvidenceModule } from '../learning-evidence/learning-evidence.module';
+import { ExaminerModule } from '../examiner/examiner.module';
+import { FeatureFlagsModule } from '../config/feature-flags.module';
 
 /** Language engine (Phase 5, Educational Engine): the professional language
  *  teacher. It orchestrates rather than duplicates — vocabulary is ordinary
@@ -18,7 +20,14 @@ import { LearningEvidenceModule } from '../learning-evidence/learning-evidence.m
  *  from TutorService, pronunciation from the @Global SpeechService. What it adds
  *  is per-language state and the seven teaching modes. */
 @Module({
-  imports: [TutorModule, LessonModule, ExperienceSessionModule, LearningEvidenceModule],
+  imports: [
+    TutorModule,
+    LessonModule,
+    ExperienceSessionModule,
+    LearningEvidenceModule,
+    ExaminerModule,
+    FeatureFlagsModule,
+  ],
   controllers: [LanguageController],
   providers: [
     LanguageService,

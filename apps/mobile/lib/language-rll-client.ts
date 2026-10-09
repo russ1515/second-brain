@@ -3,6 +3,11 @@ import {
   RLLE_CURRICULUM,
   RLLE_WORLD_MISSIONS,
   type LanguageProfileDetail,
+  type MarkRlleAutonomyHelpRequest,
+  type PronunciationCoaching,
+  type RlleAutonomyHelpResponse,
+  type RlleAutonomyStartResponse,
+  type RlleAutonomySubmissionResponse,
   type RlleCanDoCapability,
   type RlleCourseView,
   type RlleLessonStageKind,
@@ -14,9 +19,13 @@ import {
   type StartRlleCourseRequest,
   type StartRlleLessonRequest,
   type StartRlleMissionRequest,
+  type StartRlleAutonomyRequest,
+  type StartRlleRemediationRequest,
+  type SubmitRlleAutonomyRequest,
   type UpdateRlleCoursePreferencesRequest,
 } from '@second-brain/shared';
-import { ApiError, api } from './client';
+import { ApiError, api, apiUpload } from './client';
+import type { Recording } from './recorder';
 
 export interface RlleCurriculumPreview {
   kind: 'preview';
@@ -98,6 +107,74 @@ export function advanceRlleLesson(
     method: 'POST',
     body: { experienceSessionId, lessonId, completedStage },
   });
+}
+
+export function startRlleAutonomy(
+  profileId: string,
+  request: StartRlleAutonomyRequest,
+): Promise<RlleAutonomyStartResponse> {
+  return api<RlleAutonomyStartResponse>(endpoint(profileId, '/course/autonomy/start'), {
+    method: 'POST',
+    body: request,
+  });
+}
+
+export function markRlleAutonomyHelp(
+  profileId: string,
+  request: MarkRlleAutonomyHelpRequest,
+): Promise<RlleAutonomyHelpResponse> {
+  return api<RlleAutonomyHelpResponse>(endpoint(profileId, '/course/autonomy/help'), {
+    method: 'POST',
+    body: request,
+  });
+}
+
+export function submitRlleAutonomy(
+  profileId: string,
+  request: SubmitRlleAutonomyRequest,
+): Promise<RlleAutonomySubmissionResponse> {
+  return api<RlleAutonomySubmissionResponse>(endpoint(profileId, '/course/autonomy/submit'), {
+    method: 'POST',
+    body: request,
+  });
+}
+
+export function startRlleRemediation(
+  profileId: string,
+  request: StartRlleRemediationRequest,
+): Promise<RlleSessionResponse> {
+  return api<RlleSessionResponse>(endpoint(profileId, '/course/remediation/start'), {
+    method: 'POST',
+    body: request,
+  });
+}
+
+export async function submitRllePronunciationTraining(
+  profileId: string,
+  request: {
+    experienceSessionId: string;
+    lessonId: string;
+    exerciseIndex: number;
+    recording: Recording;
+  },
+): Promise<{ coaching: PronunciationCoaching; course: RlleCourseView }> {
+  const form = new FormData();
+  const extension = request.recording.mimeType.includes('mp4')
+    ? 'mp4'
+    : request.recording.mimeType.includes('ogg')
+      ? 'ogg'
+      : 'webm';
+  form.append('audio', request.recording.blob, `language-training.${extension}`);
+  form.append('experienceSessionId', request.experienceSessionId);
+  form.append('lessonId', request.lessonId);
+  form.append('exerciseIndex', String(request.exerciseIndex));
+  if (request.recording.durationMs !== undefined) {
+    form.append('durationMs', String(request.recording.durationMs));
+  }
+  return apiUpload<{ coaching: PronunciationCoaching; course: RlleCourseView }>(
+    endpoint(profileId, '/course/training/pronunciation'),
+    form,
+  );
 }
 
 export async function loadRlleMissions(profileId: string): Promise<RlleMissionCatalog> {

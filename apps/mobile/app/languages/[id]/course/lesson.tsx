@@ -9,13 +9,16 @@ import { ContextBar } from '../../../../components/context/context-bar';
 import { LessonStages } from '../../../../components/language/course-ui';
 import { useTokens } from '../../../../lib/design/theme';
 import { useRlleCopy } from '../../../../lib/language-rll-i18n';
+import { featureFlags } from '../../../../lib/feature-flags';
 import {
   advanceRlleLesson,
   loadLanguageProfile,
   loadRlleCourse,
   pauseRlleSession,
   resumeRlleSession,
+  startRlleAutonomy,
   startRlleLesson,
+  startRlleRemediation,
   type RlleCourseLoad,
 } from '../../../../lib/language-rll-client';
 
@@ -58,6 +61,9 @@ export default function StructuredLanguageLessonScreen() {
     ?? units[0]
     ?? null;
   const outline = course?.currentLesson?.unitId === requestedUnit?.id ? course.currentLesson : null;
+  const mastery = featureFlags.languageMasteryV1
+    ? course?.milestoneMastery.find((item) => item.unitId === requestedUnit?.id) ?? null
+    : null;
   const open = (href: string) => router.push(href as never);
 
   const start = async () => {
@@ -118,21 +124,86 @@ export default function StructuredLanguageLessonScreen() {
     }
   };
 
+  const startAutonomyAssessment = async () => {
+    if (!outline?.lessonId || !course?.experienceSession || !mastery) return;
+    setBusy('autonomy');
+    setError(null);
+    try {
+      const response = await startRlleAutonomy(profile.id, {
+        experienceSessionId: course.experienceSession.id,
+        lessonId: outline.lessonId,
+        idempotencyKey: `mobile-autonomy:${outline.lessonId}:${mastery.attempts.length + 1}`,
+      });
+      const query = [
+        'autonomy=1',
+        `languageProfileId=${encodeURIComponent(profile.id)}`,
+        `experienceSessionId=${encodeURIComponent(course.experienceSession.id)}`,
+        `lessonId=${encodeURIComponent(outline.lessonId)}`,
+      ].join('&');
+      open(`/examiner/${encodeURIComponent(response.assessment.id)}?${query}`);
+    } catch (cause) {
+      setError((cause as Error).message);
+      await load().catch(() => undefined);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const resumeAutonomyAssessment = () => {
+    if (!outline?.lessonId || !course?.experienceSession || !course.latestAssessment) return;
+    const query = [
+      'autonomy=1',
+      `languageProfileId=${encodeURIComponent(profile.id)}`,
+      `experienceSessionId=${encodeURIComponent(course.experienceSession.id)}`,
+      `lessonId=${encodeURIComponent(outline.lessonId)}`,
+    ].join('&');
+    open(`/examiner/${encodeURIComponent(course.latestAssessment.id)}?${query}`);
+  };
+
+  const startTargetedRemediation = async () => {
+    if (!outline?.lessonId || !course?.experienceSession || !mastery?.remediation) return;
+    setBusy('remediation');
+    setError(null);
+    try {
+      const response = await startRlleRemediation(profile.id, {
+        experienceSessionId: course.experienceSession.id,
+        lessonId: outline.lessonId,
+        idempotencyKey: `mobile-remediation:${profile.id}:${outline.unitId}:${mastery.remediation.sourceAttemptId}`,
+      });
+      setCourseLoad({ kind: 'live', course: response.course });
+      setNotice(copy('rlle.ui.remediation.ready'));
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const openStage = (kind: RlleLessonStageKind) => {
     if (!course?.experienceSession) return;
     const query = `courseSessionId=${encodeURIComponent(course.experienceSession.id)}`;
+    if (
+      outline?.lessonId
+      && ['practice', 'oral', 'writing', 'verification', 'review'].includes(kind)
+    ) {
+      const returnTo = `/languages/${profile.id}/course/lesson`;
+      open(
+        `/lesson/${encodeURIComponent(outline.lessonId)}`
+        + `?session=${encodeURIComponent(course.experienceSession.id)}`
+        + `&returnTo=${encodeURIComponent(returnTo)}`,
+      );
+      return;
+    }
     const formatByStage: Partial<Record<RlleLessonStageKind, string>> = {
       vocabulary: 'vocabulary',
       'grammar-verbs': 'grammar',
       comprehension: 'comprehension',
       oral: 'oral',
       writing: 'writing',
-      review: 'review',
     };
     const format = formatByStage[kind] ?? 'conversation';
     const courseContext = `${query}&unitId=${encodeURIComponent(outline?.unitId ?? requestedUnit?.id ?? '')}&lessonId=${encodeURIComponent(outline?.lessonId ?? '')}&stage=${encodeURIComponent(kind)}`;
-    if (format === 'review') open(`/revision?languageProfileId=${profile.id}&returnTo=course&sourceSessionId=${encodeURIComponent(course.experienceSession.id)}`);
-    else open(`/languages/${profile.id}?practice=${format}&${courseContext}`);
+    open(`/languages/${profile.id}?practice=${format}&${courseContext}`);
   };
   const activeStageIndex = outline?.stages.findIndex((stage) => stage.status === 'active') ?? -1;
   const isLastStage = Boolean(outline && activeStageIndex === outline.stages.length - 1);
@@ -181,6 +252,31 @@ export default function StructuredLanguageLessonScreen() {
                     label={copy(isLastStage ? 'rlle.ui.lesson.complete' : 'rlle.ui.lesson.completeStage')}
                     loading={busy === 'complete'}
                     onPress={() => void completeStage()}
+                  />
+                ) : null}
+                {outline.status === 'active' && mastery?.status === 'autonomy-ready' ? (
+                  <Button
+                    variant="ai"
+                    label={copy('rlle.ui.autonomy.start')}
+                    loading={busy === 'autonomy'}
+                    onPress={() => void startAutonomyAssessment()}
+                  />
+                ) : null}
+                {outline.status === 'active'
+                  && ['autonomy-active', 'autonomy-grading'].includes(mastery?.status ?? '')
+                  && course?.latestAssessment ? (
+                    <Button
+                      variant="ai"
+                      label={copy('rlle.ui.autonomy.resume')}
+                      onPress={resumeAutonomyAssessment}
+                    />
+                  ) : null}
+                {outline.status === 'active' && mastery?.status === 'remediation' ? (
+                  <Button
+                    variant="secondary"
+                    label={copy('rlle.ui.remediation.start')}
+                    loading={busy === 'remediation'}
+                    onPress={() => void startTargetedRemediation()}
                   />
                 ) : null}
                 <Button variant="ghost" label={copy('rlle.ui.common.backCourse')} onPress={() => router.replace(`/languages/${profile.id}/course` as never)} />

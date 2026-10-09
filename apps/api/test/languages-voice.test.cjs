@@ -31,7 +31,35 @@ test('speech endpoints report real capabilities and return provider transcriptio
     transcribe: async (buffer, options) => ({ text: buffer.toString('utf8'), language: options.language ?? null, provider: 'fake', model: null }),
   };
   const controller = new SpeechController(speech);
-  assert.deepEqual(controller.capabilities(), { provider: 'fake', transcription: true, synthesis: false, audioAnalysis: false });
+  assert.deepEqual(controller.capabilities(), {
+    provider: 'fake',
+    transcription: true,
+    synthesis: false,
+    audioAnalysis: false,
+    languageMasteryV1: {
+      enabled: false,
+      policyVersion: 'language-mastery-v1',
+      transcriptionLanguageCodes: [],
+      synthesisLanguageCodes: [],
+      pronunciationAssessmentLanguageCodes: [],
+    },
+  });
+  const configuredController = new SpeechController(speech, {
+    get: (key) => key === 'features'
+      ? { languageMasteryV1: true }
+      : key === 'speech.languageMasteryV1'
+        ? {
+            transcriptionLanguageCodes: ['en'],
+            synthesisLanguageCodes: ['en'],
+            pronunciationAssessmentLanguageCodes: ['en'],
+          }
+        : undefined,
+  });
+  assert.equal(
+    configuredController.capabilities().languageMasteryV1.enabled,
+    false,
+    'a feature flag cannot claim readiness while the audited curriculum mapping is incomplete',
+  );
   const result = await controller.transcribe({ originalname: 'turn.webm', mimetype: 'audio/webm', size: 5, buffer: Buffer.from('hello') }, 'en');
   assert.equal(result.text, 'hello');
   assert.equal(result.language, 'en');

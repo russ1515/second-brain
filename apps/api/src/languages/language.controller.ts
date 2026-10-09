@@ -26,6 +26,9 @@ import type {
   LanguageSkillResponse,
   PronunciationAssessment,
   PronunciationCoaching,
+  RlleAutonomyHelpResponse,
+  RlleAutonomyStartResponse,
+  RlleAutonomySubmissionResponse,
   RlleCanDoCapability,
   RlleCourseView,
   RlleMissionTurnResponse,
@@ -61,6 +64,10 @@ import { StartRlleMissionDto } from './dto/start-rlle-mission.dto';
 import { RlleMissionTurnDto } from './dto/rlle-mission-turn.dto';
 import { RecordRlleEvidenceDto } from './dto/record-rlle-evidence.dto';
 import { UpdateRlleCoursePreferencesDto } from './dto/update-rlle-course-preferences.dto';
+import { StartRlleAutonomyDto } from './dto/start-rlle-autonomy.dto';
+import { MarkRlleAutonomyHelpDto } from './dto/mark-rlle-autonomy-help.dto';
+import { SubmitRlleAutonomyDto } from './dto/submit-rlle-autonomy.dto';
+import { StartRlleRemediationDto } from './dto/start-rlle-remediation.dto';
 
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // 10 MB
 
@@ -171,6 +178,85 @@ export class LanguageController {
       dto.lessonId,
       dto.completedStage,
     );
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post(':id/course/training/pronunciation')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(
+    FileInterceptor('audio', { limits: { fileSize: MAX_AUDIO_BYTES } }),
+  )
+  coursePronunciationTraining(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @UploadedFile() audio: UploadedFileLike | undefined,
+    @Body('experienceSessionId') experienceSessionId?: string,
+    @Body('lessonId') lessonId?: string,
+    @Body('exerciseIndex') exerciseIndex?: string,
+    @Body('durationMs') durationMs?: string,
+  ): Promise<{ coaching: PronunciationCoaching; course: RlleCourseView }> {
+    if (!audio) throw new BadRequestException('No audio was uploaded (field "audio").');
+    if (!experienceSessionId?.trim() || !lessonId?.trim()) {
+      throw new BadRequestException('Course session and lesson are required.');
+    }
+    const parsedIndex = Number(exerciseIndex);
+    if (!Number.isInteger(parsedIndex) || parsedIndex < 0) {
+      throw new BadRequestException('A valid exercise index is required.');
+    }
+    return this.rlle.recordVoiceTraining(
+      user.userId,
+      id,
+      {
+        experienceSessionId: experienceSessionId.trim(),
+        lessonId: lessonId.trim(),
+        exerciseIndex: parsedIndex,
+      },
+      audio,
+      this.durationSeconds(durationMs),
+    );
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post(':id/course/autonomy/start')
+  @HttpCode(HttpStatus.CREATED)
+  courseAutonomyStart(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: StartRlleAutonomyDto,
+  ): Promise<RlleAutonomyStartResponse> {
+    return this.rlle.startAutonomy(user.userId, id, dto);
+  }
+
+  @Post(':id/course/autonomy/help')
+  @HttpCode(HttpStatus.OK)
+  courseAutonomyHelp(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: MarkRlleAutonomyHelpDto,
+  ): Promise<RlleAutonomyHelpResponse> {
+    return this.rlle.markAutonomyHelp(user.userId, id, dto);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post(':id/course/autonomy/submit')
+  @HttpCode(HttpStatus.OK)
+  courseAutonomySubmit(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: SubmitRlleAutonomyDto,
+  ): Promise<RlleAutonomySubmissionResponse> {
+    return this.rlle.submitAutonomy(user.userId, id, dto);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post(':id/course/remediation/start')
+  @HttpCode(HttpStatus.CREATED)
+  courseRemediationStart(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: StartRlleRemediationDto,
+  ): Promise<RlleSessionResponse> {
+    return this.rlle.startRemediation(user.userId, id, dto);
   }
 
   @Get(':id/missions')

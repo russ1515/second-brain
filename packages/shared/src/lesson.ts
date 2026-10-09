@@ -1,5 +1,7 @@
 /** Written-first learning (Phase 5, Educational Engine) wire contracts. */
 
+import type { LanguageTrainingFormat } from './language-mastery';
+
 /** The kinds of exercise the teacher generates after a lesson. */
 export type ExerciseType = 'qcm' | 'open' | 'exercise' | 'case';
 
@@ -12,6 +14,16 @@ export interface LessonExercise {
   type?: ExerciseType;
   /** Multiple-choice options — present only for 'qcm'. */
   options?: string[];
+  /** Present only for an internally-generated language mastery lesson. The
+   * generic lesson type remains stable so other subjects are unaffected. */
+  languageFormat?: LanguageTrainingFormat;
+  /** Token bank for keyboard/touch sentence reconstruction. Typing the full
+   * answer always remains an accessible equivalent. */
+  tokens?: string[];
+  /** Target-language text that may be read through the existing TTS pipeline. */
+  audioText?: string;
+  /** Two or three target-language turns that frame a mini-dialogue response. */
+  dialogueTurns?: string[];
 }
 
 /** The full written lesson package generated for a topic. */

@@ -6,13 +6,32 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { LessonService } = require('../dist/lessons/lesson.service.js');
 
-function fixture() {
+function fixture(options = {}) {
   const lesson = {
     id: 'lesson-1', userId: 'user-1', tutorSessionId: null, conceptId: null,
-    languageProfileId: null, language: null, level: 'beginner', topic: 'Philosophy',
+    languageProfileId: options.languageMastery ? 'profile-1' : null,
+    language: options.languageMastery ? 'German' : null,
+    level: 'beginner', topic: 'Philosophy',
     objective: 'Explain the argument.', intro: 'Introduction', explanation: 'Explanation',
     examples: ['Example'], questions: ['Q1', 'Q2', 'Q3'],
-    exercises: [
+    exercises: options.languageMastery ? [
+      'recognition-mcq',
+      'contextual-discrimination',
+      'fill-blank-no-hint',
+      'sentence-reconstruction',
+      'register-matching',
+      'error-correction',
+      'listening-discrimination',
+      'guided-writing',
+      'voice-pronunciation',
+      'mini-dialogue',
+    ].map((languageFormat, index) => ({
+      type: languageFormat === 'recognition-mcq' ? 'qcm' : 'open',
+      question: `Language activity ${index + 1}`,
+      answer: `Answer ${index + 1}`,
+      languageFormat,
+      ...(languageFormat === 'recognition-mcq' ? { options: [`Answer ${index + 1}`, 'B', 'C'] } : {}),
+    })) : [
       { type: 'qcm', question: 'QCM', answer: 'A', options: ['A', 'B', 'C'] },
       { type: 'open', question: 'Open', answer: 'Answer' },
       { type: 'exercise', question: 'Apply', answer: 'Application' },
@@ -118,6 +137,28 @@ test('lesson finalization requires all evaluated exercises and occurs only after
   }
   assert.equal(completions.length, 1);
   assert.equal(completions[0].evidence.id, 'attempt-3');
+  assert.equal(session().status, 'completed');
+});
+
+test('language-mastery Lesson flow excludes voice from generic coverage and never bypasses RLLE completion', async () => {
+  const { service, attempts, completions, lesson, session } = fixture({ languageMastery: true });
+  let flow = await service.flow('user-1', lesson.id);
+  while (flow.activeStepKey !== 'exercises') {
+    flow = await service.validateFlowStep('user-1', lesson.id, flow.activeStepKey);
+    flow = await service.enterFlowStep('user-1', lesson.id, flow.stepKeys[flow.activeIndex + 1]);
+  }
+  for (let index = 0; index < lesson.exercises.length; index += 1) {
+    if (lesson.exercises[index].languageFormat !== 'voice-pronunciation') {
+      attempts.push({ id: `attempt-${index}`, exerciseIndex: index });
+    }
+  }
+  while (!flow.completed) {
+    flow = await service.validateFlowStep('user-1', lesson.id, flow.activeStepKey);
+    if (!flow.completed) {
+      flow = await service.enterFlowStep('user-1', lesson.id, flow.stepKeys[flow.activeIndex + 1]);
+    }
+  }
+  assert.equal(completions.length, 0);
   assert.equal(session().status, 'completed');
 });
 

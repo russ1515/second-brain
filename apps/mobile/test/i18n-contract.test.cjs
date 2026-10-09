@@ -208,11 +208,13 @@ for (const group of learningDataControlGroups) {
   }
 }
 const globalPathAliases = catalog(path.join(LOCALES_DIR, 'global-path-v1.ts'), 'aliases');
+const languageMasteryAliases = catalog(path.join(LOCALES_DIR, 'language-mastery-v1.ts'), 'languageMasteryAliases');
 const overlayFiles = new Set([
   'auth-errors.ts',
   'essential.ts',
   'global-path-v1.ts',
   'index.ts',
+  'language-mastery-v1.ts',
   'learning-control-v1.ts',
   'learning-data-control-africa-v1.ts',
   'learning-data-control-asia-v1.ts',
@@ -271,6 +273,11 @@ function effectiveCatalog(resource) {
   for (const [key, sourceKey] of globalPathAliases) {
     const value = translations.get(sourceKey);
     assert.ok(value, `${code} alias source ${sourceKey} is missing`);
+    translations.set(key, value);
+  }
+  for (const [key, sourceKey] of languageMasteryAliases) {
+    const value = translations.get(sourceKey);
+    assert.ok(value, `${code} mastery alias source ${sourceKey} is missing`);
     translations.set(key, value);
   }
   return translations;

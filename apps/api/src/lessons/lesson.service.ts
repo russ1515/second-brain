@@ -16,8 +16,11 @@ import type {
   LessonSummary,
   LessonView,
   KycTeacher,
+  LanguageTrainingFormat,
 } from '@second-brain/shared';
 import {
+  LANGUAGE_REMEDIATION_MINIMUM_EXERCISES,
+  LANGUAGE_TRAINING_FORMATS,
   resolveTeacherPolicy,
   TEACHER_POLICY_METADATA_SOURCE,
   teacherPolicyDirective,
@@ -38,6 +41,7 @@ import type { LearningDeletionPreview } from '@second-brain/shared';
 import { LearningCompletionService } from '../learning-evidence/learning-completion.service';
 import { GoalsService } from '../goals/goals.service';
 import { accountDataLockKey } from '../common/account-data-lock';
+import { createHash } from 'node:crypto';
 
 const CONTEXT_LIMIT = 5;
 
@@ -64,6 +68,25 @@ const SYSTEM_PROMPT = [
   'condensed study sheet).',
 ].join(' ');
 
+const LANGUAGE_MASTERY_EXERCISE_PROMPT = [
+  'For this language-mastery lesson only, replace the generic exercise mix with',
+  'at least ten genuinely answerable items. Include at least one item for EACH',
+  'languageFormat listed here exactly:',
+  LANGUAGE_TRAINING_FORMATS.join(', '),
+  'Every item keeps type as qcm|open|exercise|case and includes question and',
+  'answer. recognition-mcq, contextual-discrimination, register-matching and',
+  'listening-discrimination use qcm with 3-4 plausible options and the exact',
+  'answer in options. fill-blank-no-hint must not include answer-revealing hints.',
+  'sentence-reconstruction includes a shuffled tokens array and always remains',
+  'answerable by typing. listening-discrimination includes audioText in the',
+  'target language. guided-writing requires a real written production.',
+  'voice-pronunciation includes audioText as the phrase to hear and repeat; do',
+  'not claim a transcript alone measures pronunciation. mini-dialogue includes',
+  'dialogueTurns with two or three contextual turns and asks for the next reply.',
+  'Return languageFormat on every language exercise. Do not duplicate a prompt',
+  'just to reach ten items.',
+].join(' ');
+
 /**
  * Steering supplied by other services (not by API clients).
  *
@@ -77,6 +100,11 @@ export interface InternalLessonOptions {
   /** Extra teaching directive appended to the system prompt (e.g. the language
    *  mode's pedagogical contract). */
   directive?: string;
+  /** Server-only switch for the language mastery exercise contract. */
+  languageMastery?: boolean;
+  /** Exact failed battery used only to reject duplicate remediation items
+   * before the generated lesson is persisted. */
+  remediationBaselineExercises?: readonly LessonExercise[];
 }
 
 /** Structured lesson shape returned by the LLM. */
@@ -150,6 +178,8 @@ export class LessonService {
       context,
       { ...dto, level },
       trustedDirective,
+      internal.languageMastery === true,
+      internal.remediationBaselineExercises,
     );
 
     const { lesson, doc, experience } = await this.prisma.$transaction(async (tx) => {
@@ -307,7 +337,10 @@ export class LessonService {
       await this.requireExerciseCoverage(userId, lesson);
     }
     const isFinal = flow.activeIndex === flow.stepKeys.length - 1;
-    if (isFinal) {
+    // The RLLE autonomy gate is the sole canonical completion authority for
+    // language-mastery lessons. Finishing their guided Lesson UI must never
+    // create a generic lesson completion or unlock mastery before >= 90%.
+    if (isFinal && !this.isLanguageMasteryLesson(lesson)) {
       const attempt = await this.prisma.exerciseAttempt.findFirst({
         where: { userId, lessonId: lesson.id, contentVersion: lesson.contentVersion },
         orderBy: { createdAt: 'desc' },
@@ -460,9 +493,25 @@ export class LessonService {
       select: { exerciseIndex: true },
     });
     const attempted = new Set(attempts.map((attempt) => attempt.exerciseIndex));
-    if (exercises.some((_, index) => !attempted.has(index))) {
+    const languageMastery = this.isLanguageMasteryLesson(lesson);
+    if (exercises.some((exercise, index) =>
+      // Pronunciation is evaluated by the RLLE audio-native endpoint. It must
+      // not be fabricated as a generic text ExerciseAttempt merely to advance
+      // this presentation flow; the RLLE gate still requires its audio proof.
+      !(languageMastery && exercise.languageFormat === 'voice-pronunciation')
+      && !attempted.has(index))) {
       throw new BadRequestException('Complete every lesson exercise before continuing.');
     }
+  }
+
+  private isLanguageMasteryLesson(lesson: Lesson): boolean {
+    if (!lesson.languageProfileId || !Array.isArray(lesson.exercises)) return false;
+    const formats = new Set(
+      (lesson.exercises as unknown as LessonExercise[])
+        .map((exercise) => exercise.languageFormat)
+        .filter((format): format is LanguageTrainingFormat => Boolean(format)),
+    );
+    return LANGUAGE_TRAINING_FORMATS.every((format) => formats.has(format));
   }
 
   private async resolveTopic(
@@ -589,12 +638,17 @@ export class LessonService {
     context: string,
     dto: GenerateLessonDto,
     directive?: string,
+    languageMastery = false,
+    remediationBaselineExercises?: readonly LessonExercise[],
   ): Promise<RawLesson> {
     const level = dto.level ? ` Pitch it at a ${dto.level} level.` : '';
     const language = dto.language
       ? ` This is a ${dto.language} language lesson; teach ${dto.language}.`
       : '';
-    const system = directive ? `${SYSTEM_PROMPT} ${directive}` : SYSTEM_PROMPT;
+    const baseSystem = languageMastery
+      ? `${SYSTEM_PROMPT} ${LANGUAGE_MASTERY_EXERCISE_PROMPT}`
+      : SYSTEM_PROMPT;
+    const system = directive ? `${baseSystem} ${directive}` : baseSystem;
     let text: string;
     try {
       const result = await this.llm.generate(
@@ -616,10 +670,14 @@ export class LessonService {
         'The teacher is temporarily unavailable. Please try again shortly.',
       );
     }
-    return this.parseLesson(text);
+    return this.parseLesson(text, languageMastery, remediationBaselineExercises);
   }
 
-  private parseLesson(raw: string): RawLesson {
+  private parseLesson(
+    raw: string,
+    languageMastery = false,
+    remediationBaselineExercises?: readonly LessonExercise[],
+  ): RawLesson {
     const start = raw.indexOf('{');
     const end = raw.lastIndexOf('}');
     let parsed: Record<string, unknown> = {};
@@ -642,22 +700,31 @@ export class LessonService {
     const keyPoints = this.nonEmptyStrings(parsed.keyPoints);
     const exercises = Array.isArray(parsed.exercises)
       ? parsed.exercises
-          .map((exercise) => this.normalizeExercise(exercise))
+          .map((exercise) => this.normalizeExercise(exercise, languageMastery))
           .filter((exercise): exercise is LessonExercise => exercise !== null)
       : [];
     const exerciseTypes = new Set(exercises.map((exercise) => exercise.type));
+    const genericExerciseContract =
+      exercises.length >= 4 && exercises.length <= 6 &&
+      (['qcm', 'open', 'exercise', 'case'] as const).every((type) => exerciseTypes.has(type));
+    const languageExerciseContract =
+      exercises.length >= LANGUAGE_TRAINING_FORMATS.length &&
+      LANGUAGE_TRAINING_FORMATS.every((format) =>
+        exercises.some((exercise) => exercise.languageFormat === format));
     const structurallyComplete =
       Boolean(objective && intro && explanation && summary && revisionSheet) &&
       examples.length >= 1 &&
       commonMisconceptions.length >= 1 &&
       questions.length >= 3 && questions.length <= 5 &&
-      exercises.length >= 4 && exercises.length <= 6 &&
-      (['qcm', 'open', 'exercise', 'case'] as const).every((type) => exerciseTypes.has(type)) &&
+      (languageMastery ? languageExerciseContract : genericExerciseContract) &&
       keyPoints.length >= 3 && keyPoints.length <= 5;
     if (!structurallyComplete) {
       throw new UnprocessableEntityException(
         'The teacher did not return a complete, usable lesson. Try again.',
       );
+    }
+    if (languageMastery && remediationBaselineExercises) {
+      this.requireNovelRemediationExercises(exercises, remediationBaselineExercises);
     }
     return {
       objective,
@@ -677,6 +744,52 @@ export class LessonService {
     };
   }
 
+  /** Deterministic novelty only: this deliberately does not claim that a new
+   * string is pedagogically well targeted. It rejects exact/normalised reuse
+   * of prompt plus essential exercise content and duplicate generated items. */
+  private requireNovelRemediationExercises(
+    exercises: readonly LessonExercise[],
+    baseline: readonly LessonExercise[],
+  ): void {
+    const previous = new Set(baseline.map((exercise) => this.languageExerciseFingerprint(exercise)));
+    const generated = new Set<string>();
+    for (const exercise of exercises) {
+      const fingerprint = this.languageExerciseFingerprint(exercise);
+      if (previous.has(fingerprint) || generated.has(fingerprint)) {
+        throw new UnprocessableEntityException(
+          'The remediation battery reused an existing or duplicate exercise.',
+        );
+      }
+      generated.add(fingerprint);
+    }
+    if (generated.size < LANGUAGE_REMEDIATION_MINIMUM_EXERCISES) {
+      throw new UnprocessableEntityException(
+        'The remediation battery must contain at least ten genuinely new exercises.',
+      );
+    }
+  }
+
+  private languageExerciseFingerprint(exercise: LessonExercise): string {
+    const normalize = (value: string | undefined): string => (value ?? '')
+      .normalize('NFKC')
+      .toLowerCase()
+      .replace(/[\p{P}\p{S}\s]+/gu, ' ')
+      .trim();
+    const normalizedList = (values: readonly string[] | undefined): string =>
+      [...new Set((values ?? []).map((value) => normalize(value)).filter(Boolean))]
+        .sort()
+        .join('|');
+    const canonical = [
+      normalize(exercise.question),
+      normalize(exercise.answer),
+      normalizedList(exercise.options),
+      normalizedList(exercise.tokens),
+      normalize(exercise.audioText),
+      normalizedList(exercise.dialogueTurns),
+    ].join('\u241f');
+    return createHash('sha256').update(canonical, 'utf8').digest('hex');
+  }
+
   private nonEmptyStrings(value: unknown): string[] {
     return Array.isArray(value)
       ? value
@@ -687,7 +800,7 @@ export class LessonService {
 
   /** Accept only complete, known exercise shapes. Invalid QCM data is rejected
    * instead of being silently downgraded to an ungraded generic exercise. */
-  private normalizeExercise(value: unknown): LessonExercise | null {
+  private normalizeExercise(value: unknown, languageMastery = false): LessonExercise | null {
     if (!value || typeof value !== 'object') return null;
     const e = value as Record<string, unknown>;
     const types: ExerciseType[] = ['qcm', 'open', 'exercise', 'case'];
@@ -701,6 +814,33 @@ export class LessonService {
       answer,
       type,
     };
+    if (languageMastery) {
+      if (!(LANGUAGE_TRAINING_FORMATS as readonly unknown[]).includes(e.languageFormat)) return null;
+      base.languageFormat = e.languageFormat as LanguageTrainingFormat;
+      const strings = (candidate: unknown): string[] | undefined => {
+        if (!Array.isArray(candidate)) return undefined;
+        const values = [...new Set(candidate
+          .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          .map((item) => item.trim()))];
+        return values.length > 0 ? values : undefined;
+      };
+      const tokens = strings(e.tokens);
+      const dialogueTurns = strings(e.dialogueTurns);
+      const audioText = typeof e.audioText === 'string' ? e.audioText.trim() : '';
+      if (base.languageFormat === 'sentence-reconstruction') {
+        if (!tokens || tokens.length < 2) return null;
+        base.tokens = tokens;
+      }
+      if (base.languageFormat === 'listening-discrimination' || base.languageFormat === 'voice-pronunciation') {
+        if (!audioText) return null;
+        base.audioText = audioText;
+      }
+      if (base.languageFormat === 'mini-dialogue') {
+        if (!dialogueTurns || dialogueTurns.length < 2 || dialogueTurns.length > 3) return null;
+        base.dialogueTurns = dialogueTurns;
+      }
+      if (base.languageFormat === 'fill-blank-no-hint' && (tokens || Array.isArray(e.options))) return null;
+    }
     if (type === 'qcm') {
       if (!Array.isArray(e.options)) return null;
       const options = e.options.filter(
@@ -711,6 +851,12 @@ export class LessonService {
       if (uniqueOptions.filter((option) => option === answer).length !== 1) return null;
       return { ...base, options: uniqueOptions };
     }
+    if (languageMastery && [
+      'recognition-mcq',
+      'contextual-discrimination',
+      'register-matching',
+      'listening-discrimination',
+    ].includes(base.languageFormat ?? '')) return null;
     return base;
   }
 
