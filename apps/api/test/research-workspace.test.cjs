@@ -149,3 +149,29 @@ test('autosave is optimistic and workspace ownership is enforced in the backend'
   assert.match(service, /assertOwnedSources/);
   assert.match(service, /MAX_ASSISTANT_HISTORY = 30/);
 });
+
+test('workspace path selection persists the brief and drives the contextual assistant', () => {
+  const service = read('apps/api/src/workspaces/academic-workspace.service.ts');
+  const dto = read('apps/api/src/workspaces/dto/workspace.dto.ts');
+  const home = read('apps/mobile/app/library/workspace/index.tsx');
+  const workspace = read('apps/mobile/app/library/workspace/[id].tsx');
+
+  assert.match(service, /localizedDefaultWorkspacePlan\(request\.template, locale\)/);
+  assert.match(service, /workspaceDefaultPlan\(template\)/);
+  assert.match(service, /workspaceProgressFromPlan\(plan, \{ version: 1, brief \}\)/);
+  assert.match(service, /request\.brief === undefined \? existingBrief/);
+  assert.match(service, /data\.progress = asJson\(\{ \.\.\.request\.progress, workflow \}\)/);
+  assert.match(service, /WORKSPACE_TEMPLATE_DEFINITIONS\[template\]/);
+  assert.match(service, /learner instructions and their institution requirements are authoritative/);
+  assert.match(service, /Never erase or silently weaken explicit requirements/);
+  assert.match(dto, /brief\?: CreateWorkspaceRequest\['brief'\]/);
+  assert.match(dto, /brief\?: UpdateWorkspaceRequest\['brief'\]/);
+
+  assert.match(home, /workspace-adaptive-fields/);
+  assert.match(home, /workspace-adaptive-plan/);
+  assert.match(home, /plan: localizedPlan/);
+  assert.match(home, /brief:/);
+  assert.match(workspace, /workspace-adaptive-brief/);
+  assert.match(workspace, /workspace-completion-controls/);
+  assert.ok(workspace.indexOf('{editor}{assistantPanel}') >= 0);
+});

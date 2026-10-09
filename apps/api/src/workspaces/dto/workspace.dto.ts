@@ -44,6 +44,9 @@ export class CreateWorkspaceDto implements CreateWorkspaceRequest {
   @IsOptional() @IsArray() @ArrayMaxSize(100)
   plan?: WorkspacePlanItem[];
 
+  @IsOptional() @IsObject()
+  brief?: CreateWorkspaceRequest['brief'];
+
   @IsOptional() @IsString() @MaxLength(200_000)
   initialContent?: string;
 }
@@ -69,6 +72,9 @@ export class UpdateWorkspaceDto implements UpdateWorkspaceRequest {
 
   @IsOptional() @IsArray() @ArrayMaxSize(100)
   plan?: WorkspacePlanItem[];
+
+  @IsOptional() @IsObject()
+  brief?: UpdateWorkspaceRequest['brief'];
 
   @IsOptional() @IsObject()
   progress?: WorkspaceProgress;

@@ -39,3 +39,67 @@ test('workspace templates and contextual assistant actions are product-level con
   assert.ok(shared.WORKSPACE_ASSIST_ACTIONS.includes('compare-sources'));
   assert.ok(shared.WORKSPACE_ASSIST_ACTIONS.includes('check-coherence'));
 });
+
+test('all eight workspace templates expose distinct fields, plans and completion controls', () => {
+  const signatures = new Set();
+  for (const template of shared.WORKSPACE_TEMPLATES) {
+    const definition = shared.WORKSPACE_TEMPLATE_DEFINITIONS[template];
+    assert.ok(definition.fields.length >= 6, `${template} fields`);
+    assert.ok(definition.requiredFields.length >= 1, `${template} required fields`);
+    assert.ok(definition.steps.length >= 7, `${template} steps`);
+    assert.ok(definition.completionControls.includes('brief'), `${template} brief control`);
+    assert.ok(definition.completionControls.includes('submission'), `${template} submission control`);
+    const plan = shared.workspaceDefaultPlan(template);
+    assert.deepEqual(plan.map((item) => item.stepId), definition.steps);
+    assert.ok(plan.every((item, index) => item.order === index && item.completed === false));
+    signatures.add(JSON.stringify({ fields: definition.fields, steps: definition.steps }));
+  }
+  assert.equal(signatures.size, shared.WORKSPACE_TEMPLATES.length);
+});
+
+test('workspace completion uses real brief, plan, sources and draft state', () => {
+  const template = 'memoire';
+  const plan = shared.workspaceDefaultPlan(template);
+  const brief = {
+    version: 1,
+    fields: {
+      subject: 'Learning systems',
+      researchQuestion: 'How does retrieval practice affect retention?',
+      methodology: 'Controlled comparison',
+      institutionInstructions: 'APA references and a signed methodology chapter.',
+    },
+  };
+  const before = shared.workspaceCompletionChecks({
+    template,
+    brief,
+    plan,
+    sources: [],
+    draftContent: '',
+  });
+  assert.equal(before.find((item) => item.id === 'brief').passed, true);
+  assert.equal(before.find((item) => item.id === 'methodology').passed, true);
+  assert.equal(before.find((item) => item.id === 'plan').passed, false);
+  assert.equal(before.find((item) => item.id === 'sources').passed, false);
+  assert.equal(before.find((item) => item.id === 'submission').passed, false);
+
+  const completed = shared.workspaceCompletionChecks({
+    template,
+    brief,
+    plan: plan.map((item) => ({ ...item, completed: true })),
+    sources: [{ kind: 'document', id: 'doc-1' }],
+    draftContent: 'A learner-authored draft.',
+  });
+  assert.ok(completed.every((item) => item.passed));
+});
+
+test('workspace progress preserves the persisted workflow brief', () => {
+  const workflow = {
+    version: 1,
+    brief: { version: 1, fields: { userInstructions: 'Use my outline.' } },
+  };
+  const progress = shared.workspaceProgressFromPlan(
+    [{ id: 'a', title: 'A', order: 0, completed: false }],
+    workflow,
+  );
+  assert.deepEqual(progress.workflow, workflow);
+});

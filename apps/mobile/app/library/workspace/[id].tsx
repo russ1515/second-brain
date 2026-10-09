@@ -2,10 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
+  WORKSPACE_TEMPLATE_DEFINITIONS,
+  workspaceCompletionChecks,
   workspaceProgressFromPlan,
   type LibraryDocument,
   type LibraryPage,
   type PersistentWorkspace,
+  type WorkspaceBrief,
   type WorkspacePlanItem,
   type WorkspaceSaveState,
   type WorkspaceSourceReference,
@@ -14,7 +17,8 @@ import { api, ApiError } from '../../../lib/client';
 import { useI18n, type TranslationKey } from '../../../lib/i18n';
 import { useTokens } from '../../../lib/design/theme';
 import { useResponsive } from '../../../lib/responsive';
-import { Alert, Badge, Button, Card, Progress, SegmentedControl } from '../../../components/ds/core';
+import { workspaceCompletionLabel, workspaceFieldLabel } from '../../../lib/workspace-paths';
+import { Alert, Badge, Button, Card, Input, Progress, SegmentedControl } from '../../../components/ds/core';
 import { Page } from '../../../components/ds/layout';
 import { SourceCitation, SourcePreview } from '../../../components/ds/sources';
 import { SmartErrorState, SmartLoadingState } from '../../../components/ds/states';
@@ -175,7 +179,16 @@ export default function AcademicWorkspaceScreen() {
   const total = workspace.plan.length;
   const done = workspace.plan.filter((item) => item.completed).length;
   const progress = total ? Math.round((done / total) * 100) : null;
+  const completionChecks = workspaceCompletionChecks({
+    template: workspace.template,
+    brief: workspace.brief,
+    plan: workspace.plan,
+    sources: workspace.sources,
+    draftContent: content,
+  });
+  const briefPanel = <BriefPanel workspace={workspace} onUpdate={(brief) => patchWorkspace({ brief })} />;
   const planPanel = <PlanPanel workspace={workspace} onUpdate={updatePlan} onMove={movePlan} onRemove={removePlanItem} onAdd={addPlanItem} />;
+  const completionPanel = <CompletionPanel checks={completionChecks} />;
   const sourcesPanel = <SourcesPanel workspace={workspace} showPicker={showSourcePicker} library={library} onOpenPicker={() => void openSourcePicker()} onToggleDocument={(document) => void toggleDocumentSource(document)} onOpenDocument={(documentId) => router.push(`/library/${documentId}`)} />;
   const assistantPanel = (
     <WorkspaceAssistant
@@ -203,17 +216,17 @@ export default function AcademicWorkspaceScreen() {
 
       {desktop ? (
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md }}>
-          <View style={{ width: 270, gap: spacing.md }}>{planPanel}{sourcesPanel}</View>
+          <View style={{ width: 320, gap: spacing.md }}>{briefPanel}{planPanel}{completionPanel}{sourcesPanel}</View>
           <View style={{ flex: 1, minWidth: 0, gap: spacing.md }}>{editor}{assistantPanel}</View>
         </View>
       ) : tabletSplit ? (
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md }}>
-          <View style={{ width: 280 }}>{activeArea === 'sources' ? sourcesPanel : planPanel}</View>
+          <View style={{ width: 310, gap: spacing.md }}>{activeArea === 'sources' ? sourcesPanel : <>{briefPanel}{planPanel}{completionPanel}</>}</View>
           <View style={{ flex: 1, minWidth: 0, gap: spacing.md }}>{editor}{assistantPanel}</View>
         </View>
       ) : (
         <View style={{ gap: spacing.md }}>
-          {activeArea === 'plan' ? planPanel : activeArea === 'sources' ? sourcesPanel : null}
+          {activeArea === 'plan' ? <>{briefPanel}{planPanel}{completionPanel}</> : activeArea === 'sources' ? sourcesPanel : null}
           {editor}
           {assistantPanel}
         </View>
@@ -222,16 +235,83 @@ export default function AcademicWorkspaceScreen() {
   </ScrollView>;
 }
 
+function BriefPanel({
+  workspace,
+  onUpdate,
+}: {
+  workspace: PersistentWorkspace;
+  onUpdate: (brief: WorkspaceBrief) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const { colors: c, spacing, typography } = useTokens();
+  const definition = WORKSPACE_TEMPLATE_DEFINITIONS[workspace.template];
+  const [fields, setFields] = useState<WorkspaceBrief['fields']>(workspace.brief.fields);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setFields(workspace.brief.fields);
+  }, [workspace.id, workspace.brief]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await onUpdate({
+        version: 1,
+        fields: Object.fromEntries(
+          Object.entries(fields)
+            .map(([field, value]) => [field, value?.trim()])
+            .filter(([, value]) => Boolean(value)),
+        ),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const dirty = JSON.stringify(fields) !== JSON.stringify(workspace.brief.fields);
+  return <Card style={{ gap: spacing.sm }} testID="workspace-adaptive-brief">
+    <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>
+      {t(`workspace10.template.${workspace.template}` as TranslationKey)} · {t('workspace10.assistantQuestion')}
+    </Text>
+    {definition.fields.map((field) => {
+      const required = definition.requiredFields.includes(field);
+      const label = workspaceFieldLabel(field, t);
+      return <Input
+        key={field}
+        testID={`workspace-resume-field-${field}`}
+        label={`${label}${required ? ' *' : ''}`}
+        value={fields[field] ?? ''}
+        onChangeText={(value) => setFields((current) => ({ ...current, [field]: value }))}
+        placeholder={label}
+        multiline
+      />;
+    })}
+    <Button size="sm" variant="secondary" label={t('workspace10.saveNow')} loading={saving} disabled={!dirty || saving} onPress={() => void save()} />
+  </Card>;
+}
+
+function CompletionPanel({ checks }: { checks: PersistentWorkspace['completionChecks'] }) {
+  const { t } = useI18n();
+  const { colors: c, spacing, typography } = useTokens();
+  return <Card style={{ gap: spacing.sm }} testID="workspace-completion-controls">
+    <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('workspace10.integrity')}</Text>
+    {checks.map((check) => <View key={check.id} style={{ minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
+      <Text accessibilityLabel={check.passed ? t('workspace10.save.saved') : t('workspace10.save.dirty')} style={{ color: check.passed ? c.success : c.textMuted, fontWeight: '800' }}>{check.passed ? '✓' : '○'}</Text>
+      <Text style={[typography.bodySmall, { flex: 1, color: c.textSecondary }]}>{workspaceCompletionLabel(check.id, t)}{check.required ? ' *' : ''}</Text>
+    </View>)}
+  </Card>;
+}
+
 function PlanPanel({ workspace, onUpdate, onMove, onRemove, onAdd }: { workspace: PersistentWorkspace; onUpdate: (plan: WorkspacePlanItem[]) => Promise<void>; onMove: (index: number, delta: number) => void; onRemove: (id: string) => void; onAdd: () => void }) {
   const { t } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
-  return <Card style={{ gap: spacing.sm }} testID="workspace-plan"><Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('workspace10.plan')}</Text>{workspace.plan.map((item, index) => <View key={item.id} style={{ gap: spacing.xs, borderBottomWidth: index === workspace.plan.length - 1 ? 0 : 1, borderBottomColor: c.borderSubtle, paddingBottom: spacing.sm }}><View style={{ flexDirection: 'row', gap: spacing.xs, alignItems: 'center' }}><Pressable accessibilityRole="checkbox" accessibilityState={{ checked: item.completed }} onPress={() => void onUpdate(workspace.plan.map((row) => row.id === item.id ? { ...row, completed: !row.completed } : row))} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: item.completed ? c.success : c.textMuted, fontSize: 18 }}>{item.completed ? '✓' : '○'}</Text></Pressable><TextInput defaultValue={item.title} onEndEditing={(event) => { const title = event.nativeEvent.text.trim(); if (title && title !== item.title) void onUpdate(workspace.plan.map((row) => row.id === item.id ? { ...row, title } : row)); }} style={[typography.bodySmall, { flex: 1, color: c.textPrimary, minHeight: 44 }]} accessibilityLabel={t('workspace10.plan.rename')} /></View><View style={{ flexDirection: 'row', gap: spacing.xs }}><Button size="sm" variant="ghost" label="↑" disabled={index === 0} onPress={() => onMove(index, -1)} /><Button size="sm" variant="ghost" label="↓" disabled={index === workspace.plan.length - 1} onPress={() => onMove(index, 1)} /><Button size="sm" variant="ghost" label={t('workspace10.plan.remove')} onPress={() => onRemove(item.id)} /></View></View>)}<Button size="sm" variant="secondary" label={t('workspace10.plan.add')} onPress={onAdd} /></Card>;
+  return <Card style={{ gap: spacing.sm }} testID="workspace-plan"><Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('workspace10.plan')}</Text>{workspace.plan.map((item, index) => <View key={item.id} style={{ gap: spacing.xs, borderBottomWidth: index === workspace.plan.length - 1 ? 0 : 1, borderBottomColor: c.borderSubtle, paddingBottom: spacing.sm }}><View style={{ flexDirection: 'row', gap: spacing.xs, alignItems: 'center' }}><Pressable accessibilityRole="checkbox" accessibilityState={{ checked: item.completed }} onPress={() => void onUpdate(workspace.plan.map((row) => row.id === item.id ? { ...row, completed: !row.completed } : row))} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: item.completed ? c.success : c.textMuted, fontSize: 18 }}>{item.completed ? '✓' : '○'}</Text></Pressable><TextInput defaultValue={item.title} onEndEditing={(event) => { const title = event.nativeEvent.text.trim(); if (title && title !== item.title) void onUpdate(workspace.plan.map((row) => row.id === item.id ? { ...row, title, stepId: undefined } : row)); }} style={[typography.bodySmall, { flex: 1, color: c.textPrimary, minHeight: 44 }]} accessibilityLabel={t('workspace10.plan.rename')} /></View><View style={{ flexDirection: 'row', gap: spacing.xs }}><Button size="sm" variant="ghost" label="↑" disabled={index === 0} onPress={() => onMove(index, -1)} /><Button size="sm" variant="ghost" label="↓" disabled={index === workspace.plan.length - 1} onPress={() => onMove(index, 1)} /><Button size="sm" variant="ghost" label={t('workspace10.plan.remove')} onPress={() => onRemove(item.id)} /></View></View>)}<Button size="sm" variant="secondary" label={t('workspace10.plan.add')} onPress={onAdd} /></Card>;
 }
 
 function EditorPanel({ content, saveState, onChange, onSelection, onInsert, onSave }: { content: string; saveState: WorkspaceSaveState; onChange: (value: string) => void; onSelection: (selection: { start: number; end: number }) => void; onInsert: (prefix: string, suffix?: string) => void; onSave: () => void }) {
   const { t } = useI18n();
   const { colors: c, radius, spacing, typography } = useTokens();
-  return <Card style={{ gap: spacing.sm, minHeight: 620 }} testID="workspace-editor"><View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}><Button size="sm" variant="ghost" label={t('workspace10.editor.heading')} onPress={() => onInsert('## ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.list')} onPress={() => onInsert('- ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.quote')} onPress={() => onInsert('> ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.reference')} onPress={() => onInsert('[', ']')} /></View><TextInput value={content} onChangeText={onChange} onSelectionChange={(event) => onSelection(event.nativeEvent.selection)} multiline textAlignVertical="top" placeholder={t('workspace10.editor.placeholder')} placeholderTextColor={c.textMuted} accessibilityLabel={t('workspace10.editor.label')} style={[typography.body, { flex: 1, minHeight: 520, borderWidth: 1, borderColor: c.border, borderRadius: radius.sm, backgroundColor: c.surfaceElevated, color: c.textPrimary, padding: spacing.md }]} /><View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }}><Text accessibilityLiveRegion="polite" style={[typography.caption, { color: saveState === 'error' || saveState === 'offline' ? c.warning : c.textMuted }]}>{t(`workspace10.save.${saveState}` as TranslationKey)}</Text><Button size="sm" variant="secondary" label={t('workspace10.saveNow')} disabled={saveState === 'saving' || saveState === 'saved'} onPress={onSave} /></View></Card>;
+  return <Card style={{ gap: spacing.sm, minHeight: 620 }} testID="workspace-editor"><View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}><Button size="sm" variant="ghost" label={t('workspace10.editor.heading')} onPress={() => onInsert('## ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.list')} onPress={() => onInsert('- ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.quote')} onPress={() => onInsert('> ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.reference')} onPress={() => onInsert('[', ']')} /></View><TextInput testID="workspace-draft-input" value={content} onChangeText={onChange} onSelectionChange={(event) => onSelection(event.nativeEvent.selection)} multiline textAlignVertical="top" placeholder={t('workspace10.editor.placeholder')} placeholderTextColor={c.textMuted} accessibilityLabel={t('workspace10.editor.label')} style={[typography.body, { flex: 1, minHeight: 520, borderWidth: 1, borderColor: c.border, borderRadius: radius.sm, backgroundColor: c.surfaceElevated, color: c.textPrimary, padding: spacing.md }]} /><View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }}><Text accessibilityLiveRegion="polite" style={[typography.caption, { color: saveState === 'error' || saveState === 'offline' ? c.warning : c.textMuted }]}>{t(`workspace10.save.${saveState}` as TranslationKey)}</Text><Button testID="workspace-save-draft" size="sm" variant="secondary" label={t('workspace10.saveNow')} disabled={saveState === 'saving' || saveState === 'saved'} onPress={onSave} /></View></Card>;
 }
 
 function SourcesPanel({ workspace, showPicker, library, onOpenPicker, onToggleDocument, onOpenDocument }: { workspace: PersistentWorkspace; showPicker: boolean; library: LibraryDocument[]; onOpenPicker: () => void; onToggleDocument: (document: LibraryDocument) => void; onOpenDocument: (id: string) => void }) {

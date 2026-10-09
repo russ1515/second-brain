@@ -15,6 +15,7 @@ import type {
   WorkspaceAssistantHistoryEntry,
   WorkspaceAutosaveRequest,
   WorkspaceAutosaveResult,
+  WorkspaceBrief,
   WorkspacePage,
   WorkspacePlanItem,
   WorkspaceProgress,
@@ -24,7 +25,13 @@ import type {
 } from '@second-brain/shared';
 import {
   createContext,
+  emptyWorkspaceBrief,
+  WORKSPACE_BRIEF_FIELDS,
+  WORKSPACE_STEP_IDS,
+  WORKSPACE_TEMPLATE_DEFINITIONS,
   WORKSPACE_TEMPLATES,
+  workspaceCompletionChecks,
+  workspaceDefaultPlan,
   workspaceProgressFromPlan,
 } from '@second-brain/shared';
 import { localeDirective, resolveLocale } from '../common/learning-locale';
@@ -48,8 +55,11 @@ export class AcademicWorkspaceService {
     if (!WORKSPACE_TEMPLATES.includes(request.template)) throw new BadRequestException('Unknown workspace template.');
     const sources = this.normalizeSources(request.sources ?? []);
     const locale = await resolveLocale(this.prisma, userId);
-    const plan = this.normalizePlan(request.plan?.length ? request.plan : defaultWorkspacePlan(locale));
-    const progress = workspaceProgressFromPlan(plan);
+    const brief = this.normalizeBrief(request.brief);
+    const plan = this.normalizePlan(
+      request.plan?.length ? request.plan : localizedDefaultWorkspacePlan(request.template, locale),
+    );
+    const progress = workspaceProgressFromPlan(plan, { version: 1, brief });
     const workspaceId = randomUUID();
     const experienceSessionId = randomUUID();
     const now = new Date();
@@ -143,7 +153,11 @@ export class AcademicWorkspaceService {
   }
 
   async update(userId: string, id: string, request: UpdateWorkspaceRequest): Promise<PersistentWorkspace> {
-    await this.requireOwned(userId, id);
+    const existing = await this.requireOwned(userId, id);
+    const existingProgress = fromJson<WorkspaceProgress>(existing.progress, { completedSteps: [] });
+    const existingBrief = existingProgress.workflow?.brief ?? emptyWorkspaceBrief();
+    const brief = request.brief === undefined ? existingBrief : this.normalizeBrief(request.brief);
+    const workflow = { version: 1 as const, brief };
     const data: Prisma.AcademicWorkspaceUncheckedUpdateInput = {};
     if (request.title !== undefined) data.title = request.title.trim();
     if (request.objective !== undefined) data.objective = request.objective.trim();
@@ -159,9 +173,11 @@ export class AcademicWorkspaceService {
     if (request.plan !== undefined) {
       const plan = this.normalizePlan(request.plan);
       data.plan = asJson(plan);
-      data.progress = asJson(workspaceProgressFromPlan(plan));
+      data.progress = asJson(workspaceProgressFromPlan(plan, workflow));
+    } else if (request.brief !== undefined) {
+      data.progress = asJson({ ...existingProgress, workflow });
     } else if (request.progress !== undefined) {
-      data.progress = asJson(request.progress);
+      data.progress = asJson({ ...request.progress, workflow });
     }
     const row = normalizedSources
       ? await this.prisma.$transaction(async (tx) => {
@@ -213,6 +229,11 @@ export class AcademicWorkspaceService {
     const row = await this.requireOwned(userId, id);
     const history = fromJson<WorkspaceAssistantHistoryEntry[]>(row.assistantHistory, []).slice(-MAX_ASSISTANT_HISTORY);
     const sources = fromJson<WorkspaceSourceReference[]>(row.sources, []);
+    const plan = fromJson<WorkspacePlanItem[]>(row.plan, []);
+    const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
+    const brief = progress.workflow?.brief ?? emptyWorkspaceBrief();
+    const template = row.template as WorkspaceTemplate;
+    const definition = WORKSPACE_TEMPLATE_DEFINITIONS[template];
     const sourceContext = await this.sourceContext(userId, sources);
     const locale = await resolveLocale(this.prisma, userId);
     const userEntry: WorkspaceAssistantHistoryEntry = {
@@ -224,6 +245,10 @@ export class AcademicWorkspaceService {
       `Action requested: ${action}.`,
       request.message?.trim() ? `Learner request: ${request.message.trim()}` : '',
       request.selectedText?.trim() ? `Selected passage:\n${request.selectedText.trim()}` : '',
+      `Workspace type: ${template}.`,
+      `Workspace objective: ${row.objective || 'Not specified'}.`,
+      `Learner and institution brief:\n${this.briefContext(brief)}`,
+      `Current plan:\n${plan.map((item) => `- [${item.completed ? 'x' : ' '}] ${item.title}`).join('\n') || 'No plan yet.'}`,
       `Current draft:\n${row.draftContent.slice(0, 12_000)}`,
       sourceContext ? `Available attributed sources:\n${sourceContext}` : 'No source content is available.',
     ].filter(Boolean).join('\n\n');
@@ -232,6 +257,10 @@ export class AcademicWorkspaceService {
         role: 'system',
         content: [
           'You are the contextual Second Brain academic assistant.',
+          definition.assistantDirective,
+          'The workspace template is only a starting scaffold.',
+          'Within safety and academic-integrity rules, the learner instructions and their institution requirements are authoritative and take priority over the starting scaffold.',
+          'Never erase or silently weaken explicit requirements, evaluation criteria, formatting rules, or delivery constraints.',
           'Help the learner understand, reason, structure, compare, verify or rephrase.',
           'Do not replace the learner or generate an entire thesis or assignment.',
           'Stay within the current workspace and distinguish sourced claims from suggestions.',
@@ -293,8 +322,37 @@ export class AcademicWorkspaceService {
       const id = item?.id?.trim() || randomUUID();
       if (!title || seen.has(id)) return [];
       seen.add(id);
-      return [{ id, title: title.slice(0, 200), order: index, completed: Boolean(item.completed) }];
+      const stepId = item.stepId && WORKSPACE_STEP_IDS.includes(item.stepId) ? item.stepId : undefined;
+      return [{
+        id,
+        title: title.slice(0, 200),
+        order: index,
+        completed: Boolean(item.completed),
+        ...(stepId ? { stepId } : {}),
+      }];
     });
+  }
+
+  private normalizeBrief(brief?: WorkspaceBrief): WorkspaceBrief {
+    const fields: WorkspaceBrief['fields'] = {};
+    if (!brief || typeof brief !== 'object' || !brief.fields || typeof brief.fields !== 'object') {
+      return emptyWorkspaceBrief();
+    }
+    for (const field of WORKSPACE_BRIEF_FIELDS) {
+      const value = brief.fields[field];
+      if (typeof value !== 'string') continue;
+      const normalized = value.trim().slice(0, 4_000);
+      if (normalized) fields[field] = normalized;
+    }
+    return { version: 1, fields };
+  }
+
+  private briefContext(brief: WorkspaceBrief): string {
+    const entries = WORKSPACE_BRIEF_FIELDS.flatMap((field) => {
+      const value = brief.fields[field]?.trim();
+      return value ? [`${field}: ${value}`] : [];
+    });
+    return entries.join('\n') || 'No additional brief was provided.';
   }
 
   private async assertOwnedSources(
@@ -347,18 +405,23 @@ export class AcademicWorkspaceService {
   }
 
   private toView(row: AcademicWorkspace): PersistentWorkspace {
+    const template = row.template as WorkspaceTemplate;
+    const sources = fromJson<WorkspaceSourceReference[]>(row.sources, []);
+    const plan = fromJson<WorkspacePlanItem[]>(row.plan, []);
+    const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
+    const brief = progress.workflow?.brief ?? emptyWorkspaceBrief();
     return {
       id: row.id,
       userId: row.userId,
       title: row.title,
-      template: row.template as WorkspaceTemplate,
+      template,
       objective: row.objective,
       dueAt: row.dueAt?.toISOString() ?? null,
       status: row.status as WorkspaceProjectStatus,
       mode: row.mode as PersistentWorkspace['mode'],
       context: createContext(row.userId, [{ id: `workspace:${row.id}`, kind: 'workspace', scope: 'active-object', referenceId: row.id, label: row.title, priority: 100, visibility: 'visible' }]),
-      sources: fromJson(row.sources, []),
-      plan: fromJson(row.plan, []),
+      sources,
+      plan,
       draft: {
         format: row.draftFormat as PersistentWorkspace['draft']['format'],
         content: row.draftContent,
@@ -366,7 +429,15 @@ export class AcademicWorkspaceService {
         updatedAt: row.updatedAt.toISOString(),
       },
       assistantHistory: fromJson(row.assistantHistory, []),
-      progress: fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] }),
+      brief,
+      completionChecks: workspaceCompletionChecks({
+        template,
+        brief,
+        plan,
+        sources,
+        draftContent: row.draftContent,
+      }),
+      progress,
       autosaveRevision: row.autosaveRevision,
       experienceSessionId: row.experienceSessionId,
       resumeTarget: fromJson(row.resumeTarget, { kind: 'workspace', id: row.id, path: `/library/workspace/${row.id}` }),
@@ -388,11 +459,35 @@ function fromJson<T>(value: Prisma.JsonValue, fallback: T): T {
   return value === null || value === undefined ? fallback : value as unknown as T;
 }
 
-function defaultWorkspacePlan(locale: string): WorkspacePlanItem[] {
-  const french = locale.toLowerCase().startsWith('fr');
-  return [
-    { id: 'introduction', title: 'Introduction', order: 0, completed: false },
-    { id: 'development', title: french ? 'Développement' : 'Development', order: 1, completed: false },
-    { id: 'conclusion', title: 'Conclusion', order: 2, completed: false },
-  ];
+function localizedDefaultWorkspacePlan(template: WorkspaceTemplate, locale: string): WorkspacePlanItem[] {
+  const plan = workspaceDefaultPlan(template);
+  if (!locale.toLowerCase().startsWith('fr')) return plan;
+  const french: Record<NonNullable<WorkspacePlanItem['stepId']>, string> = {
+    'frame-topic': 'Cadrer le sujet et le périmètre',
+    'define-problem': 'Définir la problématique ou la question de recherche',
+    'review-literature': 'Analyser la littérature et les sources',
+    'design-method': 'Définir la méthodologie',
+    'collect-evidence': 'Réunir les sources, données ou preuves',
+    'analyze-evidence': 'Analyser les preuves',
+    'build-outline': 'Construire le plan détaillé',
+    draft: 'Rédiger le travail',
+    review: 'Vérifier la cohérence et l’exactitude',
+    'institution-check': 'Contrôler les consignes de l’établissement',
+    defense: 'Préparer la soutenance',
+    'analyze-prompt': 'Analyser les consignes',
+    'build-argument': 'Construire l’argumentation',
+    counterargument: 'Traiter les contre-arguments',
+    findings: 'Présenter les résultats',
+    recommendations: 'Formuler les recommandations',
+    'executive-summary': 'Rédiger la synthèse exécutive',
+    'target-publication': 'Définir le public ou la publication cible',
+    'abstract-keywords': 'Préparer le résumé et les mots-clés',
+    'submission-check': 'Effectuer les contrôles de remise',
+    'rubric-check': 'Vérifier la grille d’évaluation',
+    protocol: 'Définir le protocole de recherche',
+    ethics: 'Vérifier l’éthique et la reproductibilité',
+    'define-deliverable': 'Définir le livrable attendu',
+    deliver: 'Préparer la livraison finale',
+  };
+  return plan.map((item) => item.stepId ? { ...item, title: french[item.stepId] } : item);
 }
