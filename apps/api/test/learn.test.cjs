@@ -30,7 +30,9 @@ test('Universal Composer preserves drafts and exposes text, voice and bounded ca
   assert.match(composer, /Sheet/);
   assert.match(composer, /learn5\.capture\.photo/);
   assert.match(composer, /learn5\.capture\.qr/);
-  assert.doesNotMatch(composer, /learn5\.capture\.document|learn5\.capture\.file|learn5\.modality\.import|learn5\.modality\.export/);
+  assert.match(composer, /learn5\.capture\.file/);
+  assert.match(composer, /pickLearnDocument\(\)/);
+  assert.doesNotMatch(composer, /learn5\.capture\.document|learn5\.modality\.import|learn5\.modality\.export/);
 });
 
 test('advanced engines stay secondary and destination screens accept composer prefill', () => {

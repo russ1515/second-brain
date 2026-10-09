@@ -15,6 +15,7 @@ import type { ColorScale } from '../../lib/design/tokens';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { saveTutorSessionDraft } from '../../lib/tutor/session-draft';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
+import { ContextBar } from '../../components/context/context-bar';
 import { SpeakButton } from '../../components/speak-button';
 import {
   pauseSpeaking,
@@ -35,7 +36,7 @@ import {
  */
 /** Modes that legitimately route to /tutor. Not-yet-specialized ones fall back
  *  to the teacher home; only Free Search has its own workspace so far. */
-const TUTOR_MODES = new Set(['free', 'free_search', 'explain', 'discuss', 'oral_exercise', 'deepsearch']);
+const TUTOR_MODES = new Set(['free', 'free_search', 'explain', 'discuss', 'oral_exercise', 'deepsearch', 'teach']);
 
 /**
  * Entry point for /tutor — dispatches on the `?mode=` param so a specialised
@@ -68,6 +69,7 @@ export default function TutorEntry() {
   const initialQuery = Array.isArray(params.q) ? params.q[0] : params.q;
   const focusConceptId = Array.isArray(params.conceptId) ? params.conceptId[0] : params.conceptId;
   const contexts = tutorContextsFromParams(params);
+  const documentContexts = contexts.filter((item) => item.kind === 'document');
   const languageProfileId = Array.isArray(params.languageProfileId) ? params.languageProfileId[0] : params.languageProfileId;
   const languageName = Array.isArray(params.languageName) ? params.languageName[0] : params.languageName;
   if (mode === 'free' || mode === 'free_search') return <FreeSearch initialQuery={initialQuery} initialContexts={contexts} />;
@@ -75,6 +77,11 @@ export default function TutorEntry() {
   if (mode === 'oral_exercise') return <OralExercise languageProfileId={languageProfileId} targetLanguage={languageName} />;
   if (mode === 'explain') return <Explain initialQuery={initialQuery} focusConceptId={focusConceptId} initialContexts={contexts} />;
   if (mode === 'discuss' || mode === 'chat_tutor') return <Discuss initialQuery={initialQuery} initialContexts={contexts} />;
+  if (mode === 'teach') {
+    return documentContexts.length > 0
+      ? <DocumentProfessor initialQuery={initialQuery} documentContexts={documentContexts} />
+      : <ModeError />;
+  }
   if (mode === 'oral_exam') return <OralExam languageProfileId={languageProfileId} targetLanguage={languageName} />;
   if (mode && !TUTOR_MODES.has(mode)) return <ModeError />;
   return <TeacherHome />;
@@ -357,6 +364,7 @@ function QuestionWorkspace({ icon, kickerKey, titleKey, subtitleKey, placeholder
         <Text style={styles.freeTitle}>{t(titleKey)}</Text>
         <Text style={styles.freeSub}>{t(subtitleKey)}</Text>
       </View>
+      {initialContexts.length > 0 ? <ContextBar items={initialContexts} /> : null}
       {error ? <ErrorBanner message={error} /> : null}
       <Card>
         <TextInput
@@ -428,6 +436,32 @@ function Discuss({ initialQuery, initialContexts }: { initialQuery?: string; ini
       initialContexts={initialContexts}
       mode="conversation"
       intent="learn"
+    />
+  );
+}
+
+/** A Library document enters the Professor as an explicit, bounded context.
+ * Nothing is generated until the learner submits a request, and no unrelated
+ * goal, language, collection or past session is silently added to the scope. */
+function DocumentProfessor({
+  initialQuery,
+  documentContexts,
+}: {
+  initialQuery?: string;
+  documentContexts: ContextItem[];
+}) {
+  return (
+    <QuestionWorkspace
+      icon="▤"
+      kickerKey="tutor6.objective"
+      titleKey="library7.action.learn"
+      subtitleKey="library7.ask.detail"
+      placeholderKey="tutor.placeholder"
+      submitKey="tutor.send"
+      initialQuery={initialQuery}
+      initialContexts={documentContexts}
+      mode="teach"
+      intent="learn-document"
     />
   );
 }

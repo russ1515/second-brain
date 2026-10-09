@@ -10,12 +10,14 @@ import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import type { Document, DocumentSource } from '@prisma/client';
 import type {
+  CapturedDocumentContentType,
   DocumentContentType,
   DocumentDetail,
   DocumentPage,
   DocumentSummary,
   Page,
 } from '@second-brain/shared';
+import { resolveCapturedDocumentContentType } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   TextExtractionService,
@@ -104,7 +106,7 @@ export class DocumentService {
       subject?: string;
       language?: string;
       collectionId?: string;
-      contentType?: 'PHOTO' | 'SCAN' | 'NOTEBOOK';
+      contentType?: CapturedDocumentContentType;
     } = {},
   ): Promise<{ document: DocumentDetail; created: boolean }> {
     // The in-process coalescer in ScanService only protects one replica. Keep
@@ -151,8 +153,7 @@ export class DocumentService {
           charCount: 0,
         status: 'processing',
         stage: 'capturing',
-          contentType: metadata.contentType
-            ?? (pageCount > 1 ? 'NOTEBOOK' : 'SCAN'),
+          contentType: resolveCapturedDocumentContentType(pageCount, metadata.contentType),
           mimeType: 'image/jpeg',
           pageCount,
           subject: existingSubject?.subject ?? requestedSubject,
@@ -275,7 +276,7 @@ export class DocumentService {
   ): Promise<void> {
     const document = await this.prisma.document.findFirst({
       where: { id: documentId, userId, deletedAt: null },
-      select: { id: true },
+      select: { id: true, contentType: true },
     });
     if (!document) throw new NotFoundException('Document not found.');
     await this.prisma.$transaction(async (tx) => {
@@ -295,9 +296,14 @@ export class DocumentService {
         where: { id: documentId },
         data: {
           pageCount: pages.length,
-          // An explicit single-photo classification remains stable. Any
-          // multi-page capture is a notebook regardless of its entry point.
-          contentType: pages.length > 1 ? 'NOTEBOOK' : undefined,
+          // Keep an explicit single photo stable. Ordered captures remain a
+          // scan through three pages and become a notebook from page four.
+          contentType: resolveCapturedDocumentContentType(
+            pages.length,
+            document.contentType === 'PHOTO' || document.contentType === 'SCAN' || document.contentType === 'NOTEBOOK'
+              ? document.contentType
+              : undefined,
+          ),
         },
       });
     });

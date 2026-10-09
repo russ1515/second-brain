@@ -13,6 +13,26 @@ export type DocumentContentType =
   | 'NOTE'
   | 'LESSON_AI';
 
+/** A capture remains a scan for the first three pages. From four pages, the
+ * same ordered capture is represented as a notebook so Library can group a
+ * photographed chapter without creating a second ingestion path. */
+export const NOTEBOOK_CAPTURE_MIN_PAGES = 4;
+
+export type CapturedDocumentContentType = Extract<
+  DocumentContentType,
+  'PHOTO' | 'SCAN' | 'NOTEBOOK'
+>;
+
+export function resolveCapturedDocumentContentType(
+  pageCount: number,
+  requested?: CapturedDocumentContentType,
+): CapturedDocumentContentType {
+  const count = Number.isFinite(pageCount) ? Math.max(0, Math.trunc(pageCount)) : 0;
+  if (count >= NOTEBOOK_CAPTURE_MIN_PAGES) return 'NOTEBOOK';
+  if (count === 1 && requested === 'PHOTO') return 'PHOTO';
+  return 'SCAN';
+}
+
 export type DocumentPageStatus = 'PENDING' | 'PROCESSING' | 'READY' | 'FAILED';
 
 export interface DocumentPage {

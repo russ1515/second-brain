@@ -238,7 +238,7 @@ export default function DocumentIntelligenceScreen() {
         <Button label={t('library7.action.ask')} icon="?" onPress={() => setSection('ask')} />
         <Button label={t('lib.u.summarize')} variant="secondary" loading={busy === 'understand-summarize'} onPress={() => void runUnderstand('summarize')} />
         <Button label={t('lib.u.explain')} variant="secondary" loading={busy === 'understand-explain'} onPress={() => void runUnderstand('explain')} />
-        <Button label={t('library7.action.learn')} variant="secondary" onPress={() => router.push({ pathname: '/tutor', params: { documentId: document.id, title: document.title, mode: 'teach', intent: 'learn-document' } })} />
+        <Button label={t('library7.action.learn')} variant="secondary" disabled={document.status !== 'ready' || Boolean(document.deletedAt)} onPress={() => router.push({ pathname: '/tutor', params: { documentId: document.id, title: document.title, mode: 'teach', intent: 'learn-document' } })} />
         <Button label={advanced ? t('library7.action.less') : t('library7.action.more')} variant="ghost" onPress={() => setAdvanced((value) => !value)} />
       </View>
 
@@ -422,6 +422,7 @@ function BrainImpact({ integration, documentId }: { integration: KnowledgeIntegr
 function NextDocumentActions({ document, integration, resources, onLearn, onAsk, onFlashcards, onReview, onBrain }: { document: LibraryDocumentDetail; integration: KnowledgeIntegration | null; resources: StudyResource[]; onLearn: () => void; onAsk: () => void; onFlashcards: () => void; onReview: () => void; onBrain: () => void }) {
   const { colors: c, spacing, typography } = useTokens();
   const { t } = useI18n();
+  if (document.status !== 'ready' || document.deletedAt) return null;
   const actions = [
     ...(integration?.newConcepts.length ? [{ key: 'learn', label: t('library7.nba.learn').replace('{n}', String(integration.newConcepts.length)), onPress: onLearn }] : [{ key: 'ask', label: t('library7.nba.ask'), onPress: onAsk }]),
     ...(resources.some((resource) => resource.type === 'flashcards') ? [{ key: 'review', label: t('review9.documentReview'), onPress: onReview }] : []),

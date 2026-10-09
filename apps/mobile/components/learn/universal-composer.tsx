@@ -17,7 +17,6 @@ import {
 import { ContextBar } from '../context/context-bar';
 import { Alert, Badge, Button, Card } from '../ds/core';
 import { Sheet } from '../ds/overlays';
-import { CameraCapture } from '../capture/camera-capture';
 import { createRecorder, RECORDING_SUPPORTED, type Recording, type Recorder } from '../../lib/recorder';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
@@ -27,9 +26,9 @@ import {
   saveLearnDraft,
   type LearnDraftAttachment,
 } from '../../lib/learn/composer-draft';
-import type { CapturedImage } from '../../lib/capture/types';
 import {
   isImageDocument,
+  pickLearnDocument,
   type PickedLearnDocument,
 } from '../../lib/learn/document-picker';
 
@@ -68,7 +67,6 @@ export function UniversalComposer({
   const [hydrated, setHydrated] = useState(false);
   const [restored, setRestored] = useState(false);
   const [captureOpen, setCaptureOpen] = useState(false);
-  const [photoOpen, setPhotoOpen] = useState(false);
   const [clarification, setClarification] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState<LearnReadyDecision | null>(null);
   const [busy, setBusy] = useState(false);
@@ -181,10 +179,22 @@ export function UniversalComposer({
     onNavigate('/scan?mode=qr&source=learn');
   };
 
-  const attachPhoto = (image: CapturedImage) => {
-    setAttachment(image);
-    setPendingConfirmation(null);
-    setPhotoOpen(false);
+  const openPhoto = () => {
+    setCaptureOpen(false);
+    onNavigate('/scan?source=learn&captureType=photo');
+  };
+
+  const chooseFile = async () => {
+    setCaptureOpen(false);
+    setError(null);
+    try {
+      const document = await pickLearnDocument();
+      if (!document) return;
+      setAttachment(document);
+      setPendingConfirmation(null);
+    } catch (reason) {
+      setError((reason as Error).message || t('learn5.error.generic'));
+    }
   };
 
   const toggleVoice = async () => {
@@ -385,20 +395,14 @@ export function UniversalComposer({
         </View>
       </Card>
 
-      <Sheet visible={captureOpen} onClose={() => setCaptureOpen(false)} title={t('learn5.modality.capture')}>
-        <Text style={[typography.body, { color: c.textSecondary }]}>{t('globalPath.captureDetail')}</Text>
-        <Button fullWidth label={t('learn5.capture.photo')} icon="📷" onPress={() => { setCaptureOpen(false); setPhotoOpen(true); }} />
+      <Sheet visible={captureOpen} onClose={() => setCaptureOpen(false)} title={t('learn5.capture.title')}>
+        <Text style={[typography.body, { color: c.textSecondary }]}>{t('learn5.capture.detail')}</Text>
+        <Button fullWidth label={t('learn5.capture.photo')} icon="📷" onPress={openPhoto} />
+        <Button fullWidth label={t('learn5.capture.file')} icon="▤" variant="secondary" onPress={() => void chooseFile()} />
         <Button fullWidth label={t('learn5.capture.qr')} icon="⌗" variant="secondary" onPress={openQr} />
         <Button fullWidth label={t('learn5.cancel')} variant="ghost" onPress={() => setCaptureOpen(false)} />
       </Sheet>
 
-      <Sheet visible={photoOpen} onClose={() => setPhotoOpen(false)} title={t('learn5.capture.photo')}>
-        <CameraCapture
-          mode="photo"
-          onCapture={attachPhoto}
-          onCancel={() => setPhotoOpen(false)}
-        />
-      </Sheet>
     </View>
   );
 }

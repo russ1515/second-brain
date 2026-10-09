@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ScrollView, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type {
   ContextItem,
@@ -389,10 +389,15 @@ export default function TutorSessionScreen() {
     : [];
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }} testID="tutor-session-experience">
+    <KeyboardAvoidingView
+      style={{ flex: 1, minHeight: 0, backgroundColor: c.background }}
+      behavior={Platform.OS === 'ios' ? 'padding' : Platform.OS === 'android' ? 'height' : undefined}
+      keyboardVerticalOffset={54}
+      testID="tutor-session-experience"
+    >
       <ScrollView
         ref={scroll}
-        style={{ flex: 1 }}
+        style={{ flex: 1, minHeight: 0 }}
         contentContainerStyle={{ flexGrow: 1 }}
         keyboardShouldPersistTaps="handled"
       >
@@ -496,6 +501,7 @@ export default function TutorSessionScreen() {
               backgroundColor: c.surfaceElevated,
               paddingHorizontal: compact ? spacing.md : spacing.xl,
               paddingVertical: spacing.sm,
+              flexShrink: 0,
             },
             elevation.low,
           ]}
@@ -504,10 +510,11 @@ export default function TutorSessionScreen() {
             {voiceFocused || recording || voiceDraft || lastRecording.current ? (
               <VoiceState state={workState} elapsedSeconds={recording || elapsedSeconds ? elapsedSeconds : undefined} transcript={voiceDraft ? draft : undefined} />
             ) : null}
-            <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: spacing.xs, borderWidth: 1, borderColor: c.border, borderRadius: radius.lg, backgroundColor: c.surface, padding: spacing.xs }}>
+            <View style={{ width: '100%', minWidth: 0, flexDirection: 'row', alignItems: 'flex-end', gap: spacing.xs, borderWidth: 1, borderColor: c.border, borderRadius: radius.lg, backgroundColor: c.surface, padding: spacing.xs }}>
               <TextInput
                 style={{
                   flex: 1,
+                  minWidth: 0,
                   minHeight: 44,
                   maxHeight: 132,
                   color: c.textPrimary,
@@ -558,7 +565,7 @@ export default function TutorSessionScreen() {
         </View>
       ) : null}
 
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

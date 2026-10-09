@@ -147,7 +147,10 @@ test('V1 library UI exposes explicit menu, private viewers, page retry, drag ord
   assert.match(detail, /application\/pdf/);
   assert.match(scan, /MAX_PAGES = 50/);
   assert.match(scan, /draggable/);
-  assert.match(scan, /NOTEBOOK/);
+  assert.match(scan, /resolveCapturedDocumentContentType\(pages\.length, requestedContentType\)/);
+  const service = fs.readFileSync(path.join(root, 'apps/api/src/documents/document.service.ts'), 'utf8');
+  assert.match(service, /resolveCapturedDocumentContentType\(pageCount, metadata\.contentType\)/);
+  assert.match(service, /resolveCapturedDocumentContentType\([\s\S]*pages\.length/);
 });
 
 test('Trash UI confirms irreversible owner-scoped purge and exact-count emptying', () => {

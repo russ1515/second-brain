@@ -171,9 +171,9 @@ export class DocumentController {
       subject,
       language,
       collectionId,
-      contentType: contentType === 'PHOTO' || contentType === 'NOTEBOOK'
+      contentType: contentType === 'PHOTO' || contentType === 'SCAN' || contentType === 'NOTEBOOK'
         ? contentType
-        : 'SCAN',
+        : undefined,
     });
   }
 

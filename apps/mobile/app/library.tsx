@@ -9,7 +9,6 @@ import {
   type LibraryFacets,
   type LibraryFilter,
   type LibraryPage,
-  type LibrarySort,
   type QuotaErrorContract,
 } from '@second-brain/shared';
 import { ApiError, api } from '../lib/client';
@@ -22,7 +21,6 @@ import { useResponsive } from '../lib/responsive';
 import { Alert, Badge, Button, Card, SegmentedControl } from '../components/ds/core';
 import { SmartEmptyState, SmartLoadingState } from '../components/ds/states';
 import { DocumentPipeline } from '../components/document/document-pipeline';
-import { BatchImport } from '../components/document/batch-import';
 import { Dialog } from '../components/ds/overlays';
 
 const SHELVES: Array<{ filter: LibraryFilter; key: TranslationKey; icon: string }> = [
@@ -61,13 +59,12 @@ export default function LibraryScreen() {
   const [shelf, setShelf] = useState<LibraryFilter>('all');
   const [facet, setFacet] = useState<Facet>(null);
   const [contentType, setContentType] = useState<DocumentContentType | null>(null);
-  const [sort, setSort] = useState<LibrarySort>('newest');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [stale, setStale] = useState(false);
   const [error, setError] = useState<ErrorState>(null);
-  const [panel, setPanel] = useState<'import' | 'batch' | 'collection' | null>(null);
+  const [panel, setPanel] = useState<'import' | 'collection' | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<LibraryDocument | null>(null);
   const [confirmEmptyTrash, setConfirmEmptyTrash] = useState(false);
   const [purging, setPurging] = useState<string | null>(null);
@@ -77,14 +74,14 @@ export default function LibraryScreen() {
   useEffect(() => { documentsRef.current = documents; }, [documents]);
 
   const query = useMemo(() => {
-    const params = new URLSearchParams({ filter: shelf, sort, limit: '24' });
+    const params = new URLSearchParams({ filter: shelf, sort: 'newest', limit: '24' });
     if (search.trim()) params.set('q', search.trim());
     if (facet?.kind === 'subject') params.set('subject', facet.value);
     if (facet?.kind === 'language') params.set('language', facet.value);
     if (facet?.kind === 'collection') params.set('collectionId', facet.id);
     if (contentType) params.set('contentType', contentType);
     return params.toString();
-  }, [contentType, facet, search, shelf, sort]);
+  }, [contentType, facet, search, shelf]);
 
   const load = useCallback(async (append = false) => {
     if (!user) { setLoading(false); return; }
@@ -233,13 +230,10 @@ export default function LibraryScreen() {
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
         <Button label={t('library7.import')} icon="＋" onPress={() => setPanel(panel === 'import' ? null : 'import')} />
         <Button label={t('library7.scan')} variant="secondary" icon="▣" onPress={() => router.push('/scan')} />
-        <Button label={t('library7.batch')} variant="secondary" icon="▤" onPress={() => setPanel(panel === 'batch' ? null : 'batch')} />
-        <Button label={t('library7.ask')} variant="ghost" icon="?" onPress={() => router.push('/library/ask')} />
         {shelf === 'trash' && (facets?.trash ?? 0) > 0 ? <Button label={t('library7.trash.empty').replace('{n}', String(facets?.trash ?? 0))} variant="danger" icon="⌫" loading={purging === 'all'} onPress={() => setConfirmEmptyTrash(true)} /> : null}
       </View>
 
-      {panel === 'import' ? <ImportPanel onDone={(id) => { setPanel(null); void load(false); router.push(`/library/${id}`); }} /> : null}
-      {panel === 'batch' ? <BatchImport onChanged={() => void load(false)} onOpen={(id) => router.push(`/library/${id}`)} onUsage={() => router.push('/usage')} /> : null}
+      {panel === 'import' ? <ImportPanel onDone={() => { setPanel(null); void load(false); }} /> : null}
       {panel === 'collection' ? <CollectionPanel collections={facets?.collections ?? []} onDone={() => { setPanel(null); void load(false); }} /> : null}
 
       <View style={{ flexDirection: desktop ? 'row' : 'column', alignItems: 'flex-start', gap: spacing.lg }}>
@@ -254,14 +248,21 @@ export default function LibraryScreen() {
         <View style={{ flex: 1, width: '100%', gap: spacing.md }}>
           <View style={{ flexDirection: desktop ? 'row' : 'column', gap: spacing.sm, justifyContent: 'space-between' }}>
             <TextInput accessibilityLabel={t('library7.search')} placeholder={t('library7.search')} placeholderTextColor={c.textMuted} value={search} onChangeText={setSearch} style={{ minHeight: 46, flex: 1, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface, color: c.textPrimary, paddingHorizontal: 14, borderRadius: 10 }} />
-            <SegmentedControl options={['newest', 'oldest', 'title'] as const} value={sort} onChange={(value) => { setSort(value); setCursor(null); }} labelFor={(value) => t(`library7.sort.${value}`)} />
           </View>
 
           {loading && !documents.length ? <SmartLoadingState title={t('lib.loading')} /> : documents.length === 0 ? (
             <LibraryEmpty trash={shelf === 'trash'} onImport={() => setPanel('import')} onScan={() => router.push('/scan')} />
           ) : (
             <View accessibilityRole="list" style={{ gap: spacing.sm }}>
-              {documents.map((document) => <DocumentRow key={document.id} document={document} collections={facets?.collections ?? []} formatLocale={formatLocale} onOpen={() => document.contentType === 'LESSON_AI' && document.sourceRef?.startsWith('lesson:') ? router.push(`/lesson/${document.sourceRef.slice(7)}`) : router.push(`/library/${document.id}`)} onFavorite={() => void mutate(document, 'favorite')} onTrash={() => void mutate(document, document.deletedAt ? 'restore' : 'trash')} onPermanentDelete={() => setDeleteTarget(document)} onChanged={() => void load(false)} />)}
+              {documents.map((document) => <DocumentRow key={document.id} document={document} collections={facets?.collections ?? []} formatLocale={formatLocale} onOpen={() => {
+                if (document.contentType === 'LESSON_AI' && document.sourceRef?.startsWith('lesson:')) {
+                  router.push(`/lesson/${document.sourceRef.slice(7)}`);
+                } else if (document.status === 'ready' && !document.deletedAt) {
+                  router.push({ pathname: '/tutor', params: { documentId: document.id, title: document.title, mode: 'teach', intent: 'learn-document' } });
+                } else {
+                  router.push(`/library/${document.id}`);
+                }
+              }} onFavorite={() => void mutate(document, 'favorite')} onTrash={() => void mutate(document, document.deletedAt ? 'restore' : 'trash')} onPermanentDelete={() => setDeleteTarget(document)} onChanged={() => void load(false)} />)}
             </View>
           )}
           {cursor ? <Button label={t('library7.more')} variant="secondary" loading={loadingMore} onPress={() => void load(true)} /> : null}
@@ -336,14 +337,16 @@ function DocumentRow({ document, collections, formatLocale, onOpen, onFavorite, 
           {collections.map((collection) => <Button key={collection.id} label={collection.name} variant="ghost" size="sm" onPress={() => void api(`/library/documents/${document.id}/collection`, { method: 'PATCH', body: { collectionId: collection.id } }).then(onChanged)} />)}
         </View> : null}
       </Card> : null}
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
-        <Badge label={t(`lib.status.${document.status}`)} tone={document.status === 'ready' ? 'success' : document.status === 'failed' ? 'error' : 'ai'} />
-        {document.subject ? <Badge label={document.subject} /> : null}
-        {document.difficulty ? <Badge label={t(DIFFICULTY_KEY[document.difficulty])} tone="info" /> : null}
-        {document.collectionName ? <Badge label={document.collectionName} tone="primary" /> : null}
-      </View>
-      {document.status === 'pending' || document.status === 'processing' || document.status === 'partial' || document.status === 'failed' ? <DocumentPipeline status={document.status} stage={document.stage} compact /> : <Text numberOfLines={3} style={[typography.bodySmall, { color: c.textSecondary }]}>{document.summary ?? document.preview}</Text>}
-      {document.concepts.length ? <Text style={[typography.caption, { color: c.textMuted }]}>{t('library7.conceptsCount').replace('{n}', String(document.concepts.length))} · {document.concepts.slice(0, 4).map((concept) => concept.name).join(' · ')}</Text> : null}
+      <Pressable onPress={onOpen} accessibilityRole="link" style={{ gap: spacing.sm, minHeight: 44 }}>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+          <Badge label={t(`lib.status.${document.status}`)} tone={document.status === 'ready' ? 'success' : document.status === 'failed' ? 'error' : 'ai'} />
+          {document.subject ? <Badge label={document.subject} /> : null}
+          {document.difficulty ? <Badge label={t(DIFFICULTY_KEY[document.difficulty])} tone="info" /> : null}
+          {document.collectionName ? <Badge label={document.collectionName} tone="primary" /> : null}
+        </View>
+        {document.status === 'pending' || document.status === 'processing' || document.status === 'partial' || document.status === 'failed' ? <DocumentPipeline status={document.status} stage={document.stage} compact /> : <Text numberOfLines={3} style={[typography.bodySmall, { color: c.textSecondary }]}>{document.summary ?? document.preview}</Text>}
+        {document.concepts.length ? <Text style={[typography.caption, { color: c.textMuted }]}>{t('library7.conceptsCount').replace('{n}', String(document.concepts.length))} · {document.concepts.slice(0, 4).map((concept) => concept.name).join(' · ')}</Text> : null}
+      </Pressable>
     </Card>
     <Dialog visible={confirmTrash} onClose={() => setConfirmTrash(false)} title={t('lib.moveToTrash')} footer={<><Button label={t('tutor.cancel')} variant="ghost" onPress={() => setConfirmTrash(false)} /><Button label={t('lib.moveToTrash')} variant="danger" onPress={() => { setConfirmTrash(false); onTrash(); }} /></>}><Text style={{ color: c.textSecondary }}>{document.title}</Text></Dialog>
     <Dialog visible={renaming} onClose={() => setRenaming(false)} title={t('workspace10.plan.rename')} footer={<><Button label={t('tutor.cancel')} variant="ghost" onPress={() => setRenaming(false)} /><Button label={t('onb.twin.confirm')} disabled={!title.trim()} onPress={() => void saveTitle()} /></>}><TextInput value={title} onChangeText={setTitle} accessibilityLabel={t('lib.addTitle')} style={{ minHeight: 46, borderWidth: 1, borderColor: c.border, borderRadius: 8, padding: 12, color: c.textPrimary }} /></Dialog>

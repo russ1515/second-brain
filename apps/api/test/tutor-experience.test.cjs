@@ -82,6 +82,7 @@ test('Provider and quota failures preserve work and keep non-AI navigation avail
 test('Conversation uses structured blocks, real-only progress and a compact centered composer', () => {
   const screen = read('apps/mobile/app/tutor/[id].tsx');
   const components = read('apps/mobile/components/tutor/experience.tsx');
+  const markdown = read('apps/mobile/components/markdown.tsx');
   assert.match(screen, /<ContextBar/);
   assert.match(screen, /<TutorMessage/);
   assert.match(screen, /<ProgressNarrative/);
@@ -89,6 +90,10 @@ test('Conversation uses structured blocks, real-only progress and a compact cent
   assert.match(screen, /maxWidth: 820/);
   assert.match(screen, /testID="tutor-send"/);
   assert.match(screen, /testID="tutor-voice-toggle"/);
+  assert.match(screen, /<KeyboardAvoidingView/);
+  assert.match(screen, /style=\{\{ flex: 1, minHeight: 0/);
+  assert.match(screen, /flexShrink: 0/);
+  assert.match(screen, /width: '100%', minWidth: 0, flexDirection: 'row'/);
   assert.doesNotMatch(screen, /optionsOpen|secondaryActions|sendPace|STRATEGY_LABEL/);
   assert.doesNotMatch(screen, /TutorSidebar|conversationSidebar|historySidebar/);
   assert.match(components, /globalPath\.copy/);
@@ -97,6 +102,24 @@ test('Conversation uses structured blocks, real-only progress and a compact cent
   assert.match(components, /progress\.percent !== undefined/);
   assert.match(components, /session\.twinImpact\?\.changes/);
   assert.doesNotMatch(components, /setInterval|Math\.random/);
+  assert.match(markdown, /const FENCE =/);
+  assert.match(markdown, /const HORIZONTAL_RULE =/);
+  assert.match(markdown, /const TABLE_ROW =/);
+  assert.match(markdown, /replace\(\/!\\\[/);
+  assert.match(markdown, /textDecorationLine: 'line-through'/);
+});
+
+test('Opening a Library document in Professor waits for an explicit request and keeps a strict document scope', () => {
+  const entry = read('apps/mobile/app/tutor/index.tsx');
+  assert.match(entry, /if \(mode === 'teach'\)/);
+  assert.match(entry, /contexts\.filter\(\(item\) => item\.kind === 'document'\)/);
+  assert.match(entry, /<DocumentProfessor initialQuery=\{initialQuery\} documentContexts=\{documentContexts\}/);
+  assert.match(entry, /initialContexts=\{documentContexts\}/);
+  assert.match(entry, /mode="teach"/);
+  assert.match(entry, /intent="learn-document"/);
+  assert.match(entry, /initialContexts\.length > 0 \? <ContextBar items=\{initialContexts\}/);
+  assert.match(entry, /const ask = async \(\) =>/);
+  assert.doesNotMatch(entry, /useEffect\(\(\) => \{?\s*void ask\(/);
 });
 
 test('Tutor data access is user-scoped, including ExperienceSession lookup and source retrieval', () => {

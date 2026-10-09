@@ -114,19 +114,23 @@ test('Scan owns handed-off object URLs and retries the durable failed document',
   assert.doesNotMatch(scan, /code === 'SCAN_ATTEMPT_FAILED'[\s\S]{0,400}uploadRequestId\.current = null/);
 });
 
-test('Learn capture is limited to photo and QR while document import stays in Library', () => {
+test('Learn capture shares photo, QR and explicit attachment import with the document pipeline', () => {
   const composer = read('apps/mobile/components/learn/universal-composer.tsx');
   const privacy = read('apps/mobile/app/privacy.tsx');
   const library = read('apps/mobile/app/library.tsx');
   assert.match(composer, /learn5\.capture\.photo/);
   assert.match(composer, /const openQr/);
   assert.match(composer, /mode=qr&source=learn/);
-  assert.doesNotMatch(composer, /openScan\('document'\)|learn5\.capture\.document|learn5\.capture\.file/);
+  assert.doesNotMatch(composer, /openScan\('document'\)|learn5\.capture\.document/);
   assert.doesNotMatch(composer, /learn5\.modality\.import|learn5\.modality\.export|learn-composer-export/);
   assert.match(privacy, /api<DataExportResponse>\('\/me\/export'\)/);
   assert.match(library, /pickDocuments/);
   assert.match(library, /router\.push\('\/scan'\)/);
-  assert.match(composer, /<CameraCapture\s+mode="photo"/);
+  assert.match(composer, /onNavigate\('\/scan\?source=learn&captureType=photo'\)/);
+  assert.match(composer, /pickLearnDocument\(\)/);
+  assert.match(composer, /learn5\.capture\.file/);
+  assert.doesNotMatch(composer, /<CameraCapture/);
+  assert.match(read('apps/mobile/app/scan.tsx'), /resolveCapturedDocumentContentType\(pages\.length, requestedContentType\)/);
 });
 
 test('avatar persistence is authenticated server media, not a global local URI', () => {

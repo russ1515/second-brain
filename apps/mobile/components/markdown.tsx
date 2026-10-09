@@ -6,22 +6,28 @@ import type { ColorScale } from '../lib/design/tokens';
 /**
  * A deliberately small Markdown renderer for lesson prose.
  *
- * Lessons come back from the teacher with light markdown (headings, **bold**,
- * lists). Rendered raw, the asterisks and hashes leak into the page and it
- * stops looking like a textbook — so we handle the handful of constructs the
- * teacher actually emits and nothing more. No links/images/tables/HTML: this
- * is teaching prose, not a document format.
+ * Lessons and Tutor replies come back with light markdown. Rendered raw, the
+ * punctuation leaks into the page and it stops looking like teaching prose.
+ * Keep this renderer deliberately non-interactive, but consume the common
+ * constructs a model may emit so fences, links and table pipes never become UI.
  */
 
 type Block =
   | { kind: 'heading'; level: number; text: string }
   | { kind: 'paragraph'; text: string }
   | { kind: 'bullet'; text: string }
-  | { kind: 'ordered'; marker: string; text: string };
+  | { kind: 'ordered'; marker: string; text: string }
+  | { kind: 'quote'; text: string }
+  | { kind: 'code'; text: string };
 
-const HEADING = /^(#{1,3})\s+(.*)$/;
-const BULLET = /^\s*[-*]\s+(.*)$/;
+const HEADING = /^(#{1,6})\s+(.*)$/;
+const BULLET = /^\s*[-*+]\s+(.*)$/;
 const ORDERED = /^\s*(\d+)[.)]\s+(.*)$/;
+const QUOTE = /^\s*>\s?(.*)$/;
+const FENCE = /^\s*```/;
+const HORIZONTAL_RULE = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
+const TABLE_DIVIDER = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
+const TABLE_ROW = /^\s*\|(.+)\|\s*$/;
 
 /** Group raw text into block-level pieces. Consecutive plain lines join into
  *  one paragraph, the way markdown treats a soft-wrapped block. */
@@ -29,6 +35,7 @@ function toBlocks(md: string): Block[] {
   const lines = md.replace(/\r\n/g, '\n').split('\n');
   const blocks: Block[] = [];
   let para: string[] = [];
+  let code: string[] | null = null;
 
   const flush = () => {
     if (para.length) {
@@ -38,7 +45,25 @@ function toBlocks(md: string): Block[] {
   };
 
   for (const line of lines) {
+    if (FENCE.test(line)) {
+      flush();
+      if (code) {
+        blocks.push({ kind: 'code', text: code.join('\n').trimEnd() });
+        code = null;
+      } else {
+        code = [];
+      }
+      continue;
+    }
+    if (code) {
+      code.push(line);
+      continue;
+    }
     if (line.trim() === '') {
+      flush();
+      continue;
+    }
+    if (HORIZONTAL_RULE.test(line) || TABLE_DIVIDER.test(line)) {
       flush();
       continue;
     }
@@ -51,7 +76,7 @@ function toBlocks(md: string): Block[] {
     const bullet = BULLET.exec(line);
     if (bullet) {
       flush();
-      blocks.push({ kind: 'bullet', text: bullet[1].trim() });
+      blocks.push({ kind: 'bullet', text: bullet[1].replace(/^\[[ xX]\]\s*/, '').trim() });
       continue;
     }
     const ordered = ORDERED.exec(line);
@@ -60,17 +85,39 @@ function toBlocks(md: string): Block[] {
       blocks.push({ kind: 'ordered', marker: `${ordered[1]}.`, text: ordered[2].trim() });
       continue;
     }
+    const quote = QUOTE.exec(line);
+    if (quote) {
+      flush();
+      blocks.push({ kind: 'quote', text: quote[1].trim() });
+      continue;
+    }
+    const table = TABLE_ROW.exec(line);
+    if (table) {
+      flush();
+      const cells = table[1].split('|').map((cell) => cell.trim()).filter(Boolean);
+      if (cells.length) blocks.push({ kind: 'paragraph', text: cells.join(' · ') });
+      continue;
+    }
     para.push(line.trim());
   }
+  if (code) blocks.push({ kind: 'code', text: code.join('\n').trimEnd() });
   flush();
   return blocks;
 }
 
-const INLINE = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*]+\*|_[^_]+_)/g;
+const INLINE = /(\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|`[^`]+`|\*[^*]+\*|_[^_]+_)/g;
 
-/** Render **bold**, *italic*, `code` inside a line as nested <Text> spans. */
+function readableInline(text: string): string {
+  return text
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/\\([\\`*_[\]{}()#+\-.!>])/g, '$1');
+}
+
+/** Render inline emphasis while turning non-interactive links into readable
+ * labels. Tutor output must never show Markdown control punctuation. */
 function renderInline(text: string, keyBase: string, styles: ReturnType<typeof makeStyles>) {
-  const parts = text.split(INLINE).filter((p) => p !== '');
+  const parts = readableInline(text).split(INLINE).filter((p) => p !== '');
   return parts.map((part, i) => {
     const key = `${keyBase}-${i}`;
     if ((part.startsWith('**') && part.endsWith('**')) || (part.startsWith('__') && part.endsWith('__'))) {
@@ -84,6 +131,13 @@ function renderInline(text: string, keyBase: string, styles: ReturnType<typeof m
       return (
         <Text key={key} style={styles.code}>
           {part.slice(1, -1)}
+        </Text>
+      );
+    }
+    if (part.startsWith('~~') && part.endsWith('~~')) {
+      return (
+        <Text key={key} style={styles.strike}>
+          {part.slice(2, -2)}
         </Text>
       );
     }
@@ -135,6 +189,14 @@ export function Markdown({ text }: { text: string }) {
                 <Text style={styles.listText}>{renderInline(block.text, key, styles)}</Text>
               </View>
             );
+          case 'quote':
+            return (
+              <View key={key} style={styles.quote}>
+                <Text style={styles.paragraph}>{renderInline(block.text, key, styles)}</Text>
+              </View>
+            );
+          case 'code':
+            return <Text key={key} selectable style={styles.codeBlock}>{block.text}</Text>;
           default:
             return (
               <Text key={key} style={styles.paragraph}>
@@ -160,10 +222,24 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
   listText: { flex: 1, fontSize: 16, lineHeight: 26, color: c.textPrimary },
   bold: { fontWeight: '700', color: c.textPrimary },
   italic: { fontStyle: 'italic' },
+  strike: { textDecorationLine: 'line-through' },
   code: {
     fontFamily: 'monospace',
     fontSize: 14,
     color: c.info,
     backgroundColor: c.surfaceElevated,
+  },
+  quote: {
+    borderLeftWidth: 3,
+    borderLeftColor: c.aiAccent,
+    paddingLeft: 12,
+  },
+  codeBlock: {
+    fontFamily: 'monospace',
+    fontSize: 14,
+    lineHeight: 21,
+    color: c.textPrimary,
+    backgroundColor: c.surfaceElevated,
+    padding: 12,
   },
 });

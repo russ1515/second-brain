@@ -3,7 +3,11 @@ import { Image, Linking, Platform, ScrollView, Text, TextInput, View } from 'rea
 import * as ImagePicker from 'expo-image-picker';
 import { manipulateAsync, SaveFormat, type Action } from 'expo-image-manipulator';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { Collection, DocumentDetail } from '@second-brain/shared';
+import {
+  resolveCapturedDocumentContentType,
+  type Collection,
+  type DocumentDetail,
+} from '@second-brain/shared';
 import { ApiError, api, apiUpload } from '../lib/client';
 import { createClientRequestId } from '../lib/request-id';
 import { appendPickedDocument, type PickedDocument } from '../lib/document-import';
@@ -42,9 +46,14 @@ export default function ScanScreen() {
   const { colors: c, spacing, radius, typography } = useTokens();
   const { t } = useI18n();
   const router = useRouter();
-  const params = useLocalSearchParams<{ mode?: string | string[]; source?: string | string[] }>();
+  const params = useLocalSearchParams<{
+    mode?: string | string[];
+    source?: string | string[];
+    captureType?: string | string[];
+  }>();
   const mode = first(params.mode) === 'qr' ? 'qr' : 'document';
   const source = first(params.source);
+  const requestedContentType = first(params.captureType) === 'photo' ? 'PHOTO' : 'SCAN';
   const [pages, setPages] = useState<ScanPage[]>([]);
   const [selected, setSelected] = useState(0);
   const [title, setTitle] = useState('');
@@ -241,7 +250,7 @@ export default function ScanScreen() {
         });
       }
       form.append('pageEdits', JSON.stringify(pages.map((page) => ({ corners: page.corners }))));
-      form.append('contentType', pages.length > 1 ? 'NOTEBOOK' : 'SCAN');
+      form.append('contentType', resolveCapturedDocumentContentType(pages.length, requestedContentType));
       if (title.trim()) form.append('title', title.trim());
       if (subject.trim()) form.append('subject', subject.trim());
       if (language.trim()) form.append('language', language.trim());
@@ -407,7 +416,7 @@ export default function ScanScreen() {
           </Text>
         </Card>
         {done.content ? <Text style={{ color: c.textSecondary }} numberOfLines={12}>{done.content}</Text> : null}
-        {source === 'learn' ? <Button label={t('scan.returnToLearn')} onPress={() => router.replace({ pathname: '/learn', params: { documentId: done.id } })} /> : null}
+        {source === 'learn' ? <Button label={t('scan.returnToLearn')} onPress={() => router.replace({ pathname: '/learn', params: { documentId: done.id, documentTitle: done.title } })} /> : null}
         <Button variant="secondary" label={t('scan.openDocument')} onPress={() => router.replace(`/library/${done.id}`)} />
         <Button variant="ghost" label={t('scan.scanAnother')} onPress={resetScan} />
       </ScrollView>

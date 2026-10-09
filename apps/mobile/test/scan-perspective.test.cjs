@@ -58,6 +58,7 @@ test('scan UI sends ordered page edits and exposes four draggable corners before
   assert.match(screen, /<ScanCornerEditor/);
   assert.match(screen, /isValidScanQuadrilateral\(page\.corners\)/);
   assert.match(screen, /form\.append\('pageEdits', JSON\.stringify\(pages\.map/);
+  assert.match(screen, /form\.append\('contentType', resolveCapturedDocumentContentType\(pages\.length, requestedContentType\)\)/);
   assert.match(screen, /for \(const page of pages\)[\s\S]*manipulateAsync[\s\S]*await appendPickedDocument/);
   assert.match(screen, /draggable/);
   assert.match(screen, /testID="scan-submit"/);
