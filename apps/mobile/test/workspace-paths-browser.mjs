@@ -52,6 +52,29 @@ async function archiveTechnicalWorkspace(id) {
   }, id);
 }
 
+async function archiveStaleTechnicalWorkspaces() {
+  return page.evaluate(async () => {
+    const token = window.localStorage.getItem('sb.accessToken');
+    if (!token) return { listed: 0, archived: 0 };
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+    const response = await window.fetch('/api/workspaces?limit=100', { headers });
+    if (!response.ok) return { listed: 0, archived: 0 };
+    const payload = await response.json();
+    const technical = (Array.isArray(payload?.items) ? payload.items : [])
+      .filter((item) => typeof item?.title === 'string' && item.title.startsWith('Workspace validation '));
+    let archived = 0;
+    for (const item of technical) {
+      const result = await window.fetch(`/api/workspaces/${encodeURIComponent(item.id)}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ status: 'archived' }),
+      });
+      if (result.ok) archived += 1;
+    }
+    return { listed: technical.length, archived };
+  });
+}
+
 try {
   await page.goto(`${baseUrl}/sign-in?mode=login&returnTo=%2Flibrary%2Fworkspace`, { waitUntil: 'networkidle' });
   await page.locator('input[autocomplete="email"]').fill(email);
@@ -59,6 +82,8 @@ try {
   await page.getByRole('button', { name: /sign in/iu }).first().click();
   await page.waitForURL(/\/library\/workspace(?:\?|$)/u, { timeout: 30_000 });
   await page.getByTestId('workspace-create').waitFor({ state: 'visible' });
+  const staleCleanup = await archiveStaleTechnicalWorkspaces();
+  assert.equal(staleCleanup.archived, staleCleanup.listed, 'STALE_TECHNICAL_CLEANUP');
 
   const planSignatures = new Set();
   for (const [template, requiredFields] of paths) {
@@ -81,7 +106,7 @@ try {
     }
 
     await page.getByTestId('workspace-create-action').click();
-    await page.waitForURL(/\/library\/workspace\/[^/?#]+$/u, { timeout: 30_000 });
+    await page.waitForURL(/\/library\/workspace\/[^/?#]+(?:\?.*)?$/u, { timeout: 30_000 });
     const workspaceId = new URL(page.url()).pathname.split('/').filter(Boolean).at(-1);
     assert.ok(workspaceId, `${template}: workspace id`);
     createdIds.push(workspaceId);
@@ -105,7 +130,7 @@ try {
     await page.goto(`${baseUrl}/library/workspace`, { waitUntil: 'networkidle' });
     await page.getByTestId(`workspace-resume-${workspaceId}`).waitFor({ state: 'visible' });
     await page.getByTestId(`workspace-open-${workspaceId}`).click();
-    await page.waitForURL(new RegExp(`/library/workspace/${workspaceId}$`, 'u'));
+    await page.waitForURL(new RegExp(`/library/workspace/${workspaceId}(?:\\?.*)?$`, 'u'));
     assert.equal(await page.getByTestId('workspace-draft-input').inputValue(), marker, `${template}: resume`);
 
     await page.screenshot({
@@ -127,6 +152,7 @@ try {
     distinctPlans: planSignatures.size,
     createdCount: results.length,
     archivedTechnicalCount: results.filter((item) => item.archived).length,
+    staleTechnicalArchived: staleCleanup.archived,
     completedAt: new Date().toISOString(),
   };
   fs.writeFileSync(path.join(evidenceDir, `${runId}.json`), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
