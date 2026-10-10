@@ -11,6 +11,8 @@ const { LearningResetService } = require('../dist/privacy/learning-reset.service
 const PEDAGOGICAL_MODELS = [
   'learningGoalLink',
   'learningCompletion',
+  'languageMasteryRemediationEvidence',
+  'languageMasteryAttempt',
   'reviewLog',
   'documentChunk',
   'conceptEdge',

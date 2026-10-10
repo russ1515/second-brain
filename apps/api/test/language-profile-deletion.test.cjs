@@ -124,13 +124,19 @@ function deletionFixture({ sharedDeck = false } = {}) {
     deleteTutorSession: async (...args) => calls.push(['tutor-purge', ...args]),
     deleteSession: async (...args) => calls.push(['experience-purge', ...args]),
   };
+  const masteryAttempts = {
+    purgeOwned: async (...args) => {
+      calls.push(['mastery-purge', ...args]);
+      return { attempts: 1, completions: 0 };
+    },
+  };
 
   return {
     userId,
     profileId,
     deckId,
     calls,
-    service: new LanguageService(prisma, learningDeletions),
+    service: new LanguageService(prisma, learningDeletions, masteryAttempts),
   };
 }
 
@@ -144,6 +150,8 @@ test('language deletion delegates linked learning purges, deletes the profile an
     ['tutor-purge', fixture.userId, 'tutor-1'],
     ['experience-purge', fixture.userId, 'experience-1'],
   ]);
+  assert.ok(fixture.calls.some((event) => event[0] === 'mastery-purge'
+    && event[1] === fixture.userId && event[2] === fixture.profileId));
   assert.ok(fixture.calls.some(([event]) => event === 'profile-delete'));
   assert.deepEqual(
     fixture.calls.find(([event]) => event === 'deck-delete'),

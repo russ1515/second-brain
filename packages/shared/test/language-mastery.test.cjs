@@ -94,8 +94,8 @@ test('pillar remediation requires at least ten newly completed activities', () =
   assert.equal(shared.languageRemediationReady({ requiredExerciseCount: 9, evidence: training() }), false);
 });
 
-test('mapping v1 keeps every one of the 18 RLLE units exactly once and preserves its level and strands', () => {
-  assert.equal(shared.RLLE_LANGUAGE_MASTERY_MAPPING_VERSION, 'rlle-language-mastery-map-v1');
+test('mapping v2 keeps every one of the 18 RLLE units exactly once and preserves its curriculum strands', () => {
+  assert.equal(shared.RLLE_LANGUAGE_MASTERY_MAPPING_VERSION, 'rlle-language-mastery-map-v2');
   assert.equal(shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP.length, 18);
   assert.equal(new Set(shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP.map((unit) => unit.unitId)).size, 18);
 
@@ -108,8 +108,66 @@ test('mapping v1 keeps every one of the 18 RLLE units exactly once and preserves
     assert.ok(source);
     assert.equal(mapped.level, source.level);
     assert.equal(mapped.unitOrder, source.order);
-    assert.deepEqual(mapped.milestones.map((item) => item.sourceStrand), source.strands);
+    assert.deepEqual(
+      mapped.milestones.filter((item) => item.origin === 'curriculum').map((item) => item.sourceStrand),
+      source.strands,
+    );
   }
+});
+
+test('the four authorised gap supplements resolve by unit with all ten formats and deterministic evaluation', () => {
+  assert.equal(shared.RLLE_LANGUAGE_MASTERY_CONTENT_VERSION, 'rlle-language-mastery-content-v1');
+  assert.deepEqual(
+    shared.RLLE_LANGUAGE_MASTERY_CONTENT_SUPPLEMENTS.map((item) => `${item.level}:${item.competencyId}`),
+    ['A1:graphy-writing', 'A2:phonetic-production', 'C1:verbal-system', 'C2:verbal-system'],
+  );
+
+  for (const supplement of shared.RLLE_LANGUAGE_MASTERY_CONTENT_SUPPLEMENTS) {
+    assert.ok(supplement.objective.trim().length > 0);
+    assert.ok(supplement.explanation.trim().length > 0);
+    assert.equal(supplement.activities.length, shared.LANGUAGE_TRAINING_FORMATS.length);
+    assert.equal(new Set(supplement.activities.map((item) => item.format)).size, supplement.activities.length);
+    assert.deepEqual(
+      [...supplement.activities.map((item) => item.format)].sort(),
+      [...shared.LANGUAGE_TRAINING_FORMATS].sort(),
+    );
+    assert.ok(supplement.activities.every((item) => item.guidance.trim().length > 0));
+    assert.ok(supplement.evaluation.criteria.length >= 3);
+    assert.equal(
+      new Set(supplement.evaluation.criteria.map((item) => item.id)).size,
+      supplement.evaluation.criteria.length,
+    );
+    assert.ok(supplement.evaluation.criteria.every((item) => item.mandatory && item.guidance.trim().length > 0));
+    assert.equal(supplement.evaluation.rawThreshold, 0.9);
+    assert.equal(supplement.evaluation.independentWithoutHelp, true);
+    assert.ok(supplement.evaluation.notEvaluableWhen.length > 0);
+
+    const mappedUnit = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP.find((unit) => unit.unitId === supplement.unitId);
+    const milestone = mappedUnit?.milestones.find((item) => item.contentDefinitionId === supplement.id);
+    assert.ok(milestone);
+    assert.equal(milestone.origin, 'authorized-content-supplement');
+    assert.equal(milestone.level, supplement.level);
+    assert.equal(milestone.pillar, supplement.pillar);
+    assert.equal(milestone.criterionId, supplement.criterionId);
+    assert.equal(milestone.contentVersion, supplement.contentVersion);
+    assert.match(
+      shared.rlleMilestoneEvidenceScopeKey({ languageCode: 'fr', milestone }),
+      /:rlle-language-mastery-content-v1$/,
+    );
+    assert.deepEqual(
+      shared.getRlleLanguageMasteryContentSupplementsForUnit(supplement.unitId)
+        .map((item) => item.id),
+      [supplement.id],
+    );
+  }
+
+  assert.deepEqual(shared.getRlleLanguageMasteryContentSupplementsForUnit('b1-opinions'), []);
+  const phonetics = shared.getRlleLanguageMasteryContentSupplementsForUnit('a2-routines')[0];
+  assert.equal(phonetics.evaluation.acousticAssessment.required, true);
+  assert.equal(phonetics.evaluation.acousticAssessment.transcriptionSufficient, false);
+  assert.deepEqual(phonetics.evaluation.acousticAssessment.modes, ['scripted-reference', 'spontaneous']);
+  assert.deepEqual(phonetics.evaluation.acousticAssessment.requiredDimensions, ['accuracy', 'fluency']);
+  assert.deepEqual(phonetics.evaluation.acousticAssessment.optionalDimensions, ['prosody']);
 });
 
 test('each source criterion has its own milestone and evidence scope', () => {
@@ -135,6 +193,8 @@ test('each source criterion has its own milestone and evidence scope', () => {
   assert.ok(milestones.filter((item) => item.sourceStrand === 'writing').every((item) =>
     item.evidenceModality === 'written-production'
     && item.oralRole === 'none'));
+  assert.ok(milestones.filter((item) => item.origin === 'curriculum').every((item) =>
+    item.contentDefinitionId === null && item.contentVersion === null));
 });
 
 test('exam planning creates exactly five pillar exams per CEFR level, never five per unit', () => {
@@ -148,23 +208,15 @@ test('exam planning creates exactly five pillar exams per CEFR level, never five
   }
 });
 
-test('mapping audit reports mandatory competency gaps instead of relabelling them as covered', () => {
-  const structuralIssues = shared.RLLE_LANGUAGE_MASTERY_MAPPING_ISSUES.filter(
-    (issue) => issue.kind !== 'missing-required-competency-content',
-  );
-  assert.deepEqual(structuralIssues, []);
-
+test('mapping audit confirms the four mandatory competency gaps are closed by full content', () => {
   const contentGaps = shared.RLLE_LANGUAGE_MASTERY_MAPPING_ISSUES
     .filter((issue) => issue.kind === 'missing-required-competency-content')
     .map((issue) => `${issue.level}:${issue.pillar}:${issue.competencyId}`)
     .sort();
-  assert.deepEqual(contentGaps, [
-    'A1:orthography-graphy-phonetics:graphy-writing',
-    'A2:orthography-graphy-phonetics:phonetic-production',
-    'C1:verbal-system-conjugation:verbal-system',
-    'C2:verbal-system-conjugation:verbal-system',
-  ]);
-  assert.equal(shared.RLLE_LANGUAGE_MASTERY_MAPPING_AUDIT.activationReady, false);
+  assert.deepEqual(contentGaps, []);
+  assert.deepEqual(shared.RLLE_LANGUAGE_MASTERY_MAPPING_ISSUES, []);
+  assert.equal(shared.RLLE_LANGUAGE_MASTERY_MAPPING_AUDIT.activationReady, true);
+  assert.ok(shared.RLLE_LEVEL_PILLAR_PLANS.every((plan) => plan.contentReady));
 });
 
 test('level gate requires all milestones and five independent exams with raw scores at 90 percent', () => {
@@ -193,7 +245,7 @@ test('level gate requires all milestones and five independent exams with raw sco
   assert.deepEqual(blocked.notEvaluableExamPillars, [plans[4].pillar]);
 });
 
-test('a missing mandatory pillar blocks the level even when every available proof passes', () => {
+test('the completed C1 verbal-system pillar can unlock only with every mapped proof and exam', () => {
   const plans = shared.getRlleLevelPillarPlans('C1');
   const milestones = plans.flatMap((plan) => plan.requiredMilestoneIds).map((milestoneId) => ({
     milestoneId, verdict: 'mastered',
@@ -202,6 +254,6 @@ test('a missing mandatory pillar blocks the level even when every available proo
     examId: plan.examId, pillar: plan.pillar, verdict: 'mastered', rawScore: 1,
   }));
   const decision = shared.decideRlleLevelPillarGate({ level: 'C1', milestones, exams });
-  assert.equal(decision.unlocked, false);
-  assert.deepEqual(decision.blockedContentPillars, ['verbal-system-conjugation']);
+  assert.equal(decision.unlocked, true);
+  assert.deepEqual(decision.blockedContentPillars, []);
 });

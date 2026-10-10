@@ -13,6 +13,8 @@ import { RealLifeLanguageService } from './real-life-language.service';
 import { LearningEvidenceModule } from '../learning-evidence/learning-evidence.module';
 import { ExaminerModule } from '../examiner/examiner.module';
 import { FeatureFlagsModule } from '../config/feature-flags.module';
+import { LanguageMasteryAttemptController } from './language-mastery-attempt.controller';
+import { LanguageMasteryAttemptService } from './language-mastery-attempt.service';
 
 /** Language engine (Phase 5, Educational Engine): the professional language
  *  teacher. It orchestrates rather than duplicates — vocabulary is ordinary
@@ -28,7 +30,7 @@ import { FeatureFlagsModule } from '../config/feature-flags.module';
     ExaminerModule,
     FeatureFlagsModule,
   ],
-  controllers: [LanguageController],
+  controllers: [LanguageController, LanguageMasteryAttemptController],
   providers: [
     LanguageService,
     VocabularyService,
@@ -37,7 +39,8 @@ import { FeatureFlagsModule } from '../config/feature-flags.module';
     LanguageWritingService,
     LanguageSkillsService,
     RealLifeLanguageService,
+    LanguageMasteryAttemptService,
   ],
-  exports: [LanguageService, RealLifeLanguageService],
+  exports: [LanguageService, RealLifeLanguageService, LanguageMasteryAttemptService],
 })
 export class LanguageModule {}

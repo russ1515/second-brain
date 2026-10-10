@@ -19,6 +19,7 @@ import type { UpdateLanguageProfileDto } from './dto/update-language-profile.dto
 import { immersionRatio } from './language-modes';
 import { LearningDataDeletionService } from '../experience-sessions/learning-data-deletion.service';
 import { accountDataLockKey } from '../common/account-data-lock';
+import { LanguageMasteryAttemptService } from './language-mastery-attempt.service';
 
 /** Per-language state for the learner. Vocabulary is not a new SRS: each profile
  *  owns an ordinary Deck whose cards ride the existing FSRS engine. */
@@ -27,6 +28,7 @@ export class LanguageService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly learningDeletions: LearningDataDeletionService,
+    private readonly masteryAttempts: LanguageMasteryAttemptService,
   ) {}
 
   async create(
@@ -154,6 +156,7 @@ export class LanguageService {
       for (const lesson of lessons) await this.learningDeletions.deleteLesson(userId, lesson.id);
       for (const tutor of tutors) await this.learningDeletions.deleteTutorSession(userId, tutor.id);
       for (const session of sessions) await this.learningDeletions.deleteSession(userId, session.id);
+      await this.masteryAttempts.purgeOwned(userId, id);
 
       const removed = await this.prisma.$transaction(async (tx) => {
         const lockKey = accountDataLockKey(userId);

@@ -103,7 +103,7 @@ test('strict proof is scoped by language, level, pillar, milestone and mapping v
   const state = a1State(['a1-first-contact']);
   const milestone = Object.values(state.milestones)[0];
   assert.equal(milestone.status, 'legacy-unverified');
-  assert.match(milestone.scopeKey, /^rlle-language-mastery-map-v1:en:A1:/);
+  assert.match(milestone.scopeKey, /^rlle-language-mastery-map-v2:en:A1:/);
   assert.throws(
     () => progression.recordRlleMilestoneDecision(state, {
       languageCode: 'fr',
@@ -191,16 +191,22 @@ test('a content-complete level has five ordered pillar exams and no exam opens b
   });
 });
 
-test('a real mapping content gap remains locked and blocks the level denominator', () => {
+test('the completed A1 graphy content becomes exam-ready after its proofs and prior pillar exams', () => {
   let state = masterAllMilestones(a1State());
-  const graphy = shared.getRlleLevelPillarPlans('A1')
+  const plans = shared.getRlleLevelPillarPlans('A1');
+  const graphy = plans
     .find((plan) => plan.pillar === 'orthography-graphy-phonetics');
   assert.ok(graphy);
-  assert.equal(graphy.contentReady, false);
-  assert.equal(state.pillarExams[graphy.examId].status, 'locked');
+  assert.equal(graphy.contentReady, true);
+  for (const [index, plan] of plans.slice(0, -1).entries()) {
+    assert.equal(state.pillarExams[plan.examId].status, 'ready');
+    state = passExam(state, state.pillarExams[plan.examId], index + 1);
+  }
+  assert.equal(state.pillarExams[graphy.examId].status, 'ready');
   const gate = progression.rlleLevelGate(state, 'A1');
   assert.equal(gate.unlocked, false);
-  assert.deepEqual(gate.blockedContentPillars, ['orthography-graphy-phonetics']);
+  assert.deepEqual(gate.blockedContentPillars, []);
+  assert.ok(gate.missingExamPillars.includes('orthography-graphy-phonetics'));
 });
 
 test('89.9 percent fails before rounding and requires ten genuinely new exercises', () => {

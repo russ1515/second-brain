@@ -17,6 +17,8 @@ import {
   LANGUAGE_REMEDIATION_MINIMUM_EXERCISES,
   LANGUAGE_TRAINING_FORMATS,
   RLLE_LANGUAGE_MASTERY_MAPPING_AUDIT,
+  RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+  getRlleLanguageMasteryContentSupplementsForUnit,
   RLLE_CAN_DO_MAP,
   RLLE_CURRICULUM,
   RLLE_GAP_KINDS,
@@ -93,6 +95,8 @@ import { ExaminerService } from '../examiner/examiner.service';
 import { PronunciationService } from './pronunciation.service';
 import { FeatureFlagsService } from '../config/feature-flags.service';
 import { SpeechService } from '../speech/speech.service';
+import { LanguageMasteryAttemptService } from './language-mastery-attempt.service';
+import { LANGUAGE_MASTERY_STRICT_RUNTIME_READY } from './language-mastery-readiness';
 import type { UploadedFileLike } from '../documents/extraction/text-extraction.service';
 import {
   CEFR_RANK,
@@ -168,6 +172,7 @@ export class RealLifeLanguageService {
     private readonly featureFlags: FeatureFlagsService,
     private readonly config: ConfigService,
     private readonly speech: SpeechService,
+    private readonly masteryAttempts: LanguageMasteryAttemptService,
   ) {}
 
   async course(userId: string, profileId: string): Promise<RlleCourseView> {
@@ -331,6 +336,9 @@ export class RealLifeLanguageService {
     }
 
     const guidance = unitGuidance(unit.id);
+    const masteryContentDirective = strictMastery
+      ? this.masteryContentDirective(unit.id)
+      : '';
     const promptRoles = await this.languages.promptRoles(userId, profile);
     const survivalSkills = [...new Set(
       RLLE_WORLD_MISSIONS
@@ -374,6 +382,7 @@ export class RealLifeLanguageService {
                 ? `Prepare these concrete communication-survival strategies: ${survivalSkills.join(', ')}.`
                 : '',
               'Adapt all forms and terminology to the actual target language; never copy an English or French tense inventory into a language where it does not apply.',
+              masteryContentDirective,
               'The generated exercise answers are controlled evidence, but merely opening the lesson is not mastery.',
             ].join(' '),
           },
@@ -800,29 +809,118 @@ export class RealLifeLanguageService {
       throw new BadRequestException('Complete the targeted remediation before a new autonomy test.');
     }
 
-    const attemptId = `autonomy:${createHash('sha256')
-      .update(`${userId}:${profileId}:${session.id}:${request.lessonId}:${request.idempotencyKey}`)
-      .digest('hex')
-      .slice(0, 24)}`;
-    const existing = mastery.attempts.find((attempt) => attempt.id === attemptId);
-    if (existing?.assessmentId) {
-      return {
-        assessment: await this.examiner.get(userId, existing.assessmentId),
-        course: this.toCourseView(profile, session, state),
-      };
+    // Reject a second active/maxed attempt before creating a journal row. A
+    // local `starting` attempt is the one recoverable exception: the journal
+    // may already contain the assessment binding when the final course-state
+    // write was interrupted.
+    const activeLocalAttempt = mastery.activeAttemptId
+      ? mastery.attempts.find((attempt) => attempt.id === mastery.activeAttemptId)
+      : null;
+    let journalAttempt = activeLocalAttempt?.status === 'starting'
+      ? await this.masteryAttempts.get(userId, activeLocalAttempt.id)
+      : null;
+    if (mastery.activeAttemptId && !activeLocalAttempt) {
+      throw new ConflictException('The active autonomy assessment state is invalid.');
     }
-    if (existing) {
-      throw new ConflictException('This autonomy assessment is already being prepared.');
-    }
-    if (mastery.activeAttemptId) {
+    if (activeLocalAttempt && activeLocalAttempt.status !== 'starting') {
+      if (activeLocalAttempt.assessmentId && activeLocalAttempt.status === 'active') {
+        return {
+          assessment: await this.examiner.get(userId, activeLocalAttempt.assessmentId),
+          course: this.toCourseView(profile, session, state),
+        };
+      }
       throw new ConflictException('Another autonomy assessment is already active.');
     }
-    if (mastery.attempts.length >= MAX_AUTONOMY_ATTEMPTS_PER_UNIT) {
+    if (!activeLocalAttempt && mastery.attempts.length >= MAX_AUTONOMY_ATTEMPTS_PER_UNIT) {
       throw new BadRequestException('Too many stored autonomy attempts for this milestone.');
     }
 
+    // The current Examiner produces one aggregate unit assessment. Persist it
+    // under that honest scope only: it must never be cloned into the unit's
+    // multiple micro-milestones or pillar exams.
+    const languageCode = this.languageCode(profile);
+    journalAttempt ??= await this.masteryAttempts.start(userId, {
+        languageProfileId: profileId,
+        experienceSessionId: session.id,
+        lessonId: request.lessonId,
+        idempotencyKey: request.idempotencyKey,
+        scopeKind: 'unit_autonomy',
+        scopeKey: [
+          RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+          languageCode,
+          unit.level,
+          'unit_autonomy',
+          unit.id,
+          lessonRecord.contentVersion,
+        ].join(':'),
+        targetId: unit.id,
+        mappingVersion: RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+        policyVersion: LANGUAGE_MASTERY_POLICY_VERSION,
+        masteryContentVersion: null,
+        contentDefinitionId: null,
+        sourceContentVersion: lessonRecord.contentVersion,
+        languageCode,
+        cefrLevel: unit.level,
+        pillar: null,
+      });
+    const attemptId = journalAttempt.attemptId;
+    const existing = mastery.attempts.find((attempt) => attempt.id === attemptId);
+    if (journalAttempt.assessmentId) {
+      const assessment = await this.examiner.get(userId, journalAttempt.assessmentId);
+      const recovered: RlleAutonomyAttemptSummary = {
+        id: attemptId,
+        assessmentId: journalAttempt.assessmentId,
+        status: 'active',
+        helpUsed: journalAttempt.helpUsed,
+        answerLeak: false,
+        decision: null,
+        startedAt: existing?.startedAt ?? journalAttempt.startedAt,
+        completedAt: null,
+      };
+      const recoveredMastery: RlleMilestoneMasteryState = {
+        ...mastery,
+        status: 'autonomy-active',
+        trainingEvidence,
+        attempts: existing
+          ? mastery.attempts.map((attempt) => attempt.id === attemptId ? recovered : attempt)
+          : [...mastery.attempts, recovered].slice(-MAX_AUTONOMY_ATTEMPTS_PER_UNIT),
+        activeAttemptId: attemptId,
+      };
+      state = {
+        ...state,
+        milestoneMastery: { ...state.milestoneMastery, [lesson.unitId]: recoveredMastery },
+      };
+      session = await this.persistCourse(userId, profile, session, state);
+      return {
+        assessment,
+        course: this.toCourseView(profile, session, state),
+      };
+    }
+    if (journalAttempt.status === 'evaluated') {
+      if (existing) {
+        await this.markAutonomyTechnicalError(
+          userId,
+          profile,
+          session,
+          state,
+          lesson.unitId,
+          attemptId,
+          false,
+        );
+      }
+      throw new ServiceUnavailableException(
+        'The previous autonomy assessment could not be evaluated. Start a new attempt.',
+      );
+    }
+    if (journalAttempt.status !== 'started') {
+      throw new ConflictException('The autonomy assessment journal cannot be resumed.');
+    }
+    if (existing && existing.status !== 'starting') {
+      throw new ConflictException('This autonomy assessment is already being prepared.');
+    }
+
     const now = new Date().toISOString();
-    const starting: RlleAutonomyAttemptSummary = {
+    const starting: RlleAutonomyAttemptSummary = existing ?? {
       id: attemptId,
       assessmentId: null,
       status: 'starting',
@@ -836,7 +934,9 @@ export class RealLifeLanguageService {
       ...mastery,
       status: 'autonomy-starting',
       trainingEvidence,
-      attempts: [...mastery.attempts, starting].slice(-MAX_AUTONOMY_ATTEMPTS_PER_UNIT),
+      attempts: existing
+        ? mastery.attempts
+        : [...mastery.attempts, starting].slice(-MAX_AUTONOMY_ATTEMPTS_PER_UNIT),
       activeAttemptId: attemptId,
     };
     state = {
@@ -844,6 +944,33 @@ export class RealLifeLanguageService {
       milestoneMastery: { ...state.milestoneMastery, [lesson.unitId]: startingMastery },
     };
     session = await this.persistCourse(userId, profile, session, state);
+
+    if (this.unitRequiresNativeAcousticAssessment(unit.id)) {
+      const decision = decideLanguageMilestoneMastery({
+        training: trainingEvidence,
+        autonomy: null,
+      });
+      await this.masteryAttempts.appendNotEvaluable(userId, {
+        attemptId,
+        decision,
+        criteria: this.aggregateCriteria(unit.id, decision),
+      });
+      await this.markAutonomyTechnicalError(
+        userId,
+        profile,
+        session,
+        state,
+        lesson.unitId,
+        attemptId,
+        false,
+      );
+      throw new ServiceUnavailableException({
+        code: 'LANGUAGE_MASTERY_ACOUSTIC_ASSESSMENT_REQUIRED',
+        message:
+          'This unit requires verified native acoustic assessment. A text response or transcript cannot validate pronunciation mastery.',
+        retryable: false,
+      });
+    }
 
     let assessment;
     try {
@@ -880,6 +1007,7 @@ export class RealLifeLanguageService {
             }),
             `Create a new autonomous assessment for curriculum unit ${unit.id}.`,
             `Assess only this taught objective: ${unitGuidance(unit.id).objective}.`,
+            this.masteryAssessmentDirective(unit.id),
             `Cover these required Can-Do capabilities across the assessment: ${unit.canDoIds.join(', ')}.`,
             'All questions require original production. No QCM, options, hints, expected-answer translation, model answer or correction may appear before submission.',
             'Instructions may use the resolved explanation language, while the learner production requested by the task stays in the target language.',
@@ -887,6 +1015,7 @@ export class RealLifeLanguageService {
           ].join(' '),
         },
       );
+      await this.masteryAttempts.bindAssessment(userId, attemptId, assessment.id);
     } catch (error) {
       await this.markAutonomyTechnicalError(userId, profile, session, state, lesson.unitId, attemptId);
       throw error;
@@ -966,7 +1095,6 @@ export class RealLifeLanguageService {
       throw new NotFoundException('Active language lesson not found.');
     }
     const unit = this.requireCourseUnit(state, lesson.unitId);
-    const lessonRecord = await this.requireLessonVersion(userId, request.lessonId);
     let mastery = state.milestoneMastery[lesson.unitId]
       ?? this.emptyMilestoneMastery(lesson.unitId);
     let attempt = mastery.attempts.find((item) => item.assessmentId === request.assessmentId);
@@ -985,6 +1113,21 @@ export class RealLifeLanguageService {
     let submission = assessment.latestSubmission;
     if (!submission) {
       if (attempt.status === 'grading') {
+        const journalAttempt = await this.masteryAttempts.get(userId, attempt.id);
+        if (journalAttempt.status === 'evaluated' && journalAttempt.verdict === 'not-evaluable') {
+          await this.markAutonomyTechnicalError(
+            userId,
+            profile,
+            session,
+            state,
+            lesson.unitId,
+            attempt.id,
+            false,
+          );
+          throw new ServiceUnavailableException(
+            'The previous autonomy assessment could not be evaluated. Start a new attempt.',
+          );
+        }
         throw new ConflictException('This autonomy submission is already being graded.');
       }
       if (attempt.status !== 'active' || mastery.activeAttemptId !== attempt.id) {
@@ -1038,6 +1181,13 @@ export class RealLifeLanguageService {
       training: mastery.trainingEvidence,
       autonomy,
     });
+    const criteria = this.aggregateCriteria(unit.id, decision);
+    await this.masteryAttempts.appendOutcome(userId, {
+      attemptId: attempt.id,
+      assessmentSubmissionId: submission.id,
+      decision,
+      criteria,
+    });
     const now = submission.createdAt;
     attempt = {
       ...attempt,
@@ -1047,100 +1197,27 @@ export class RealLifeLanguageService {
       decision,
       completedAt: now,
     };
-    const mastered = decision.verdict === 'mastered';
-    const completionEvidence = mastered
-      ? this.autonomyCapabilityEvidence(unit, submission)
-      : [];
-    const knownEvidence = new Set(state.evidence.map((item) => item.id));
-    const completedUnitIds = mastered
-      ? [...new Set([...state.completedUnitIds, unit.id])]
-      : state.completedUnitIds;
-    const nextUnitId = mastered
-      ? state.curriculumIds.find((id) => !completedUnitIds.includes(id)) ?? null
-      : state.currentUnitId;
+
+    // This is an aggregate unit assessment, not one criterion-scoped proof.
+    // Preserve its evaluated history, but keep every strict milestone and
+    // pillar exam locked. Publishing a completion here would duplicate one
+    // global score across several unrelated pillars.
     const nextMastery: RlleMilestoneMasteryState = {
       ...mastery,
-      status: mastered
-        ? 'mastered'
-        : decision.verdict === 'not-mastered'
-          ? 'remediation'
-          : 'not-evaluable',
+      status: 'not-evaluable',
       attempts: mastery.attempts.map((item) => item.id === attempt!.id ? attempt! : item),
       activeAttemptId: null,
-      remediation: decision.verdict === 'not-mastered'
-        ? {
-            sourceAttemptId: attempt.id,
-            requiredExerciseCount: LANGUAGE_REMEDIATION_MINIMUM_EXERCISES,
-            completedExerciseCount: 0,
-          }
-        : null,
-      masteredAt: mastered ? now : null,
+      remediation: null,
+      masteredAt: null,
     };
     const nextState: StoredCourseState = {
       ...state,
-      completedUnitIds,
-      currentUnitId: nextUnitId,
-      currentLesson: mastered
-        ? {
-            ...lesson,
-            status: 'completed',
-            stages: lesson.stages.map((stage) => ({
-              ...stage,
-              status: stage.status === 'skipped' ? 'skipped' : 'completed',
-            })),
-            lastActivityAt: now,
-          }
-        : lesson,
+      currentLesson: lesson,
       milestoneMastery: { ...state.milestoneMastery, [unit.id]: nextMastery },
-      evidence: [
-        ...state.evidence,
-        ...completionEvidence.filter((item) => !knownEvidence.has(item.id)),
-      ].slice(-MAX_EVIDENCE),
       unitLastActivityAt: { ...state.unitLastActivityAt, [unit.id]: now },
     };
-    if (mastered) {
-      await this.completions.finalizeLanguageUnit(userId, {
-        languageProfileId: profile.id,
-        unitId: unit.id,
-        experienceSessionId: session.id,
-        lessonId: request.lessonId,
-        lessonContentVersion: lessonRecord.contentVersion,
-        assessmentSubmissionId: submission.id,
-        policyVersion: LANGUAGE_MASTERY_POLICY_VERSION,
-        mastery: nextMastery,
-        startedAt: session.startedAt,
-      });
-    }
-
-    // Unlock only after the canonical completion gate has accepted the sealed
-    // submission. A rejected or failed finalizer therefore leaves persisted
-    // course progress non-mastered and on the same unit.
     state = nextState;
-    session = await this.persistCourse(userId, profile, session, state, {
-      twinImpact: mastered
-        ? {
-            measuredAt: now,
-            changes: [{ kind: 'mastery', referenceId: unit.id, label: lesson.title }],
-          }
-        : undefined,
-    });
-
-    if (mastered) {
-      await this.publishCompletedUnitVocabulary(userId, profile, session, lesson)
-        .catch(() => this.logger.warn('Learning operation failed.'));
-      const unresolvedRepair = state.repairLoops.some((loop) => loop.currentStage !== 'consolidate');
-      const unresolvedMission = Boolean(
-        state.currentMission
-        && ['active', 'paused', 'needs-retry'].includes(state.currentMission.status),
-      );
-      if (
-        completedUnitIds.length === state.curriculumIds.length
-        && !unresolvedRepair
-        && !unresolvedMission
-      ) {
-        session = await this.experiences.complete(userId, session.id);
-      }
-    }
+    session = await this.persistCourse(userId, profile, session, state);
     return {
       submission,
       decision,
@@ -1828,8 +1905,20 @@ export class RealLifeLanguageService {
     state: StoredCourseState,
     unitId: string,
     attemptId: string,
+    journal = true,
   ): Promise<void> {
     const mastery = state.milestoneMastery[unitId] ?? this.emptyMilestoneMastery(unitId);
+    if (journal) {
+      const decision = decideLanguageMilestoneMastery({
+        training: mastery.trainingEvidence,
+        autonomy: null,
+      });
+      await this.masteryAttempts.appendNotEvaluable(userId, {
+        attemptId,
+        decision,
+        criteria: this.aggregateCriteria(unitId, decision),
+      });
+    }
     const failed: RlleMilestoneMasteryState = {
       ...mastery,
       status: 'not-evaluable',
@@ -1842,35 +1931,7 @@ export class RealLifeLanguageService {
       ...state,
       milestoneMastery: { ...state.milestoneMastery, [unitId]: failed },
     };
-    await this.persistCourse(userId, profile, session, next).catch(() => {
-      this.logger.warn('Could not persist the language autonomy technical-error state.');
-    });
-  }
-
-  private autonomyCapabilityEvidence(
-    unit: (typeof RLLE_CURRICULUM)[number],
-    submission: AssessmentSubmissionView,
-  ): RlleCapabilityEvidence[] {
-    const dimensions = unit.strands
-      .map((strand) => strand === 'verbs' || strand === 'conjugation' ? 'grammar' : strand)
-      // This assessment is written/open production. Never infer listening,
-      // interaction or pronunciation from the submitted text.
-      .filter((strand): strand is RlleProgressDimension =>
-        ['vocabulary', 'grammar', 'writing'].includes(strand),
-      );
-    return unit.canDoIds.map((canDoId, index) => {
-      const result = submission.results[index % submission.results.length];
-      return {
-        id: `autonomy-evidence:${submission.id}:${canDoId}`,
-        canDoId,
-        source: 'assessment',
-        sourceId: submission.id,
-        result: 'demonstrated',
-        observedAt: submission.createdAt,
-        observation: (result?.why || submission.summary).slice(0, MAX_OBSERVATION),
-        dimensions,
-      };
-    });
+    await this.persistCourse(userId, profile, session, next);
   }
 
   private async controlledUnitEvidence(
@@ -2792,6 +2853,8 @@ export class RealLifeLanguageService {
 
   private strictMasteryAvailable(profile: LanguageProfile): boolean {
     if (
+      !LANGUAGE_MASTERY_STRICT_RUNTIME_READY
+      ||
       !this.featureFlags.enabled('languageMasteryV1')
       || !RLLE_LANGUAGE_MASTERY_MAPPING_AUDIT.activationReady
     ) {
@@ -2812,6 +2875,62 @@ export class RealLifeLanguageService {
       && coverage.synthesisLanguageCodes.includes(languageCode)
       && coverage.pronunciationAssessmentLanguageCodes.includes(languageCode)
     );
+  }
+
+  private masteryContentDirective(unitId: string): string {
+    const supplements = getRlleLanguageMasteryContentSupplementsForUnit(unitId);
+    if (supplements.length === 0) return '';
+    return supplements.map((supplement) => [
+      `Authorised mastery content ${supplement.id} (${supplement.contentVersion}) must be taught inside this existing unit; do not create or rename a curriculum unit.`,
+      `Additional objective: ${supplement.objective}`,
+      `Teaching explanation: ${supplement.explanation}`,
+      `Create the complete ten-format activity battery from these authored requirements: ${supplement.activities
+        .map((activity) => `${activity.format}: ${activity.guidance}`)
+        .join(' | ')}.`,
+      `Mandatory evaluation criteria: ${supplement.evaluation.criteria
+        .map((criterion) => `${criterion.id}: ${criterion.guidance}`)
+        .join(' | ')}.`,
+      `Autonomous raw threshold is ${supplement.evaluation.rawThreshold}; no help, model answer or answer leak is allowed.`,
+      supplement.evaluation.acousticAssessment
+        ? [
+            'This competency requires native acoustic assessment.',
+            `Required modes: ${supplement.evaluation.acousticAssessment.modes.join(', ')}.`,
+            `Required acoustic dimensions: ${supplement.evaluation.acousticAssessment.requiredDimensions.join(', ')}.`,
+            'A transcript, spelling result or written response is explicitly insufficient. If the acoustic adapter is unavailable, the result is NOT_EVALUABLE: never zero, never mastery and never punitive remediation.',
+          ].join(' ')
+        : '',
+    ].filter(Boolean).join(' ')).join(' ');
+  }
+
+  private masteryAssessmentDirective(unitId: string): string {
+    const supplements = getRlleLanguageMasteryContentSupplementsForUnit(unitId);
+    if (supplements.length === 0) return '';
+    return supplements.map((supplement) => [
+      `Bind this assessment to authored content ${supplement.id} at ${supplement.contentVersion}.`,
+      `Assess this additional objective: ${supplement.objective}`,
+      `Every mandatory criterion must be represented in the rubric: ${supplement.evaluation.criteria
+        .map((criterion) => `${criterion.id}: ${criterion.guidance}`)
+        .join(' | ')}.`,
+      `Do not round before applying the raw threshold ${supplement.evaluation.rawThreshold}.`,
+    ].join(' ')).join(' ');
+  }
+
+  private unitRequiresNativeAcousticAssessment(unitId: string): boolean {
+    return getRlleLanguageMasteryContentSupplementsForUnit(unitId)
+      .some((supplement) => supplement.evaluation.acousticAssessment?.required === true);
+  }
+
+  /** Aggregate rubric facts are retained only as unit-assessment history. They
+   * are deliberately not interpreted as per-milestone or per-pillar proof. */
+  private aggregateCriteria(
+    _unitId: string,
+    decision: LanguageMasteryDecision,
+  ): Array<{ id: string; met: boolean; score: number | null }> {
+    return [{
+      id: 'unit-autonomy-aggregate-non-credit',
+      met: decision.verdict === 'mastered',
+      score: decision.rawScore,
+    }];
   }
 
   private assertStrictMasteryAvailable(profile: LanguageProfile): void {

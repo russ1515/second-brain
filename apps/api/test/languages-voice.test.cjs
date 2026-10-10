@@ -58,7 +58,28 @@ test('speech endpoints report real capabilities and return provider transcriptio
   assert.equal(
     configuredController.capabilities().languageMasteryV1.enabled,
     false,
-    'a feature flag cannot claim readiness while the audited curriculum mapping is incomplete',
+    'a feature flag cannot claim readiness before acoustic evidence and canonical publication are integrated',
+  );
+  const fullyCapableSpeech = {
+    ...speech,
+    supportsSynthesis: true,
+    supportsAnalysis: true,
+  };
+  const fullyConfiguredController = new SpeechController(fullyCapableSpeech, {
+    get: (key) => key === 'features'
+      ? { languageMasteryV1: true }
+      : key === 'speech.languageMasteryV1'
+        ? {
+            transcriptionLanguageCodes: ['en'],
+            synthesisLanguageCodes: ['en'],
+            pronunciationAssessmentLanguageCodes: ['en'],
+          }
+        : undefined,
+  });
+  assert.equal(
+    fullyConfiguredController.capabilities().languageMasteryV1.enabled,
+    false,
+    'external provider capability cannot bypass the code-level strict-path readiness boundary',
   );
   const result = await controller.transcribe({ originalname: 'turn.webm', mimetype: 'audio/webm', size: 5, buffer: Buffer.from('hello') }, 'en');
   assert.equal(result.text, 'hello');

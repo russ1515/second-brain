@@ -43,77 +43,79 @@ model User {
   // updated (throttled) by ActivityInterceptor. Drives DAU/WAU/MAU.
   lastActiveAt DateTime?
 
-  profile                 Profile?
-  onboardingProfile       OnboardingProfile?
-  sessions                Session[]
-  emailVerificationTokens EmailVerificationToken[]
-  emailOtps               EmailOtp[]
-  recoveryCodes           RecoveryCode[]
-  documents               Document[]
-  decks                   Deck[]
-  cards                   Card[]
-  concepts                Concept[]
-  conceptEdges            ConceptEdge[]
-  tutorSessions           TutorSession[]
-  lessons                 Lesson[]
-  languageProfiles        LanguageProfile[]
-  dailyPlans              DailyPlan[]
-  notifications           Notification[]
-  exerciseAttempts        ExerciseAttempt[]
-  achievements            Achievement[]
-  homework                Homework[]
-  studySessions           StudySession[]
-  reviewables             Reviewable[]
-  calendarEvents          CalendarEvent[]
-  goals                   Goal[]
-  exams                   Exam[]
-  collections             Collection[]
-  studyResources          StudyResource[]
-  assessments             Assessment[]
-  assessmentSubmissions   AssessmentSubmission[]
-  writingSubmissions      WritingSubmission[]
-  readingExercises        ReadingExercise[]
-  subscription            Subscription?
-  payments                Payment[]
-  invoices                Invoice[]
-  usageCounters           UsageCounter[]
-  memberships             Membership[]
-  groupMemberships        GroupMember[]
-  consents                Consent[]
-  aiInitiatives           AiInitiative[]
-  coachProfile            CoachProfile?
-  learningPredictions     LearningPrediction[]
-  recommendations         Recommendation[]
-  mentorGuidance          MentorGuidance?
-  successPredictions      SuccessPrediction[]
-  learningDna             LearningDna?
-  experienceSessions      ExperienceSession[]
-  academicWorkspaces      AcademicWorkspace[]
-  adminRoleAssignments    AdminRoleAssignment[]
-  quotaCycles             QuotaCycle[]
-  entitlementOverrides    EntitlementOverride[]
-  providerUsage           ProviderUsage[]
+  profile                            Profile?
+  onboardingProfile                  OnboardingProfile?
+  sessions                           Session[]
+  emailVerificationTokens            EmailVerificationToken[]
+  emailOtps                          EmailOtp[]
+  recoveryCodes                      RecoveryCode[]
+  documents                          Document[]
+  decks                              Deck[]
+  cards                              Card[]
+  concepts                           Concept[]
+  conceptEdges                       ConceptEdge[]
+  tutorSessions                      TutorSession[]
+  lessons                            Lesson[]
+  languageProfiles                   LanguageProfile[]
+  dailyPlans                         DailyPlan[]
+  notifications                      Notification[]
+  exerciseAttempts                   ExerciseAttempt[]
+  achievements                       Achievement[]
+  homework                           Homework[]
+  studySessions                      StudySession[]
+  reviewables                        Reviewable[]
+  calendarEvents                     CalendarEvent[]
+  goals                              Goal[]
+  exams                              Exam[]
+  collections                        Collection[]
+  studyResources                     StudyResource[]
+  assessments                        Assessment[]
+  assessmentSubmissions              AssessmentSubmission[]
+  languageMasteryAttempts            LanguageMasteryAttempt[]
+  languageMasteryRemediationEvidence LanguageMasteryRemediationEvidence[]
+  writingSubmissions                 WritingSubmission[]
+  readingExercises                   ReadingExercise[]
+  subscription                       Subscription?
+  payments                           Payment[]
+  invoices                           Invoice[]
+  usageCounters                      UsageCounter[]
+  memberships                        Membership[]
+  groupMemberships                   GroupMember[]
+  consents                           Consent[]
+  aiInitiatives                      AiInitiative[]
+  coachProfile                       CoachProfile?
+  learningPredictions                LearningPrediction[]
+  recommendations                    Recommendation[]
+  mentorGuidance                     MentorGuidance?
+  successPredictions                 SuccessPrediction[]
+  learningDna                        LearningDna?
+  experienceSessions                 ExperienceSession[]
+  academicWorkspaces                 AcademicWorkspace[]
+  adminRoleAssignments               AdminRoleAssignment[]
+  quotaCycles                        QuotaCycle[]
+  entitlementOverrides               EntitlementOverride[]
+  providerUsage                      ProviderUsage[]
   /// Sprint 4's durable, immutable provider-cost ledger.  Unlike the legacy
   /// ProviderUsage envelope, an operation may contain several provider attempts
   /// (retry / provider fallback) and a deleted user is intentionally detached
   /// from its historical financial evidence.
-  providerUsageOperations ProviderUsageOperation[]
-  supportNotesForUser     AdminSupportNote[]       @relation("AdminSupportNotesForUser")
-  supportNotesAuthored    AdminSupportNote[]       @relation("AdminSupportNotesByActor")
-  profileReviewsForUser   AdminProfileReview[]     @relation("AdminProfileReviewsForUser")
-  profileReviewsAuthored  AdminProfileReview[]     @relation("AdminProfileReviewsByActor")
-  errorEvents             ErrorEvent[]             @relation("ErrorEventsForUser")
-  affectedBugGroups       BugAffectedUser[]
-  supportCases            SupportCase[]            @relation("SupportCasesForUser")
-  assignedBugGroups       BugGroup[]               @relation("AssignedBugGroups")
-  assignedSupportCases    SupportCase[]            @relation("AssignedSupportCases")
-  assignedIncidents       Incident[]               @relation("AssignedIncidents")
-  bugComments             BugComment[]             @relation("BugCommentsByActor")
-  supportCaseNotes        SupportCaseNote[]        @relation("SupportCaseNotesByActor")
-  incidentTimelineEvents  IncidentTimelineEvent[]  @relation("IncidentTimelineByActor")
-  diagnosticsRequested    BugDiagnostic[]          @relation("BugDiagnosticsRequestedBy")
-  learningCompletions     LearningCompletion[]
-  learningGoalLinks       LearningGoalLink[]
+  providerUsageOperations            ProviderUsageOperation[]
+  supportNotesForUser                AdminSupportNote[]                   @relation("AdminSupportNotesForUser")
+  supportNotesAuthored               AdminSupportNote[]                   @relation("AdminSupportNotesByActor")
+  profileReviewsForUser              AdminProfileReview[]                 @relation("AdminProfileReviewsForUser")
+  profileReviewsAuthored             AdminProfileReview[]                 @relation("AdminProfileReviewsByActor")
+  errorEvents                        ErrorEvent[]                         @relation("ErrorEventsForUser")
+  affectedBugGroups                  BugAffectedUser[]
+  supportCases                       SupportCase[]                        @relation("SupportCasesForUser")
+  assignedBugGroups                  BugGroup[]                           @relation("AssignedBugGroups")
+  assignedSupportCases               SupportCase[]                        @relation("AssignedSupportCases")
+  assignedIncidents                  Incident[]                           @relation("AssignedIncidents")
+  bugComments                        BugComment[]                         @relation("BugCommentsByActor")
+  supportCaseNotes                   SupportCaseNote[]                    @relation("SupportCaseNotesByActor")
+  incidentTimelineEvents             IncidentTimelineEvent[]              @relation("IncidentTimelineByActor")
+  diagnosticsRequested               BugDiagnostic[]                      @relation("BugDiagnosticsRequestedBy")
+  learningCompletions                LearningCompletion[]
+  learningGoalLinks                  LearningGoalLink[]
 
   @@index([lastActiveAt])
   @@index([createdAt])
@@ -568,13 +570,14 @@ model LanguageProfile {
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
 
-  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  vocabDeck           Deck?                @relation(fields: [vocabDeckId], references: [id], onDelete: SetNull)
+  user                User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vocabDeck           Deck?                    @relation(fields: [vocabDeckId], references: [id], onDelete: SetNull)
   lessons             Lesson[]
   tutorSessions       TutorSession[]
   planItems           DailyPlanItem[]
   experienceSessions  ExperienceSession[]
   learningCompletions LearningCompletion[]
+  masteryAttempts     LanguageMasteryAttempt[]
 
   @@unique([userId, normalizedLanguage])
   @@index([userId])
@@ -920,16 +923,17 @@ model Lesson {
   contentVersion    Int      @default(1)
   createdAt         DateTime @default(now())
 
-  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tutorSession        TutorSession?        @relation(fields: [tutorSessionId], references: [id], onDelete: SetNull)
-  concept             Concept?             @relation(fields: [conceptId], references: [id], onDelete: SetNull)
-  sourceDocument      Document?            @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
-  languageProfile     LanguageProfile?     @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
+  user                User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tutorSession        TutorSession?            @relation(fields: [tutorSessionId], references: [id], onDelete: SetNull)
+  concept             Concept?                 @relation(fields: [conceptId], references: [id], onDelete: SetNull)
+  sourceDocument      Document?                @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+  languageProfile     LanguageProfile?         @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
   attempts            ExerciseAttempt[]
   assignment          Homework?
   experienceSessions  ExperienceSession[]
   assessments         Assessment[]
   learningCompletions LearningCompletion[]
+  masteryAttempts     LanguageMasteryAttempt[]
 
   @@index([userId])
   @@map("lessons")
@@ -1151,14 +1155,15 @@ model ExperienceSession {
   pausedAt       DateTime?
   completedAt    DateTime?
 
-  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tutorSession        TutorSession?        @relation(fields: [tutorSessionId], references: [id], onDelete: SetNull)
-  studySession        StudySession?        @relation(fields: [studySessionId], references: [id], onDelete: SetNull)
-  document            Document?            @relation(fields: [documentId], references: [id], onDelete: SetNull)
-  lesson              Lesson?              @relation(fields: [lessonId], references: [id], onDelete: SetNull)
-  goal                Goal?                @relation(fields: [goalId], references: [id], onDelete: SetNull)
-  languageProfile     LanguageProfile?     @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
+  user                User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tutorSession        TutorSession?            @relation(fields: [tutorSessionId], references: [id], onDelete: SetNull)
+  studySession        StudySession?            @relation(fields: [studySessionId], references: [id], onDelete: SetNull)
+  document            Document?                @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  lesson              Lesson?                  @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  goal                Goal?                    @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  languageProfile     LanguageProfile?         @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
   learningCompletions LearningCompletion[]
+  masteryAttempts     LanguageMasteryAttempt[]
   learningGoalLinks   LearningGoalLink[]
 
   @@unique([userId, idempotencyKey])
@@ -1254,9 +1259,10 @@ model Assessment {
   questions      Json
   createdAt      DateTime @default(now())
 
-  user        User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  submissions AssessmentSubmission[]
-  lesson      Lesson?                @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  user            User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  submissions     AssessmentSubmission[]
+  masteryAttempts LanguageMasteryAttempt[]
+  lesson          Lesson?                  @relation(fields: [lessonId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
   @@index([lessonId])
@@ -1282,12 +1288,139 @@ model AssessmentSubmission {
   advice       String
   createdAt    DateTime @default(now())
 
-  assessment         Assessment           @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
-  user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assessment         Assessment              @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  user               User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
   completionEvidence LearningCompletion[]
+  masteryAttempt     LanguageMasteryAttempt?
 
   @@index([assessmentId])
   @@map("assessment_submissions")
+}
+
+/// Append-only, server-authored journal entry for one evaluated language
+/// mastery attempt. AssessmentSubmission remains the graded response; this row
+/// binds its deterministic decision to an immutable, versioned learning scope.
+/// A published LearningCompletion is optional and can only be linked after a
+/// mastered decision. Failed and NOT_EVALUABLE attempts remain first-class
+/// history and never become completion evidence.
+enum LanguageMasteryScopeKind {
+  /// Aggregate current unit autonomy assessment. Journal-only: it cannot be
+  /// published as strict milestone or pillar mastery evidence.
+  unit_autonomy
+  milestone
+  pillar_exam
+}
+
+enum LanguageMasteryAttemptVerdict {
+  mastered
+  not_mastered
+  not_evaluable
+}
+
+enum LanguageMasteryAttemptStatus {
+  started
+  assessment_bound
+  evaluated
+}
+
+enum LanguageMasteryRemediationState {
+  completed
+  incomplete
+  technical_error
+  not_evaluable
+}
+
+model LanguageMasteryAttempt {
+  id                     String                         @id @default(cuid())
+  userId                 String
+  languageProfileId      String
+  experienceSessionId    String?
+  lessonId               String?
+  assessmentId           String?                        @unique
+  assessmentSubmissionId String?                        @unique
+  /// Stable server-generated retry key. The same owner/key can replay only an
+  /// equivalent immutable decision; a different payload is rejected.
+  attemptId              String
+  idempotencyKey         String
+  scopeKind              LanguageMasteryScopeKind
+  /// Includes mapping version, language, CEFR level, pillar and target id.
+  scopeKey               String
+  targetId               String
+  mappingVersion         String
+  policyVersion          String
+  /// Version of the authored mastery supplement/rubric, not a display title.
+  masteryContentVersion  String?
+  contentDefinitionId    String?
+  /// Version of the concrete generated lesson/assessment content.
+  sourceContentVersion   Int
+  languageCode           String
+  cefrLevel              String
+  /// Null for aggregate unit autonomy history; required for criterion-scoped
+  /// milestones and dedicated pillar exams.
+  pillar                 String?
+  status                 LanguageMasteryAttemptStatus   @default(started)
+  verdict                LanguageMasteryAttemptVerdict?
+  /// Exact unrounded ratio. Null means not measured, never zero.
+  rawScore               Float?
+  threshold              Float
+  decisionReason         String?
+  helpUsed               Boolean                        @default(false)
+  decision               Json?
+  criteria               Json?
+  /// Hash of every immutable decision input, used to validate safe retries.
+  startHash              String
+  decisionHash           String?
+  startedAt              DateTime                       @default(now())
+  evaluatedAt            DateTime?
+  createdAt              DateTime                       @default(now())
+
+  user                 User                                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  languageProfile      LanguageProfile                      @relation(fields: [languageProfileId], references: [id], onDelete: Cascade)
+  experienceSession    ExperienceSession?                   @relation(fields: [experienceSessionId], references: [id], onDelete: SetNull)
+  lesson               Lesson?                              @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  assessment           Assessment?                          @relation(fields: [assessmentId], references: [id], onDelete: SetNull)
+  assessmentSubmission AssessmentSubmission?                @relation(fields: [assessmentSubmissionId], references: [id], onDelete: SetNull)
+  completion           LearningCompletion?
+  remediationEvidence  LanguageMasteryRemediationEvidence[]
+
+  @@unique([userId, attemptId])
+  @@unique([userId, scopeKey, idempotencyKey])
+  @@index([userId, languageProfileId, evaluatedAt])
+  @@index([userId, scopeKey, evaluatedAt])
+  @@index([mappingVersion, policyVersion])
+  @@map("language_mastery_attempts")
+}
+
+/// Append-only targeted exercises completed after one failed pillar attempt.
+/// Neutral technical/NOT_EVALUABLE evidence remains in history but is never
+/// counted toward the ten required new completed exercises.
+model LanguageMasteryRemediationEvidence {
+  id                       String                          @id @default(cuid())
+  userId                   String
+  languageMasteryAttemptId String
+  evidenceId               String
+  scopeKey                 String
+  mappingVersion           String
+  policyVersion            String
+  trainingFormat           String
+  state                    LanguageMasteryRemediationState
+  lessonId                 String
+  sourceContentVersion     Int
+  exerciseIndex            Int
+  sourceKind               String
+  sourceRefId              String
+  evidenceHash             String
+  recordedAt               DateTime
+  createdAt                DateTime                        @default(now())
+
+  user    User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attempt LanguageMasteryAttempt @relation(fields: [languageMasteryAttemptId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, evidenceId])
+  @@unique([userId, sourceKind, sourceRefId])
+  @@unique([userId, languageMasteryAttemptId, lessonId, sourceContentVersion, exerciseIndex])
+  @@index([languageMasteryAttemptId, recordedAt])
+  @@map("language_mastery_remediation_evidence")
 }
 
 /// A server-verified statement that one version of a learning unit was
@@ -1311,45 +1444,47 @@ enum LearningEvidenceSourceKind {
 }
 
 model LearningCompletion {
-  id                     String                     @id @default(cuid())
-  userId                 String
-  kind                   LearningCompletionKind
+  id                       String                     @id @default(cuid())
+  userId                   String
+  kind                     LearningCompletionKind
   /// Stable lesson id or profile-scoped language-unit reference. Paired with
   /// owner, kind and version to make finalization idempotent.
-  learningRefId          String
-  contentVersion         Int
-  status                 LearningCompletionStatus   @default(verified)
-  evidenceSource         LearningEvidenceSourceKind
+  learningRefId            String
+  contentVersion           Int
+  status                   LearningCompletionStatus   @default(verified)
+  evidenceSource           LearningEvidenceSourceKind
   /// Primary evidence id; additional controlled evidence belongs in provenance.
-  evidenceRefId          String
-  lessonId               String?
-  languageProfileId      String?
-  experienceSessionId    String?
-  exerciseAttemptId      String?
-  assessmentSubmissionId String?
+  evidenceRefId            String
+  lessonId                 String?
+  languageProfileId        String?
+  experienceSessionId      String?
+  exerciseAttemptId        String?
+  assessmentSubmissionId   String?
+  languageMasteryAttemptId String?                    @unique
   /// Machine-readable evaluated criteria. A missing measurement stays absent;
   /// no product threshold is inferred here.
-  criteria               Json
+  criteria                 Json
   /// Observable result, separate from completion and from mastery.
-  result                 Json
+  result                   Json
   /// Auditable source/version/timestamps, never hidden model reasoning.
-  provenance             Json
+  provenance               Json
   /// Six nullable product dimensions. Null means not evaluated, never zero.
-  dimensionScores        Json
-  startedAt              DateTime?
-  finalizedAt            DateTime                   @default(now())
-  createdAt              DateTime                   @default(now())
-  updatedAt              DateTime                   @updatedAt
+  dimensionScores          Json
+  startedAt                DateTime?
+  finalizedAt              DateTime                   @default(now())
+  createdAt                DateTime                   @default(now())
+  updatedAt                DateTime                   @updatedAt
 
-  user                 User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  lesson               Lesson?                        @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  languageProfile      LanguageProfile?               @relation(fields: [languageProfileId], references: [id], onDelete: Cascade)
-  experienceSession    ExperienceSession?             @relation(fields: [experienceSessionId], references: [id], onDelete: SetNull)
-  exerciseAttempt      ExerciseAttempt?               @relation(fields: [exerciseAttemptId], references: [id], onDelete: SetNull)
-  assessmentSubmission AssessmentSubmission?          @relation(fields: [assessmentSubmissionId], references: [id], onDelete: SetNull)
-  goals                LearningCompletionGoal[]
-  cards                LearningCompletionCard[]
-  reviewables          LearningCompletionReviewable[]
+  user                   User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson                 Lesson?                        @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  languageProfile        LanguageProfile?               @relation(fields: [languageProfileId], references: [id], onDelete: Cascade)
+  experienceSession      ExperienceSession?             @relation(fields: [experienceSessionId], references: [id], onDelete: SetNull)
+  exerciseAttempt        ExerciseAttempt?               @relation(fields: [exerciseAttemptId], references: [id], onDelete: SetNull)
+  assessmentSubmission   AssessmentSubmission?          @relation(fields: [assessmentSubmissionId], references: [id], onDelete: SetNull)
+  languageMasteryAttempt LanguageMasteryAttempt?        @relation(fields: [languageMasteryAttemptId], references: [id], onDelete: SetNull)
+  goals                  LearningCompletionGoal[]
+  cards                  LearningCompletionCard[]
+  reviewables            LearningCompletionReviewable[]
 
   @@unique([userId, kind, learningRefId, contentVersion])
   @@index([userId, status, finalizedAt])

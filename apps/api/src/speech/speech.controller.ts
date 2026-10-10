@@ -32,6 +32,7 @@ import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import type { UploadedFileLike } from '../documents/extraction/text-extraction.service';
 import { SpeechService } from './speech.service';
 import { SynthesizeDto } from './dto/synthesize.dto';
+import { LANGUAGE_MASTERY_STRICT_RUNTIME_READY } from '../languages/language-mastery-readiness';
 
 /**
  * Letting the teacher SPEAK.
@@ -64,7 +65,8 @@ export class SpeechController {
     const fullyCoveredLanguage = transcriptionLanguageCodes.some((languageCode) =>
       synthesisLanguageCodes.includes(languageCode)
       && pronunciationAssessmentLanguageCodes.includes(languageCode));
-    const strictPathEnabled = features?.languageMasteryV1 === true
+    const strictPathEnabled = LANGUAGE_MASTERY_STRICT_RUNTIME_READY
+      && features?.languageMasteryV1 === true
       && RLLE_LANGUAGE_MASTERY_MAPPING_AUDIT.activationReady
       && this.speech.supportsSynthesis
       && this.speech.supportsAnalysis

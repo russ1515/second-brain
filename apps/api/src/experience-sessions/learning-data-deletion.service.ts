@@ -30,6 +30,7 @@ interface SessionDeletionPlan {
   homeworkIds: string[];
   documentIds: string[];
   completionIds: string[];
+  masteryAttemptIds: string[];
   cardIds: string[];
   candidateGoalIds: string[];
   reviewableIds: string[];
@@ -378,13 +379,29 @@ export class LearningDataDeletionService {
         })
       : [];
     const homeworkIds = homeworkRows.map((row) => row.id);
-    const completionRows = sessionIds.length || existingLessonIds.length
+    const masteryAttemptRows = sessionIds.length || existingLessonIds.length
+      ? await db.languageMasteryAttempt.findMany({
+          where: {
+            userId,
+            OR: [
+              ...(existingLessonIds.length ? [{ lessonId: { in: existingLessonIds } }] : []),
+              ...(sessionIds.length ? [{ experienceSessionId: { in: sessionIds } }] : []),
+            ],
+          },
+          select: { id: true },
+        })
+      : [];
+    const masteryAttemptIds = masteryAttemptRows.map((row) => row.id);
+    const completionRows = sessionIds.length || existingLessonIds.length || masteryAttemptIds.length
       ? await db.learningCompletion.findMany({
           where: {
             userId,
             OR: [
               ...(existingLessonIds.length ? [{ lessonId: { in: existingLessonIds } }] : []),
               ...(sessionIds.length ? [{ experienceSessionId: { in: sessionIds } }] : []),
+              ...(masteryAttemptIds.length
+                ? [{ languageMasteryAttemptId: { in: masteryAttemptIds } }]
+                : []),
             ],
           },
           select: {
@@ -511,6 +528,7 @@ export class LearningDataDeletionService {
       homeworkIds,
       documentIds,
       completionIds,
+      masteryAttemptIds,
       cardIds,
       candidateGoalIds,
       reviewableIds,
@@ -575,6 +593,15 @@ export class LearningDataDeletionService {
         }
         if (freshPlan.completionIds.length) {
           await tx.learningCompletion.deleteMany({ where: { userId, id: { in: freshPlan.completionIds } } });
+        }
+        if (freshPlan.masteryAttemptIds.length) {
+          // A lesson/session deletion owns its Lot 2 journal and remediation
+          // evidence. Purge it while the owner lock is held, before deleting
+          // the source rows; otherwise the SET NULL relations would preserve
+          // detached evidence that can no longer prove its provenance.
+          await tx.languageMasteryAttempt.deleteMany({
+            where: { userId, id: { in: freshPlan.masteryAttemptIds } },
+          });
         }
         if (freshPlan.cardIds.length) {
           await tx.card.deleteMany({

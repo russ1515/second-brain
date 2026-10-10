@@ -168,6 +168,8 @@ export class LearningResetService {
     // makes a future schema relation less likely to retain learner content.
     add(await tx.learningGoalLink.deleteMany({ where: { userId } }));
     add(await tx.learningCompletion.deleteMany({ where: { userId } }));
+    add(await tx.languageMasteryRemediationEvidence.deleteMany({ where: { userId } }));
+    add(await tx.languageMasteryAttempt.deleteMany({ where: { userId } }));
     add(await tx.reviewLog.deleteMany({ where: { userId } }));
     add(await tx.documentChunk.deleteMany({ where: { userId } }));
     add(await tx.conceptEdge.deleteMany({ where: { userId } }));

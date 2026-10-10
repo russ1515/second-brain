@@ -24,9 +24,14 @@ function harness(options = {}) {
   const sessions = new Map();
   const attempts = [];
   const finalizedUnits = [];
+  const masteryJournal = [];
+  const lessonGenerations = [];
+  const assessmentCreations = [];
   const assessments = new Map();
+  const masteryAttempts = new Map();
   let nextId = 1;
   let conversationStarts = 0;
+  let failedAutonomyActivePersist = false;
   const toSession = (request, id = `experience-${nextId++}`) => ({
     id, userId: 'user-1', version: 1, type: request.type ?? 'language',
     status: 'active', title: request.title ?? null, intent: request.intent ?? null,
@@ -58,6 +63,14 @@ function harness(options = {}) {
     },
     updateState: async (userId, id, update) => {
       const previous = await experiences.get(userId, id);
+      if (
+        options.failAutonomyActivePersistOnce
+        && !failedAutonomyActivePersist
+        && JSON.stringify(update).includes('autonomy-active')
+      ) {
+        failedAutonomyActivePersist = true;
+        throw new Error('autonomy active persist interrupted');
+      }
       const next = { ...previous, ...update, version: previous.version + 1, updatedAt: '2026-09-14T08:05:00.000Z' };
       sessions.set(id, next);
       return next;
@@ -129,11 +142,14 @@ function harness(options = {}) {
     ...(languageFormat === 'mini-dialogue' ? { dialogueTurns: ['Hello', 'Hi'] } : {}),
   }));
   const lessons = {
-    generate: async () => ({
-      id: 'lesson-1', languageProfileId: profile.id, topic: 'First contact',
-      objective: 'Introduce yourself in a real exchange.', sourceDocumentId: null,
-      exercises: lessonExercises,
-    }),
+    generate: async (...args) => {
+      lessonGenerations.push(args);
+      return {
+        id: 'lesson-1', languageProfileId: profile.id, topic: 'First contact',
+        objective: 'Introduce yourself in a real exchange.', sourceDocumentId: null,
+        exercises: lessonExercises,
+      };
+    },
     get: async () => ({
       id: 'lesson-1', languageProfileId: profile.id, topic: 'First contact',
       objective: 'Introduce yourself in a real exchange.', sourceDocumentId: null,
@@ -170,6 +186,7 @@ function harness(options = {}) {
     },
     {
       create: async (_userId, _dto, internal) => {
+        assessmentCreations.push(internal);
         const assessment = {
           id: 'assessment-1', type: 'open', topic: 'Autonomy', title: 'Autonomy',
           level: 'beginner',
@@ -233,12 +250,63 @@ function harness(options = {}) {
       }),
     },
     { supportsSynthesis: true, supportsAnalysis: true },
+    {
+      start: async (_userId, input) => {
+        const attemptId = `journal:${input.idempotencyKey}`;
+        const existing = masteryAttempts.get(attemptId);
+        if (existing) return existing;
+        const entry = {
+          attemptId,
+          assessmentId: null,
+          status: 'started',
+          verdict: null,
+          helpUsed: false,
+          startedAt: '2026-09-14T08:30:00.000Z',
+          ...input,
+        };
+        masteryAttempts.set(attemptId, entry);
+        masteryJournal.push({ event: 'start', ...entry });
+        return entry;
+      },
+      get: async (_userId, attemptId) => {
+        const entry = masteryAttempts.get(attemptId);
+        if (!entry) throw new Error('journal attempt not found');
+        return entry;
+      },
+      bindAssessment: async (_userId, attemptId, assessmentId) => {
+        const entry = masteryAttempts.get(attemptId);
+        masteryAttempts.set(attemptId, { ...entry, assessmentId, status: 'assessment_bound' });
+        masteryJournal.push({ event: 'bind', attemptId, assessmentId });
+        return { attemptId, assessmentId, status: 'assessment_bound' };
+      },
+      appendOutcome: async (_userId, input) => {
+        const entry = masteryAttempts.get(input.attemptId);
+        masteryAttempts.set(input.attemptId, {
+          ...entry,
+          status: 'evaluated',
+          verdict: input.decision.verdict,
+        });
+        masteryJournal.push({ event: 'outcome', ...input });
+        return { ...input, status: 'evaluated' };
+      },
+      appendNotEvaluable: async (_userId, input) => {
+        const entry = masteryAttempts.get(input.attemptId);
+        masteryAttempts.set(input.attemptId, {
+          ...entry,
+          status: 'evaluated',
+          verdict: 'not-evaluable',
+        });
+        masteryJournal.push({ event: 'not-evaluable', ...input });
+        return { ...input, status: 'evaluated' };
+      },
+    },
   );
   if (!options.useRealActivationGate) {
     service.strictMasteryAvailable = () => options.strictMastery !== false;
   }
   return {
-    service, sessions, experiences, attempts, finalizedUnits, lessonExercises,
+    service, sessions, experiences, attempts, finalizedUnits, lessonExercises, masteryJournal,
+    lessonGenerations, assessmentCreations,
     conversationStarts: () => conversationStarts,
   };
 }
@@ -257,6 +325,20 @@ test('course from zero keeps the complete A1→B1 spine and distinguishes declar
   assert.equal(result.course.progress.completedUnits, 0);
   assert.equal(result.course.canDoMap.every((item) => item.status === 'not-evaluated'), true);
   assert.equal(result.session.currentStep.metadata.rlleCourse.immersionIntensity, 'guided');
+});
+
+test('authored mastery supplements are injected into the existing unit generation contract', async () => {
+  const { service, lessonGenerations } = harness();
+  await service.startCourse('user-1', 'language-1', {
+    startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
+  });
+  await service.startLesson('user-1', 'language-1', { unitId: 'a1-first-contact' });
+  const directive = lessonGenerations[0][2].directive;
+  assert.match(directive, /a1-graphy-writing-foundations/);
+  assert.match(directive, new RegExp(shared.RLLE_LANGUAGE_MASTERY_CONTENT_VERSION));
+  for (const format of shared.LANGUAGE_TRAINING_FORMATS) assert.match(directive, new RegExp(format));
+  assert.match(directive, /legible-target-graphemes/);
+  assert.match(directive, /independent-basic-writing/);
 });
 
 test('an advanced course starts at the declared level and never silently replays A1', async () => {
@@ -330,8 +412,8 @@ test('a paused World Mission resumes the same Tutor context and keeps its repair
   assert.equal(conversationStarts(), 1);
 });
 
-test('structured lesson navigation never grants mastery; ten formats and autonomous 90% proof do', async () => {
-  const { service, attempts, finalizedUnits, lessonExercises } = harness();
+test('unit autonomy is journaled without cloning aggregate evidence into strict mastery', async () => {
+  const { service, attempts, finalizedUnits, lessonExercises, masteryJournal } = harness();
   await service.startCourse('user-1', 'language-1', {
     startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
   });
@@ -393,17 +475,79 @@ test('structured lesson navigation never grants mastery; ten formats and autonom
   course = evaluated.course;
   assert.equal(evaluated.decision.verdict, 'mastered');
   assert.equal(evaluated.decision.rawScore, 0.9);
-  assert.equal(course.progress.completedUnits, 1);
+  assert.equal(course.progress.completedUnits, 0);
   const unitCanDoIds = new Set(shared.RLLE_CURRICULUM.find((item) => item.id === outline.unitId).canDoIds);
-  assert.equal(course.canDoMap.filter((item) => unitCanDoIds.has(item.id)).every((item) => item.status === 'validated'), true);
-  assert.equal(finalizedUnits.length, 1);
-  assert.equal(finalizedUnits[0].unitId, outline.unitId);
-  assert.equal(finalizedUnits[0].assessmentSubmissionId, 'submission-1');
-  assert.equal(finalizedUnits[0].lessonContentVersion, 1);
-  assert.equal(finalizedUnits[0].policyVersion, shared.LANGUAGE_MASTERY_POLICY_VERSION);
+  assert.equal(course.canDoMap.filter((item) => unitCanDoIds.has(item.id)).every((item) => item.status !== 'validated'), true);
+  assert.equal(finalizedUnits.length, 0);
+  assert.equal(masteryJournal.find((entry) => entry.event === 'start').scopeKind, 'unit_autonomy');
+  assert.deepEqual(
+    masteryJournal.find((entry) => entry.event === 'outcome').criteria,
+    [{ id: 'unit-autonomy-aggregate-non-credit', met: true, score: 0.9 }],
+  );
 });
 
-test('the real activation gate keeps the deployed RLLE path legacy while mandatory content is incomplete', async () => {
+test('autonomy start reconciles a bound journal after the course-state write is interrupted', async () => {
+  const runtime = harness({ failAutonomyActivePersistOnce: true });
+  const {
+    service, attempts, lessonExercises, masteryJournal, assessmentCreations,
+  } = runtime;
+  await service.startCourse('user-1', 'language-1', {
+    startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
+  });
+  const started = await service.startLesson('user-1', 'language-1', { unitId: 'a1-first-contact' });
+  const outline = started.course.currentLesson;
+  const stages = outline.stages.filter((item) => item.status !== 'skipped');
+  const verificationIndex = stages.findIndex((item) => item.kind === 'verification');
+  for (const stage of stages.slice(0, verificationIndex)) {
+    await service.advanceLesson('user-1', 'language-1', started.session.id, outline.lessonId, stage.kind);
+  }
+  for (let index = 0; index < lessonExercises.length; index += 1) {
+    if (lessonExercises[index].languageFormat === 'voice-pronunciation') continue;
+    attempts.push({
+      id: `recovery-attempt-${index}`,
+      userId: 'user-1',
+      lessonId: outline.lessonId,
+      contentVersion: 1,
+      exerciseIndex: index,
+      correct: true,
+      score: 1,
+      feedback: `Evaluated recovery answer ${index + 1}.`,
+      correction: 'Correct.',
+      createdAt: new Date(`2026-09-14T08:2${index}:00.000Z`),
+    });
+  }
+  await service.recordVoiceTraining(
+    'user-1',
+    'language-1',
+    { experienceSessionId: started.session.id, lessonId: outline.lessonId, exerciseIndex: 8 },
+    { buffer: Buffer.from('technical-audio'), mimetype: 'audio/webm', originalname: 'recovery.webm', size: 15 },
+    2,
+  );
+  for (const stage of stages.slice(verificationIndex)) {
+    await service.advanceLesson('user-1', 'language-1', started.session.id, outline.lessonId, stage.kind);
+  }
+
+  const request = {
+    experienceSessionId: started.session.id,
+    lessonId: outline.lessonId,
+    idempotencyKey: 'autonomy-recovery-0001',
+  };
+  await assert.rejects(
+    () => service.startAutonomy('user-1', 'language-1', request),
+    /persist interrupted/i,
+  );
+  const recovered = await service.startAutonomy('user-1', 'language-1', request);
+  assert.equal(recovered.assessment.id, 'assessment-1');
+  assert.equal(
+    recovered.course.milestoneMastery.find((item) => item.unitId === outline.unitId).status,
+    'autonomy-active',
+  );
+  assert.equal(assessmentCreations.length, 1);
+  assert.equal(masteryJournal.filter((entry) => entry.event === 'start').length, 1);
+  assert.equal(masteryJournal.filter((entry) => entry.event === 'bind').length, 1);
+});
+
+test('the real activation gate remains legacy until acoustic evidence and canonical publication are integrated', async () => {
   const { service } = harness({ useRealActivationGate: true });
   const started = await service.startCourse('user-1', 'language-1', {
     startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
@@ -465,7 +609,7 @@ test('feature-off lessons retain the deployed completion and finalizer flow', as
   assert.equal(Object.hasOwn(finalizedUnits[0], 'policyVersion'), false);
 });
 
-test('a rejected late-help finalizer never persists mastered progress or unlocks the next unit', async () => {
+test('an aggregate autonomy result never invokes the strict completion finalizer', async () => {
   const runtime = harness({ rejectFinalizer: true });
   const { service, attempts, lessonExercises, sessions } = runtime;
   await service.startCourse('user-1', 'language-1', {
@@ -502,15 +646,13 @@ test('a rejected late-help finalizer never persists mastered progress or unlocks
     lessonId: outline.lessonId,
     idempotencyKey: 'late-help-race-attempt',
   });
-  await assert.rejects(
-    () => service.submitAutonomy('user-1', 'language-1', {
-      experienceSessionId: started.session.id,
-      lessonId: outline.lessonId,
-      assessmentId: autonomy.assessment.id,
-      answers: ['One', 'Two', 'Three'],
-    }),
-    /late-help-finalizer-rejected/,
-  );
+  const evaluated = await service.submitAutonomy('user-1', 'language-1', {
+    experienceSessionId: started.session.id,
+    lessonId: outline.lessonId,
+    assessmentId: autonomy.assessment.id,
+    answers: ['One', 'Two', 'Three'],
+  });
+  assert.equal(evaluated.decision.verdict, 'mastered');
   const persisted = sessions.get(started.session.id);
   const state = persisted.currentStep.metadata.rlleCourse;
   assert.deepEqual(state.completedUnitIds, []);

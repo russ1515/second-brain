@@ -151,6 +151,7 @@ test('ensureVocabDeck re-reads and attaches the deck atomically under the owner 
   const service = new LanguageService(
     { $transaction: async (callback) => callback(tx) },
     {},
+    {},
   );
 
   const id = await service.ensureVocabDeck({ ...current });
@@ -167,6 +168,7 @@ test('ensureVocabDeck refuses a stale deleted profile before creating a deck', a
   };
   const service = new LanguageService(
     { $transaction: async (callback) => callback(tx) },
+    {},
     {},
   );
 

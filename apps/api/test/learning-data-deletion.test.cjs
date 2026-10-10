@@ -29,6 +29,10 @@ function fakePrisma(overrides = {}) {
       async findMany(args) { calls.push(['learningCompletion', 'findMany', args]); return []; },
       async deleteMany(args) { calls.push(['learningCompletion', 'deleteMany', args]); return { count: 0 }; },
     },
+    languageMasteryAttempt: {
+      async findMany(args) { calls.push(['languageMasteryAttempt', 'findMany', args]); return []; },
+      async deleteMany(args) { calls.push(['languageMasteryAttempt', 'deleteMany', args]); return { count: 0 }; },
+    },
     learningGoalLink: {
       async findMany(args) { calls.push(['learningGoalLink', 'findMany', args]); return []; },
     },
@@ -86,7 +90,10 @@ test('session preview and delete use exact links and hard-delete the exclusive g
     lesson: {
       async findMany() { return [{ id: 'lesson-a', sourceDocumentId: 'doc-a' }]; },
       async count() { return 0; },
-      async deleteMany() { return { count: 1 }; },
+      async deleteMany(args) {
+        prisma.calls.push(['lesson', 'deleteMany', args]);
+        return { count: 1 };
+      },
     },
     studySession: { async findMany() { return [{ id: 'study-a' }]; } },
     document: {
@@ -99,6 +106,29 @@ test('session preview and delete use exact links and hard-delete the exclusive g
     card: { async findMany() { return Array.from({ length: 8 }, (_, index) => ({ id: `card-${index}` })); } },
     recommendation: { async findMany() { return [{ id: 'recommendation-a' }]; } },
     academicWorkspace: { async findMany() { return []; } },
+    languageMasteryAttempt: {
+      async findMany(args) {
+        assert.equal(args.where.userId, 'user-a');
+        return [{ id: 'mastery-attempt-a' }];
+      },
+      async deleteMany(args) {
+        prisma.calls.push(['languageMasteryAttempt', 'deleteMany', args]);
+        return { count: 1 };
+      },
+    },
+    learningCompletion: {
+      async findMany(args) {
+        prisma.calls.push(['learningCompletion', 'findMany', args]);
+        assert.deepEqual(args.where.OR.at(-1), {
+          languageMasteryAttemptId: { in: ['mastery-attempt-a'] },
+        });
+        return [{ id: 'mastery-completion-a', cards: [], reviewables: [], goals: [] }];
+      },
+      async deleteMany(args) {
+        prisma.calls.push(['learningCompletion', 'deleteMany', args]);
+        return { count: 1 };
+      },
+    },
   });
   const { service, qdrantCalls, cacheCalls } = dependencies(prisma);
 
@@ -115,6 +145,16 @@ test('session preview and delete use exact links and hard-delete the exclusive g
   assert.deepEqual(qdrantCalls, [['document_chunks', 'doc-a']]);
   assert.ok(prisma.calls.some(([model, method]) => model === 'document' && method === 'updateMany'));
   assert.ok(prisma.calls.some(([model, method]) => model === 'document' && method === 'deleteMany'));
+  const masteryDeleteIndex = prisma.calls.findIndex(([model, method]) =>
+    model === 'languageMasteryAttempt' && method === 'deleteMany',
+  );
+  const lessonDeleteIndex = prisma.calls.findIndex(([model, method]) =>
+    model === 'lesson' && method === 'deleteMany',
+  );
+  assert.ok(masteryDeleteIndex >= 0 && masteryDeleteIndex < lessonDeleteIndex);
+  assert.deepEqual(prisma.calls[masteryDeleteIndex][2], {
+    where: { userId: 'user-a', id: { in: ['mastery-attempt-a'] } },
+  });
   const orphanGoalCleanup = prisma.calls.find(([model, method, args]) =>
     model === 'goal' && method === 'deleteMany' && args?.where?.id?.in,
   );
