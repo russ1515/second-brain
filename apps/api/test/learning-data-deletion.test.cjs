@@ -33,6 +33,14 @@ function fakePrisma(overrides = {}) {
       async findMany(args) { calls.push(['languageMasteryAttempt', 'findMany', args]); return []; },
       async deleteMany(args) { calls.push(['languageMasteryAttempt', 'deleteMany', args]); return { count: 0 }; },
     },
+    languageMasteryRemediationPlan: {
+      async findMany(args) { calls.push(['languageMasteryRemediationPlan', 'findMany', args]); return []; },
+      async deleteMany(args) { calls.push(['languageMasteryRemediationPlan', 'deleteMany', args]); return { count: 0 }; },
+    },
+    languageMasteryRemediationEvidence: {
+      async findMany(args) { calls.push(['languageMasteryRemediationEvidence', 'findMany', args]); return []; },
+      async deleteMany(args) { calls.push(['languageMasteryRemediationEvidence', 'deleteMany', args]); return { count: 0 }; },
+    },
     learningGoalLink: {
       async findMany(args) { calls.push(['learningGoalLink', 'findMany', args]); return []; },
     },
@@ -43,7 +51,10 @@ function fakePrisma(overrides = {}) {
     conceptDocument: model('conceptDocument', ['deleteMany']),
     tutorSession: model('tutorSession', ['deleteMany']),
     goal: model('goal', ['findFirst', 'deleteMany']),
-    async $executeRaw() { return 1; },
+    async $executeRaw(...args) {
+      calls.push(['$executeRaw', 'execute', args]);
+      return 1;
+    },
     async $transaction(fn) { return fn(prisma); },
   };
   for (const [name, methods] of Object.entries(overrides)) {
@@ -163,6 +174,167 @@ test('session preview and delete use exact links and hard-delete the exclusive g
 
   const retry = await service.deleteSession('user-a', 'session-a');
   assert.deepEqual(retry, { deleted: false, alreadyDeleted: true, preview: null });
+});
+
+test('deleting a remediation lesson purges its owner-scoped plan graph and is idempotent', async () => {
+  let lessonExists = true;
+  const prisma = fakePrisma({
+    lesson: {
+      async findFirst(args) {
+        assert.deepEqual(args.where, { id: 'lesson-remediation', userId: 'user-a' });
+        return lessonExists
+          ? { id: 'lesson-remediation', userId: 'user-a', topic: 'Targeted remediation' }
+          : null;
+      },
+      async findMany() {
+        return lessonExists
+          ? [{ id: 'lesson-remediation', sourceDocumentId: null, tutorSessionId: null }]
+          : [];
+      },
+      async deleteMany(args) {
+        prisma.calls.push(['lesson', 'deleteMany', args]);
+        lessonExists = false;
+        return { count: 1 };
+      },
+    },
+    experienceSession: { async findMany() { return []; } },
+    studySession: { async findMany() { return []; } },
+    homework: { async findMany() { return []; } },
+    reviewable: { async findMany() { return []; } },
+    tutorMessage: { async count() { return 0; } },
+    exerciseAttempt: { async count() { return 0; } },
+    card: { async findMany() { return []; } },
+    recommendation: { async findMany() { return []; } },
+    academicWorkspace: { async findMany() { return []; } },
+    languageMasteryAttempt: {
+      async findMany(args) {
+        assert.equal(args.where.userId, 'user-a');
+        return [];
+      },
+      async deleteMany(args) {
+        prisma.calls.push(['languageMasteryAttempt', 'deleteMany', args]);
+        return { count: 3 };
+      },
+    },
+    languageMasteryRemediationPlan: {
+      async findMany(args) {
+        prisma.calls.push(['languageMasteryRemediationPlan', 'findMany', args]);
+        assert.equal(args.where.userId, 'user-a');
+        const serialized = JSON.stringify(args.where.OR);
+        const rows = [{
+          id: 'plan-a',
+          failedAttemptId: 'attempt-failed',
+          retestAttempts: [{ id: 'attempt-retest-failed' }],
+        }];
+        if (serialized.includes('attempt-retest-failed')) {
+          rows.push({
+            id: 'plan-b',
+            failedAttemptId: 'attempt-retest-failed',
+            retestAttempts: [{ id: 'attempt-retest-final' }],
+          });
+        }
+        return rows;
+      },
+      async deleteMany(args) {
+        prisma.calls.push(['languageMasteryRemediationPlan', 'deleteMany', args]);
+        return { count: 2 };
+      },
+    },
+    languageMasteryRemediationEvidence: {
+      async findMany(args) {
+        prisma.calls.push(['languageMasteryRemediationEvidence', 'findMany', args]);
+        assert.equal(args.where.userId, 'user-a');
+        assert.deepEqual(args.where.OR[0], {
+          lessonId: { in: ['lesson-remediation'] },
+        });
+        return [{ id: 'evidence-a' }, { id: 'evidence-b' }];
+      },
+      async deleteMany(args) {
+        prisma.calls.push(['languageMasteryRemediationEvidence', 'deleteMany', args]);
+        return { count: 2 };
+      },
+    },
+    learningCompletion: {
+      async findMany(args) {
+        prisma.calls.push(['learningCompletion', 'findMany', args]);
+        assert.equal(args.where.userId, 'user-a');
+        assert.deepEqual(args.where.OR.at(-1), {
+          languageMasteryAttemptId: {
+            in: ['attempt-failed', 'attempt-retest-failed', 'attempt-retest-final'],
+          },
+        });
+        return [
+          { id: 'completion-a', cards: [], reviewables: [], goals: [] },
+          { id: 'completion-b', cards: [], reviewables: [], goals: [] },
+        ];
+      },
+      async deleteMany(args) {
+        prisma.calls.push(['learningCompletion', 'deleteMany', args]);
+        return { count: 2 };
+      },
+    },
+  });
+  const { service } = dependencies(prisma);
+
+  const preview = await service.previewLesson('user-a', 'lesson-remediation');
+  assert.equal(preview.counts.lessons, 1);
+  const planLookup = prisma.calls.find(([model, method]) =>
+    model === 'languageMasteryRemediationPlan' && method === 'findMany',
+  );
+  assert.ok(JSON.stringify(planLookup?.[2].where.OR).includes('remediationLessonId'));
+
+  const result = await service.deleteLesson('user-a', 'lesson-remediation');
+  assert.equal(result.deleted, true);
+  assert.ok(
+    prisma.calls.filter(([model, method]) =>
+      model === '$executeRaw' && method === 'execute',
+    ).length >= 2,
+  );
+
+  const completionDeleteIndex = prisma.calls.findIndex(([model, method]) =>
+    model === 'learningCompletion' && method === 'deleteMany',
+  );
+  const evidenceDeleteIndex = prisma.calls.findIndex(([model, method]) =>
+    model === 'languageMasteryRemediationEvidence' && method === 'deleteMany',
+  );
+  const planDeleteIndex = prisma.calls.findIndex(([model, method]) =>
+    model === 'languageMasteryRemediationPlan' && method === 'deleteMany',
+  );
+  const attemptDeleteIndex = prisma.calls.findIndex(([model, method]) =>
+    model === 'languageMasteryAttempt' && method === 'deleteMany',
+  );
+  const lessonDeleteIndex = prisma.calls.findIndex(([model, method]) =>
+    model === 'lesson' && method === 'deleteMany',
+  );
+  assert.ok(
+    completionDeleteIndex < evidenceDeleteIndex &&
+    evidenceDeleteIndex < planDeleteIndex &&
+    planDeleteIndex < attemptDeleteIndex &&
+    attemptDeleteIndex < lessonDeleteIndex,
+  );
+  assert.deepEqual(prisma.calls[completionDeleteIndex][2], {
+    where: { userId: 'user-a', id: { in: ['completion-a', 'completion-b'] } },
+  });
+  assert.deepEqual(prisma.calls[evidenceDeleteIndex][2], {
+    where: { userId: 'user-a', id: { in: ['evidence-a', 'evidence-b'] } },
+  });
+  assert.deepEqual(prisma.calls[planDeleteIndex][2], {
+    where: { userId: 'user-a', id: { in: ['plan-a', 'plan-b'] } },
+  });
+  assert.deepEqual(prisma.calls[attemptDeleteIndex][2], {
+    where: {
+      userId: 'user-a',
+      id: { in: ['attempt-failed', 'attempt-retest-failed', 'attempt-retest-final'] },
+    },
+  });
+
+  const deletionCallCount = prisma.calls.filter(([, method]) => method === 'deleteMany').length;
+  const retry = await service.deleteLesson('user-a', 'lesson-remediation');
+  assert.deepEqual(retry, { deleted: false, alreadyDeleted: true, preview: null });
+  assert.equal(
+    prisma.calls.filter(([, method]) => method === 'deleteMany').length,
+    deletionCallCount,
+  );
 });
 
 test('a source document referenced elsewhere is preserved and never purged', async () => {

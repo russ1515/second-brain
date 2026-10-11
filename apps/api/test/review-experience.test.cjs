@@ -8,6 +8,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { ReviewExperienceService } = require('../dist/flashcards/review-experience.service.js');
 const { FsrsEngine } = require('../dist/revision/fsrs-engine.js');
+const { RevisionEngineService } = require('../dist/revision/revision-engine.service.js');
+const { CalendarService } = require('../dist/calendar/calendar.service.js');
 
 const root = path.resolve(__dirname, '../../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
@@ -51,6 +53,66 @@ test('review home is honestly caught up when both existing engines have nothing 
   assert.equal(home.priorityItems.length, 0);
   assert.equal(home.plan.nextDueAt, null);
   assert.equal(home.resumableSession, null);
+});
+
+test('non-scheduled reviewables are excluded from review queues, actions, home and calendar', async () => {
+  const revisionQueries = [];
+  const revision = new RevisionEngineService({
+    reviewable: {
+      findMany: async (args) => {
+        revisionQueries.push(args.where);
+        return [];
+      },
+      findFirst: async (args) => {
+        revisionQueries.push(args.where);
+        return null;
+      },
+    },
+  }, {});
+  await revision.queue('owner-1');
+  await revision.due('owner-1');
+  await revision.forecasts('owner-1');
+  await assert.rejects(
+    revision.review('owner-1', 'reviewable-1', { rating: 3 }),
+    /not found/i,
+  );
+  assert.equal(revisionQueries.length, 4);
+  assert.ok(revisionQueries.every((where) => where.isScheduled === true));
+
+  const homeQueries = [];
+  const { service } = emptyFixture({
+    prisma: {
+      reviewable: {
+        count: async (args) => {
+          homeQueries.push(args.where);
+          return 0;
+        },
+        findFirst: async (args) => {
+          homeQueries.push(args.where);
+          return null;
+        },
+        findMany: async () => [],
+      },
+    },
+  });
+  await service.home('owner-1', {});
+  assert.equal(homeQueries.length, 4);
+  assert.ok(homeQueries.every((where) => where.isScheduled === true));
+
+  let calendarWhere;
+  const calendar = new CalendarService({
+    reviewable: {
+      findMany: async (args) => {
+        calendarWhere = args.where;
+        return [];
+      },
+    },
+    card: { groupBy: async () => [] },
+    calendarEvent: { findMany: async () => [] },
+  });
+  await calendar.view('owner-1');
+  assert.equal(calendarWhere.userId, 'owner-1');
+  assert.equal(calendarWhere.isScheduled, true);
 });
 
 test('target concept stays owner-scoped and reaches the bounded card queue', async () => {

@@ -9,9 +9,36 @@ const { LanguageService } = require('../dist/languages/language.service.js');
 
 function deletionFixture({ sharedDeck = false } = {}) {
   const userId = 'owner-1';
-  const profileId = 'language-1';
+  const profileId = 'language/profile 1';
   const deckId = 'deck-1';
   const calls = [];
+  const reviewables = [
+    { id: 'legacy-owned', userId, kind: 'language', refId: `${profileId}:unit-a1` },
+    {
+      id: 'canonical-owned',
+      userId,
+      kind: 'language',
+      refId: `language-mastery:${encodeURIComponent(profileId)}:milestone:a1`,
+    },
+    {
+      id: 'other-profile',
+      userId,
+      kind: 'language',
+      refId: 'language-mastery:language-2:milestone:a1',
+    },
+    {
+      id: 'other-owner',
+      userId: 'owner-2',
+      kind: 'language',
+      refId: `language-mastery:${encodeURIComponent(profileId)}:milestone:a1`,
+    },
+    {
+      id: 'other-kind',
+      userId,
+      kind: 'lesson',
+      refId: `${profileId}:unit-a1`,
+    },
+  ];
 
   const tx = {
     $executeRaw: async () => {
@@ -59,7 +86,14 @@ function deletionFixture({ sharedDeck = false } = {}) {
     reviewable: {
       deleteMany: async (args) => {
         calls.push(['reviewable-delete', args]);
-        return { count: 1 };
+        const prefixes = args.where.OR.map(({ refId }) => refId.startsWith);
+        const retained = reviewables.filter((row) => !(
+          row.userId === args.where.userId
+          && row.kind === args.where.kind
+          && prefixes.some((prefix) => row.refId.startsWith(prefix))
+        ));
+        reviewables.splice(0, reviewables.length, ...retained);
+        return { count: 2 };
       },
     },
     dailyPlanItem: {
@@ -136,6 +170,7 @@ function deletionFixture({ sharedDeck = false } = {}) {
     profileId,
     deckId,
     calls,
+    reviewables,
     service: new LanguageService(prisma, learningDeletions, masteryAttempts),
   };
 }
@@ -153,6 +188,28 @@ test('language deletion delegates linked learning purges, deletes the profile an
   assert.ok(fixture.calls.some((event) => event[0] === 'mastery-purge'
     && event[1] === fixture.userId && event[2] === fixture.profileId));
   assert.ok(fixture.calls.some(([event]) => event === 'profile-delete'));
+  assert.deepEqual(
+    fixture.calls.find(([event]) => event === 'reviewable-delete'),
+    ['reviewable-delete', {
+      where: {
+        userId: fixture.userId,
+        kind: 'language',
+        OR: [
+          { refId: { startsWith: `${fixture.profileId}:` } },
+          {
+            refId: {
+              startsWith: `language-mastery:${encodeURIComponent(fixture.profileId)}:`,
+            },
+          },
+        ],
+      },
+    }],
+  );
+  assert.deepEqual(
+    fixture.reviewables.map(({ id }) => id),
+    ['other-profile', 'other-owner', 'other-kind'],
+    'both owned profile prefixes must be purged without deleting legitimate reviewables',
+  );
   assert.deepEqual(
     fixture.calls.find(([event]) => event === 'deck-delete'),
     ['deck-delete', { where: { id: fixture.deckId, userId: fixture.userId } }],

@@ -47,7 +47,10 @@ export class LearningReportService {
           }),
         ]),
         this.prisma.assessmentSubmission.aggregate({
-          where: { userId },
+          where: {
+            userId,
+            OR: [{ masteryGenerationStatus: null }, { masteryGenerationStatus: 'ready' }],
+          },
           _count: { _all: true },
           _avg: { score: true },
         }),

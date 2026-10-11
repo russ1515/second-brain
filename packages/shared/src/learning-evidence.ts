@@ -17,13 +17,30 @@ export const LEARNING_EVIDENCE_DIMENSIONS = [
 ] as const;
 
 export type LearningEvidenceDimension = (typeof LEARNING_EVIDENCE_DIMENSIONS)[number];
-export type LearningCompletionKind = 'lesson' | 'language_unit';
+export type LearningCompletionKind =
+  | 'lesson'
+  | 'language_unit'
+  | 'language_milestone'
+  | 'language_pillar_exam';
 export type LearningEvidenceSourceKind =
   | 'exercise_attempt'
   | 'assessment_submission'
-  | 'language_capability';
+  | 'language_capability'
+  | 'language_mastery_attempt';
 
 const LANGUAGE_UNIT_REF_PREFIX = 'language-unit:';
+const LANGUAGE_MASTERY_REF_PREFIX = 'language-mastery:';
+
+export type LanguageMasteryCompletionScopeKind = 'milestone' | 'pillar_exam';
+
+export interface LanguageMasteryCompletionIdentity {
+  languageProfileId: string;
+  scopeKind: LanguageMasteryCompletionScopeKind;
+  scopeKey: string;
+  policyVersion: string;
+  masteryContentVersion: string | null;
+  contentDefinitionId: string | null;
+}
 
 /** A curriculum unit id is reused across target languages. Its canonical
  * completion identity must therefore include the owned language profile. */
@@ -37,6 +54,21 @@ export function languageUnitIdFromLearningRef(learningRefId: string): string {
   if (!learningRefId.startsWith(LANGUAGE_UNIT_REF_PREFIX)) return learningRefId;
   const separator = learningRefId.indexOf(':', LANGUAGE_UNIT_REF_PREFIX.length);
   return separator < 0 ? learningRefId : learningRefId.slice(separator + 1);
+}
+
+/** Canonical, profile-scoped identity for one publishable mastery target.
+ * Attempt ids are deliberately excluded so retries cannot award the same
+ * versioned scope twice. */
+export function languageMasteryLearningRef(input: LanguageMasteryCompletionIdentity): string {
+  const parts = [
+    input.languageProfileId,
+    input.scopeKind,
+    input.scopeKey,
+    input.policyVersion,
+    input.masteryContentVersion ?? '-',
+    input.contentDefinitionId ?? '-',
+  ].map((part) => encodeURIComponent(part));
+  return `${LANGUAGE_MASTERY_REF_PREFIX}${parts.join(':')}`;
 }
 
 export interface LearningCriterionResult {
@@ -68,14 +100,37 @@ export interface LearningCompletionResult {
   feedback: string | null;
 }
 
-export interface LearningCompletionProvenance {
+export interface StandardLearningCompletionProvenance {
   schemaVersion: 1;
   contentVersion: number;
-  evidenceSource: LearningEvidenceSourceKind;
+  evidenceSource: Exclude<LearningEvidenceSourceKind, 'language_mastery_attempt'>;
   evidenceRefIds: string[];
   experienceSessionId: string | null;
   evaluatedAt: string;
 }
+
+export interface LanguageMasteryCompletionProvenance {
+  schemaVersion: 2;
+  contentVersion: number;
+  evidenceSource: 'language_mastery_attempt';
+  /** Journal attempt first, then its immutable AssessmentSubmission. */
+  evidenceRefIds: [string, string];
+  experienceSessionId: string | null;
+  evaluatedAt: string;
+  languageMastery: {
+    scopeKind: LanguageMasteryCompletionScopeKind;
+    scopeKey: string;
+    targetId: string;
+    mappingVersion: string;
+    policyVersion: string;
+    masteryContentVersion: string | null;
+    contentDefinitionId: string | null;
+  };
+}
+
+export type LearningCompletionProvenance =
+  | StandardLearningCompletionProvenance
+  | LanguageMasteryCompletionProvenance;
 
 export interface LearningCompletionView {
   id: string;
@@ -103,6 +158,12 @@ export interface FinalizeLessonCompletionInput {
   goalIds?: string[];
   /** Optional explicit rubric output from the trusted server-side evaluator. */
   dimensions?: Partial<Record<LearningEvidenceDimension, number | null>>;
+}
+
+/** Internal server contract. The caller supplies only the owned journal id;
+ * verdict, score, provenance and identity are always reloaded server-side. */
+export interface FinalizeLanguageMasteryCompletionInput {
+  attemptId: string;
 }
 
 export interface FinalizeLegacyLanguageUnitCompletionInput {

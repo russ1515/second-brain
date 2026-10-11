@@ -53,6 +53,7 @@ export class CalendarService {
       this.prisma.reviewable.findMany({
         where: {
           userId,
+          isScheduled: true,
           due: { gte: start, lt: horizon },
           completionLinks: { some: { completion: { userId, status: 'verified' } } },
         },

@@ -9,8 +9,11 @@ import {
 import {
   LanguageMasteryAttemptStatus,
   LanguageMasteryAttemptVerdict,
+  LanguageMasteryRemediationPlanStatus,
   LanguageMasteryRemediationState,
   LanguageMasteryScopeKind,
+  LearningCompletionKind,
+  LearningCompletionStatus,
   Prisma,
 } from '@prisma/client';
 import {
@@ -21,6 +24,10 @@ import {
   LANGUAGE_MASTERY_THRESHOLD,
   LANGUAGE_TRAINING_FORMATS,
   RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+  RLLE_LANGUAGE_MASTERY_UNIT_MAP,
+  getRlleLevelPillarPlans,
+  languageMasteryLearningRef,
+  rlleMilestoneEvidenceScopeKey,
   toSupportedLanguage,
   type CefrLevel,
   type LanguageMasteryDecision,
@@ -29,6 +36,8 @@ import {
   type LanguageTrainingFormat,
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
+import { LearningCompletionService } from '../learning-evidence/learning-completion.service';
+import { accountDataLockKey } from '../common/account-data-lock';
 
 const MAX_KEY = 240;
 const MAX_SCOPE = 800;
@@ -38,6 +47,21 @@ type AttemptWithEvidence = Prisma.LanguageMasteryAttemptGetPayload<{
   include: {
     completion: { select: { id: true; status: true } };
     remediationEvidence: { orderBy: { recordedAt: 'asc' } };
+    failedRemediationPlan: {
+      select: {
+        id: true;
+        status: true;
+        remediationLessonId: true;
+        requiredExerciseCount: true;
+      };
+    };
+  };
+}>;
+
+type RemediationPlanWithEvidence = Prisma.LanguageMasteryRemediationPlanGetPayload<{
+  include: {
+    failedAttempt: { select: { attemptId: true; evaluatedAt: true } };
+    evidence: { orderBy: { recordedAt: 'asc' } };
   };
 }>;
 
@@ -59,6 +83,8 @@ export interface StartLanguageMasteryAttemptInput {
   languageCode: string;
   cefrLevel: CefrLevel;
   pillar: LanguageMasteryPillar | null;
+  /** Required only for a pillar retest after a durable, completed remediation. */
+  remediationPlanId?: string | null;
 }
 
 export interface LanguageMasteryAttemptCriterion {
@@ -82,6 +108,7 @@ export interface AppendNotEvaluableLanguageMasteryInput {
 
 export interface AppendLanguageMasteryRemediationInput {
   attemptId: string;
+  remediationPlanId: string;
   evidenceId: string;
   trainingFormat: LanguageTrainingFormat;
   state: LanguageTrainingEvidenceState;
@@ -95,9 +122,36 @@ export interface AppendLanguageMasteryRemediationInput {
   sourceRefId: string;
 }
 
+export interface StartLanguageMasteryRemediationPlanInput {
+  failedAttemptId: string;
+  idempotencyKey: string;
+}
+
+export interface BindLanguageMasteryRemediationLessonInput {
+  remediationPlanId: string;
+  lessonId: string;
+}
+
+export interface LanguageMasteryRemediationPlanProjection {
+  id: string;
+  failedAttemptId: string;
+  languageProfileId: string;
+  scopeKey: string;
+  targetId: string;
+  generationKey: string;
+  remediationLessonId: string | null;
+  requiredExerciseCount: typeof LANGUAGE_REMEDIATION_MINIMUM_EXERCISES;
+  completedExerciseCount: number;
+  evidenceCount: number;
+  status: 'preparing' | 'active' | 'ready_for_retest' | 'retest_started' | 'completed';
+  startedAt: string;
+  readyAt: string | null;
+}
+
 export interface LanguageMasteryAttemptProjection {
   id: string;
   attemptId: string;
+  idempotencyKey: string;
   scopeKind: 'unit_autonomy' | 'milestone' | 'pillar_exam';
   scopeKey: string;
   targetId: string;
@@ -106,10 +160,11 @@ export interface LanguageMasteryAttemptProjection {
   masteryContentVersion: string | null;
   contentDefinitionId: string | null;
   sourceContentVersion: number;
+  lessonId: string | null;
   languageCode: string;
   cefrLevel: string;
   pillar: string | null;
-  status: 'started' | 'assessment_bound' | 'evaluated';
+  status: 'started' | 'assessment_bound' | 'evaluated' | 'technical-error';
   verdict: 'mastered' | 'not-mastered' | 'not-evaluable' | null;
   rawScore: number | null;
   threshold: number;
@@ -121,9 +176,24 @@ export interface LanguageMasteryAttemptProjection {
   assessmentSubmissionId: string | null;
   completionId: string | null;
   remediation: {
+    planId: string | null;
+    status: 'preparing' | 'active' | 'ready_for_retest' | 'retest_started' | 'completed' | null;
+    lessonId: string | null;
     requiredExerciseCount: typeof LANGUAGE_REMEDIATION_MINIMUM_EXERCISES;
     completedExerciseCount: number;
     evidenceCount: number;
+    evidence: Array<{
+      id: string;
+      evidenceId: string;
+      trainingFormat: string;
+      state: 'completed' | 'not-evaluable';
+      lessonId: string;
+      sourceContentVersion: number;
+      exerciseIndex: number;
+      sourceKind: string;
+      sourceRefId: string;
+      recordedAt: string;
+    }>;
   } | null;
   startedAt: string;
   evaluatedAt: string | null;
@@ -139,7 +209,10 @@ export interface LanguageMasteryAttemptProjection {
  */
 @Injectable()
 export class LanguageMasteryAttemptService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly completions: LearningCompletionService,
+  ) {}
 
   async start(
     userId: string,
@@ -155,6 +228,7 @@ export class LanguageMasteryAttemptService {
     let row: AttemptWithEvidence;
     try {
       row = await this.prisma.$transaction(async (tx) => {
+        await this.lockOwner(tx, userId);
         await this.requireOwnedSources(tx, userId, normalized);
         const existing = await tx.languageMasteryAttempt.findUnique({
           where: { userId_attemptId: { userId, attemptId } },
@@ -164,6 +238,58 @@ export class LanguageMasteryAttemptService {
             throw new ConflictException('Language mastery idempotency key was already used for another scope.');
           }
           return this.withRelations(tx, existing.id);
+        }
+        if (normalized.scopeKind === 'pillar_exam') {
+          const latestFailure = await tx.languageMasteryAttempt.findFirst({
+            where: {
+              userId,
+              languageProfileId: normalized.languageProfileId,
+              scopeKind: LanguageMasteryScopeKind.pillar_exam,
+              scopeKey: normalized.scopeKey,
+              mappingVersion: normalized.mappingVersion,
+              policyVersion: normalized.policyVersion,
+              status: LanguageMasteryAttemptStatus.evaluated,
+              verdict: LanguageMasteryAttemptVerdict.not_mastered,
+            },
+            orderBy: [{ evaluatedAt: 'desc' }, { id: 'desc' }],
+            include: {
+              failedRemediationPlan: { select: { id: true, status: true } },
+            },
+          });
+          const unresolvedPlan = latestFailure?.failedRemediationPlan;
+          const unresolved = Boolean(
+            latestFailure
+            && (!unresolvedPlan || unresolvedPlan.status !== LanguageMasteryRemediationPlanStatus.completed),
+          );
+          if (
+            unresolved
+            && (
+              !normalized.remediationPlanId
+              || !unresolvedPlan
+              || normalized.remediationPlanId !== unresolvedPlan.id
+            )
+          ) {
+            throw new ConflictException(
+              'The latest failed pillar exam must complete its targeted remediation before a retest.',
+            );
+          }
+        }
+        if (normalized.remediationPlanId) {
+          const readyPlan = await tx.languageMasteryRemediationPlan.findFirst({
+            where: {
+              id: normalized.remediationPlanId,
+              userId,
+              languageProfileId: normalized.languageProfileId,
+              scopeKey: normalized.scopeKey,
+              status: LanguageMasteryRemediationPlanStatus.ready_for_retest,
+            },
+            select: { id: true },
+          });
+          if (!readyPlan) {
+            throw new ConflictException(
+              'A pillar retest requires a remediation plan with ten completed new exercises.',
+            );
+          }
         }
         const created = await tx.languageMasteryAttempt.create({
           data: {
@@ -180,6 +306,19 @@ export class LanguageMasteryAttemptService {
             threshold: LANGUAGE_MASTERY_THRESHOLD,
           },
         });
+        if (normalized.remediationPlanId) {
+          const linked = await tx.languageMasteryRemediationPlan.updateMany({
+            where: {
+              id: normalized.remediationPlanId,
+              userId,
+              status: LanguageMasteryRemediationPlanStatus.ready_for_retest,
+            },
+            data: { status: LanguageMasteryRemediationPlanStatus.retest_started },
+          });
+          if (linked.count !== 1) {
+            throw new ConflictException('Concurrent pillar retest already started.');
+          }
+        }
         return this.withRelations(tx, created.id);
       });
     } catch (error) {
@@ -201,6 +340,7 @@ export class LanguageMasteryAttemptService {
     assessmentId: string,
   ): Promise<LanguageMasteryAttemptProjection> {
     const row = await this.prisma.$transaction(async (tx) => {
+      await this.lockOwner(tx, userId);
       const attempt = await tx.languageMasteryAttempt.findFirst({ where: { userId, attemptId } });
       if (!attempt) throw new NotFoundException('Language mastery attempt not found.');
       if (attempt.assessmentId) {
@@ -214,12 +354,18 @@ export class LanguageMasteryAttemptService {
       }
       const assessment = await tx.assessment.findFirst({
         where: { id: assessmentId, userId },
-        select: { id: true, lessonId: true, contentVersion: true },
+        select: {
+          id: true,
+          lessonId: true,
+          contentVersion: true,
+          masteryCreationKey: true,
+        },
       });
       if (
         !assessment
         || assessment.lessonId !== attempt.lessonId
         || assessment.contentVersion !== attempt.sourceContentVersion
+        || assessment.masteryCreationKey !== attempt.attemptId
       ) {
         throw new NotFoundException('Versioned language mastery assessment not found.');
       }
@@ -255,7 +401,21 @@ export class LanguageMasteryAttemptService {
       select: { id: true },
     });
     if (!owned) throw new NotFoundException('Language mastery attempt not found.');
-    return this.project(await this.withRelations(this.prisma, owned.id));
+    const row = await this.withRelations(this.prisma, owned.id);
+    const projected = this.project(row);
+    if (projected.completionId || !this.isPublishableMasteryRow(row)) return projected;
+    const identity = this.canonicalCompletionIdentity(row);
+    if (!identity) return projected;
+    const completion = await this.prisma.learningCompletion.findFirst({
+      where: {
+        userId,
+        kind: identity.kind,
+        learningRefId: identity.learningRefId,
+        status: LearningCompletionStatus.verified,
+      },
+      select: { id: true },
+    });
+    return this.project(row, completion?.id ?? null);
   }
 
   async appendOutcome(
@@ -263,12 +423,17 @@ export class LanguageMasteryAttemptService {
     input: AppendLanguageMasteryOutcomeInput,
   ): Promise<LanguageMasteryAttemptProjection> {
     const row = await this.prisma.$transaction(async (tx) => {
+      await this.lockOwner(tx, userId);
       const attempt = await tx.languageMasteryAttempt.findFirst({
         where: { userId, attemptId: this.required(input.attemptId, 'attempt id', MAX_KEY) },
       });
       if (!attempt) throw new NotFoundException('Language mastery attempt not found.');
       const submission = await tx.assessmentSubmission.findFirst({
-        where: { id: this.required(input.assessmentSubmissionId, 'submission id', MAX_KEY), userId },
+        where: {
+          id: this.required(input.assessmentSubmissionId, 'submission id', MAX_KEY),
+          userId,
+          OR: [{ masteryGenerationStatus: null }, { masteryGenerationStatus: 'ready' }],
+        },
         include: { assessment: true },
       });
       if (
@@ -301,6 +466,7 @@ export class LanguageMasteryAttemptService {
         }
         return this.withRelations(tx, attempt.id);
       }
+      await this.requireResolvedPillarRemediationForSubmission(tx, userId, attempt);
       if (attempt.status !== LanguageMasteryAttemptStatus.assessment_bound) {
         throw new ConflictException('Language mastery assessment must be bound before evaluation.');
       }
@@ -334,6 +500,13 @@ export class LanguageMasteryAttemptService {
           throw new ConflictException('Concurrent language mastery outcome differs from this retry.');
         }
       }
+      await this.advanceRetestPlan(
+        tx,
+        userId,
+        attempt.remediationPlanId,
+        decision.verdict === 'not-evaluable',
+        evaluatedAt,
+      );
       return this.withRelations(tx, attempt.id);
     });
     return this.project(row);
@@ -347,6 +520,7 @@ export class LanguageMasteryAttemptService {
     input: AppendNotEvaluableLanguageMasteryInput,
   ): Promise<LanguageMasteryAttemptProjection> {
     const row = await this.prisma.$transaction(async (tx) => {
+      await this.lockOwner(tx, userId);
       const attempt = await tx.languageMasteryAttempt.findFirst({
         where: { userId, attemptId: this.required(input.attemptId, 'attempt id', MAX_KEY) },
       });
@@ -385,6 +559,7 @@ export class LanguageMasteryAttemptService {
         }
         return this.withRelations(tx, attempt.id);
       }
+      await this.requireResolvedPillarRemediationForSubmission(tx, userId, attempt);
       const updated = await tx.languageMasteryAttempt.updateMany({
         where: {
           id: attempt.id,
@@ -410,22 +585,223 @@ export class LanguageMasteryAttemptService {
           throw new ConflictException('Concurrent language mastery outcome differs from this retry.');
         }
       }
+      await this.advanceRetestPlan(tx, userId, attempt.remediationPlanId, true, evaluatedAt);
       return this.withRelations(tx, attempt.id);
     });
     return this.project(row);
   }
 
-  async linkPublishedCompletion(
+  async publishCompletion(
     userId: string,
     attemptId: string,
-    completionId: string,
   ): Promise<LanguageMasteryAttemptProjection> {
-    const attempt = await this.prisma.languageMasteryAttempt.findFirst({ where: { userId, attemptId } });
-    if (!attempt) throw new NotFoundException('Language mastery attempt not found.');
-    void completionId;
-    throw new UnprocessableEntityException(
-      'BLOCKED_CAPABILITY: the canonical completion contract cannot represent language milestone evidence.',
+    const completion = await this.completions.finalizeLanguageMastery(userId, {
+      attemptId: this.required(attemptId, 'attempt id', MAX_KEY),
+    });
+    const attempt = await this.get(userId, attemptId);
+    return { ...attempt, completionId: completion.id };
+  }
+
+  async startRemediationPlan(
+    userId: string,
+    input: StartLanguageMasteryRemediationPlanInput,
+  ): Promise<LanguageMasteryRemediationPlanProjection> {
+    const failedAttemptId = this.required(input.failedAttemptId, 'failed attempt id', MAX_KEY);
+    const idempotencyKey = this.required(input.idempotencyKey, 'idempotency key', MAX_KEY);
+    const failed = await this.prisma.languageMasteryAttempt.findFirst({
+      where: { userId, attemptId: failedAttemptId },
+    });
+    if (
+      !failed
+      || failed.scopeKind !== LanguageMasteryScopeKind.pillar_exam
+      || failed.status !== LanguageMasteryAttemptStatus.evaluated
+      || failed.verdict !== LanguageMasteryAttemptVerdict.not_mastered
+      || !failed.evaluatedAt
+    ) {
+      throw new UnprocessableEntityException(
+        'Targeted remediation requires an owned evaluated failed pillar exam.',
+      );
+    }
+    // A failed pillar has exactly one canonical remediation plan. Operation
+    // idempotency keys may differ between the automatic failure hook and the
+    // later user command, so they must not alter plan identity/provenance.
+    const generationKey = 'rlle-remediation:' + createHash('sha256')
+      .update([userId, failed.id].join(':'))
+      .digest('hex')
+      .slice(0, 32);
+    const startHash = this.hash({
+      userId,
+      failedAttemptId: failed.id,
+      generationKey,
+      scopeKey: failed.scopeKey,
+      targetId: failed.targetId,
+      mappingVersion: failed.mappingVersion,
+      policyVersion: failed.policyVersion,
+      masteryContentVersion: failed.masteryContentVersion,
+      requiredExerciseCount: LANGUAGE_REMEDIATION_MINIMUM_EXERCISES,
+    });
+    let plan: RemediationPlanWithEvidence;
+    try {
+      plan = await this.prisma.$transaction(async (tx) => {
+        await this.lockOwner(tx, userId);
+        const existing = await tx.languageMasteryRemediationPlan.findFirst({
+          where: { userId, failedAttemptId: failed.id },
+          include: {
+            failedAttempt: { select: { attemptId: true, evaluatedAt: true } },
+            evidence: { orderBy: { recordedAt: 'asc' } },
+          },
+        });
+        if (existing) {
+          if (existing.startHash !== startHash) {
+            throw new ConflictException('A different remediation plan already exists for this failure.');
+          }
+          return existing;
+        }
+        return tx.languageMasteryRemediationPlan.create({
+          data: {
+            userId,
+            languageProfileId: failed.languageProfileId,
+            failedAttemptId: failed.id,
+            idempotencyKey,
+            generationKey,
+            startHash,
+            scopeKey: failed.scopeKey,
+            targetId: failed.targetId,
+            mappingVersion: failed.mappingVersion,
+            policyVersion: failed.policyVersion,
+            masteryContentVersion: failed.masteryContentVersion,
+            requiredExerciseCount: LANGUAGE_REMEDIATION_MINIMUM_EXERCISES,
+            status: LanguageMasteryRemediationPlanStatus.preparing,
+          },
+          include: {
+            failedAttempt: { select: { attemptId: true, evaluatedAt: true } },
+            evidence: { orderBy: { recordedAt: 'asc' } },
+          },
+        });
+      });
+    } catch (error) {
+      if (!this.uniqueConflict(error)) throw error;
+      const concurrent = await this.prisma.languageMasteryRemediationPlan.findFirst({
+        where: { userId, failedAttemptId: failed.id },
+        include: {
+          failedAttempt: { select: { attemptId: true, evaluatedAt: true } },
+          evidence: { orderBy: { recordedAt: 'asc' } },
+        },
+      });
+      if (!concurrent || concurrent.startHash !== startHash) {
+        throw new ConflictException('Concurrent remediation plan differs from this retry.');
+      }
+      plan = concurrent;
+    }
+    return this.projectRemediationPlan(plan);
+  }
+
+  async bindRemediationLesson(
+    userId: string,
+    input: BindLanguageMasteryRemediationLessonInput,
+  ): Promise<LanguageMasteryRemediationPlanProjection> {
+    const remediationPlanId = this.required(
+      input.remediationPlanId,
+      'remediation plan id',
+      MAX_KEY,
     );
+    const lessonId = this.required(input.lessonId, 'lesson id', MAX_KEY);
+    const plan = await this.prisma.$transaction(async (tx) => {
+      await this.lockOwner(tx, userId);
+      const current = await tx.languageMasteryRemediationPlan.findFirst({
+        where: { id: remediationPlanId, userId },
+        include: {
+          failedAttempt: { select: { attemptId: true, evaluatedAt: true } },
+          evidence: { orderBy: { recordedAt: 'asc' } },
+        },
+      });
+      if (!current) throw new NotFoundException('Language remediation plan not found.');
+      if (current.remediationLessonId) {
+        if (current.remediationLessonId !== lessonId) {
+          throw new ConflictException('Remediation plan is already bound to another lesson.');
+        }
+        return current;
+      }
+      if (
+        current.status !== LanguageMasteryRemediationPlanStatus.preparing
+        || !current.failedAttempt.evaluatedAt
+      ) {
+        throw new ConflictException('Only a preparing remediation plan can bind a lesson.');
+      }
+      const lesson = await tx.lesson.findFirst({
+        where: { id: lessonId, userId, languageProfileId: current.languageProfileId },
+        select: {
+          id: true,
+          contentVersion: true,
+          exercises: true,
+          createdAt: true,
+          masteryRemediationGenerationKey: true,
+        },
+      });
+      if (
+        !lesson
+        || lesson.createdAt <= current.failedAttempt.evaluatedAt
+        || lesson.masteryRemediationGenerationKey !== current.generationKey
+      ) {
+        throw new NotFoundException('New owner-scoped remediation lesson not found.');
+      }
+      const declaredFormats = Array.isArray(lesson.exercises)
+        ? lesson.exercises.map((item) =>
+            item && typeof item === 'object' && !Array.isArray(item)
+              ? item.languageFormat
+              : null)
+        : [];
+      if (
+        declaredFormats.length < LANGUAGE_REMEDIATION_MINIMUM_EXERCISES
+        || !LANGUAGE_TRAINING_FORMATS.every((format) => declaredFormats.includes(format))
+      ) {
+        throw new UnprocessableEntityException(
+          'Targeted remediation requires ten new exercises covering every training format.',
+        );
+      }
+      const linked = await tx.languageMasteryRemediationPlan.updateMany({
+        where: {
+          id: current.id,
+          userId,
+          status: LanguageMasteryRemediationPlanStatus.preparing,
+          remediationLessonId: null,
+        },
+        data: {
+          remediationLessonId: lesson.id,
+          status: LanguageMasteryRemediationPlanStatus.active,
+          lessonBoundAt: new Date(),
+        },
+      });
+      if (linked.count !== 1) {
+        throw new ConflictException('Concurrent remediation lesson binding differs.');
+      }
+      return tx.languageMasteryRemediationPlan.findUniqueOrThrow({
+        where: { id: current.id },
+        include: {
+          failedAttempt: { select: { attemptId: true, evaluatedAt: true } },
+          evidence: { orderBy: { recordedAt: 'asc' } },
+        },
+      });
+    });
+    return this.projectRemediationPlan(plan);
+  }
+
+  async getRemediationPlan(
+    userId: string,
+    remediationPlanId: string,
+  ): Promise<LanguageMasteryRemediationPlanProjection> {
+    const plan = await this.prisma.languageMasteryRemediationPlan.findFirst({
+      where: {
+        id: this.required(remediationPlanId, 'remediation plan id', MAX_KEY),
+        userId,
+      },
+      include: {
+        failedAttempt: { select: { attemptId: true, evaluatedAt: true } },
+        evidence: { orderBy: { recordedAt: 'asc' } },
+      },
+    });
+    if (!plan) throw new NotFoundException('Language remediation plan not found.');
+    return this.projectRemediationPlan(plan);
   }
 
   async appendRemediationEvidence(
@@ -437,16 +813,28 @@ export class LanguageMasteryAttemptService {
     let row: AttemptWithEvidence;
     try {
       row = await this.prisma.$transaction(async (tx) => {
-      const attempt = await tx.languageMasteryAttempt.findFirst({
-        where: { userId, attemptId },
+      await this.lockOwner(tx, userId);
+      const plan = await tx.languageMasteryRemediationPlan.findFirst({
+        where: { id: evidence.remediationPlanId, userId },
+        include: { failedAttempt: true },
       });
+      const attempt = plan?.failedAttempt ?? null;
       if (
-        !attempt
+        !plan
+        || !attempt
+        || attempt.attemptId !== attemptId
         || attempt.scopeKind !== LanguageMasteryScopeKind.pillar_exam
         || attempt.status !== LanguageMasteryAttemptStatus.evaluated
         || attempt.verdict !== LanguageMasteryAttemptVerdict.not_mastered
+        || plan.remediationLessonId !== evidence.lessonId
+        || (
+          plan.status !== LanguageMasteryRemediationPlanStatus.active
+          && plan.status !== LanguageMasteryRemediationPlanStatus.ready_for_retest
+        )
       ) {
-        throw new UnprocessableEntityException('Targeted remediation requires an owned failed pillar exam.');
+        throw new UnprocessableEntityException(
+          'Targeted remediation evidence must belong to its durable failed-exam plan and lesson.',
+        );
       }
       const lesson = await tx.lesson.findFirst({
         where: { id: evidence.lessonId, userId },
@@ -511,7 +899,7 @@ export class LanguageMasteryAttemptService {
       const creditedExercise = await tx.languageMasteryRemediationEvidence.findFirst({
         where: {
           userId,
-          languageMasteryAttemptId: attempt.id,
+          remediationPlanId: plan.id,
           lessonId: evidence.lessonId,
           sourceContentVersion: evidence.sourceContentVersion,
           exerciseIndex: evidence.exerciseIndex,
@@ -533,15 +921,38 @@ export class LanguageMasteryAttemptService {
           evidenceHash,
         },
       });
+      const completedExerciseCount = await tx.languageMasteryRemediationEvidence.count({
+        where: {
+          userId,
+          remediationPlanId: plan.id,
+          state: LanguageMasteryRemediationState.completed,
+        },
+      });
+      if (completedExerciseCount >= LANGUAGE_REMEDIATION_MINIMUM_EXERCISES) {
+        await tx.languageMasteryRemediationPlan.updateMany({
+          where: {
+            id: plan.id,
+            userId,
+            status: LanguageMasteryRemediationPlanStatus.active,
+          },
+          data: {
+            status: LanguageMasteryRemediationPlanStatus.ready_for_retest,
+            readyAt: new Date(),
+          },
+        });
+      }
       return this.withRelations(tx, attempt.id);
       });
     } catch (error) {
       if (!this.uniqueConflict(error)) throw error;
       const attempt = await this.prisma.languageMasteryAttempt.findFirst({ where: { userId, attemptId } });
+      const plan = await this.prisma.languageMasteryRemediationPlan.findFirst({
+        where: { id: evidence.remediationPlanId, userId },
+      });
       const existing = await this.prisma.languageMasteryRemediationEvidence.findFirst({
         where: { userId, evidenceId: evidence.evidenceId },
       });
-      const evidenceHash = attempt
+      const evidenceHash = attempt && plan
         ? this.hash({
             languageMasteryAttemptId: attempt.id,
             scopeKey: attempt.scopeKey,
@@ -552,8 +963,10 @@ export class LanguageMasteryAttemptService {
         : null;
       if (
         !attempt
+        || !plan
         || !existing
         || existing.languageMasteryAttemptId !== attempt.id
+        || existing.remediationPlanId !== plan.id
         || existing.evidenceHash !== evidenceHash
       ) {
         throw new ConflictException('A remediation source can be credited only once.');
@@ -574,9 +987,126 @@ export class LanguageMasteryAttemptService {
       include: {
         completion: { select: { id: true, status: true } },
         remediationEvidence: { orderBy: { recordedAt: 'asc' } },
+        failedRemediationPlan: {
+          select: {
+            id: true,
+            status: true,
+            remediationLessonId: true,
+            requiredExerciseCount: true,
+          },
+        },
       },
     });
-    return rows.map((row) => this.project(row));
+    const identities = rows
+      .filter((row) => !row.completion && this.isPublishableMasteryRow(row))
+      .map((row) => this.canonicalCompletionIdentity(row))
+      .filter((identity): identity is NonNullable<typeof identity> => Boolean(identity));
+    const refs = [...new Set(identities.map((identity) => identity.learningRefId))];
+    const canonicalRows = refs.length > 0
+      ? await this.prisma.learningCompletion.findMany({
+          where: {
+            userId,
+            languageProfileId,
+            status: LearningCompletionStatus.verified,
+            kind: {
+              in: [
+                LearningCompletionKind.language_milestone,
+                LearningCompletionKind.language_pillar_exam,
+              ],
+            },
+            learningRefId: { in: refs },
+          },
+          select: { id: true, kind: true, learningRefId: true },
+        })
+      : [];
+    const completionByIdentity = new Map(
+      canonicalRows.map((completion) => [
+        `${completion.kind}:${completion.learningRefId}`,
+        completion.id,
+      ]),
+    );
+    return rows.map((row) => {
+      const identity = this.canonicalCompletionIdentity(row);
+      const completionId = identity
+        ? completionByIdentity.get(`${identity.kind}:${identity.learningRefId}`) ?? null
+        : null;
+      return this.project(row, completionId);
+    });
+  }
+
+  /** Recover the narrow crash window where the graded ExerciseAttempt was
+   * committed but the client did not reach the remediation-evidence route.
+   * Every candidate is revalidated by appendRemediationEvidence, so this
+   * helper cannot manufacture progress from lesson JSON or client state. */
+  async reconcileRemediationExerciseAttempts(
+    userId: string,
+    attemptId: string,
+  ): Promise<LanguageMasteryAttemptProjection> {
+    let attempt = await this.get(userId, attemptId);
+    const remediation = attempt.remediation;
+    if (
+      !attempt.evaluatedAt
+      || !remediation?.planId
+      || !remediation.lessonId
+      || remediation.status === 'completed'
+    ) return attempt;
+    const lesson = await this.prisma.lesson.findFirst({
+      where: {
+        id: remediation.lessonId,
+        userId,
+      },
+      select: {
+        id: true,
+        contentVersion: true,
+        exercises: true,
+      },
+    });
+    if (!lesson || !Array.isArray(lesson.exercises)) return attempt;
+    const evaluatedAt = new Date(attempt.evaluatedAt);
+    const sources = await this.prisma.exerciseAttempt.findMany({
+      where: {
+        userId,
+        lessonId: lesson.id,
+        contentVersion: lesson.contentVersion,
+        createdAt: { gt: evaluatedAt },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: {
+        id: true,
+        exerciseIndex: true,
+      },
+    });
+    const seenIndexes = new Set<number>();
+    for (const source of sources) {
+      if (seenIndexes.has(source.exerciseIndex)) continue;
+      seenIndexes.add(source.exerciseIndex);
+      const exercise = lesson.exercises[source.exerciseIndex];
+      const format = exercise && typeof exercise === 'object' && !Array.isArray(exercise)
+        ? exercise.languageFormat
+        : null;
+      if (!(LANGUAGE_TRAINING_FORMATS as readonly unknown[]).includes(format)) continue;
+      try {
+        attempt = await this.appendRemediationEvidence(userId, {
+          attemptId,
+          remediationPlanId: remediation.planId,
+          evidenceId: `exercise-attempt:${source.id}`,
+          trainingFormat: format as LanguageTrainingFormat,
+          state: 'completed',
+          lessonId: lesson.id,
+          sourceContentVersion: lesson.contentVersion,
+          exerciseIndex: source.exerciseIndex,
+          sourceKind: 'exercise-attempt',
+          sourceRefId: source.id,
+        });
+      } catch (error) {
+        // A concurrent recovery may have credited the same canonical exercise
+        // index first. Re-read the winner; all other validation failures remain
+        // visible and fail closed.
+        if (!(error instanceof ConflictException)) throw error;
+        attempt = await this.get(userId, attemptId);
+      }
+    }
+    return attempt;
   }
 
   /** Internal reset hook. Profile/user ownership is required; published proof
@@ -589,16 +1119,41 @@ export class LanguageMasteryAttemptService {
       await this.requireOwnedProfile(this.prisma, userId, languageProfileId);
     }
     return this.prisma.$transaction(async (tx) => {
+      await this.lockOwner(tx, userId);
       const where = { userId, ...(languageProfileId ? { languageProfileId } : {}) };
       const attemptIds = (await tx.languageMasteryAttempt.findMany({
         where,
         select: { id: true },
       })).map(({ id }) => id);
       if (attemptIds.length === 0) return { attempts: 0, completions: 0 };
+      const reviewableIds = (await tx.learningCompletionReviewable.findMany({
+        where: {
+          completion: {
+            userId,
+            languageMasteryAttemptId: { in: attemptIds },
+          },
+        },
+        select: { reviewableId: true },
+      })).map(({ reviewableId }) => reviewableId);
       const completions = await tx.learningCompletion.deleteMany({
         where: { userId, languageMasteryAttemptId: { in: attemptIds } },
       });
       const attempts = await tx.languageMasteryAttempt.deleteMany({ where });
+      if (reviewableIds.length > 0) {
+        // A published mastery target creates a Reviewable but no due schedule.
+        // Remove only untouched rows whose final completion link disappeared;
+        // a reviewed/shared row is user learning history and must survive.
+        await tx.reviewable.deleteMany({
+          where: {
+            id: { in: [...new Set(reviewableIds)] },
+            userId,
+            kind: 'language',
+            completionLinks: { none: {} },
+            reps: 0,
+            lastReview: null,
+          },
+        });
+      }
       return { attempts: attempts.count, completions: completions.count };
     });
   }
@@ -634,7 +1189,11 @@ export class LanguageMasteryAttemptService {
     if (Boolean(contentDefinitionId) !== Boolean(masteryContentVersion)) {
       throw new BadRequestException('Content definition and version must be provided together.');
     }
-    return {
+    const languageCode = toSupportedLanguage(
+      this.required(input.languageCode, 'language code', 16),
+    );
+    if (!languageCode) throw new BadRequestException('Unsupported language mastery language code.');
+    const normalized = {
       languageProfileId: this.required(input.languageProfileId, 'language profile id', MAX_KEY),
       experienceSessionId: input.experienceSessionId?.trim() || null,
       lessonId: input.lessonId?.trim() || null,
@@ -647,10 +1206,66 @@ export class LanguageMasteryAttemptService {
       masteryContentVersion,
       contentDefinitionId,
       sourceContentVersion: input.sourceContentVersion,
-      languageCode: this.required(input.languageCode, 'language code', 16).toLowerCase(),
+      languageCode,
       cefrLevel: input.cefrLevel,
       pillar: input.pillar,
+      remediationPlanId: input.remediationPlanId?.trim() || null,
     };
+    this.assertCanonicalScope(normalized);
+    return normalized;
+  }
+
+  private assertCanonicalScope(input: {
+    scopeKind: 'unit_autonomy' | 'milestone' | 'pillar_exam';
+    scopeKey: string;
+    targetId: string;
+    mappingVersion: string;
+    masteryContentVersion: string | null;
+    contentDefinitionId: string | null;
+    languageCode: string;
+    cefrLevel: CefrLevel;
+    pillar: LanguageMasteryPillar | null;
+  }): void {
+    if (input.scopeKind === 'unit_autonomy') return;
+    const canonicalLanguage = toSupportedLanguage(input.languageCode);
+    if (!canonicalLanguage) {
+      throw new BadRequestException('Language mastery scope uses an unsupported language code.');
+    }
+    if (input.scopeKind === 'milestone') {
+      const milestone = RLLE_LANGUAGE_MASTERY_UNIT_MAP
+        .flatMap((unit) => unit.milestones)
+        .find((candidate) => candidate.id === input.targetId);
+      if (
+        !milestone
+        || milestone.level !== input.cefrLevel
+        || milestone.pillar !== input.pillar
+        || milestone.contentVersion !== input.masteryContentVersion
+        || milestone.contentDefinitionId !== input.contentDefinitionId
+        || rlleMilestoneEvidenceScopeKey({ languageCode: canonicalLanguage, milestone }) !== input.scopeKey
+      ) {
+        throw new BadRequestException('Language milestone scope does not match the canonical mapping.');
+      }
+      return;
+    }
+    const plan = getRlleLevelPillarPlans(input.cefrLevel)
+      .find((candidate) => candidate.examId === input.targetId && candidate.pillar === input.pillar);
+    const expectedScope = [
+      RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+      input.languageCode,
+      input.cefrLevel,
+      input.pillar,
+      input.targetId,
+      'pillar-exam',
+    ].join(':');
+    if (
+      !plan
+      || !plan.contentReady
+      || input.masteryContentVersion !== null
+      || input.contentDefinitionId !== null
+      || input.scopeKey !== expectedScope
+    ) {
+      throw new BadRequestException('Language pillar-exam scope does not match the canonical plan.');
+    }
   }
 
   private async requireOwnedSources(
@@ -680,6 +1295,27 @@ export class LanguageMasteryAttemptService {
       });
       if (!lesson || lesson.contentVersion !== input.sourceContentVersion) {
         throw new NotFoundException('Owned versioned language lesson not found.');
+      }
+    }
+    if (input.remediationPlanId) {
+      if (input.scopeKind !== 'pillar_exam') {
+        throw new BadRequestException('Only a pillar exam can be linked to a remediation retest.');
+      }
+      const plan = await tx.languageMasteryRemediationPlan.findFirst({
+        where: { id: input.remediationPlanId, userId },
+        include: { failedAttempt: true },
+      });
+      if (
+        !plan
+        || plan.languageProfileId !== input.languageProfileId
+        || plan.scopeKey !== input.scopeKey
+        || plan.targetId !== input.targetId
+        || plan.mappingVersion !== input.mappingVersion
+        || plan.policyVersion !== input.policyVersion
+        || plan.masteryContentVersion !== input.masteryContentVersion
+        || plan.failedAttempt.pillar !== input.pillar
+      ) {
+        throw new NotFoundException('Owned compatible language remediation plan not found.');
       }
     }
   }
@@ -751,10 +1387,15 @@ export class LanguageMasteryAttemptService {
       }
     } else if (decision.rawScore !== null) {
       if (
-        decision.rawScore >= LANGUAGE_MASTERY_THRESHOLD
-        || decision.reason !== 'below-threshold'
+        decision.reason !== 'below-threshold'
+        || (
+          decision.rawScore >= LANGUAGE_MASTERY_THRESHOLD
+          && !criteria.some((criterion) => !criterion.met)
+        )
       ) {
-        throw new BadRequestException('A non-mastered scored attempt must be below the raw threshold.');
+        throw new BadRequestException(
+          'A non-mastered scored attempt must be below threshold or have an unmet canonical criterion.',
+        );
       }
     } else if (
       !['autonomy-assisted', 'autonomy-answer-leak'].includes(decision.reason)
@@ -801,6 +1442,11 @@ export class LanguageMasteryAttemptService {
       throw new BadRequestException('Remediation evidence requires a durable owned exercise attempt.');
     }
     return {
+      remediationPlanId: this.required(
+        input.remediationPlanId,
+        'remediation plan id',
+        MAX_KEY,
+      ),
       evidenceId: this.required(input.evidenceId, 'evidence id', MAX_KEY),
       trainingFormat: input.trainingFormat,
       state: input.state,
@@ -818,13 +1464,56 @@ export class LanguageMasteryAttemptService {
       include: {
         completion: { select: { id: true, status: true } },
         remediationEvidence: { orderBy: { recordedAt: 'asc' } },
+        failedRemediationPlan: {
+          select: {
+            id: true,
+            status: true,
+            remediationLessonId: true,
+            requiredExerciseCount: true,
+          },
+        },
       },
     });
   }
 
-  private project(row: AttemptWithEvidence): LanguageMasteryAttemptProjection {
+  private canonicalCompletionIdentity(row: AttemptWithEvidence): {
+    kind: LearningCompletionKind;
+    learningRefId: string;
+  } | null {
+    if (row.scopeKind === LanguageMasteryScopeKind.unit_autonomy) return null;
+    const scopeKind = row.scopeKind === LanguageMasteryScopeKind.milestone
+      ? 'milestone' as const
+      : 'pillar_exam' as const;
+    return {
+      kind: scopeKind === 'milestone'
+        ? LearningCompletionKind.language_milestone
+        : LearningCompletionKind.language_pillar_exam,
+      learningRefId: languageMasteryLearningRef({
+        languageProfileId: row.languageProfileId,
+        scopeKind,
+        scopeKey: row.scopeKey,
+        policyVersion: row.policyVersion,
+        masteryContentVersion: row.masteryContentVersion,
+        contentDefinitionId: row.contentDefinitionId,
+      }),
+    };
+  }
+
+  private isPublishableMasteryRow(row: AttemptWithEvidence): boolean {
+    return row.status === LanguageMasteryAttemptStatus.evaluated
+      && row.verdict === LanguageMasteryAttemptVerdict.mastered
+      && row.scopeKind !== LanguageMasteryScopeKind.unit_autonomy;
+  }
+
+  private project(
+    row: AttemptWithEvidence,
+    canonicalCompletionId: string | null = null,
+  ): LanguageMasteryAttemptProjection {
+    const planEvidence = row.failedRemediationPlan
+      ? row.remediationEvidence.filter((item) => item.remediationPlanId === row.failedRemediationPlan?.id)
+      : [];
     const completedExerciseCount = new Set(
-      row.remediationEvidence
+      planEvidence
         .filter((item) => item.state === LanguageMasteryRemediationState.completed)
         .map((item) => `${item.sourceKind}:${item.sourceRefId}`),
     ).size;
@@ -838,11 +1527,13 @@ export class LanguageMasteryAttemptService {
           : 'pillar_exam',
       scopeKey: row.scopeKey,
       targetId: row.targetId,
+      idempotencyKey: row.idempotencyKey,
       mappingVersion: row.mappingVersion,
       policyVersion: row.policyVersion,
       masteryContentVersion: row.masteryContentVersion,
       contentDefinitionId: row.contentDefinitionId,
       sourceContentVersion: row.sourceContentVersion,
+      lessonId: row.lessonId,
       languageCode: row.languageCode,
       cefrLevel: row.cefrLevel,
       pillar: row.pillar,
@@ -862,13 +1553,32 @@ export class LanguageMasteryAttemptService {
         : [],
       assessmentId: row.assessmentId,
       assessmentSubmissionId: row.assessmentSubmissionId,
-      completionId: row.completion?.status === 'verified' ? row.completion.id : null,
+      completionId: row.completion?.status === 'verified'
+        ? row.completion.id
+        : canonicalCompletionId,
       remediation: row.scopeKind === LanguageMasteryScopeKind.pillar_exam
         && row.verdict === LanguageMasteryAttemptVerdict.not_mastered
         ? {
+            planId: row.failedRemediationPlan?.id ?? null,
+            status: row.failedRemediationPlan?.status ?? null,
+            lessonId: row.failedRemediationPlan?.remediationLessonId ?? null,
             requiredExerciseCount: LANGUAGE_REMEDIATION_MINIMUM_EXERCISES,
             completedExerciseCount,
-            evidenceCount: row.remediationEvidence.length,
+            evidenceCount: planEvidence.length,
+            evidence: planEvidence.map((item) => ({
+              id: item.id,
+              evidenceId: item.evidenceId,
+              trainingFormat: item.trainingFormat,
+              state: item.state === LanguageMasteryRemediationState.completed
+                ? 'completed'
+                : 'not-evaluable',
+              lessonId: item.lessonId,
+              sourceContentVersion: item.sourceContentVersion,
+              exerciseIndex: item.exerciseIndex,
+              sourceKind: item.sourceKind,
+              sourceRefId: item.sourceRefId,
+              recordedAt: item.recordedAt.toISOString(),
+            })),
           }
         : null,
       startedAt: row.startedAt.toISOString(),
@@ -882,11 +1592,122 @@ export class LanguageMasteryAttemptService {
     return LanguageMasteryAttemptVerdict.not_evaluable;
   }
 
+  private projectRemediationPlan(
+    row: RemediationPlanWithEvidence,
+  ): LanguageMasteryRemediationPlanProjection {
+    const completedExerciseCount = new Set(
+      row.evidence
+        .filter((item) => item.state === LanguageMasteryRemediationState.completed)
+        .map((item) => `${item.lessonId}:${item.sourceContentVersion}:${item.exerciseIndex}`),
+    ).size;
+    return {
+      id: row.id,
+      failedAttemptId: row.failedAttempt.attemptId,
+      languageProfileId: row.languageProfileId,
+      scopeKey: row.scopeKey,
+      targetId: row.targetId,
+      generationKey: row.generationKey,
+      remediationLessonId: row.remediationLessonId,
+      requiredExerciseCount: LANGUAGE_REMEDIATION_MINIMUM_EXERCISES,
+      completedExerciseCount,
+      evidenceCount: row.evidence.length,
+      status: row.status,
+      startedAt: row.startedAt.toISOString(),
+      readyAt: row.readyAt?.toISOString() ?? null,
+    };
+  }
+
   private prismaRemediationState(state: LanguageTrainingEvidenceState): LanguageMasteryRemediationState {
     if (state === 'completed') return LanguageMasteryRemediationState.completed;
     if (state === 'incomplete') return LanguageMasteryRemediationState.incomplete;
     if (state === 'technical-error') return LanguageMasteryRemediationState.technical_error;
     return LanguageMasteryRemediationState.not_evaluable;
+  }
+
+  private async advanceRetestPlan(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    remediationPlanId: string | null,
+    retryableNeutral: boolean,
+    evaluatedAt: Date,
+  ): Promise<void> {
+    if (!remediationPlanId) return;
+    const desiredStatus = retryableNeutral
+      ? LanguageMasteryRemediationPlanStatus.ready_for_retest
+      : LanguageMasteryRemediationPlanStatus.completed;
+    const updated = await tx.languageMasteryRemediationPlan.updateMany({
+      where: {
+        id: remediationPlanId,
+        userId,
+        status: LanguageMasteryRemediationPlanStatus.retest_started,
+      },
+      data: {
+        status: desiredStatus,
+        ...(retryableNeutral ? {} : { completedAt: evaluatedAt }),
+      },
+    });
+    if (updated.count === 1) return;
+    const current = await tx.languageMasteryRemediationPlan.findFirst({
+      where: { id: remediationPlanId, userId },
+      select: { status: true },
+    });
+    if (current?.status !== desiredStatus) {
+      throw new ConflictException('The remediation retest state changed concurrently.');
+    }
+  }
+
+  /** Revalidate the latest durable pillar failure at evaluation time.
+   *
+   * Two pillar attempts may have been started before either result existed.
+   * Once one fails, the other pre-started attempt must not bypass the newly
+   * required targeted remediation merely because its start check happened
+   * earlier. The owner lock serialises this check with outcome persistence.
+   */
+  private async requireResolvedPillarRemediationForSubmission(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    attempt: {
+      id: string;
+      languageProfileId: string;
+      scopeKind: LanguageMasteryScopeKind;
+      scopeKey: string;
+      mappingVersion: string;
+      policyVersion: string;
+      remediationPlanId: string | null;
+    },
+  ): Promise<void> {
+    if (attempt.scopeKind !== LanguageMasteryScopeKind.pillar_exam) return;
+    const latestFailure = await tx.languageMasteryAttempt.findFirst({
+      where: {
+        userId,
+        languageProfileId: attempt.languageProfileId,
+        scopeKind: LanguageMasteryScopeKind.pillar_exam,
+        scopeKey: attempt.scopeKey,
+        mappingVersion: attempt.mappingVersion,
+        policyVersion: attempt.policyVersion,
+        status: LanguageMasteryAttemptStatus.evaluated,
+        verdict: LanguageMasteryAttemptVerdict.not_mastered,
+      },
+      orderBy: [{ evaluatedAt: 'desc' }, { id: 'desc' }],
+      include: {
+        failedRemediationPlan: { select: { id: true, status: true } },
+      },
+    });
+    if (!latestFailure || latestFailure.id === attempt.id) return;
+    if (
+      !latestFailure.failedRemediationPlan
+      || latestFailure.failedRemediationPlan.id !== attempt.remediationPlanId
+      || latestFailure.failedRemediationPlan.status !== LanguageMasteryRemediationPlanStatus.retest_started
+    ) {
+      throw new ConflictException(
+        'The latest failed pillar exam must complete its targeted remediation before submission.',
+      );
+    }
+  }
+
+  private async lockOwner(tx: Prisma.TransactionClient, userId: string): Promise<void> {
+    const lockKey = accountDataLockKey(userId);
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
   }
 
   private allCriteriaMet(value: Prisma.JsonValue | null): boolean {

@@ -251,6 +251,8 @@ function harness(options = {}) {
     },
     { supportsSynthesis: true, supportsAnalysis: true },
     {
+      projection: async () => [],
+      reconcileRemediationExerciseAttempts: async () => null,
       start: async (_userId, input) => {
         const attemptId = `journal:${input.idempotencyKey}`;
         const existing = masteryAttempts.get(attemptId);

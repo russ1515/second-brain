@@ -30,6 +30,8 @@ interface SessionDeletionPlan {
   homeworkIds: string[];
   documentIds: string[];
   completionIds: string[];
+  remediationEvidenceIds: string[];
+  remediationPlanIds: string[];
   masteryAttemptIds: string[];
   cardIds: string[];
   candidateGoalIds: string[];
@@ -379,7 +381,7 @@ export class LearningDataDeletionService {
         })
       : [];
     const homeworkIds = homeworkRows.map((row) => row.id);
-    const masteryAttemptRows = sessionIds.length || existingLessonIds.length
+    const directMasteryAttemptRows = sessionIds.length || existingLessonIds.length
       ? await db.languageMasteryAttempt.findMany({
           where: {
             userId,
@@ -391,16 +393,90 @@ export class LearningDataDeletionService {
           select: { id: true },
         })
       : [];
-    const masteryAttemptIds = masteryAttemptRows.map((row) => row.id);
-    const completionRows = sessionIds.length || existingLessonIds.length || masteryAttemptIds.length
+    const masteryAttemptIds = new Set(directMasteryAttemptRows.map((row) => row.id));
+    const remediationPlanIds = new Set<string>();
+
+    // A remediation lesson belongs to the complete failed-attempt -> plan ->
+    // retest chain. Its relation uses SET NULL so deleting only the lesson
+    // would otherwise preserve a detached plan. Expand the dependency graph to
+    // a fixed point because a retest can itself be the failed attempt of a
+    // subsequent remediation plan.
+    if (existingLessonIds.length || masteryAttemptIds.size) {
+      let graphExpanded = true;
+      while (graphExpanded) {
+        graphExpanded = false;
+        const attemptIds = [...masteryAttemptIds];
+        const planRows = await db.languageMasteryRemediationPlan.findMany({
+          where: {
+            userId,
+            OR: [
+              ...(existingLessonIds.length
+                ? [{ remediationLessonId: { in: existingLessonIds } }]
+                : []),
+              ...(attemptIds.length
+                ? [
+                    { failedAttemptId: { in: attemptIds } },
+                    { retestAttempts: { some: { id: { in: attemptIds } } } },
+                  ]
+                : []),
+            ],
+          },
+          select: {
+            id: true,
+            failedAttemptId: true,
+            retestAttempts: { select: { id: true } },
+          },
+        });
+        for (const row of planRows) {
+          if (!remediationPlanIds.has(row.id)) {
+            remediationPlanIds.add(row.id);
+            graphExpanded = true;
+          }
+          if (!masteryAttemptIds.has(row.failedAttemptId)) {
+            masteryAttemptIds.add(row.failedAttemptId);
+            graphExpanded = true;
+          }
+          for (const attempt of row.retestAttempts) {
+            if (!masteryAttemptIds.has(attempt.id)) {
+              masteryAttemptIds.add(attempt.id);
+              graphExpanded = true;
+            }
+          }
+        }
+      }
+    }
+    const masteryAttemptIdList = [...masteryAttemptIds];
+    const remediationPlanIdList = [...remediationPlanIds];
+    const remediationEvidenceRows =
+      existingLessonIds.length || masteryAttemptIdList.length || remediationPlanIdList.length
+      ? await db.languageMasteryRemediationEvidence.findMany({
+          where: {
+            userId,
+            OR: [
+              ...(existingLessonIds.length
+                ? [{ lessonId: { in: existingLessonIds } }]
+                : []),
+              ...(masteryAttemptIdList.length
+                ? [{ languageMasteryAttemptId: { in: masteryAttemptIdList } }]
+                : []),
+              ...(remediationPlanIdList.length
+                ? [{ remediationPlanId: { in: remediationPlanIdList } }]
+                : []),
+            ],
+          },
+          select: { id: true },
+        })
+      : [];
+    const remediationEvidenceIds = remediationEvidenceRows.map((row) => row.id);
+    const completionRows = sessionIds.length || existingLessonIds.length || masteryAttemptIdList.length
       ? await db.learningCompletion.findMany({
           where: {
             userId,
             OR: [
               ...(existingLessonIds.length ? [{ lessonId: { in: existingLessonIds } }] : []),
               ...(sessionIds.length ? [{ experienceSessionId: { in: sessionIds } }] : []),
-              ...(masteryAttemptIds.length
-                ? [{ languageMasteryAttemptId: { in: masteryAttemptIds } }]
+              ...(masteryAttemptIdList.length
+                ? [{ languageMasteryAttemptId: { in: masteryAttemptIdList } }]
                 : []),
             ],
           },
@@ -528,7 +604,9 @@ export class LearningDataDeletionService {
       homeworkIds,
       documentIds,
       completionIds,
-      masteryAttemptIds,
+      remediationEvidenceIds,
+      remediationPlanIds: remediationPlanIdList,
+      masteryAttemptIds: masteryAttemptIdList,
       cardIds,
       candidateGoalIds,
       reviewableIds,
@@ -593,6 +671,16 @@ export class LearningDataDeletionService {
         }
         if (freshPlan.completionIds.length) {
           await tx.learningCompletion.deleteMany({ where: { userId, id: { in: freshPlan.completionIds } } });
+        }
+        if (freshPlan.remediationEvidenceIds.length) {
+          await tx.languageMasteryRemediationEvidence.deleteMany({
+            where: { userId, id: { in: freshPlan.remediationEvidenceIds } },
+          });
+        }
+        if (freshPlan.remediationPlanIds.length) {
+          await tx.languageMasteryRemediationPlan.deleteMany({
+            where: { userId, id: { in: freshPlan.remediationPlanIds } },
+          });
         }
         if (freshPlan.masteryAttemptIds.length) {
           // A lesson/session deletion owns its Lot 2 journal and remediation

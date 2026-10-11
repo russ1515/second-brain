@@ -6,7 +6,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import type { Assessment, AssessmentSubmission } from '@prisma/client';
+import { Prisma, type Assessment, type AssessmentSubmission } from '@prisma/client';
 import type {
   AssessmentDifficulty,
   AssessmentSubmissionView,
@@ -24,7 +24,7 @@ import {
   resolveTeacherPolicy,
   teacherPolicyDirective,
 } from '@second-brain/shared';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
 import { localeDirective, resolveLocale } from '../common/learning-locale';
@@ -58,6 +58,10 @@ export interface LanguageMasteryAssessmentMetadata {
   unitId: string;
   lessonId: string;
   attemptId: string;
+  /** Canonical criterion attached to each generated question, in question order.
+   * This is server-authored and lets pillar decisions use rubric facts instead
+   * of copying a global score onto every competency. */
+  criterionIds: string[];
   helpUsed: boolean;
   answerLeak: boolean;
   /** Once a graded submission is sealed, help/leak flags can no longer race
@@ -66,12 +70,20 @@ export interface LanguageMasteryAssessmentMetadata {
   createdAt: string;
 }
 
+const MASTERY_CLAIM_STALE_MS = 2 * 60 * 1000;
+const MASTERY_CLAIM_WAIT_ATTEMPTS = 300;
+const MASTERY_CLAIM_WAIT_MS = 100;
+
 export interface InternalAssessmentCreateOptions {
   /** Trusted server directive; never accepted from a public DTO. */
   directive?: string;
   languageMastery?: Omit<LanguageMasteryAssessmentMetadata, 'helpUsed' | 'answerLeak' | 'sealedAt' | 'createdAt'>;
   lessonId?: string;
   contentVersion?: number;
+  /** Stable server-only key for a language-mastery assessment. It closes the
+   * crash window between Assessment creation and journal binding: an exact
+   * retry reuses the persisted assessment instead of generating another one. */
+  masteryCreationKey?: string;
 }
 
 const EXAMINER_PERSONA =
@@ -156,6 +168,9 @@ export class ExaminerService {
     if (internal.languageMastery && type !== 'open') {
       throw new BadRequestException('Language autonomy assessments must use open production questions.');
     }
+    if (internal.masteryCreationKey && !internal.languageMastery) {
+      throw new BadRequestException('A mastery creation key requires language mastery metadata.');
+    }
     if (internal.lessonId) {
       const lesson = await this.prisma.lesson.findFirst({
         where: { id: internal.lessonId, userId },
@@ -169,6 +184,27 @@ export class ExaminerService {
       brief.fixedCount ??
       Math.min(20, Math.max(1, dto.questionCount ?? brief.defaultCount));
 
+    const masteryCreationKey = internal.masteryCreationKey?.trim() || null;
+    if (masteryCreationKey && masteryCreationKey.length > 240) {
+      throw new BadRequestException('Invalid language mastery creation key.');
+    }
+    const validatedMastery = internal.languageMastery
+      ? this.validateLanguageMasteryMetadata(internal.languageMastery)
+      : null;
+    const masteryCreationHash = masteryCreationKey
+      ? createHash('sha256').update(JSON.stringify({
+          userId,
+          type,
+          topic,
+          difficulty,
+          count,
+          conceptId: dto.conceptId ?? null,
+          lessonId: internal.lessonId ?? null,
+          contentVersion: internal.contentVersion ?? null,
+          languageMastery: validatedMastery,
+          directive: internal.directive ?? null,
+        })).digest('hex')
+      : null;
     const locale = await resolveLocale(this.prisma, userId);
     const teacherPreferences = await this.loadTeacherPreferences(userId);
     const teacherPolicy = resolveTeacherPolicy(teacherPreferences, {
@@ -177,6 +213,38 @@ export class ExaminerService {
       difficulty,
       assessment: true,
     });
+    if (masteryCreationKey && masteryCreationHash && validatedMastery) {
+      const claimed = await this.claimMasteryAssessment(userId, {
+        type,
+        topic,
+        difficulty,
+        conceptId: dto.conceptId ?? null,
+        lessonId: internal.lessonId ?? null,
+        contentVersion: internal.contentVersion ?? null,
+        masteryCreationKey,
+        masteryCreationHash,
+        teacherPolicy,
+        languageMastery: validatedMastery,
+      });
+      if (!claimed.ownsClaim) {
+        return this.waitForMasteryAssessment(userId, claimed.assessment.id, masteryCreationHash);
+      }
+      return this.completeMasteryAssessmentClaim(
+        userId,
+        claimed.assessment,
+        masteryCreationHash,
+        type,
+        topic,
+        difficulty,
+        count,
+        brief,
+        locale,
+        teacherPolicy,
+        internal.directive,
+        validatedMastery,
+      );
+    }
+
     const questions = await this.generate(
       type,
       topic,
@@ -194,41 +262,237 @@ export class ExaminerService {
       );
     }
 
-    const assessment = await this.prisma.assessment.create({
-      data: {
-        userId,
-        type,
-        topic,
-        title: this.titleFor(type, topic),
-        level: difficulty,
-        conceptId: dto.conceptId ?? null,
-        lessonId: internal.lessonId ?? null,
-        contentVersion: internal.contentVersion ?? null,
-        questions: {
-          version: 2,
-          teacherPolicy,
-          questions,
-          ...(internal.languageMastery ? {
+    let assessment: Assessment;
+    try {
+      assessment = await this.prisma.assessment.create({
+        data: {
+          userId,
+          type,
+          topic,
+          title: this.titleFor(type, topic),
+          level: difficulty,
+          conceptId: dto.conceptId ?? null,
+          lessonId: internal.lessonId ?? null,
+          contentVersion: internal.contentVersion ?? null,
+          masteryCreationKey: null,
+          masteryCreationHash: null,
+          questions: {
+            version: 2,
+            teacherPolicy,
+            questions,
+            ...(validatedMastery ? {
+              languageMastery: {
+                ...validatedMastery,
+                helpUsed: false,
+                answerLeak: false,
+                sealedAt: null,
+                createdAt: new Date().toISOString(),
+              },
+            } : {}),
+          } as unknown as object,
+        },
+      });
+    } catch (error) {
+      throw error;
+    }
+    return this.toView(assessment, null);
+  }
+
+  private async claimMasteryAssessment(
+    userId: string,
+    input: {
+      type: AssessmentType;
+      topic: string;
+      difficulty: AssessmentDifficulty;
+      conceptId: string | null;
+      lessonId: string | null;
+      contentVersion: number | null;
+      masteryCreationKey: string;
+      masteryCreationHash: string;
+      teacherPolicy: TeacherPolicySnapshot;
+      languageMastery: Omit<LanguageMasteryAssessmentMetadata, 'helpUsed' | 'answerLeak' | 'sealedAt' | 'createdAt'>;
+    },
+  ): Promise<{ assessment: Assessment; ownsClaim: boolean }> {
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const existing = await tx.assessment.findFirst({
+        where: { userId, masteryCreationKey: input.masteryCreationKey },
+      });
+      if (existing) {
+        if (existing.masteryCreationHash !== input.masteryCreationHash) {
+          throw new ConflictException(
+            'Language mastery assessment creation key was already used with different input.',
+          );
+        }
+        if (existing.masteryGenerationStatus === 'ready' || existing.masteryGenerationStatus === null) {
+          return { assessment: existing, ownsClaim: false };
+        }
+        const stale = !existing.masteryGenerationClaimedAt
+          || Date.now() - existing.masteryGenerationClaimedAt.getTime() >= MASTERY_CLAIM_STALE_MS;
+        if (existing.masteryGenerationStatus === 'failed' || stale) {
+          const claimed = await tx.assessment.update({
+            where: { id: existing.id },
+            data: {
+              masteryGenerationStatus: 'generating',
+              masteryGenerationClaimedAt: new Date(),
+            },
+          });
+          return { assessment: claimed, ownsClaim: true };
+        }
+        return { assessment: existing, ownsClaim: false };
+      }
+
+      const assessment = await tx.assessment.create({
+        data: {
+          userId,
+          type: input.type,
+          topic: input.topic,
+          title: this.titleFor(input.type, input.topic),
+          level: input.difficulty,
+          conceptId: input.conceptId,
+          lessonId: input.lessonId,
+          contentVersion: input.contentVersion,
+          masteryCreationKey: input.masteryCreationKey,
+          masteryCreationHash: input.masteryCreationHash,
+          masteryGenerationStatus: 'generating',
+          masteryGenerationClaimedAt: new Date(),
+          questions: {
+            version: 2,
+            teacherPolicy: input.teacherPolicy,
+            questions: [],
             languageMastery: {
-              ...this.validateLanguageMasteryMetadata(internal.languageMastery),
+              ...input.languageMastery,
               helpUsed: false,
               answerLeak: false,
               sealedAt: null,
               createdAt: new Date().toISOString(),
             },
-          } : {}),
-        } as unknown as object,
-      },
+          } as unknown as object,
+        },
+      });
+      return { assessment, ownsClaim: true };
     });
-    return this.toView(assessment, null);
+  }
+
+  private async completeMasteryAssessmentClaim(
+    userId: string,
+    assessment: Assessment,
+    masteryCreationHash: string,
+    type: AssessmentType,
+    topic: string,
+    difficulty: AssessmentDifficulty,
+    count: number,
+    brief: (typeof TYPE_BRIEF)[AssessmentType],
+    locale: string,
+    teacherPolicy: TeacherPolicySnapshot,
+    directive: string | undefined,
+    languageMastery: Omit<LanguageMasteryAssessmentMetadata, 'helpUsed' | 'answerLeak' | 'sealedAt' | 'createdAt'>,
+  ): Promise<AssessmentView> {
+    const claimToken = assessment.masteryGenerationClaimedAt;
+    if (!claimToken) throw new ConflictException('Language mastery generation claim is missing.');
+    try {
+      const questions = await this.generate(
+        type,
+        topic,
+        difficulty,
+        count,
+        brief,
+        locale,
+        teacherPolicy,
+        directive,
+        true,
+      );
+      if (questions.length === 0) {
+        throw new ServiceUnavailableException(
+          'The examiner could not draft that assessment. Please try again.',
+        );
+      }
+      const existingPayload = this.readPayload(assessment.questions);
+      const finalized = await this.prisma.assessment.updateMany({
+        where: {
+          id: assessment.id,
+          userId,
+          masteryCreationHash,
+          masteryGenerationStatus: 'generating',
+          masteryGenerationClaimedAt: claimToken,
+        },
+        data: {
+          masteryGenerationStatus: 'ready',
+          masteryGenerationClaimedAt: null,
+          questions: {
+            version: 2,
+            teacherPolicy,
+            questions,
+            languageMastery: existingPayload.languageMastery ?? {
+              ...languageMastery,
+              helpUsed: false,
+              answerLeak: false,
+              sealedAt: null,
+              createdAt: assessment.createdAt.toISOString(),
+            },
+          } as unknown as object,
+        },
+      });
+      if (finalized.count !== 1) {
+        return this.waitForMasteryAssessment(userId, assessment.id, masteryCreationHash);
+      }
+      const updated = await this.prisma.assessment.findFirst({
+        where: { id: assessment.id, userId, masteryCreationHash, masteryGenerationStatus: 'ready' },
+      });
+      if (!updated) throw new ConflictException('Finalized language mastery assessment is unavailable.');
+      return this.toView(updated, null);
+    } catch (error) {
+      await this.prisma.assessment.updateMany({
+        where: {
+          id: assessment.id,
+          userId,
+          masteryCreationHash,
+          masteryGenerationStatus: 'generating',
+          masteryGenerationClaimedAt: claimToken,
+        },
+        data: { masteryGenerationStatus: 'failed', masteryGenerationClaimedAt: null },
+      });
+      throw error;
+    }
+  }
+
+  private async waitForMasteryAssessment(
+    userId: string,
+    assessmentId: string,
+    masteryCreationHash: string,
+  ): Promise<AssessmentView> {
+    for (let attempt = 0; attempt < MASTERY_CLAIM_WAIT_ATTEMPTS; attempt += 1) {
+      const assessment = await this.prisma.assessment.findFirst({
+        where: { id: assessmentId, userId, masteryCreationHash },
+      });
+      if (!assessment) throw new NotFoundException('Assessment not found.');
+      if (assessment.masteryGenerationStatus === 'ready' || assessment.masteryGenerationStatus === null) {
+        return this.toView(assessment, null);
+      }
+      if (assessment.masteryGenerationStatus === 'failed') {
+        throw new ServiceUnavailableException(
+          'The examiner could not draft that assessment. Please retry with the same key.',
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, MASTERY_CLAIM_WAIT_MS));
+    }
+    throw new ConflictException('Language mastery assessment generation is still in progress.');
   }
 
   async list(userId: string): Promise<AssessmentSummary[]> {
     const rows = await this.prisma.assessment.findMany({
-      where: { userId },
+      where: {
+        userId,
+        OR: [{ masteryGenerationStatus: null }, { masteryGenerationStatus: 'ready' }],
+      },
       orderBy: { createdAt: 'desc' },
       include: {
-        submissions: { orderBy: { createdAt: 'desc' }, take: 1 },
+        submissions: {
+          where: { OR: [{ masteryGenerationStatus: null }, { masteryGenerationStatus: 'ready' }] },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
       },
     });
     return rows.map((a) => {
@@ -248,7 +512,10 @@ export class ExaminerService {
   async get(userId: string, id: string): Promise<AssessmentView> {
     const assessment = await this.requireOwned(userId, id);
     const latest = await this.prisma.assessmentSubmission.findFirst({
-      where: { assessmentId: id },
+      where: {
+        assessmentId: id,
+        OR: [{ masteryGenerationStatus: null }, { masteryGenerationStatus: 'ready' }],
+      },
       orderBy: { createdAt: 'desc' },
     });
     return this.toView(assessment, latest);
@@ -290,7 +557,11 @@ export class ExaminerService {
         throw new NotFoundException('Assessment not found.');
       }
       const submission = await tx.assessmentSubmission.findFirst({
-        where: { assessmentId: id, userId },
+        where: {
+          assessmentId: id,
+          userId,
+          OR: [{ masteryGenerationStatus: null }, { masteryGenerationStatus: 'ready' }],
+        },
         select: { id: true },
       });
       if (!submission) {
@@ -393,10 +664,193 @@ export class ExaminerService {
     return this.toSubmissionView(submission);
   }
 
+  async submitLanguageMasteryOnce(
+    userId: string,
+    id: string,
+    attemptId: string,
+    answers: string[],
+  ): Promise<AssessmentSubmissionView> {
+    const assessment = await this.requireOwned(userId, id);
+    const payload = this.readPayload(assessment.questions);
+    if (!payload.languageMastery || payload.languageMastery.attemptId !== attemptId) {
+      throw new BadRequestException('Assessment does not belong to this language mastery attempt.');
+    }
+    if (
+      answers.length !== payload.questions.length
+      || answers.some((answer) => typeof answer !== 'string' || !answer.trim())
+    ) {
+      throw new BadRequestException('Every autonomous production must be completed before submission.');
+    }
+    const teacherPolicy = payload.teacherPolicy ?? resolveTeacherPolicy(null, {
+      mode: assessment.type === 'oral' ? 'oral_exam' : 'exam',
+      intent: 'assessment',
+      difficulty: this.asDifficulty(assessment.level),
+      assessment: true,
+    });
+    const submissionKey = `language-mastery:${attemptId}`;
+    const submissionHash = createHash('sha256').update(JSON.stringify({
+      userId,
+      assessmentId: id,
+      attemptId,
+      answers: answers.map((answer) => answer.trim()),
+    })).digest('hex');
+    const claim = await this.claimMasterySubmission(
+      userId,
+      assessment,
+      submissionKey,
+      submissionHash,
+      answers,
+    );
+    if (!claim.ownsClaim) {
+      return this.waitForMasterySubmission(userId, claim.submission.id, submissionHash);
+    }
+    const claimToken = claim.submission.masteryGenerationClaimedAt;
+    if (!claimToken) throw new ConflictException('Language mastery grading claim is missing.');
+    try {
+      const locale = await resolveLocale(this.prisma, userId);
+      const graded = await this.grade(
+        assessment,
+        payload.questions,
+        answers,
+        locale,
+        teacherPolicy,
+      );
+      const finalized = await this.prisma.assessmentSubmission.updateMany({
+        where: {
+          id: claim.submission.id,
+          userId,
+          masterySubmissionHash: submissionHash,
+          masteryGenerationStatus: 'grading',
+          masteryGenerationClaimedAt: claimToken,
+        },
+        data: {
+          score: graded.score,
+          results: graded.results as unknown as object,
+          summary: graded.summary,
+          advice: graded.advice,
+          masteryGenerationStatus: 'ready',
+          masteryGenerationClaimedAt: null,
+        },
+      });
+      if (finalized.count !== 1) {
+        return this.waitForMasterySubmission(userId, claim.submission.id, submissionHash);
+      }
+      const submission = await this.prisma.assessmentSubmission.findFirst({
+        where: {
+          id: claim.submission.id,
+          userId,
+          masterySubmissionHash: submissionHash,
+          masteryGenerationStatus: 'ready',
+        },
+      });
+      if (!submission) throw new ConflictException('Finalized mastery submission is unavailable.');
+      return this.toSubmissionView(submission);
+    } catch (error) {
+      await this.prisma.assessmentSubmission.updateMany({
+        where: {
+          id: claim.submission.id,
+          userId,
+          masterySubmissionHash: submissionHash,
+          masteryGenerationStatus: 'grading',
+          masteryGenerationClaimedAt: claimToken,
+        },
+        data: { masteryGenerationStatus: 'failed', masteryGenerationClaimedAt: null },
+      });
+      throw error;
+    }
+  }
+
+  private async claimMasterySubmission(
+    userId: string,
+    assessment: Assessment,
+    submissionKey: string,
+    submissionHash: string,
+    answers: string[],
+  ): Promise<{ submission: AssessmentSubmission; ownsClaim: boolean }> {
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const existing = await tx.assessmentSubmission.findFirst({
+        where: { userId, masterySubmissionKey: submissionKey },
+      });
+      if (existing) {
+        if (
+          existing.assessmentId !== assessment.id
+          || existing.masterySubmissionHash !== submissionHash
+        ) {
+          throw new ConflictException(
+            'Language mastery submission key was already used with different answers.',
+          );
+        }
+        if (existing.masteryGenerationStatus === 'ready' || existing.masteryGenerationStatus === null) {
+          return { submission: existing, ownsClaim: false };
+        }
+        const stale = !existing.masteryGenerationClaimedAt
+          || Date.now() - existing.masteryGenerationClaimedAt.getTime() >= MASTERY_CLAIM_STALE_MS;
+        if (existing.masteryGenerationStatus === 'failed' || stale) {
+          const claimed = await tx.assessmentSubmission.update({
+            where: { id: existing.id },
+            data: {
+              masteryGenerationStatus: 'grading',
+              masteryGenerationClaimedAt: new Date(),
+            },
+          });
+          return { submission: claimed, ownsClaim: true };
+        }
+        return { submission: existing, ownsClaim: false };
+      }
+      const submission = await tx.assessmentSubmission.create({
+        data: {
+          assessmentId: assessment.id,
+          userId,
+          answers: answers as unknown as object,
+          score: 0,
+          results: [] as unknown as object,
+          summary: '',
+          advice: '',
+          masterySubmissionKey: submissionKey,
+          masterySubmissionHash: submissionHash,
+          masteryGenerationStatus: 'grading',
+          masteryGenerationClaimedAt: new Date(),
+        },
+      });
+      return { submission, ownsClaim: true };
+    });
+  }
+
+  private async waitForMasterySubmission(
+    userId: string,
+    submissionId: string,
+    submissionHash: string,
+  ): Promise<AssessmentSubmissionView> {
+    for (let attempt = 0; attempt < MASTERY_CLAIM_WAIT_ATTEMPTS; attempt += 1) {
+      const submission = await this.prisma.assessmentSubmission.findFirst({
+        where: { id: submissionId, userId, masterySubmissionHash: submissionHash },
+      });
+      if (!submission) throw new NotFoundException('Assessment submission not found.');
+      if (submission.masteryGenerationStatus === 'ready' || submission.masteryGenerationStatus === null) {
+        return this.toSubmissionView(submission);
+      }
+      if (submission.masteryGenerationStatus === 'failed') {
+        throw new ServiceUnavailableException(
+          'Could not mark that submission. Retry with the same answers.',
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, MASTERY_CLAIM_WAIT_MS));
+    }
+    throw new ConflictException('Language mastery grading is still in progress.');
+  }
+
   async requireOwned(userId: string, id: string): Promise<Assessment> {
     const assessment = await this.prisma.assessment.findUnique({ where: { id } });
     if (!assessment || assessment.userId !== userId) {
       throw new NotFoundException('Assessment not found.');
+    }
+    if (
+      assessment.masteryGenerationStatus !== null
+      && assessment.masteryGenerationStatus !== 'ready'
+    ) {
+      throw new ConflictException('Assessment generation is not complete.');
     }
     return assessment;
   }
@@ -722,12 +1176,25 @@ export class ExaminerService {
   private validateLanguageMasteryMetadata(
     value: Omit<LanguageMasteryAssessmentMetadata, 'helpUsed' | 'answerLeak' | 'sealedAt' | 'createdAt'>,
   ): Omit<LanguageMasteryAssessmentMetadata, 'helpUsed' | 'answerLeak' | 'sealedAt' | 'createdAt'> {
-    for (const [key, candidate] of Object.entries(value)) {
+    const { criterionIds, ...stringValues } = value;
+    for (const [key, candidate] of Object.entries(stringValues)) {
       if (typeof candidate !== 'string' || candidate.trim().length === 0 || candidate.length > 240) {
         throw new BadRequestException(`Invalid language mastery ${key}.`);
       }
     }
-    return { ...value };
+    if (
+      !Array.isArray(criterionIds)
+      || criterionIds.length === 0
+      || criterionIds.length > 20
+      || criterionIds.some((candidate) => (
+        typeof candidate !== 'string'
+        || candidate.trim().length === 0
+        || candidate.length > 240
+      ))
+    ) {
+      throw new BadRequestException('Invalid language mastery criterion ids.');
+    }
+    return { ...value, criterionIds: criterionIds.map((candidate) => candidate.trim()) };
   }
 
   private isLanguageMasteryMetadata(value: unknown): value is LanguageMasteryAssessmentMetadata {
@@ -742,6 +1209,9 @@ export class ExaminerService {
       item.attemptId,
       item.createdAt,
     ].every((candidate) => typeof candidate === 'string' && candidate.length > 0)
+      && Array.isArray(item.criterionIds)
+      && item.criterionIds.length > 0
+      && item.criterionIds.every((candidate) => typeof candidate === 'string' && candidate.length > 0)
       && typeof item.helpUsed === 'boolean'
       && typeof item.answerLeak === 'boolean'
       && (item.sealedAt === undefined || item.sealedAt === null
@@ -752,6 +1222,10 @@ export class ExaminerService {
     return value === 'beginner' || value === 'intermediate' || value === 'advanced'
       ? value
       : null;
+  }
+
+  private uniqueConflict(error: unknown): boolean {
+    return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
   }
 
   private toSubmissionView(s: AssessmentSubmission): AssessmentSubmissionView {

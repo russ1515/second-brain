@@ -1,6 +1,7 @@
 # Language Mastery — Azure pronunciation assessment readiness
 
-Status: **integration preparation complete; acoustic capability not activated**.
+Status: **provider-independent software seam complete; Azure transport and
+acoustic capability not activated**.
 
 This note records the bounded preparation for the proposed Azure Speech
 Pronunciation Assessment integration. It is not proof that Azure supports a
@@ -8,7 +9,10 @@ locale, that a resource exists, or that an acoustic assessment has run.
 
 ## Existing contracts to reuse
 
-- `SpeechProvider` / `SpeechService` remain the single provider seam.
+- `SpeechService` remains the single business entry point. The existing
+  `SpeechProvider` continues to own STT/TTS and generic coaching; the optional
+  `AcousticAssessmentProvider` slot is dedicated to native phonetic evidence
+  so Azure can be attached without replacing OpenAI/Gemini speech.
 - `ProviderMeteringService` remains responsible for reservation, finalization
   or release and cost attribution.
 - `LanguageOralCapabilityMatrix` remains the activation gate.
@@ -20,9 +24,40 @@ locale, that a resource exists, or that an acoustic assessment has run.
   directly and no second scoring engine is introduced.
 
 The current speech contract has transcription, synthesis and generic
-audio-native analysis. A future Azure adapter must be additive at this seam and
-normalize provider results into a versioned, provider-independent acoustic
-result. It must not replace the OpenAI Professor or the existing STT/TTS path.
+audio-native analysis. The additive acoustic slot now normalizes results into
+the versioned provider-independent `acoustic-assessment-v1` contract. A future
+Azure transport must implement that slot. It must not replace the OpenAI
+Professor or the existing STT/TTS path.
+
+## Offline software raccord completed
+
+The following is implemented and testable without a credential, resource or
+provider call:
+
+- a dedicated provider slot distinct from transcription and generic audio
+  analysis;
+- explicit scripted-reference and spontaneous modes;
+- mandatory accuracy and fluency dimensions, with optional prosody;
+- SHA-256 reference fingerprinting without returning or metering the reference
+  text;
+- preservation of raw provider values and their ranges, without computing a
+  vendor-derived mastery score;
+- deterministic validation of locale, request/correlation id, duration,
+  dimensions, duplicate dimensions and score ranges;
+- scoreless `not-evaluable` / `technical-error` results for missing
+  capability, unsupported locale/mode, incomplete or malformed output;
+- in-flight deduplication and the existing reserve/finalize/release metering
+  boundary for a future billable call;
+- a conservative 600-second reservation when a compressed input has no trusted
+  duration, released down to measured duration after success;
+- capability reporting that no longer treats generic audio analysis as
+  pronunciation assessment.
+
+The deterministic tests use an in-process simulated provider only. They prove
+the software contract and fail-closed behavior; they do **not** prove Azure
+wire compatibility, locale support, acoustic quality or operational readiness.
+No Azure SDK, endpoint, resource, credential or provider response schema has
+been invented from unverified information.
 
 ## Required acoustic contract
 
@@ -84,9 +119,53 @@ Until that one-time official comparison and an operational smoke test are
 recorded, the allowlist stays empty and the strict path remains
 `BLOCKED_CAPABILITY`.
 
-## Single grouped approval before any paid resource or call
+## Single grouped external-prerequisite request
 
-The approval request must present all of the following together:
+Please approve and supply the following as **one bounded package** before an
+Azure transport, resource creation or real call is attempted:
+
+1. **Resource and region:** the exact Azure AI Speech resource identifier,
+   subscription/tenant owner, exact region, and exact HTTPS endpoint approved
+   for the OVH workload and audio-data requirements. Include the confirmed
+   provider retention/deletion setting for that resource.
+2. **Private server variables:** provision
+   `AZURE_SPEECH_PRONUNCIATION_KEY`,
+   `AZURE_SPEECH_PRONUNCIATION_REGION`,
+   `AZURE_SPEECH_PRONUNCIATION_ENDPOINT` and the confirmed non-secret
+   `AZURE_SPEECH_PRONUNCIATION_API_VERSION`. Keep the operational allowlist in
+   `LANGUAGE_MASTERY_PRONUNCIATION_ASSESSMENT_LANGUAGES` empty until smoke
+   evidence passes.
+3. **Locales and capabilities:** provide the exact provider locale tags selected
+   for the pilot and, for each tag, separately confirm scripted-reference,
+   spontaneous, accuracy, fluency and (optional) prosody. Mapping from the 34
+   product codes to these exact provider tags remains
+   `BUSINESS_DECISION_REQUIRED`; no locale is implicitly enabled.
+4. **Bounded budget:** authorize at most six **provider attempts**, each using at
+   most 30 seconds of audio, at most 180 audio seconds total, and a hard monetary
+   stop of EUR 2. The first call remains forbidden until the current official
+   rate and billing unit show this cap is sufficient and the stop can be
+   enforced. Resource creation or any recurring charge needs the same explicit
+   approval.
+5. **Secret entry outside chat:** an authorized operator enters the key through
+   the existing OVH server-side secret mechanism during an interactive session
+   with hidden input. It must never be pasted into chat, committed to Git,
+   placed in a browser/client bundle or echoed into command output/logs. Store
+   it in the existing root-restricted runtime secret file/store, restart only
+   the targeted API service, and report only redacted presence/length and
+   configuration checks.
+6. **Test handling:** memory/ephemeral audio transfer only, no raw-audio,
+   transcript, reference-text or provider-body logging, no Second Brain raw
+   audio persistence, and written confirmation of Azure-side retention/deletion
+   behavior for the selected resource.
+
+This is a request for prerequisites, not authorization already granted. Until
+all six items are supplied together, the acoustic provider token remains
+unbound, the pronunciation capability remains false and all 34 product
+languages remain `NOT_VERIFIED`.
+
+## Evidence still required after approval
+
+The approved validation must record all of the following together:
 
 1. exact supported locales for scripted and spontaneous assessment, with the
    dimensions available per locale;
@@ -111,7 +190,8 @@ created by this readiness work.
 
 Before adding a language code to the pronunciation allowlist:
 
-- implement the adapter through the existing speech and metering seams;
+- attach the verified Azure transport to the implemented acoustic and metering
+  seams;
 - validate response schema, ranges and failure mapping deterministically;
 - verify scripted and spontaneous modes for the exact locale;
 - verify accuracy and fluency; record prosody only if actually returned;

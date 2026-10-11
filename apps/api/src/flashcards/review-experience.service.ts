@@ -82,10 +82,10 @@ export class ReviewExperienceService {
       ...(targetConceptId ? { concepts: { some: { conceptId: targetConceptId } } } : {}),
     };
     const activityScope = context.document || context.language
-      ? { id: '__document-scope-has-no-generic-reviewables__', completionLinks: { some: { completion: { userId, status: 'verified' as const } } } }
+      ? { id: '__document-scope-has-no-generic-reviewables__', isScheduled: true, completionLinks: { some: { completion: { userId, status: 'verified' as const } } } }
       : targetConceptId
-        ? { kind: 'concept', refId: targetConceptId, completionLinks: { some: { completion: { userId, status: 'verified' as const } } } }
-        : { completionLinks: { some: { completion: { userId, status: 'verified' as const } } } };
+        ? { kind: 'concept', refId: targetConceptId, isScheduled: true, completionLinks: { some: { completion: { userId, status: 'verified' as const } } } }
+        : { isScheduled: true, completionLinks: { some: { completion: { userId, status: 'verified' as const } } } };
     const [stats, flashcardDueCount, activityDueCount, items, overdueCards, overdueActivities, tomorrowCards, tomorrowActivities, nextCard, nextActivity, nextExam] =
       await Promise.all([
         this.cardSessions.stats(userId),
@@ -318,6 +318,7 @@ export class ReviewExperienceService {
         where: {
           userId,
           id: { in: reviewableIds },
+          isScheduled: true,
           completionLinks: { some: { completion: { userId, status: 'verified' } } },
         },
       }),
@@ -684,7 +685,7 @@ export class ReviewExperienceService {
       return card?.due.toISOString() ?? null;
     }
     const reviewable = await this.prisma.reviewable.findFirst({
-      where: { id: item.id, userId, lastReview: { gte: since } },
+      where: { id: item.id, userId, isScheduled: true, lastReview: { gte: since } },
       select: { due: true },
     });
     return reviewable?.due.toISOString() ?? null;

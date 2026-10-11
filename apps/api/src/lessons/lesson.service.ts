@@ -105,6 +105,9 @@ export interface InternalLessonOptions {
   /** Exact failed battery used only to reject duplicate remediation items
    * before the generated lesson is persisted. */
   remediationBaselineExercises?: readonly LessonExercise[];
+  /** Durable server-only identity of the failed-exam remediation plan that
+   * requested this lesson. It is never accepted from GenerateLessonDto. */
+  masteryRemediationGenerationKey?: string;
 }
 
 /** Structured lesson shape returned by the LLM. */
@@ -150,6 +153,17 @@ export class LessonService {
       userId,
       dto,
     );
+    const masteryRemediationGenerationKey = internal.masteryRemediationGenerationKey?.trim() || null;
+    if (masteryRemediationGenerationKey) {
+      if (!internal.languageMastery || !internal.languageProfileId) {
+        throw new BadRequestException('A mastery remediation key requires an owned language profile.');
+      }
+      const existing = await this.prisma.lesson.findFirst({
+        where: { userId, masteryRemediationGenerationKey },
+        select: { id: true },
+      });
+      if (existing) return this.get(userId, existing.id);
+    }
 
     // Ground the lesson in the learner's existing notes when available.
     const context = await this.retrieveContext(userId, topic);
@@ -173,7 +187,7 @@ export class LessonService {
     const trustedDirective = [localeInstruction, teacherPolicyDirective(teacherPolicy)]
       .filter((value): value is string => Boolean(value))
       .join(' ');
-    const raw = await this.generateLesson(
+    const generateRawLesson = () => this.generateLesson(
       topic,
       context,
       { ...dto, level },
@@ -181,8 +195,7 @@ export class LessonService {
       internal.languageMastery === true,
       internal.remediationBaselineExercises,
     );
-
-    const { lesson, doc, experience } = await this.prisma.$transaction(async (tx) => {
+    const persist = async (tx: Prisma.TransactionClient, raw: RawLesson) => {
       const lockKey = accountDataLockKey(userId);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       if (tutorSessionId) {
@@ -205,6 +218,7 @@ export class LessonService {
         tutorSessionId: tutorSessionId ?? null,
         conceptId: conceptId ?? null,
         languageProfileId: internal.languageProfileId ?? null,
+        masteryRemediationGenerationKey,
         language: dto.language?.trim() || null,
         level: level ?? null,
         topic,
@@ -257,7 +271,42 @@ export class LessonService {
         data: { sourceDocumentId: createdDoc.id },
       });
       return { lesson: linkedLesson, doc: createdDoc, experience: createdExperience };
-    });
+    };
+
+    const generated = masteryRemediationGenerationKey
+      ? await this.prisma.$transaction(async (tx) => {
+          // Only the server-authored remediation path holds this key-scoped
+          // lock across the provider call. PostgreSQL releases the xact lock
+          // on commit, rollback or connection loss, so a crashed owner never
+          // leaves a durable claim that must be guessed stale by a retry.
+          const generationLockKey =
+            `lesson-remediation-generation:${userId}:${masteryRemediationGenerationKey}`;
+          await tx.$executeRaw`
+            SELECT pg_advisory_xact_lock(hashtextextended(${generationLockKey}, 0))
+          `;
+          // Fence after taking the lock: two callers may both have missed the
+          // cheap preflight read above, but only the first may reach the LLM.
+          const existing = await tx.lesson.findFirst({
+            where: { userId, masteryRemediationGenerationKey },
+            select: { id: true },
+          });
+          if (existing) return { existingLessonId: existing.id } as const;
+
+          const raw = await generateRawLesson();
+          return { created: await persist(tx, raw) } as const;
+        }, { maxWait: 10_000, timeout: 120_000 })
+      : await (async () => {
+          // Keep ordinary lesson generation outside the database transaction.
+          const raw = await generateRawLesson();
+          return {
+            created: await this.prisma.$transaction(async (tx) => persist(tx, raw)),
+          } as const;
+        })();
+
+    if ('existingLessonId' in generated) {
+      return this.get(userId, generated.existingLessonId);
+    }
+    const { lesson, doc, experience } = generated.created;
 
     // Workers must only see the generated document after its transaction has
     // committed. Their own durable status/error handling remains unchanged.

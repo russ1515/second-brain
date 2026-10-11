@@ -33,6 +33,8 @@ import type {
   RlleCourseView,
   RlleMissionTurnResponse,
   RlleSessionResponse,
+  RlleScopedMasteryStartResponse,
+  RlleScopedMasterySubmissionResponse,
   RlleWorldMissionTemplate,
   StartConversationResponse,
 } from '@second-brain/shared';
@@ -68,6 +70,10 @@ import { StartRlleAutonomyDto } from './dto/start-rlle-autonomy.dto';
 import { MarkRlleAutonomyHelpDto } from './dto/mark-rlle-autonomy-help.dto';
 import { SubmitRlleAutonomyDto } from './dto/submit-rlle-autonomy.dto';
 import { StartRlleRemediationDto } from './dto/start-rlle-remediation.dto';
+import { StartRlleScopedMasteryDto } from './dto/start-rlle-scoped-mastery.dto';
+import { SubmitRlleScopedMasteryDto } from './dto/submit-rlle-scoped-mastery.dto';
+import { RecordRlleRemediationExerciseDto } from './dto/record-rlle-remediation-exercise.dto';
+import type { LanguageMasteryAttemptProjection } from './language-mastery-attempt.service';
 
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // 10 MB
 
@@ -249,6 +255,28 @@ export class LanguageController {
   }
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post(':id/course/mastery/start')
+  @HttpCode(HttpStatus.CREATED)
+  courseScopedMasteryStart(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: StartRlleScopedMasteryDto,
+  ): Promise<RlleScopedMasteryStartResponse> {
+    return this.rlle.startScopedMastery(user.userId, id, dto);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post(':id/course/mastery/submit')
+  @HttpCode(HttpStatus.OK)
+  courseScopedMasterySubmit(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: SubmitRlleScopedMasteryDto,
+  ): Promise<RlleScopedMasterySubmissionResponse> {
+    return this.rlle.submitScopedMastery(user.userId, id, dto);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post(':id/course/remediation/start')
   @HttpCode(HttpStatus.CREATED)
   courseRemediationStart(
@@ -257,6 +285,16 @@ export class LanguageController {
     @Body() dto: StartRlleRemediationDto,
   ): Promise<RlleSessionResponse> {
     return this.rlle.startRemediation(user.userId, id, dto);
+  }
+
+  @Post(':id/course/remediation/evidence')
+  @HttpCode(HttpStatus.OK)
+  courseRemediationEvidence(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: RecordRlleRemediationExerciseDto,
+  ): Promise<LanguageMasteryAttemptProjection> {
+    return this.rlle.recordRemediationExercise(user.userId, id, dto);
   }
 
   @Get(':id/missions')

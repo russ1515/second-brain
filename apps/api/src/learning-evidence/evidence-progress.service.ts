@@ -52,6 +52,7 @@ export class EvidenceProgressService {
       include: {
         lesson: { select: { topic: true, objective: true } },
         languageProfile: { select: { language: true, goal: true } },
+        languageMasteryAttempt: { select: { targetId: true } },
         goals: { include: { goal: { select: { title: true } } } },
       },
       orderBy: { finalizedAt: 'desc' },
@@ -67,7 +68,8 @@ export class EvidenceProgressService {
           completionId: row.id,
           kind: row.kind,
           learningRefId: row.learningRefId,
-          title: row.lesson?.topic ?? `${row.languageProfile?.language ?? ''} — ${unit?.titleCode ?? row.learningRefId}`,
+          title: row.lesson?.topic
+            ?? `${row.languageProfile?.language ?? ''} — ${unit?.titleCode ?? row.languageMasteryAttempt?.targetId ?? row.learningRefId}`,
           objective: row.lesson?.objective ?? row.goals.find((link) => link.goal)?.goal.title ?? row.languageProfile?.goal ?? null,
           startedAt: row.startedAt?.toISOString() ?? null,
           finalizedAt: row.finalizedAt.toISOString(),

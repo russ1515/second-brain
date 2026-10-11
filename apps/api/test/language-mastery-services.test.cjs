@@ -203,6 +203,7 @@ function assessmentFixture() {
           lessonId: data.lessonId,
           contentVersion: data.contentVersion,
           questions: data.questions,
+          masteryGenerationStatus: data.masteryGenerationStatus ?? null,
           createdAt: new Date('2026-10-09T10:00:00.000Z'),
         };
         return assessment;
@@ -261,6 +262,7 @@ const masteryMetadata = {
   unitId: 'unit-1',
   lessonId: 'lesson-1',
   attemptId: 'attempt-1',
+  criterionIds: ['criterion-1', 'criterion-2', 'criterion-3'],
 };
 
 test('language mastery assessment rejects non-open type and keeps only open production questions', async () => {

@@ -56,7 +56,10 @@ export interface LanguageOralCapabilityInput {
   provider: {
     transcription: boolean;
     synthesis: boolean;
+    /** Generic coaching/analysis capability; never phonetic proof by itself. */
     audioAnalysis: boolean;
+    /** Dedicated normalized pronunciation-assessment adapter. */
+    pronunciationAssessment: boolean;
   };
   coverage: Pick<
     LanguageMasterySpeechCoverage,
@@ -111,7 +114,7 @@ export function languageOralCapabilityMatrix(
   }
 
   let pronunciationAssessment: LanguageOralCapabilityState = 'available';
-  if (!input.provider.audioAnalysis) {
+  if (!input.provider.pronunciationAssessment) {
     pronunciationAssessment = 'not-evaluable';
     blockers.push('acoustic-analysis-provider-unavailable');
   } else if (!verified(input.coverage.pronunciationAssessmentLanguageCodes, input.languageCode)) {

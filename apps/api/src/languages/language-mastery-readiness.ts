@@ -8,7 +8,7 @@
  */
 export const LANGUAGE_MASTERY_RUNTIME_READINESS = {
   nativeAcousticAssessmentIntegrated: false,
-  canonicalMilestonePillarPublicationIntegrated: false,
+  canonicalMilestonePillarPublicationIntegrated: true,
 } as const;
 
 export const LANGUAGE_MASTERY_STRICT_RUNTIME_READY =

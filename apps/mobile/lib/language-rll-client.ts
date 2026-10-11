@@ -14,14 +14,19 @@ import {
   type RlleMissionTurnRequest,
   type RlleMissionTurnResponse,
   type RlleSessionResponse,
+  type RlleScopedMasteryStartResponse,
+  type RlleScopedMasterySubmissionResponse,
   type RlleWorldMissionAttempt,
   type RlleWorldMissionTemplate,
+  type RecordRlleRemediationExerciseRequest,
   type StartRlleCourseRequest,
   type StartRlleLessonRequest,
   type StartRlleMissionRequest,
   type StartRlleAutonomyRequest,
   type StartRlleRemediationRequest,
+  type StartRlleScopedMasteryRequest,
   type SubmitRlleAutonomyRequest,
+  type SubmitRlleScopedMasteryRequest,
   type UpdateRlleCoursePreferencesRequest,
 } from '@second-brain/shared';
 import { ApiError, api, apiUpload } from './client';
@@ -144,6 +149,39 @@ export function startRlleRemediation(
   request: StartRlleRemediationRequest,
 ): Promise<RlleSessionResponse> {
   return api<RlleSessionResponse>(endpoint(profileId, '/course/remediation/start'), {
+    method: 'POST',
+    body: request,
+  });
+}
+
+export function startRlleScopedMastery(
+  profileId: string,
+  request: StartRlleScopedMasteryRequest,
+): Promise<RlleScopedMasteryStartResponse> {
+  return api<RlleScopedMasteryStartResponse>(endpoint(profileId, '/course/mastery/start'), {
+    method: 'POST',
+    body: request,
+  });
+}
+
+export function submitRlleScopedMastery(
+  profileId: string,
+  request: SubmitRlleScopedMasteryRequest,
+): Promise<RlleScopedMasterySubmissionResponse> {
+  return api<RlleScopedMasterySubmissionResponse>(endpoint(profileId, '/course/mastery/submit'), {
+    method: 'POST',
+    body: request,
+  });
+}
+
+/** Records only an already-persisted ExerciseAttempt. Replaying the exact
+ * request is safe because the API de-duplicates the canonical evidence by the
+ * exerciseAttemptId-derived evidence id. */
+export function recordRlleRemediationExercise(
+  profileId: string,
+  request: RecordRlleRemediationExerciseRequest,
+): Promise<unknown> {
+  return api(endpoint(profileId, '/course/remediation/evidence'), {
     method: 'POST',
     body: request,
   });

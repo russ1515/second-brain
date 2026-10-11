@@ -86,7 +86,7 @@ function CompletionEvidenceHistory({ items }: { items: LearningHistoryEntry[] })
             return (
               <Card key={item.completionId} style={{ gap: spacing.sm }} testID={`brain-completion-${item.completionId}`}>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs }}>
-                  <Badge tone="neutral" label={t(`globalPath.calendar.kind.${item.kind === 'language_unit' ? 'languageUnit' : 'lesson'}` as TranslationKey)} />
+                  <Badge tone="neutral" label={t(completionKindKey(item.kind))} />
                   <Text style={[typography.title, { color: c.textPrimary, flex: 1 }]}>{item.title}</Text>
                 </View>
                 <Text style={[typography.bodySmall, { color: c.textSecondary }]}>
@@ -124,6 +124,13 @@ function CompletionEvidenceHistory({ items }: { items: LearningHistoryEntry[] })
 
 function resultKey(outcome: LearningHistoryEntry['result']['outcome']): 'evaluated' | 'demonstrated' | 'notDemonstrated' {
   return outcome === 'not_demonstrated' ? 'notDemonstrated' : outcome;
+}
+
+function completionKindKey(kind: LearningHistoryEntry['kind']): TranslationKey {
+  if (kind === 'lesson') return 'globalPath.calendar.kind.lesson';
+  if (kind === 'language_unit') return 'globalPath.calendar.kind.languageUnit';
+  if (kind === 'language_milestone') return 'progress.milestones';
+  return 'cal.k.exam';
 }
 
 function formatDate(value: string | null, formatLocale: string, fallback: string): string {

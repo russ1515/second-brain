@@ -28,6 +28,8 @@ test('language Professor prompt keeps target, UI language, CEFR, immersion and c
 test('speech endpoints report real capabilities and return provider transcription unchanged', async () => {
   const speech = {
     activeProvider: 'fake', supportsSynthesis: false, supportsAnalysis: false,
+    supportsPronunciationAssessment: false,
+    activePronunciationAssessmentProvider: null,
     transcribe: async (buffer, options) => ({ text: buffer.toString('utf8'), language: options.language ?? null, provider: 'fake', model: null }),
   };
   const controller = new SpeechController(speech);
@@ -36,6 +38,8 @@ test('speech endpoints report real capabilities and return provider transcriptio
     transcription: true,
     synthesis: false,
     audioAnalysis: false,
+    pronunciationAssessment: false,
+    pronunciationAssessmentProvider: null,
     languageMasteryV1: {
       enabled: false,
       policyVersion: 'language-mastery-v1',
@@ -60,10 +64,31 @@ test('speech endpoints report real capabilities and return provider transcriptio
     false,
     'a feature flag cannot claim readiness before acoustic evidence and canonical publication are integrated',
   );
-  const fullyCapableSpeech = {
+  const genericAnalysisOnlySpeech = {
     ...speech,
     supportsSynthesis: true,
     supportsAnalysis: true,
+  };
+  const genericAnalysisController = new SpeechController(genericAnalysisOnlySpeech, {
+    get: (key) => key === 'features'
+      ? { languageMasteryV1: true }
+      : key === 'speech.languageMasteryV1'
+        ? {
+            transcriptionLanguageCodes: ['en'],
+            synthesisLanguageCodes: ['en'],
+            pronunciationAssessmentLanguageCodes: ['en'],
+          }
+        : undefined,
+  });
+  assert.equal(
+    genericAnalysisController.capabilities().languageMasteryV1.enabled,
+    false,
+    'generic audio analysis cannot stand in for a dedicated phonetic assessment',
+  );
+  const fullyCapableSpeech = {
+    ...genericAnalysisOnlySpeech,
+    supportsPronunciationAssessment: true,
+    activePronunciationAssessmentProvider: 'azure-speech-simulated',
   };
   const fullyConfiguredController = new SpeechController(fullyCapableSpeech, {
     get: (key) => key === 'features'

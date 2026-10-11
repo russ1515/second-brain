@@ -69,13 +69,16 @@ export class SpeechController {
       && features?.languageMasteryV1 === true
       && RLLE_LANGUAGE_MASTERY_MAPPING_AUDIT.activationReady
       && this.speech.supportsSynthesis
-      && this.speech.supportsAnalysis
+      && this.speech.supportsPronunciationAssessment
       && fullyCoveredLanguage;
     return {
       provider: this.speech.activeProvider,
       transcription: true,
       synthesis: this.speech.supportsSynthesis,
       audioAnalysis: this.speech.supportsAnalysis,
+      pronunciationAssessment: this.speech.supportsPronunciationAssessment,
+      pronunciationAssessmentProvider:
+        this.speech.activePronunciationAssessmentProvider,
       languageMasteryV1: {
         // This is an activation claim, not merely a configured feature flag.
         // The client still applies the returned per-language allowlists before

@@ -1,16 +1,23 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import {
+  LanguageMasteryAttemptStatus,
+  LanguageMasteryAttemptVerdict,
+  LanguageMasteryRemediationPlanStatus,
+  LanguageMasteryScopeKind,
   LearningCompletionKind as PrismaCompletionKind,
+  LearningCompletionStatus,
   LearningEvidenceSourceKind as PrismaEvidenceKind,
   Prisma,
 } from '@prisma/client';
 import type {
+  FinalizeLanguageMasteryCompletionInput,
   FinalizeLanguageUnitCompletionInput,
   FinalizeLegacyLanguageUnitCompletionInput,
   FinalizeLessonCompletionInput,
@@ -19,6 +26,7 @@ import type {
   LearningCompletionView,
   LearningCriterionResult,
   LearningDimensionScores,
+  LanguageMasteryCompletionProvenance,
   LanguageMasteryDecision,
   LanguageTrainingFormat,
   LanguageTrainingEvidence,
@@ -30,19 +38,31 @@ import {
   LANGUAGE_MASTERY_POLICY_VERSION,
   LANGUAGE_MASTERY_THRESHOLD,
   LANGUAGE_TRAINING_FORMATS,
+  RLLE_LANGUAGE_MASTERY_UNIT_MAP,
+  getRlleLevelPillarPlans,
+  rlleMilestoneEvidenceScopeKey,
+  toSupportedLanguage,
+  languageMasteryLearningRef,
   languageUnitIdFromLearningRef,
   languageUnitLearningRef,
   LEARNING_EVIDENCE_DIMENSIONS,
   missingLanguageTrainingFormats,
+  RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
   RLLE_CURRICULUM,
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { CardGenerationService } from '../flashcards/card-generation.service';
+import { accountDataLockKey } from '../common/account-data-lock';
 
 // Version 1 used controlled Can-Do observations and may remain visible as
 // history. Version 2 is awarded only from the autonomy/mastery policy below.
 const LANGUAGE_CURRICULUM_CONTENT_VERSION = 2;
 const LEGACY_LANGUAGE_CURRICULUM_CONTENT_VERSION = 1;
+// The canonical mastery identity lives entirely in `learningRefId` (owned
+// profile, mapped scope/target, policy and mastery-content definition). The
+// lesson version remains provenance only: changing/regenerating the source
+// lesson must never create a second mastery credit for the same target.
+const LANGUAGE_MASTERY_COMPLETION_IDENTITY_VERSION = 1;
 const COMPLETION_FLASHCARD_COUNT = 8;
 
 type CompletionWithRelations = Prisma.LearningCompletionGetPayload<{
@@ -50,6 +70,7 @@ type CompletionWithRelations = Prisma.LearningCompletionGetPayload<{
     goals: true;
     lesson: { select: { topic: true } };
     languageProfile: { select: { language: true } };
+    languageMasteryAttempt: { select: { targetId: true; scopeKind: true } };
   };
 }>;
 
@@ -199,6 +220,7 @@ export class LearningCompletionService {
           goals: true,
           lesson: { select: { topic: true } },
           languageProfile: { select: { language: true } },
+          languageMasteryAttempt: { select: { targetId: true, scopeKind: true } },
         },
       });
     });
@@ -248,7 +270,11 @@ export class LearningCompletionService {
     }
 
     const submission = await this.prisma.assessmentSubmission.findFirst({
-      where: { id: input.assessmentSubmissionId, userId },
+      where: {
+        id: input.assessmentSubmissionId,
+        userId,
+        OR: [{ masteryGenerationStatus: null }, { masteryGenerationStatus: 'ready' }],
+      },
       include: { assessment: true },
     });
     if (
@@ -382,6 +408,332 @@ export class LearningCompletionService {
           goals: true,
           lesson: { select: { topic: true } },
           languageProfile: { select: { language: true } },
+          languageMasteryAttempt: { select: { targetId: true, scopeKind: true } },
+        },
+      });
+    });
+    return this.toView(completion);
+  }
+
+  /**
+   * Publish one canonical micro-milestone or pillar-exam proof.
+   *
+   * The caller supplies only the owner-scoped journal id. Every credit-bearing
+   * fact is reloaded and checked server-side; aggregate unit autonomy, failed
+   * and NOT_EVALUABLE attempts can never reach LearningCompletion.
+   */
+  async finalizeLanguageMastery(
+    userId: string,
+    input: FinalizeLanguageMasteryCompletionInput,
+  ): Promise<LearningCompletionView> {
+    const attemptId = input.attemptId?.trim();
+    if (!attemptId || attemptId.length > 240) {
+      throw new BadRequestException('Invalid language mastery attempt id.');
+    }
+
+    const completion = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const attempt = await tx.languageMasteryAttempt.findFirst({
+        where: { userId, attemptId },
+        include: {
+          languageProfile: { select: { id: true, userId: true, language: true } },
+          assessmentSubmission: {
+            select: {
+              id: true,
+              userId: true,
+              assessmentId: true,
+              masteryGenerationStatus: true,
+              createdAt: true,
+            },
+          },
+        },
+      });
+      if (!attempt) throw new NotFoundException('Language mastery attempt not found.');
+      if (
+        attempt.scopeKind !== LanguageMasteryScopeKind.milestone
+        && attempt.scopeKind !== LanguageMasteryScopeKind.pillar_exam
+      ) {
+        throw new UnprocessableEntityException(
+          'Aggregate unit autonomy cannot publish milestone or pillar proof.',
+        );
+      }
+      if (
+        attempt.status !== LanguageMasteryAttemptStatus.evaluated
+        || attempt.verdict !== LanguageMasteryAttemptVerdict.mastered
+        || attempt.helpUsed
+      ) {
+        throw new UnprocessableEntityException(
+          'Only an independently mastered language attempt can be published.',
+        );
+      }
+      if (
+        attempt.mappingVersion !== RLLE_LANGUAGE_MASTERY_MAPPING_VERSION
+        || attempt.policyVersion !== LANGUAGE_MASTERY_POLICY_VERSION
+        || attempt.threshold !== LANGUAGE_MASTERY_THRESHOLD
+      ) {
+        throw new UnprocessableEntityException('Language mastery proof version is unsupported.');
+      }
+      if (
+        !Number.isFinite(attempt.rawScore)
+        || attempt.rawScore === null
+        || attempt.rawScore < LANGUAGE_MASTERY_THRESHOLD
+        || !attempt.pillar
+        || !attempt.targetId.trim()
+        || !attempt.scopeKey.trim()
+        || !Number.isInteger(attempt.sourceContentVersion)
+        || attempt.sourceContentVersion < 1
+      ) {
+        throw new UnprocessableEntityException('Language mastery proof is incomplete.');
+      }
+
+      const decision = this.languageMasteryDecision(attempt.decision);
+      if (
+        !decision
+        || decision.policyVersion !== attempt.policyVersion
+        || decision.verdict !== 'mastered'
+        || decision.reason !== 'threshold-met'
+        || !decision.trainingComplete
+        || decision.missingTrainingFormats.length !== 0
+        || decision.helpUsed
+        || decision.rawScore !== attempt.rawScore
+        || decision.threshold !== attempt.threshold
+      ) {
+        throw new UnprocessableEntityException('Language mastery decision cannot publish proof.');
+      }
+      const criteria = this.languageMasteryCompletionCriteria(attempt.criteria);
+      const canonicalLanguage = toSupportedLanguage(attempt.languageCode);
+      if (!canonicalLanguage) {
+        throw new UnprocessableEntityException('Language mastery proof uses an unsupported language code.');
+      }
+      if (attempt.scopeKind === LanguageMasteryScopeKind.milestone) {
+        const milestone = RLLE_LANGUAGE_MASTERY_UNIT_MAP
+          .flatMap((unit) => unit.milestones)
+          .find((candidate) => candidate.id === attempt.targetId);
+        if (
+          !milestone
+          || milestone.level !== attempt.cefrLevel
+          || milestone.pillar !== attempt.pillar
+          || milestone.contentVersion !== attempt.masteryContentVersion
+          || milestone.contentDefinitionId !== attempt.contentDefinitionId
+          || rlleMilestoneEvidenceScopeKey({
+            languageCode: canonicalLanguage,
+            milestone,
+          }) !== attempt.scopeKey
+          || criteria.length !== 1
+          || criteria[0]?.id !== milestone.criterionId
+        ) {
+          throw new UnprocessableEntityException(
+            'Language milestone proof does not match the canonical mapping.',
+          );
+        }
+      } else {
+        const plan = getRlleLevelPillarPlans(attempt.cefrLevel as never)
+          .find((candidate) => candidate.examId === attempt.targetId && String(candidate.pillar) === attempt.pillar);
+        const expectedScope = [
+          RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+          attempt.languageCode,
+          attempt.cefrLevel,
+          attempt.pillar,
+          attempt.targetId,
+          'pillar-exam',
+        ].join(':');
+        const requiredCriteria = new Set<string>(
+          plan?.mandatoryCompetencies.map((item) => item.competencyId) ?? [],
+        );
+        if (
+          !plan
+          || !plan.contentReady
+          || attempt.scopeKey !== expectedScope
+          || attempt.masteryContentVersion !== null
+          || attempt.contentDefinitionId !== null
+          || criteria.length !== requiredCriteria.size
+          || criteria.some((criterion) => !requiredCriteria.has(criterion.id))
+        ) {
+          throw new UnprocessableEntityException(
+            'Language pillar proof does not match the canonical plan.',
+          );
+        }
+        // Revalidate remediation at publication time under the same owner
+        // advisory lock. A pillar attempt may have been pre-started before a
+        // later failed sibling created a remediation obligation.
+        const latestFailure = await tx.languageMasteryAttempt.findFirst({
+          where: {
+            userId,
+            languageProfileId: attempt.languageProfileId,
+            scopeKind: LanguageMasteryScopeKind.pillar_exam,
+            scopeKey: attempt.scopeKey,
+            mappingVersion: attempt.mappingVersion,
+            policyVersion: attempt.policyVersion,
+            status: LanguageMasteryAttemptStatus.evaluated,
+            verdict: LanguageMasteryAttemptVerdict.not_mastered,
+          },
+          orderBy: [{ evaluatedAt: 'desc' }, { id: 'desc' }],
+          include: {
+            failedRemediationPlan: { select: { id: true, status: true } },
+          },
+        });
+        if (
+          latestFailure
+          && latestFailure.id !== attempt.id
+          && (
+            !latestFailure.failedRemediationPlan
+            || latestFailure.failedRemediationPlan.id !== attempt.remediationPlanId
+            || latestFailure.failedRemediationPlan.status !== LanguageMasteryRemediationPlanStatus.completed
+          )
+        ) {
+          throw new ConflictException(
+            'The latest failed pillar exam must complete targeted remediation before publication.',
+          );
+        }
+        const prerequisiteAttempts = await tx.languageMasteryAttempt.findMany({
+          where: {
+            userId,
+            languageProfileId: attempt.languageProfileId,
+            scopeKind: LanguageMasteryScopeKind.milestone,
+            targetId: { in: [...plan.requiredMilestoneIds] },
+            mappingVersion: attempt.mappingVersion,
+            policyVersion: attempt.policyVersion,
+            status: LanguageMasteryAttemptStatus.evaluated,
+            verdict: LanguageMasteryAttemptVerdict.mastered,
+            completion: { is: { status: LearningCompletionStatus.verified } },
+          },
+          select: { targetId: true },
+        });
+        const publishedTargets = new Set(prerequisiteAttempts.map((item) => item.targetId));
+        if (plan.requiredMilestoneIds.some((id) => !publishedTargets.has(id))) {
+          throw new UnprocessableEntityException(
+            'Every required milestone must be published before the pillar exam can be published.',
+          );
+        }
+      }
+      const submission = attempt.assessmentSubmission;
+      if (
+        !attempt.assessmentId
+        || !attempt.assessmentSubmissionId
+        || !submission
+        || submission.id !== attempt.assessmentSubmissionId
+        || submission.userId !== userId
+        || submission.assessmentId !== attempt.assessmentId
+        || (submission.masteryGenerationStatus !== null
+          && submission.masteryGenerationStatus !== 'ready')
+        || !attempt.evaluatedAt
+        || !Number.isFinite(submission.createdAt.getTime())
+        || !Number.isFinite(attempt.evaluatedAt.getTime())
+        || attempt.evaluatedAt < submission.createdAt
+        || attempt.languageProfile.userId !== userId
+      ) {
+        throw new UnprocessableEntityException('Language mastery submission provenance is invalid.');
+      }
+
+      const scopeKind = attempt.scopeKind === LanguageMasteryScopeKind.milestone
+        ? 'milestone' as const
+        : 'pillar_exam' as const;
+      const kind = scopeKind === 'milestone'
+        ? PrismaCompletionKind.language_milestone
+        : PrismaCompletionKind.language_pillar_exam;
+      const learningRefId = languageMasteryLearningRef({
+        languageProfileId: attempt.languageProfileId,
+        scopeKind,
+        scopeKey: attempt.scopeKey,
+        policyVersion: attempt.policyVersion,
+        masteryContentVersion: attempt.masteryContentVersion,
+        contentDefinitionId: attempt.contentDefinitionId,
+      });
+      const dimensions = emptyLearningDimensionScores();
+      const result: LearningCompletionResult = {
+        outcome: 'demonstrated',
+        score: attempt.rawScore,
+        passed: true,
+        feedback: null,
+      };
+      const provenance: LanguageMasteryCompletionProvenance = {
+        schemaVersion: 2,
+        contentVersion: attempt.sourceContentVersion,
+        evidenceSource: 'language_mastery_attempt',
+        evidenceRefIds: [attempt.id, submission.id],
+        experienceSessionId: attempt.experienceSessionId,
+        evaluatedAt: attempt.evaluatedAt.toISOString(),
+        languageMastery: {
+          scopeKind,
+          scopeKey: attempt.scopeKey,
+          targetId: attempt.targetId,
+          mappingVersion: attempt.mappingVersion,
+          policyVersion: attempt.policyVersion,
+          masteryContentVersion: attempt.masteryContentVersion,
+          contentDefinitionId: attempt.contentDefinitionId,
+        },
+      };
+
+      // First read by canonical ref so a rolling deployment also reuses any
+      // pre-release row written with the old lesson-derived contentVersion.
+      // The account advisory lock above serializes this read/create boundary.
+      const existing = await tx.learningCompletion.findFirst({
+        where: { userId, kind, learningRefId },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+      const row = existing ?? await tx.learningCompletion.upsert({
+        where: {
+          userId_kind_learningRefId_contentVersion: {
+            userId,
+            kind,
+            learningRefId,
+            contentVersion: LANGUAGE_MASTERY_COMPLETION_IDENTITY_VERSION,
+          },
+        },
+        create: {
+          userId,
+          kind,
+          learningRefId,
+          contentVersion: LANGUAGE_MASTERY_COMPLETION_IDENTITY_VERSION,
+          status: LearningCompletionStatus.verified,
+          evidenceSource: PrismaEvidenceKind.language_mastery_attempt,
+          evidenceRefId: attempt.id,
+          languageProfileId: attempt.languageProfileId,
+          experienceSessionId: attempt.experienceSessionId,
+          assessmentSubmissionId: submission.id,
+          languageMasteryAttemptId: attempt.id,
+          criteria: criteria as unknown as Prisma.InputJsonValue,
+          result: result as unknown as Prisma.InputJsonValue,
+          provenance: provenance as unknown as Prisma.InputJsonValue,
+          dimensionScores: dimensions as unknown as Prisma.InputJsonValue,
+          startedAt: attempt.startedAt,
+          finalizedAt: attempt.evaluatedAt,
+        },
+        update: {},
+      });
+      if (row.status !== LearningCompletionStatus.verified) {
+        throw new UnprocessableEntityException('Revoked language mastery proof cannot be republished.');
+      }
+
+      // Publication makes the proven target reviewable, but deliberately does
+      // not create a ReviewSchedule or an immediate due date.
+      const title = `${attempt.languageProfile.language} — ${attempt.targetId}`.slice(0, 200);
+      const reviewable = await tx.reviewable.upsert({
+        where: { userId_kind_refId: { userId, kind: 'language', refId: learningRefId } },
+        create: { userId, kind: 'language', refId: learningRefId, title, isScheduled: false },
+        // A retry may happen after the proof was explicitly scheduled/reviewed.
+        // Never undo that later FSRS state while replaying publication.
+        update: { title },
+      });
+      await tx.learningCompletionReviewable.upsert({
+        where: {
+          completionId_reviewableId: {
+            completionId: row.id,
+            reviewableId: reviewable.id,
+          },
+        },
+        create: { completionId: row.id, reviewableId: reviewable.id },
+        update: {},
+      });
+
+      return tx.learningCompletion.findUniqueOrThrow({
+        where: { id: row.id },
+        include: {
+          goals: true,
+          lesson: { select: { topic: true } },
+          languageProfile: { select: { language: true } },
+          languageMasteryAttempt: { select: { targetId: true, scopeKind: true } },
         },
       });
     });
@@ -546,6 +898,7 @@ export class LearningCompletionService {
           goals: true,
           lesson: { select: { topic: true } },
           languageProfile: { select: { language: true } },
+          languageMasteryAttempt: { select: { targetId: true, scopeKind: true } },
         },
       });
     });
@@ -642,7 +995,11 @@ export class LearningCompletionService {
     }
 
     const submission = await this.prisma.assessmentSubmission.findFirst({
-      where: { id: input.evidence.id, userId },
+      where: {
+        id: input.evidence.id,
+        userId,
+        OR: [{ masteryGenerationStatus: null }, { masteryGenerationStatus: 'ready' }],
+      },
       include: { assessment: true },
     });
     if (
@@ -1025,6 +1382,36 @@ export class LearningCompletionService {
     return decision as unknown as LanguageMasteryDecision;
   }
 
+  private languageMasteryCompletionCriteria(value: unknown): LearningCriterionResult[] {
+    if (!Array.isArray(value) || value.length === 0) {
+      throw new UnprocessableEntityException('Language mastery criteria are missing.');
+    }
+    return value.map((candidate) => {
+      const criterion = this.record(candidate);
+      const id = typeof criterion?.id === 'string' ? criterion.id.trim() : '';
+      const score = criterion?.score;
+      if (
+        !criterion
+        || !id
+        || criterion.met !== true
+        || !isNormalisedLearningScore(score)
+        || score < LANGUAGE_MASTERY_THRESHOLD
+      ) {
+        throw new UnprocessableEntityException(
+          'Every language mastery criterion must be independently satisfied.',
+        );
+      }
+      return {
+        id,
+        label: typeof criterion.label === 'string' && criterion.label.trim()
+          ? criterion.label.trim().slice(0, 500)
+          : id.slice(0, 500),
+        met: true,
+        score,
+      };
+    });
+  }
+
   private record(value: unknown): Record<string, unknown> | null {
     return value && !Array.isArray(value) && typeof value === 'object'
       ? value as Record<string, unknown>
@@ -1141,7 +1528,12 @@ export class LearningCompletionService {
       id: row.id,
       kind: row.kind,
       learningRefId: row.learningRefId,
-      title: row.lesson?.topic ?? (unit ? `${row.languageProfile?.language ?? ''} — ${unit.titleCode}` : row.learningRefId),
+      title: row.lesson?.topic
+        ?? (unit
+          ? `${row.languageProfile?.language ?? ''} — ${unit.titleCode}`
+          : row.languageMasteryAttempt
+            ? `${row.languageProfile?.language ?? ''} — ${row.languageMasteryAttempt.targetId}`
+            : row.learningRefId),
       contentVersion: row.contentVersion,
       status: row.status,
       goalIds: row.goals.map((goal) => goal.goalId),

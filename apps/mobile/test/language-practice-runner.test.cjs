@@ -86,6 +86,7 @@ test('Lesson persists written and audio-native practice while returning to the R
   assert.doesNotMatch(lessonScreen, /decideLanguageMilestoneMastery/);
 
   assert.match(courseLessonScreen, /returnTo=\$\{encodeURIComponent\(returnTo\)\}/);
-  assert.match(courseLessonScreen, /startRlleAutonomy/);
+  assert.match(courseLessonScreen, /startRlleScopedMastery/);
+  assert.match(courseLessonScreen, /course\?\.nextMasteryTarget/);
   assert.match(courseLessonScreen, /startRlleRemediation/);
 });

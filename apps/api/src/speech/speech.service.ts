@@ -1,10 +1,26 @@
 import { Inject, Injectable, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import type { SynthesisResult, TranscriptionResult } from '@second-brain/shared';
-import { SPEECH_PROVIDER } from './speech.constants';
+import {
+  ACOUSTIC_ASSESSMENT_CONTRACT_VERSION,
+  ACOUSTIC_ASSESSMENT_DIMENSIONS,
+  ACOUSTIC_ASSESSMENT_MODES,
+  ACOUSTIC_ASSESSMENT_REASONS,
+  type AcousticAssessmentDimension,
+  type AcousticAssessmentReason,
+  type AcousticAssessmentResult,
+  type SynthesisResult,
+  type TranscriptionResult,
+} from '@second-brain/shared';
+import {
+  ACOUSTIC_ASSESSMENT_PROVIDER,
+  SPEECH_PROVIDER,
+} from './speech.constants';
 import type {
+  AcousticAssessmentOptions,
+  AcousticAssessmentProvider,
   AnalyzeOptions,
   AudioAnalysisResult,
+  ProviderAcousticAssessmentResult,
   SpeechProvider,
   SynthesizeOptions,
   TranscribeOptions,
@@ -31,6 +47,9 @@ export class SpeechService {
     @Inject(SPEECH_PROVIDER) private readonly provider: SpeechProvider,
     @Optional() private readonly metering?: ProviderMeteringService,
     @Optional() private readonly requestContext?: RequestContextService,
+    @Optional()
+    @Inject(ACOUSTIC_ASSESSMENT_PROVIDER)
+    private readonly acousticProvider?: AcousticAssessmentProvider,
   ) {}
 
   get activeProvider(): string {
@@ -48,6 +67,166 @@ export class SpeechService {
    *  model can do it honestly (see SpeechProvider.analyze). */
   get supportsAnalysis(): boolean {
     return typeof this.provider.analyze === 'function';
+  }
+
+  /** A dedicated phonetic evaluator. Generic audio-native coaching does not
+   * satisfy this capability. */
+  get supportsPronunciationAssessment(): boolean {
+    return this.acousticProvider !== undefined;
+  }
+
+  get activePronunciationAssessmentProvider(): string | null {
+    return this.acousticProvider?.name ?? null;
+  }
+
+  /**
+   * Native pronunciation assessment through a dedicated provider slot.
+   *
+   * The method never derives a phonetic score from STT or generic analysis.
+   * Missing capability and malformed provider output are returned as scoreless
+   * neutral/technical evidence so the language domain can persist NOT_EVALUABLE.
+   */
+  assessPronunciation(
+    audio: Buffer,
+    options: AcousticAssessmentOptions,
+    feature = 'LANGUAGE_MASTERY_ACOUSTIC',
+  ): Promise<AcousticAssessmentResult> {
+    const normalized = this.normalizedAcousticOptions(options);
+    const fingerprint = normalized.mode === 'scripted-reference'
+      && normalized.referenceText
+      ? createHash('sha256')
+          .update(ACOUSTIC_ASSESSMENT_CONTRACT_VERSION)
+          .update('\u0000')
+          .update(normalized.locale)
+          .update('\u0000')
+          .update(normalized.referenceText)
+          .digest('hex')
+      : null;
+    const provider = this.acousticProvider;
+
+    const requestReason = this.invalidAcousticRequest(audio, normalized);
+    if (requestReason) {
+      return Promise.resolve(this.acousticFailure(
+        normalized,
+        fingerprint,
+        provider,
+        'not-evaluable',
+        requestReason,
+      ));
+    }
+    if (!provider) {
+      return Promise.resolve(this.acousticFailure(
+        normalized,
+        fingerprint,
+        undefined,
+        'not-evaluable',
+        'assessment-provider-unavailable',
+      ));
+    }
+
+    let supported = false;
+    try {
+      supported = provider.supports({
+        locale: normalized.locale,
+        mode: normalized.mode,
+        requiredDimensions: normalized.requiredDimensions,
+      });
+    } catch {
+      supported = false;
+    }
+    if (!supported) {
+      return Promise.resolve(this.acousticFailure(
+        normalized,
+        fingerprint,
+        provider,
+        'not-evaluable',
+        'locale-mode-not-verified',
+      ));
+    }
+
+    const seconds = this.wavSeconds(audio, normalized.mimeType)
+      ?? this.boundedDuration(normalized.durationSeconds);
+    // When compressed duration is unknown, reserve the full accepted duration
+    // before a future billable call. ProviderMetering releases the unused part.
+    const reservedSeconds = seconds ?? 600;
+    const key = this.key('pronunciation-assessment', audio, normalized);
+
+    return this.deduplicate(key, async () => {
+      try {
+        const call = () => provider.assess(audio, normalized);
+        const raw = await (this.metering?.executeWithAttempts(
+          {
+            provider: provider.name,
+            model: provider.model ?? undefined,
+            feature,
+            resource: 'VOICE_SECONDS',
+            units: reservedSeconds,
+            metadata: {
+              requestedLocale: normalized.locale,
+              assessmentMode: normalized.mode,
+              rubricVersion: normalized.rubricVersion,
+              durationMeasurement: seconds === null
+                ? 'NOT_INSTRUMENTED'
+                : 'OBSERVED',
+            },
+            measure: (result) => {
+              const assessment = result as ProviderAcousticAssessmentResult;
+              const providerSeconds = this.validAcousticSeconds(
+                assessment.audioSeconds,
+              );
+              return {
+                providerRequestId: this.safeProviderRequestId(
+                  assessment.providerRequestId,
+                ),
+                model: provider.model,
+                audioInputSeconds: providerSeconds ?? seconds,
+                measurementSource: providerSeconds === null
+                  ? 'OBSERVED' as const
+                  : 'PROVIDER' as const,
+              };
+            },
+            quotaUnits: (result) => {
+              const assessment = result as ProviderAcousticAssessmentResult;
+              return Math.ceil(
+                this.validAcousticSeconds(assessment.audioSeconds)
+                  ?? seconds
+                  ?? reservedSeconds,
+              );
+            },
+          },
+          (attempts) => this.execute(
+            'SPEECH_ACOUSTIC_ASSESSMENT_UNAVAILABLE',
+            60_000,
+            call,
+            attempts,
+            provider.name,
+            provider.model,
+          ),
+        ) ?? this.execute(
+          'SPEECH_ACOUSTIC_ASSESSMENT_UNAVAILABLE',
+          60_000,
+          call,
+          undefined,
+          provider.name,
+          provider.model,
+        ));
+        return this.normalizeAcousticResult(
+          raw,
+          normalized,
+          fingerprint,
+          provider,
+          seconds,
+        );
+      } catch {
+        return this.acousticFailure(
+          normalized,
+          fingerprint,
+          provider,
+          'technical-error',
+          'provider-request-failed',
+        );
+      }
+    });
   }
 
   transcribe(
@@ -152,6 +331,307 @@ export class SpeechService {
     ) ?? this.execute('SPEECH_ANALYSIS_UNAVAILABLE', 60_000, () => analyze.call(this.provider, audio, options)));
   }
 
+  private normalizedAcousticOptions(
+    options: AcousticAssessmentOptions,
+  ): AcousticAssessmentOptions {
+    const referenceText = typeof options.referenceText === 'string'
+      ? options.referenceText.normalize('NFC').trim().replace(/\s+/g, ' ')
+      : undefined;
+    return {
+      mimeType: typeof options.mimeType === 'string'
+        ? options.mimeType.trim()
+        : '',
+      locale: typeof options.locale === 'string' ? options.locale.trim() : '',
+      mode: options.mode,
+      rubricVersion: typeof options.rubricVersion === 'string'
+        ? options.rubricVersion.trim()
+        : '',
+      requiredDimensions: Array.isArray(options.requiredDimensions)
+        ? [...options.requiredDimensions]
+        : [],
+      ...(referenceText ? { referenceText } : {}),
+      ...(options.durationSeconds === undefined
+        ? {}
+        : { durationSeconds: options.durationSeconds }),
+    };
+  }
+
+  private invalidAcousticRequest(
+    audio: Buffer,
+    options: AcousticAssessmentOptions,
+  ): AcousticAssessmentReason | null {
+    if (!Buffer.isBuffer(audio) || audio.length === 0) return 'audio-missing';
+    if (
+      !options.mimeType
+      || !options.locale
+      || options.locale.length > 80
+      || !options.rubricVersion
+      || options.rubricVersion.length > 200
+      || !(ACOUSTIC_ASSESSMENT_MODES as readonly string[]).includes(options.mode)
+    ) {
+      return 'assessment-request-invalid';
+    }
+    if (
+      options.durationSeconds !== undefined
+      && this.boundedDuration(options.durationSeconds) === null
+    ) {
+      return 'assessment-request-invalid';
+    }
+    const required = options.requiredDimensions;
+    if (
+      required.length === 0
+      || new Set(required).size !== required.length
+      || !required.every((dimension) =>
+        (ACOUSTIC_ASSESSMENT_DIMENSIONS as readonly string[]).includes(
+          dimension,
+        ))
+      || !required.includes('accuracy')
+      || !required.includes('fluency')
+    ) {
+      return 'assessment-request-invalid';
+    }
+    if (options.mode === 'scripted-reference' && !options.referenceText) {
+      return 'reference-text-required';
+    }
+    if (options.mode === 'spontaneous' && options.referenceText) {
+      return 'reference-text-not-allowed';
+    }
+    return null;
+  }
+
+  private normalizeAcousticResult(
+    raw: unknown,
+    options: AcousticAssessmentOptions,
+    fingerprint: string | null,
+    provider: AcousticAssessmentProvider,
+    observedSeconds: number | null,
+  ): AcousticAssessmentResult {
+    if (
+      !this.isRecord(raw)
+      || !['evaluated', 'not-evaluable', 'technical-error'].includes(
+        String(raw.outcome),
+      )
+      || !this.safeIdentifier(provider.name, 120)
+      || !this.safeIdentifier(provider.adapterVersion, 120)
+    ) {
+      return this.acousticFailure(
+        options,
+        fingerprint,
+        provider,
+        'technical-error',
+        'provider-response-invalid',
+      );
+    }
+
+    const outcome = raw.outcome as ProviderAcousticAssessmentResult['outcome'];
+    const providerLocale = this.safeIdentifier(raw.providerLocale, 80);
+    const providerRequestId = this.safeProviderRequestId(raw.providerRequestId);
+    const audioSeconds = this.validAcousticSeconds(raw.audioSeconds)
+      ?? observedSeconds;
+
+    if (outcome !== 'evaluated') {
+      const reason = this.isAcousticReason(raw.reason)
+        ? raw.reason
+        : outcome === 'not-evaluable'
+          ? 'provider-not-evaluable'
+          : 'provider-response-invalid';
+      return this.acousticFailure(
+        options,
+        fingerprint,
+        provider,
+        outcome,
+        reason,
+        { providerLocale, providerRequestId, audioSeconds },
+      );
+    }
+
+    if (
+      raw.reason !== null
+      || !providerLocale
+      || !providerRequestId
+      || audioSeconds === null
+      || !Array.isArray(raw.dimensions)
+    ) {
+      return this.acousticFailure(
+        options,
+        fingerprint,
+        provider,
+        'technical-error',
+        'provider-response-invalid',
+        { providerLocale, providerRequestId, audioSeconds },
+      );
+    }
+    if (providerLocale.toLowerCase() !== options.locale.toLowerCase()) {
+      return this.acousticFailure(
+        options,
+        fingerprint,
+        provider,
+        'not-evaluable',
+        'provider-locale-mismatch',
+        { providerLocale, providerRequestId, audioSeconds },
+      );
+    }
+
+    const dimensions: AcousticAssessmentDimension[] = [];
+    const seen = new Set<string>();
+    for (const candidate of raw.dimensions) {
+      if (!this.isRecord(candidate) || !this.isRecord(candidate.range)) {
+        return this.acousticFailure(
+          options,
+          fingerprint,
+          provider,
+          'technical-error',
+          'provider-response-invalid',
+          { providerLocale, providerRequestId, audioSeconds },
+        );
+      }
+      const kind = candidate.kind;
+      const rawValue = candidate.rawValue;
+      const min = candidate.range.min;
+      const max = candidate.range.max;
+      if (
+        typeof kind !== 'string'
+        || !(ACOUSTIC_ASSESSMENT_DIMENSIONS as readonly string[]).includes(kind)
+        || seen.has(kind)
+        || typeof rawValue !== 'number'
+        || !Number.isFinite(rawValue)
+        || typeof min !== 'number'
+        || !Number.isFinite(min)
+        || typeof max !== 'number'
+        || !Number.isFinite(max)
+        || min >= max
+        || rawValue < min
+        || rawValue > max
+      ) {
+        return this.acousticFailure(
+          options,
+          fingerprint,
+          provider,
+          'technical-error',
+          'provider-response-invalid',
+          { providerLocale, providerRequestId, audioSeconds },
+        );
+      }
+      seen.add(kind);
+      dimensions.push({
+        kind: kind as AcousticAssessmentDimension['kind'],
+        rawValue,
+        range: { min, max },
+      });
+    }
+
+    if (options.requiredDimensions.some((dimension) => !seen.has(dimension))) {
+      return this.acousticFailure(
+        options,
+        fingerprint,
+        provider,
+        'technical-error',
+        'required-dimension-missing',
+        { providerLocale, providerRequestId, audioSeconds },
+      );
+    }
+
+    return this.acousticResult(
+      options,
+      fingerprint,
+      provider,
+      'evaluated',
+      null,
+      { providerLocale, providerRequestId, audioSeconds, dimensions },
+    );
+  }
+
+  private acousticFailure(
+    options: AcousticAssessmentOptions,
+    fingerprint: string | null,
+    provider: AcousticAssessmentProvider | undefined,
+    outcome: 'not-evaluable' | 'technical-error',
+    reason: AcousticAssessmentReason,
+    details: {
+      providerLocale?: string | null;
+      providerRequestId?: string | null;
+      audioSeconds?: number | null;
+    } = {},
+  ): AcousticAssessmentResult {
+    return this.acousticResult(
+      options,
+      fingerprint,
+      provider,
+      outcome,
+      reason,
+      details,
+    );
+  }
+
+  private acousticResult(
+    options: AcousticAssessmentOptions,
+    fingerprint: string | null,
+    provider: AcousticAssessmentProvider | undefined,
+    outcome: AcousticAssessmentResult['outcome'],
+    reason: AcousticAssessmentReason | null,
+    details: {
+      providerLocale?: string | null;
+      providerRequestId?: string | null;
+      audioSeconds?: number | null;
+      dimensions?: AcousticAssessmentDimension[];
+    } = {},
+  ): AcousticAssessmentResult {
+    return {
+      contractVersion: ACOUSTIC_ASSESSMENT_CONTRACT_VERSION,
+      rubricVersion: options.rubricVersion,
+      provider: this.safeIdentifier(provider?.name, 120),
+      providerModel: this.safeIdentifier(provider?.model, 200),
+      providerAdapterVersion: this.safeIdentifier(
+        provider?.adapterVersion,
+        120,
+      ),
+      requestedLocale: options.locale,
+      providerLocale: details.providerLocale ?? null,
+      mode: options.mode,
+      referenceTextFingerprint: fingerprint,
+      providerRequestId: details.providerRequestId ?? null,
+      audioSeconds: details.audioSeconds ?? null,
+      outcome,
+      dimensions: outcome === 'evaluated'
+        ? details.dimensions ?? []
+        : [],
+      reason,
+    };
+  }
+
+  private validAcousticSeconds(value: unknown): number | null {
+    return typeof value === 'number'
+      && Number.isFinite(value)
+      && value > 0
+      && value <= 600
+      ? value
+      : null;
+  }
+
+  private safeProviderRequestId(value: unknown): string | null {
+    const candidate = this.safeIdentifier(value, 240);
+    return candidate && /^[A-Za-z0-9_.:-]+$/.test(candidate)
+      ? candidate
+      : null;
+  }
+
+  private safeIdentifier(value: unknown, maxLength: number): string | null {
+    if (typeof value !== 'string') return null;
+    const candidate = value.trim();
+    return candidate && candidate.length <= maxLength
+      ? candidate
+      : null;
+  }
+
+  private isAcousticReason(value: unknown): value is AcousticAssessmentReason {
+    return typeof value === 'string'
+      && (ACOUSTIC_ASSESSMENT_REASONS as readonly string[]).includes(value);
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
   private deduplicate<T>(key: string, run: () => Promise<T>): Promise<T> {
     const current = this.inFlight.get(key) as Promise<T> | undefined;
     if (current) return current;
@@ -165,6 +645,8 @@ export class SpeechService {
     timeoutMs: number,
     call: () => Promise<T>,
     attempts?: ProviderAttemptRunner,
+    attemptProvider: string = this.provider.name,
+    attemptModel?: string | null,
   ): Promise<T> {
     if (this.circuitOpenUntil > Date.now()) {
       throw this.unavailable('SPEECH_CIRCUIT_OPEN');
@@ -175,7 +657,12 @@ export class SpeechService {
       try {
         const invoke = () => this.withTimeout(call(), timeoutMs);
         const value = attempts
-          ? await attempts.attempt(invoke, { provider: this.provider.name })
+          ? await attempts.attempt(invoke, {
+              provider: attemptProvider,
+              ...(attemptModel === undefined
+                ? {}
+                : { model: attemptModel ?? undefined }),
+            })
           : await invoke();
         this.consecutiveFailures = 0;
         this.circuitOpenUntil = 0;
@@ -195,7 +682,7 @@ export class SpeechService {
     const providerCode = this.safeErrorCode(lastError);
     const requestId = this.requestContext?.current()?.requestId ?? 'REQUEST_CONTEXT_UNAVAILABLE';
     this.logger.error(
-      `Speech provider failure category=${code} provider=${this.provider.name} ` +
+      `Speech provider failure category=${code} provider=${attemptProvider} ` +
         `providerCode=${providerCode} requestId=${requestId}`,
     );
     throw this.unavailable(code);

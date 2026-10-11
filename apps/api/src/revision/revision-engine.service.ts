@@ -42,8 +42,14 @@ export class RevisionEngineService {
   ): Promise<ReviewableView> {
     const item = await this.prisma.reviewable.upsert({
       where: { userId_kind_refId: { userId, kind: dto.kind, refId: dto.refId } },
-      create: { userId, kind: dto.kind, refId: dto.refId, title: dto.title.slice(0, 200) },
-      update: { title: dto.title.slice(0, 200) },
+      create: {
+        userId,
+        kind: dto.kind,
+        refId: dto.refId,
+        title: dto.title.slice(0, 200),
+        isScheduled: true,
+      },
+      update: { title: dto.title.slice(0, 200), isScheduled: true },
     });
     return this.toView(item);
   }
@@ -75,8 +81,8 @@ export class RevisionEngineService {
     try {
       const item = await this.prisma.reviewable.upsert({
         where: { userId_kind_refId: { userId, kind, refId } },
-        create: { userId, kind, refId, title: title.slice(0, 200) },
-        update: {},
+        create: { userId, kind, refId, title: title.slice(0, 200), isScheduled: true },
+        update: { isScheduled: true },
       });
       await this.review(userId, item.id, input);
     } catch {
@@ -94,6 +100,7 @@ export class RevisionEngineService {
       where: {
         id,
         userId,
+        isScheduled: true,
         completionLinks: { some: { completion: { userId, status: 'verified' } } },
       },
     });
@@ -128,6 +135,7 @@ export class RevisionEngineService {
     const items = await this.prisma.reviewable.findMany({
       where: {
         userId,
+        isScheduled: true,
         completionLinks: { some: { completion: { userId, status: 'verified' } } },
       },
     });
@@ -155,6 +163,7 @@ export class RevisionEngineService {
     const items = await this.prisma.reviewable.findMany({
       where: {
         userId,
+        isScheduled: true,
         reps: { gt: 0 },
         completionLinks: { some: { completion: { userId, status: 'verified' } } },
       },
@@ -187,6 +196,7 @@ export class RevisionEngineService {
     const items = await this.prisma.reviewable.findMany({
       where: {
         userId,
+        isScheduled: true,
         due: { lte: now },
         completionLinks: { some: { completion: { userId, status: 'verified' } } },
       },
@@ -224,6 +234,7 @@ export class RevisionEngineService {
       kind: item.kind as ReviewableKind,
       refId: item.refId,
       title: item.title,
+      isScheduled: item.isScheduled,
       reps: item.reps,
       lapses: item.lapses,
       due: item.due.getTime() <= now.getTime(),

@@ -303,7 +303,10 @@ export class PrivacyService {
       this.prisma.studySession.findMany({ where: { userId } }),
       this.prisma.homework.findMany({ where: { userId } }),
       this.prisma.assessment.findMany({
-        where: { userId },
+        where: {
+          userId,
+          OR: [{ masteryGenerationStatus: null }, { masteryGenerationStatus: 'ready' }],
+        },
         // `questions` contains server-side answer keys and grading rubrics.
         // Export learner-owned metadata and submissions, never solution data.
         select: {
@@ -317,7 +320,26 @@ export class PrivacyService {
           createdAt: true,
         },
       }),
-      this.prisma.assessmentSubmission.findMany({ where: { userId } }),
+      this.prisma.assessmentSubmission.findMany({
+        where: {
+          userId,
+          OR: [{ masteryGenerationStatus: null }, { masteryGenerationStatus: 'ready' }],
+        },
+        // Submission claim/fencing fields are server-only orchestration state.
+        // Export only the historical learner payload that existed before the
+        // exact-once language-mastery claim was introduced.
+        select: {
+          id: true,
+          userId: true,
+          assessmentId: true,
+          answers: true,
+          score: true,
+          results: true,
+          summary: true,
+          advice: true,
+          createdAt: true,
+        },
+      }),
       this.prisma.writingSubmission.findMany({ where: { userId } }),
       this.prisma.readingExercise.findMany({
         where: { userId },

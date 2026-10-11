@@ -1,0 +1,195 @@
+'use strict';
+
+require('reflect-metadata');
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const shared = require('../../../packages/shared/dist/index.js');
+const {
+  RealLifeLanguageService,
+} = require('../dist/languages/real-life-language.service.js');
+
+const PROFILE = {
+  id: 'profile-runtime',
+  userId: 'owner',
+  language: 'English',
+  normalizedLanguage: 'en',
+};
+
+function decision(verdict, rawScore) {
+  return {
+    policyVersion: shared.LANGUAGE_MASTERY_POLICY_VERSION,
+    verdict,
+    reason: verdict === 'mastered'
+      ? 'threshold-met'
+      : verdict === 'not-evaluable'
+        ? 'missing-evaluation'
+        : 'below-threshold',
+    rawScore,
+    threshold: 0.9,
+    completed: true,
+    helpUsed: false,
+    missingTrainingFormats: [],
+    unevaluatedAutonomyItemIds: verdict === 'not-evaluable' ? ['acoustic-proof'] : [],
+  };
+}
+
+function milestoneProjection(milestone, index, overrides = {}) {
+  return {
+    id: `row-${index}`,
+    attemptId: `attempt-${index}`,
+    idempotencyKey: `operation-${index}`,
+    scopeKind: 'milestone',
+    scopeKey: shared.rlleMilestoneEvidenceScopeKey({
+      languageCode: 'en',
+      milestone,
+    }),
+    targetId: milestone.id,
+    mappingVersion: shared.RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+    policyVersion: shared.LANGUAGE_MASTERY_POLICY_VERSION,
+    masteryContentVersion: milestone.contentVersion,
+    contentDefinitionId: milestone.contentDefinitionId,
+    sourceContentVersion: 1,
+    lessonId: `lesson-${milestone.unitId}`,
+    languageCode: 'en',
+    cefrLevel: milestone.level,
+    pillar: milestone.pillar,
+    status: 'evaluated',
+    verdict: 'mastered',
+    rawScore: 1,
+    threshold: 0.9,
+    decisionReason: 'threshold-met',
+    helpUsed: false,
+    decision: decision('mastered', 1),
+    criteria: [{ id: milestone.criterionId, met: true, score: 1 }],
+    assessmentId: `assessment-${index}`,
+    assessmentSubmissionId: `submission-${index}`,
+    completionId: `completion-${index}`,
+    remediation: null,
+    startedAt: '2026-10-10T08:00:00.000Z',
+    evaluatedAt: '2026-10-10T08:01:00.000Z',
+    ...overrides,
+  };
+}
+
+function harness(initialAttempts) {
+  const attempts = [...initialAttempts];
+  const masteryAttempts = {
+    projection: async () => attempts.map((attempt) => ({ ...attempt })),
+    reconcileRemediationExerciseAttempts: async (_userId, attemptId) =>
+      attempts.find((attempt) => attempt.attemptId === attemptId),
+  };
+  const service = new RealLifeLanguageService(
+    { exerciseAttempt: { findMany: async () => [] } },
+    {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
+    { enabled: () => true },
+    { get: () => null },
+    {},
+    masteryAttempts,
+  );
+  service.strictMasteryAvailable = () => true;
+  return { service, attempts };
+}
+
+function courseState(service, curriculumIds) {
+  return {
+    schemaVersion: 2,
+    startLevel: 'A1',
+    level: { declared: 'A1', estimated: null, evaluated: null, target: 'A2' },
+    goal: null,
+    goalDomain: 'general',
+    curriculumIds,
+    completedUnitIds: [],
+    masteryPolicyVersion: shared.LANGUAGE_MASTERY_POLICY_VERSION,
+    legacyCompletedUnitIds: [],
+    milestoneMastery: Object.fromEntries(curriculumIds.map((unitId) => [
+      unitId,
+      service.emptyMilestoneMastery(unitId),
+    ])),
+    currentUnitId: curriculumIds[0] ?? null,
+    unitLessonIds: {},
+    unitLastActivityAt: {},
+    currentLesson: null,
+    currentMission: null,
+    evidence: [],
+    gaps: [],
+    mistakeMemory: [],
+    repairLoops: [],
+    immersionIntensity: 'guided',
+    correctionIntensity: 'balanced',
+  };
+}
+
+test('reloaded milestone technical-error is terminal neutral and rotates only the next operation key', async () => {
+  const unit = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP.find((candidate) => candidate.level === 'A1');
+  const milestone = unit.milestones[0];
+  const technical = milestoneProjection(milestone, 'technical', {
+    id: 'row-technical',
+    attemptId: 'attempt-technical',
+    idempotencyKey: 'operation-technical',
+    status: 'technical-error',
+    verdict: 'not-evaluable',
+    rawScore: null,
+    decisionReason: 'missing-evaluation',
+    decision: decision('not-evaluable', null),
+    criteria: [{ id: milestone.criterionId, met: false, score: null }],
+    completionId: null,
+  });
+  const { service, attempts } = harness([technical]);
+  const state = courseState(service, [unit.unitId]);
+
+  const neutral = await service.reconcileCanonicalMastery('owner', PROFILE, state);
+  const projected = neutral.state.milestoneMastery[unit.unitId];
+  assert.equal(projected.status, 'not-evaluable');
+  assert.equal(projected.activeAttemptId, null);
+  assert.equal(projected.remediation, null);
+  assert.deepEqual(neutral.state.completedUnitIds, []);
+  assert.equal(neutral.nextMasteryTarget.targetId, milestone.id);
+  assert.notEqual(neutral.nextMasteryTarget.operationKey, technical.idempotencyKey);
+  const nextOperationKey = neutral.nextMasteryTarget.operationKey;
+
+  attempts.push(milestoneProjection(milestone, 'active', {
+    id: 'row-active',
+    attemptId: 'attempt-active',
+    idempotencyKey: nextOperationKey,
+    status: 'started',
+    verdict: null,
+    rawScore: null,
+    decisionReason: null,
+    decision: null,
+    criteria: [],
+    assessmentId: null,
+    assessmentSubmissionId: null,
+    completionId: null,
+    evaluatedAt: null,
+  }));
+  const firstReplay = await service.reconcileCanonicalMastery('owner', PROFILE, neutral.state);
+  const doubleClickReplay = await service.reconcileCanonicalMastery(
+    'owner',
+    PROFILE,
+    firstReplay.state,
+  );
+  assert.equal(firstReplay.nextMasteryTarget.operationKey, nextOperationKey);
+  assert.equal(firstReplay.nextMasteryTarget.activeAttemptId, 'attempt-active');
+  assert.equal(firstReplay.nextMasteryTarget.blockedReason, 'assessment-active');
+  assert.equal(doubleClickReplay.nextMasteryTarget.operationKey, nextOperationKey);
+  assert.equal(doubleClickReplay.nextMasteryTarget.activeAttemptId, 'attempt-active');
+});
+
+test('all A1 milestone proofs project the first A1 pillar exam before any A2 target', async () => {
+  const units = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP
+    .filter((unit) => unit.level === 'A1' || unit.level === 'A2');
+  const a1Units = units.filter((unit) => unit.level === 'A1');
+  const attempts = a1Units.flatMap((unit) => unit.milestones)
+    .map((milestone, index) => milestoneProjection(milestone, index));
+  const { service } = harness(attempts);
+  const state = courseState(service, units.map((unit) => unit.unitId));
+
+  const reconciled = await service.reconcileCanonicalMastery('owner', PROFILE, state);
+  const firstA1Exam = shared.getRlleLevelPillarPlans('A1')[0];
+  assert.equal(reconciled.nextMasteryTarget.scopeKind, 'pillar_exam');
+  assert.equal(reconciled.nextMasteryTarget.targetId, firstA1Exam.examId);
+  assert.equal(reconciled.nextMasteryTarget.eligible, true);
+  assert.equal(reconciled.nextMasteryTarget.remediationPlanId, null);
+  assert.equal(reconciled.nextMasteryTarget.targetId.includes(':A2:'), false);
+});

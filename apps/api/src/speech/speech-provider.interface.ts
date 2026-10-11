@@ -1,4 +1,9 @@
 import type {
+  AcousticAssessmentDimension,
+  AcousticAssessmentDimensionKind,
+  AcousticAssessmentMode,
+  AcousticAssessmentOutcome,
+  AcousticAssessmentReason,
   SpeechProviderName,
   SynthesisResult,
   TranscriptionResult,
@@ -34,6 +39,53 @@ export interface AnalyzeOptions {
  *  parses it — e.g. as JSON). */
 export interface AudioAnalysisResult {
   text: string;
+}
+
+/** Domain-owned request for a dedicated native pronunciation assessment.
+ * Reference text is sent only to the configured provider in scripted mode and
+ * must never be logged or copied into the normalized result. */
+export interface AcousticAssessmentOptions {
+  mimeType: string;
+  locale: string;
+  mode: AcousticAssessmentMode;
+  rubricVersion: string;
+  requiredDimensions: readonly AcousticAssessmentDimensionKind[];
+  referenceText?: string;
+  durationSeconds?: number;
+}
+
+/** Normalized adapter output before the speech seam applies fail-closed
+ * validation. No vendor response body, transcript or reference text belongs
+ * here. */
+export interface ProviderAcousticAssessmentResult {
+  providerLocale: string | null;
+  providerRequestId: string | null;
+  audioSeconds: number | null;
+  outcome: AcousticAssessmentOutcome;
+  dimensions: AcousticAssessmentDimension[];
+  reason: AcousticAssessmentReason | null;
+}
+
+/**
+ * Separate provider slot for phonetic assessment. It is intentionally not the
+ * active STT/TTS provider: Azure can later be attached here without replacing
+ * the existing OpenAI/Gemini transport.
+ */
+export interface AcousticAssessmentProvider {
+  readonly name: string;
+  readonly model: string | null;
+  readonly adapterVersion: string;
+
+  supports(input: {
+    locale: string;
+    mode: AcousticAssessmentMode;
+    requiredDimensions: readonly AcousticAssessmentDimensionKind[];
+  }): boolean;
+
+  assess(
+    audio: Buffer,
+    options: AcousticAssessmentOptions,
+  ): Promise<ProviderAcousticAssessmentResult>;
 }
 
 /**

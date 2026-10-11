@@ -178,7 +178,21 @@ export class LanguageService {
 
         await tx.learningCompletion.deleteMany({ where: { userId, languageProfileId: id } });
         await tx.reviewable.deleteMany({
-          where: { userId, kind: 'language', refId: { startsWith: `${id}:` } },
+          where: {
+            userId,
+            kind: 'language',
+            OR: [
+              // Legacy language-unit reviewables predate the canonical
+              // language-mastery identity and remain valid until the owned
+              // profile is deleted.
+              { refId: { startsWith: `${id}:` } },
+              {
+                refId: {
+                  startsWith: `language-mastery:${encodeURIComponent(id)}:`,
+                },
+              },
+            ],
+          },
         });
         await tx.dailyPlanItem.deleteMany({ where: { languageProfileId: id } });
         await tx.languageProfile.delete({ where: { id } });

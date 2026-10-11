@@ -119,6 +119,7 @@ export default function LanguageExperienceScreen() {
         transcription: capabilities.transcription,
         synthesis: capabilities.synthesis,
         audioAnalysis: capabilities.audioAnalysis,
+        pronunciationAssessment: capabilities.pronunciationAssessment,
       },
       coverage: capabilities.languageMasteryV1,
       audioCapture: audioCaptureVerified,

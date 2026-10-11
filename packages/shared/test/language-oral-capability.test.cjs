@@ -4,7 +4,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const shared = require('../dist/index.js');
 
-const provider = { transcription: true, synthesis: true, audioAnalysis: true };
+const provider = {
+  transcription: true,
+  synthesis: true,
+  audioAnalysis: true,
+  pronunciationAssessment: true,
+};
 const fullCoverage = {
   transcriptionLanguageCodes: ['fr'],
   synthesisLanguageCodes: ['fr'],
@@ -28,8 +33,8 @@ test('transcription and written evidence cannot substitute acoustic pronunciatio
   const matrix = shared.languageOralCapabilityMatrix({
     featureEnabled: true,
     languageCode: 'fr',
-    provider: { ...provider, audioAnalysis: false },
-    coverage: { ...fullCoverage, pronunciationAssessmentLanguageCodes: [] },
+    provider: { ...provider, pronunciationAssessment: false },
+    coverage: fullCoverage,
     audioCapture: true,
   });
   assert.equal(matrix.audioCapture, 'available');

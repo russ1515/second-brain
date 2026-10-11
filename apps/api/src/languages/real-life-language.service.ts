@@ -8,17 +8,27 @@ import {
   ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import type { LanguageProfile } from '@prisma/client';
+import {
+  LanguageMasteryAttemptStatus,
+  LanguageMasteryAttemptVerdict,
+  LanguageMasteryScopeKind,
+  LearningCompletionStatus,
+  type LanguageProfile,
+} from '@prisma/client';
 import {
   CEFR_LEVELS,
   IMMERSION_INTENSITIES,
   LANGUAGE_CORRECTION_INTENSITIES,
+  LANGUAGE_MASTERY_PILLARS,
   LANGUAGE_MASTERY_POLICY_VERSION,
   LANGUAGE_REMEDIATION_MINIMUM_EXERCISES,
   LANGUAGE_TRAINING_FORMATS,
   RLLE_LANGUAGE_MASTERY_MAPPING_AUDIT,
   RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+  RLLE_LANGUAGE_MASTERY_UNIT_MAP,
+  getRlleLevelPillarPlans,
   getRlleLanguageMasteryContentSupplementsForUnit,
+  rlleMilestoneEvidenceScopeKey,
   RLLE_CAN_DO_MAP,
   RLLE_CURRICULUM,
   RLLE_GAP_KINDS,
@@ -67,9 +77,12 @@ import {
   type RlleMistakeMemoryItem,
   type RlleMissionEvaluation,
   type RlleMissionTurnResponse,
+  type RlleNextMasteryTarget,
   type RlleProgressDimension,
   type RlleRepairLoop,
   type RlleSessionResponse,
+  type RlleScopedMasteryStartResponse,
+  type RlleScopedMasterySubmissionResponse,
   type RlleWorldMissionAttempt,
   type RlleWorldMissionTemplate,
   type StartRlleCourseRequest,
@@ -78,6 +91,9 @@ import {
   type StartRlleLessonRequest,
   type StartRlleMissionRequest,
   type StartRlleRemediationRequest,
+  type StartRlleScopedMasteryRequest,
+  type SubmitRlleScopedMasteryRequest,
+  type RecordRlleRemediationExerciseRequest,
   type UpdateRlleCoursePreferencesRequest,
 } from '@second-brain/shared';
 import { ConfigService } from '@nestjs/config';
@@ -96,7 +112,18 @@ import { PronunciationService } from './pronunciation.service';
 import { FeatureFlagsService } from '../config/feature-flags.service';
 import { SpeechService } from '../speech/speech.service';
 import { LanguageMasteryAttemptService } from './language-mastery-attempt.service';
+import type { LanguageMasteryAttemptProjection } from './language-mastery-attempt.service';
 import { LANGUAGE_MASTERY_STRICT_RUNTIME_READY } from './language-mastery-readiness';
+import {
+  createRlleStrictProgression,
+  recordRlleMilestoneDecision,
+  recordRllePillarExamDecision,
+  recordRllePillarRemediationExercises,
+  rlleLevelGate,
+  startRllePillarExam,
+  type StoredRlleStrictProgression,
+  type StoredRlleTargetedRemediationEvidence,
+} from './language-mastery-progression';
 import type { UploadedFileLike } from '../documents/extraction/text-extraction.service';
 import {
   CEFR_RANK,
@@ -178,11 +205,16 @@ export class RealLifeLanguageService {
   async course(userId: string, profileId: string): Promise<RlleCourseView> {
     const profile = await this.languages.requireOwned(userId, profileId);
     const strictMastery = this.strictMasteryAvailable(profile);
-    const session = await this.findCourseSession(userId, profileId);
+    let session = await this.findCourseSession(userId, profileId);
     if (!session) return this.notStartedCourse(profile, strictMastery);
-    const state = this.readCourseState(session, strictMastery);
+    let state = this.readCourseState(session, strictMastery);
+    const reconciled = await this.reconcileCanonicalMastery(userId, profile, state);
+    state = reconciled.state;
+    if (reconciled.changed) {
+      session = await this.persistCourse(userId, profile, session, state);
+    }
     let view = {
-      ...this.toCourseView(profile, session, state),
+      ...this.toCourseView(profile, session, state, reconciled.nextMasteryTarget),
       // FSRS due state can change in Review without mutating the course session,
       // so the projected NBA is recalculated on read from current facts.
       nextBestAction: await this.nextAction(userId, profile, state),
@@ -986,6 +1018,7 @@ export class RealLifeLanguageService {
         {
           lessonId: request.lessonId,
           contentVersion: lessonRecord.contentVersion,
+          masteryCreationKey: attemptId,
           languageMastery: {
             policyVersion: LANGUAGE_MASTERY_POLICY_VERSION,
             profileId,
@@ -993,6 +1026,10 @@ export class RealLifeLanguageService {
             unitId: unit.id,
             lessonId: request.lessonId,
             attemptId,
+            criterionIds: Array.from(
+              { length: Math.max(3, unit.canDoIds.length) },
+              (_, index) => unit.canDoIds[index] ?? unit.canDoIds.at(-1) ?? unit.id,
+            ),
           },
           directive: [
             languageSystemPrompt({
@@ -1207,7 +1244,7 @@ export class RealLifeLanguageService {
       status: 'not-evaluable',
       attempts: mastery.attempts.map((item) => item.id === attempt!.id ? attempt! : item),
       activeAttemptId: null,
-      remediation: null,
+      remediation: decision.verdict === 'not-evaluable' ? mastery.remediation : null,
       masteredAt: null,
     };
     const nextState: StoredCourseState = {
@@ -1223,6 +1260,484 @@ export class RealLifeLanguageService {
       decision,
       course: this.toCourseView(profile, session, state),
     };
+  }
+
+  async startScopedMastery(
+    userId: string,
+    profileId: string,
+    request: StartRlleScopedMasteryRequest,
+  ): Promise<RlleScopedMasteryStartResponse> {
+    const profile = await this.languages.requireOwned(userId, profileId);
+    this.assertStrictMasteryAvailable(profile);
+    let session = await this.requireActiveCourse(userId, profileId);
+    if (session.id !== request.experienceSessionId) {
+      throw new BadRequestException('The mastery assessment does not belong to this course session.');
+    }
+    let state = this.readCourseState(session, true);
+    const reconciled = await this.reconcileCanonicalMastery(userId, profile, state);
+    state = reconciled.state;
+    if (reconciled.changed) {
+      session = await this.persistCourse(userId, profile, session, state);
+    }
+    const expectedTarget = reconciled.nextMasteryTarget;
+    if (
+      !expectedTarget
+      || expectedTarget.scopeKind !== request.scopeKind
+      || expectedTarget.targetId !== request.targetId
+      || expectedTarget.operationKey !== request.idempotencyKey
+      || expectedTarget.remediationPlanId !== (request.remediationPlanId ?? null)
+    ) {
+      throw new ConflictException('The requested mastery operation is not the current server-issued target.');
+    }
+    if (!expectedTarget.eligible && expectedTarget.blockedReason !== 'assessment-active') {
+      throw new BadRequestException('The current mastery target is not eligible yet.');
+    }
+    const lesson = state.currentLesson;
+    if (!lesson || lesson.lessonId !== request.lessonId || lesson.status !== 'active') {
+      throw new NotFoundException('Active language lesson not found.');
+    }
+    const unit = this.requireCourseUnit(state, lesson.unitId);
+    const unitMapping = RLLE_LANGUAGE_MASTERY_UNIT_MAP.find((item) => item.unitId === unit.id);
+    if (!unitMapping) throw new NotFoundException('Language mastery unit mapping not found.');
+    const languageCode = this.languageCode(profile);
+    const lessonRecord = await this.requireLessonVersion(userId, request.lessonId);
+
+    let scopeKey: string;
+    let pillar: (typeof LANGUAGE_MASTERY_PILLARS)[number];
+    let masteryContentVersion: string | null;
+    let contentDefinitionId: string | null;
+    let directive: string;
+    let questionCount: number;
+    let criterionIds: string[];
+
+    if (request.scopeKind === 'milestone') {
+      const milestone = unitMapping.milestones.find((item) => item.id === request.targetId);
+      if (!milestone) {
+        throw new NotFoundException('The requested milestone does not belong to the active unit.');
+      }
+      if (milestone.oralRole === 'audio-native-assessment') {
+        throw new ServiceUnavailableException({
+          code: 'LANGUAGE_MASTERY_ACOUSTIC_ASSESSMENT_REQUIRED',
+          message: 'This milestone must use the native acoustic assessment route.',
+          retryable: false,
+        });
+      }
+      const mastery = state.milestoneMastery[unit.id] ?? this.emptyMilestoneMastery(unit.id);
+      const training = await this.trainingEvidenceForLesson(userId, lesson, mastery.trainingEvidence);
+      const missing = missingLanguageTrainingFormats(training);
+      if (missing.length > 0) {
+        throw new BadRequestException(
+          'Complete every required training format before this milestone assessment.',
+        );
+      }
+      scopeKey = rlleMilestoneEvidenceScopeKey({ languageCode, milestone });
+      pillar = milestone.pillar;
+      masteryContentVersion = milestone.contentVersion;
+      contentDefinitionId = milestone.contentDefinitionId;
+      directive = [
+        'Create an autonomous criterion-scoped assessment.',
+        'Assess only milestone ' + milestone.id + ' and criterion ' + milestone.criterionId + '.',
+        'No hints, model answers, correction or answer translation may appear before submission.',
+      ].join(' ');
+      questionCount = 3;
+      criterionIds = Array.from({ length: questionCount }, () => milestone.criterionId);
+    } else {
+      const plan = getRlleLevelPillarPlans(unit.level)
+        .find((item) => item.examId === request.targetId);
+      if (!plan || !plan.contentReady) {
+        throw new NotFoundException('Ready pillar exam plan not found for this level.');
+      }
+      await this.requirePillarMilestoneProofs(userId, profileId, plan.requiredMilestoneIds);
+      scopeKey = [
+        RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+        languageCode,
+        unit.level,
+        plan.pillar,
+        plan.examId,
+        'pillar-exam',
+      ].join(':');
+      pillar = plan.pillar;
+      masteryContentVersion = null;
+      contentDefinitionId = null;
+      directive = [
+        'Create a closed autonomous pillar examination for ' + plan.pillar + '.',
+        'Cover every mandatory competency: '
+          + plan.mandatoryCompetencies.map((item) => item.competencyId).join(', ') + '.',
+        'Do not reveal hints, model answers, corrections or expected-answer translations.',
+        'The assessment must not lower the CEFR level or grading standard.',
+      ].join(' ');
+      questionCount = Math.max(1, plan.mandatoryCompetencies.length);
+      criterionIds = plan.mandatoryCompetencies.map((item) => item.competencyId);
+    }
+
+    const journal = await this.masteryAttempts.start(userId, {
+      languageProfileId: profileId,
+      experienceSessionId: session.id,
+      lessonId: request.lessonId,
+      idempotencyKey: request.idempotencyKey,
+      scopeKind: request.scopeKind,
+      scopeKey,
+      targetId: request.targetId,
+      mappingVersion: RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+      policyVersion: LANGUAGE_MASTERY_POLICY_VERSION,
+      masteryContentVersion,
+      contentDefinitionId,
+      sourceContentVersion: lessonRecord.contentVersion,
+      languageCode,
+      cefrLevel: unit.level,
+      pillar,
+      remediationPlanId: request.remediationPlanId ?? null,
+    });
+    if (journal.assessmentId) {
+      return {
+        attemptId: journal.attemptId,
+        scopeKind: request.scopeKind,
+        targetId: request.targetId,
+        assessment: await this.examiner.get(userId, journal.assessmentId),
+        course: this.toCourseView(profile, session, state, expectedTarget),
+      };
+    }
+
+    const promptRoles = await this.languages.promptRoles(userId, profile);
+    const assessment = await this.examiner.create(
+      userId,
+      {
+        type: 'open',
+        topic: unitGuidance(unit.id).title + ' — ' + request.targetId,
+        difficulty: lessonDifficulty(unit.level),
+        questionCount,
+      },
+      {
+        lessonId: request.lessonId,
+        contentVersion: lessonRecord.contentVersion,
+        masteryCreationKey: journal.attemptId,
+        languageMastery: {
+          policyVersion: LANGUAGE_MASTERY_POLICY_VERSION,
+          profileId,
+          courseSessionId: session.id,
+          unitId: unit.id,
+          lessonId: request.lessonId,
+          attemptId: journal.attemptId,
+            criterionIds,
+        },
+        directive: [
+          languageSystemPrompt({
+            ...promptRoles,
+            language: profile.language,
+            nativeLanguage: profile.nativeLanguage,
+            mode: profile.mode as LanguageMode,
+            goal: state.goal,
+            cefrLevel: unit.level,
+            immersionIntensity: state.immersionIntensity,
+            correctionIntensity: state.correctionIntensity,
+          }),
+          directive,
+        ].join(' '),
+      },
+    );
+    await this.masteryAttempts.bindAssessment(userId, journal.attemptId, assessment.id);
+    return {
+      attemptId: journal.attemptId,
+      scopeKind: request.scopeKind,
+      targetId: request.targetId,
+      assessment,
+      course: this.toCourseView(profile, session, state, {
+        ...expectedTarget,
+        eligible: false,
+        blockedReason: 'assessment-active',
+        activeAttemptId: journal.attemptId,
+        assessmentId: assessment.id,
+      }),
+    };
+  }
+
+  async submitScopedMastery(
+    userId: string,
+    profileId: string,
+    request: SubmitRlleScopedMasteryRequest,
+  ): Promise<RlleScopedMasterySubmissionResponse> {
+    const profile = await this.languages.requireOwned(userId, profileId);
+    this.assertStrictMasteryAvailable(profile);
+    let session = await this.requireActiveCourse(userId, profileId);
+    if (session.id !== request.experienceSessionId) {
+      throw new BadRequestException('The mastery assessment does not belong to this course session.');
+    }
+    let state = this.readCourseState(session, true);
+    const beforeSubmission = await this.reconcileCanonicalMastery(userId, profile, state);
+    state = beforeSubmission.state;
+    const lesson = state.currentLesson;
+    if (!lesson || lesson.lessonId !== request.lessonId) {
+      throw new NotFoundException('Active language lesson not found.');
+    }
+    const journal = await this.masteryAttempts.get(userId, request.attemptId);
+    if (
+      journal.scopeKind !== request.scopeKind
+      || journal.assessmentId !== request.assessmentId
+      || journal.sourceContentVersion !== (await this.requireLessonVersion(userId, request.lessonId)).contentVersion
+    ) {
+      throw new NotFoundException('Owned versioned mastery assessment not found.');
+    }
+    if (
+      beforeSubmission.nextMasteryTarget?.activeAttemptId
+      && beforeSubmission.nextMasteryTarget.activeAttemptId !== journal.attemptId
+    ) {
+      throw new ConflictException('Another canonical mastery attempt is active.');
+    }
+    const assessment = await this.examiner.get(userId, request.assessmentId);
+    const metadata = await this.examiner.languageMasteryMetadata(userId, request.assessmentId);
+    this.assertAssessmentContext(metadata, profileId, session.id, lesson, journal.attemptId);
+    if (
+      request.answers.length !== assessment.questions.length
+      || request.answers.some((answer) => !answer.trim())
+    ) {
+      throw new BadRequestException('Every autonomous production must be completed before submission.');
+    }
+    const submission = await this.examiner.submitLanguageMasteryOnce(
+      userId,
+      request.assessmentId,
+      journal.attemptId,
+      request.answers,
+    );
+    const sealed = await this.examiner.sealLanguageMasterySubmission(userId, request.assessmentId);
+    this.assertAssessmentContext(sealed, profileId, session.id, lesson, journal.attemptId);
+    const autonomy: LanguageAutonomyEvidence = {
+      id: submission.id,
+      completed: submission.results.length === assessment.questions.length,
+      helpUsed: sealed.helpUsed,
+      answerLeak: sealed.answerLeak,
+      items: assessment.questions.map((question) => {
+        const result = submission.results.find((item) => item.questionId === question.id);
+        return {
+          id: question.id,
+          responseMode: 'open' as const,
+          state: result ? 'evaluated' as const : 'incomplete' as const,
+          awardedPoints: result?.awarded ?? null,
+          maximumPoints: result?.max ?? null,
+        };
+      }),
+    };
+
+    const unit = this.requireCourseUnit(state, lesson.unitId);
+    const mastery = state.milestoneMastery[unit.id] ?? this.emptyMilestoneMastery(unit.id);
+    const training = await this.trainingEvidenceForLesson(userId, lesson, mastery.trainingEvidence);
+    let criteria: Array<{ id: string; met: boolean; score: number | null }>;
+    let decision: LanguageMasteryDecision;
+    if (journal.scopeKind === 'milestone') {
+      const milestone = RLLE_LANGUAGE_MASTERY_UNIT_MAP
+        .find((item) => item.unitId === unit.id)
+        ?.milestones.find((item) => item.id === journal.targetId);
+      if (!milestone) throw new NotFoundException('Language milestone mapping not found.');
+      const provisional = decideLanguageMilestoneMastery({ training, autonomy });
+      decision = provisional;
+      criteria = [{
+        id: milestone.criterionId,
+        met: provisional.verdict === 'mastered',
+        score: provisional.rawScore,
+      }];
+    } else {
+      const plan = getRlleLevelPillarPlans(journal.cefrLevel as CefrLevel)
+        .find((item) => item.examId === journal.targetId && item.pillar === journal.pillar);
+      if (!plan) throw new NotFoundException('Language pillar exam mapping not found.');
+      await this.requirePillarMilestoneProofs(
+        userId,
+        profileId,
+        plan.requiredMilestoneIds,
+      );
+      const provisional = decideLanguageMilestoneMastery({ training, autonomy });
+      const expectedCriteria = plan.mandatoryCompetencies.map((item) => item.competencyId);
+      const validMapping = metadata.criterionIds.length === assessment.questions.length
+        && expectedCriteria.length === assessment.questions.length
+        && metadata.criterionIds.every((criterionId, index) => criterionId === expectedCriteria[index]);
+      criteria = expectedCriteria.map((criterionId) => {
+        const indexes = metadata.criterionIds
+          .map((candidate, index) => candidate === criterionId ? index : -1)
+          .filter((index) => index >= 0);
+        let awarded = 0;
+        let maximum = 0;
+        for (const index of indexes) {
+          const question = assessment.questions[index];
+          const result = question
+            ? submission.results.find((item) => item.questionId === question.id)
+            : null;
+          if (
+            !result
+            || !Number.isFinite(result.awarded)
+            || !Number.isFinite(result.max)
+            || result.max <= 0
+            || result.awarded < 0
+            || result.awarded > result.max
+          ) {
+            return { id: criterionId, met: false, score: null };
+          }
+          awarded += result.awarded;
+          maximum += result.max;
+        }
+        const score = indexes.length > 0 && maximum > 0 ? awarded / maximum : null;
+        return {
+          id: criterionId,
+          met: score !== null && score >= 0.9,
+          score,
+        };
+      });
+      if (!validMapping || criteria.some((criterion) => criterion.score === null)) {
+        decision = {
+          ...provisional,
+          verdict: 'not-evaluable',
+          reason: 'invalid-rubric',
+          rawScore: null,
+        };
+        criteria = criteria.map((criterion) => ({ ...criterion, met: false, score: null }));
+      } else if (provisional.verdict === 'mastered' && criteria.some((criterion) => !criterion.met)) {
+        decision = { ...provisional, verdict: 'not-mastered', reason: 'below-threshold' };
+      } else {
+        decision = provisional;
+      }
+    }
+    if (decision.verdict === 'not-evaluable') {
+      criteria = criteria.map((criterion) => ({ ...criterion, met: false, score: null }));
+    }
+    const evaluated = await this.masteryAttempts.appendOutcome(userId, {
+      attemptId: journal.attemptId,
+      assessmentSubmissionId: submission.id,
+      decision,
+      criteria,
+    });
+    let published = evaluated;
+    if (decision.verdict === 'mastered') {
+      published = await this.masteryAttempts.publishCompletion(userId, journal.attemptId);
+    }
+    const canonicalSummary: RlleAutonomyAttemptSummary = {
+      id: journal.attemptId,
+      assessmentId: journal.assessmentId,
+      scopeKind: request.scopeKind,
+      targetId: journal.targetId,
+      completionId: published.completionId,
+      status: 'evaluated',
+      helpUsed: decision.helpUsed,
+      answerLeak: sealed.answerLeak,
+      decision,
+      startedAt: journal.startedAt,
+      completedAt: published.evaluatedAt,
+    };
+    let reconciledMastery: RlleMilestoneMasteryState = {
+      ...mastery,
+      status: decision.verdict === 'not-evaluable'
+        ? 'not-evaluable'
+        : decision.verdict === 'mastered' && journal.scopeKind === 'pillar_exam'
+          ? 'mastered'
+          : 'training',
+      attempts: [
+        ...mastery.attempts.filter((item) => item.id !== journal.attemptId),
+        canonicalSummary,
+      ].slice(-MAX_AUTONOMY_ATTEMPTS_PER_UNIT),
+      activeAttemptId: null,
+      remediation: null,
+      masteredAt: decision.verdict === 'mastered' && journal.scopeKind === 'pillar_exam'
+        ? (published.evaluatedAt ?? new Date().toISOString())
+        : mastery.masteredAt,
+    };
+    if (journal.scopeKind === 'pillar_exam' && decision.verdict === 'not-mastered') {
+      const remediationPlan = await this.masteryAttempts.startRemediationPlan(userId, {
+        failedAttemptId: journal.attemptId,
+        idempotencyKey: `pillar-failure:${journal.attemptId}`,
+      });
+      reconciledMastery = {
+        ...reconciledMastery,
+        status: 'remediation',
+        remediation: {
+          sourceAttemptId: journal.attemptId,
+          planId: remediationPlan.id,
+          requiredExerciseCount: remediationPlan.requiredExerciseCount,
+          completedExerciseCount: remediationPlan.completedExerciseCount,
+        },
+      };
+    }
+    state = {
+      ...state,
+      milestoneMastery: {
+        ...state.milestoneMastery,
+        [unit.id]: reconciledMastery,
+      },
+    };
+    const canonical = await this.reconcileCanonicalMastery(userId, profile, state, false);
+    state = canonical.state;
+    session = await this.persistCourse(userId, profile, session, state);
+    return {
+      attemptId: journal.attemptId,
+      scopeKind: request.scopeKind,
+      targetId: journal.targetId,
+      submission,
+      decision,
+      completionId: published.completionId,
+      course: this.toCourseView(profile, session, state, canonical.nextMasteryTarget),
+    };
+  }
+
+  async recordRemediationExercise(
+    userId: string,
+    profileId: string,
+    request: RecordRlleRemediationExerciseRequest,
+  ) {
+    const profile = await this.languages.requireOwned(userId, profileId);
+    this.assertStrictMasteryAvailable(profile);
+    const source = await this.prisma.exerciseAttempt.findFirst({
+      where: {
+        id: request.exerciseAttemptId,
+        userId,
+        lessonId: request.lessonId,
+        exerciseIndex: request.exerciseIndex,
+      },
+      select: { contentVersion: true },
+    });
+    if (!source) throw new NotFoundException('Owned remediation exercise attempt not found.');
+    const recorded = await this.masteryAttempts.appendRemediationEvidence(userId, {
+      attemptId: request.failedAttemptId,
+      remediationPlanId: request.remediationPlanId,
+      evidenceId: `exercise-attempt:${request.exerciseAttemptId}`,
+      trainingFormat: request.trainingFormat,
+      // ExerciseAttempt is written only after the answer was graded. Completion
+      // is therefore derived from the canonical row, never trusted from the DTO.
+      state: 'completed',
+      lessonId: request.lessonId,
+      sourceContentVersion: source.contentVersion,
+      exerciseIndex: request.exerciseIndex,
+      sourceKind: 'exercise-attempt',
+      sourceRefId: request.exerciseAttemptId,
+    });
+    const courseSession = await this.findCourseSession(userId, profileId);
+    if (courseSession) {
+      let state = this.readCourseState(courseSession, true);
+      const unitId = state.currentLesson?.unitId ?? state.currentUnitId;
+      if (unitId) {
+        const mastery = state.milestoneMastery[unitId] ?? this.emptyMilestoneMastery(unitId);
+        const currentRemediation = mastery.remediation;
+        const recordedRemediation = recorded.remediation;
+        if (
+          currentRemediation
+          && recordedRemediation
+          && currentRemediation.planId === recordedRemediation.planId
+        ) {
+          state = {
+            ...state,
+            milestoneMastery: {
+              ...state.milestoneMastery,
+              [unitId]: {
+                ...mastery,
+                status: 'remediation',
+                remediation: {
+                  ...currentRemediation,
+                  requiredExerciseCount: recordedRemediation.requiredExerciseCount,
+                  completedExerciseCount: recordedRemediation.completedExerciseCount,
+                },
+              },
+            },
+          };
+        }
+      }
+      const canonical = await this.reconcileCanonicalMastery(userId, profile, state, false);
+      await this.persistCourse(userId, profile, courseSession, canonical.state);
+    }
+    return recorded;
   }
 
   async startRemediation(
@@ -1248,10 +1763,15 @@ export class RealLifeLanguageService {
     if (!remediation) {
       throw new BadRequestException('This milestone has no targeted remediation to perform.');
     }
-    const generationKey = `remediation:${createHash('sha256')
-      .update(`${userId}:${profileId}:${session.id}:${unit.id}:${request.idempotencyKey}`)
-      .digest('hex')
-      .slice(0, 24)}`;
+    const failedAttemptId = request.failedAttemptId ?? remediation.sourceAttemptId;
+    const plan = await this.masteryAttempts.startRemediationPlan(userId, {
+      failedAttemptId,
+      idempotencyKey: request.idempotencyKey,
+    });
+    if (remediation.planId && remediation.planId !== plan.id) {
+      throw new ConflictException('The course remediation points to another canonical plan.');
+    }
+    const generationKey = plan.generationKey;
     if (remediation.generationKey) {
       if (
         remediation.generationKey === generationKey
@@ -1260,10 +1780,12 @@ export class RealLifeLanguageService {
       ) {
         return this.lessonResponse(profile, session, state);
       }
-      throw new ConflictException('A targeted remediation is already being prepared or is active.');
+      if (remediation.generationKey !== generationKey) {
+        throw new ConflictException('A targeted remediation is already being prepared or is active.');
+      }
     }
-    const sourceAttempt = mastery.attempts.find((item) => item.id === remediation.sourceAttemptId);
-    if (!sourceAttempt?.assessmentId) {
+    const sourceAttempt = await this.masteryAttempts.get(userId, failedAttemptId);
+    if (!sourceAttempt.assessmentId) {
       throw new UnprocessableEntityException('The remediation source assessment is unavailable.');
     }
     const assessment = await this.examiner.get(userId, sourceAttempt.assessmentId);
@@ -1279,7 +1801,12 @@ export class RealLifeLanguageService {
     const preparing: RlleMilestoneMasteryState = {
       ...mastery,
       status: 'remediation-starting',
-      remediation: { ...remediation, generationKey },
+      remediation: {
+        ...remediation,
+        sourceAttemptId: failedAttemptId,
+        planId: plan.id,
+        generationKey,
+      },
     };
     state = {
       ...state,
@@ -1309,6 +1836,7 @@ export class RealLifeLanguageService {
         {
           languageProfileId: profile.id,
           languageMastery: true,
+          masteryRemediationGenerationKey: generationKey,
           remediationBaselineExercises: failedLessonContent.exercises,
           directive: [
             languageSystemPrompt({
@@ -1334,7 +1862,8 @@ export class RealLifeLanguageService {
         ...mastery,
         status: 'remediation',
         remediation: {
-          sourceAttemptId: remediation.sourceAttemptId,
+          sourceAttemptId: failedAttemptId,
+          planId: plan.id,
           requiredExerciseCount: remediation.requiredExerciseCount,
           completedExerciseCount: remediation.completedExerciseCount,
         },
@@ -1351,6 +1880,10 @@ export class RealLifeLanguageService {
     if (generated.languageProfileId !== profile.id) {
       throw new BadRequestException('The remediation lesson does not belong to this language course.');
     }
+    await this.masteryAttempts.bindRemediationLesson(userId, {
+      remediationPlanId: plan.id,
+      lessonId: generated.id,
+    });
     const now = new Date().toISOString();
     const outline: RlleLessonOutline = {
       id: `${unit.id}:${generated.id}`,
@@ -1370,6 +1903,8 @@ export class RealLifeLanguageService {
       trainingEvidence: [],
       remediation: {
         ...remediation,
+        sourceAttemptId: failedAttemptId,
+        planId: plan.id,
         completedExerciseCount: 0,
         generationKey,
         lessonId: generated.id,
@@ -1395,7 +1930,8 @@ export class RealLifeLanguageService {
       createdAt: now,
       metadata: {
         unitId: unit.id,
-        sourceAttemptId: remediation.sourceAttemptId,
+        sourceAttemptId: failedAttemptId,
+        remediationPlanId: plan.id,
         requiredExerciseCount: remediation.requiredExerciseCount,
       },
     };
@@ -2187,6 +2723,7 @@ export class RealLifeLanguageService {
       units,
       masteryPolicyVersion: strictMastery ? LANGUAGE_MASTERY_POLICY_VERSION : 'legacy',
       milestoneMastery: units.map((unit) => this.emptyMilestoneMastery(unit.id)),
+      nextMasteryTarget: null,
       currentLesson: null,
       currentMission: null,
       latestAssessment: null,
@@ -2210,6 +2747,7 @@ export class RealLifeLanguageService {
     profile: LanguageProfile,
     session: ExperienceSession,
     state: StoredCourseState,
+    nextMasteryTarget: RlleNextMasteryTarget | null = null,
   ): RlleCourseView {
     const curriculum = curriculumForGoal(state.startLevel, state.level.target, state.goalDomain)
       .filter((unit) => state.curriculumIds.includes(unit.id));
@@ -2248,6 +2786,7 @@ export class RealLifeLanguageService {
       masteryPolicyVersion: state.masteryPolicyVersion ?? 'legacy',
       milestoneMastery: state.curriculumIds.map((unitId) =>
         state.milestoneMastery[unitId] ?? this.emptyMilestoneMastery(unitId)),
+      nextMasteryTarget,
       currentLesson:
         state.currentLesson?.status === 'active' && session.status === 'paused'
           ? { ...state.currentLesson, status: 'paused' }
@@ -2845,6 +3384,536 @@ export class RealLifeLanguageService {
     return code;
   }
 
+  private async requirePillarMilestoneProofs(
+    userId: string,
+    languageProfileId: string,
+    requiredMilestoneIds: readonly string[],
+  ): Promise<string[]> {
+    if (requiredMilestoneIds.length === 0) {
+      throw new UnprocessableEntityException('Pillar exam has no mapped milestone prerequisites.');
+    }
+    const rows = await this.prisma.languageMasteryAttempt.findMany({
+      where: {
+        userId,
+        languageProfileId,
+        scopeKind: LanguageMasteryScopeKind.milestone,
+        targetId: { in: [...requiredMilestoneIds] },
+        mappingVersion: RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+        policyVersion: LANGUAGE_MASTERY_POLICY_VERSION,
+        status: LanguageMasteryAttemptStatus.evaluated,
+        verdict: LanguageMasteryAttemptVerdict.mastered,
+        completion: { is: { status: LearningCompletionStatus.verified } },
+      },
+      select: {
+        targetId: true,
+        completion: { select: { id: true } },
+      },
+    });
+    const proofByTarget = new Map(
+      rows
+        .filter((row) => row.completion)
+        .map((row) => [row.targetId, row.completion!.id] as const),
+    );
+    const missing = requiredMilestoneIds.filter((id) => !proofByTarget.has(id));
+    if (missing.length > 0) {
+      throw new UnprocessableEntityException(
+        'Every mapped micro-milestone must be published before its pillar exam.',
+      );
+    }
+    return requiredMilestoneIds.map((id) => proofByTarget.get(id)!);
+  }
+
+  /** Rebuild the display/navigation projection from the append-only journal.
+   * ExperienceSession JSON is a cache only; it never grants mastery. */
+  private async reconcileCanonicalMastery(
+    userId: string,
+    profile: LanguageProfile,
+    state: StoredCourseState,
+    recoverInterruptedEvidence = true,
+  ): Promise<{
+    state: StoredCourseState;
+    progression: StoredRlleStrictProgression;
+    nextMasteryTarget: RlleNextMasteryTarget | null;
+    changed: boolean;
+  }> {
+    const languageCode = this.languageCode(profile);
+    let attempts = (await this.masteryAttempts.projection(userId, profile.id))
+      .filter((attempt) =>
+        attempt.mappingVersion === RLLE_LANGUAGE_MASTERY_MAPPING_VERSION
+        && attempt.policyVersion === LANGUAGE_MASTERY_POLICY_VERSION
+        && attempt.languageCode === languageCode
+        && attempt.scopeKind !== 'unit_autonomy');
+
+    if (recoverInterruptedEvidence) {
+      let recovered = false;
+      // The journal outcome and its canonical publication are two durable
+      // commits. A process interruption between them must be repaired from
+      // the evaluated attempt, but an unpublished mastered verdict must
+      // never be interpreted as credit while that repair is unavailable.
+      for (const attempt of attempts) {
+        if (
+          attempt.status === 'evaluated'
+          && attempt.verdict === 'mastered'
+          && !attempt.completionId
+        ) {
+          try {
+            await this.masteryAttempts.publishCompletion(userId, attempt.attemptId);
+            recovered = true;
+          } catch {
+            this.logger.warn(
+              'Interrupted language mastery publication could not be recovered; proof remains uncredited.',
+            );
+          }
+        }
+        if (
+          attempt.scopeKind === 'pillar_exam'
+          && attempt.status === 'evaluated'
+          && attempt.verdict === 'not-mastered'
+          && !attempt.remediation?.planId
+        ) {
+          try {
+            await this.masteryAttempts.startRemediationPlan(userId, {
+              failedAttemptId: attempt.attemptId,
+              idempotencyKey: 'pillar-failure:' + attempt.attemptId,
+            });
+            recovered = true;
+          } catch {
+            this.logger.warn(
+              'Interrupted language remediation creation could not be recovered; failure remains blocked.',
+            );
+          }
+        }
+      }
+      if (recovered) {
+        attempts = (await this.masteryAttempts.projection(userId, profile.id))
+          .filter((attempt) =>
+            attempt.mappingVersion === RLLE_LANGUAGE_MASTERY_MAPPING_VERSION
+            && attempt.policyVersion === LANGUAGE_MASTERY_POLICY_VERSION
+            && attempt.languageCode === languageCode
+            && attempt.scopeKind !== 'unit_autonomy');
+      }
+
+      for (const attempt of attempts) {
+        if (
+          attempt.scopeKind === 'pillar_exam'
+          && attempt.remediation?.planId
+          && attempt.remediation.lessonId
+          && attempt.remediation.status !== 'completed'
+          && attempt.remediation.completedExerciseCount
+            < attempt.remediation.requiredExerciseCount
+        ) {
+          const next = await this.masteryAttempts.reconcileRemediationExerciseAttempts(
+            userId,
+            attempt.attemptId,
+          );
+          recovered = recovered
+            || next.remediation?.evidenceCount !== attempt.remediation.evidenceCount;
+        }
+      }
+      if (recovered) {
+        attempts = (await this.masteryAttempts.projection(userId, profile.id))
+          .filter((attempt) =>
+            attempt.mappingVersion === RLLE_LANGUAGE_MASTERY_MAPPING_VERSION
+            && attempt.policyVersion === LANGUAGE_MASTERY_POLICY_VERSION
+            && attempt.languageCode === languageCode
+            && attempt.scopeKind !== 'unit_autonomy');
+      }
+    }
+
+    let progression = createRlleStrictProgression({
+      languageCode,
+      curriculumUnitIds: state.curriculumIds,
+      legacyCompletedUnitIds: state.legacyCompletedUnitIds,
+    });
+    if (
+      state.masteryPolicyVersion !== LANGUAGE_MASTERY_POLICY_VERSION
+      && attempts.length === 0
+    ) {
+      return {
+        state,
+        progression,
+        nextMasteryTarget: null,
+        changed: false,
+      };
+    }
+    const replayedCanonicalCompletionIds = new Set<string>();
+    for (const attempt of attempts) {
+      if (
+        !this.isCefr(attempt.cefrLevel)
+        || !attempt.pillar
+        || !(LANGUAGE_MASTERY_PILLARS as readonly string[]).includes(attempt.pillar)
+      ) continue;
+      const pillar = attempt.pillar as (typeof LANGUAGE_MASTERY_PILLARS)[number];
+      if (attempt.scopeKind === 'milestone') {
+        if (
+          !this.masteryAttemptIsTerminal(attempt)
+          || !attempt.decision
+          || !attempt.evaluatedAt
+          || !progression.milestones[attempt.targetId]
+        ) continue;
+        // A mastered decision is not product evidence until the canonical
+        // LearningCompletion exists. Failed/neutral outcomes still replay so
+        // retries and NOT_EVALUABLE semantics survive reconnects.
+        if (attempt.verdict === 'mastered' && !attempt.completionId) continue;
+        if (
+          attempt.verdict === 'mastered'
+          && attempt.completionId
+          && replayedCanonicalCompletionIds.has(attempt.completionId)
+        ) continue;
+        const evidenceId = attempt.completionId
+          ?? attempt.assessmentSubmissionId
+          ?? attempt.attemptId;
+        progression = recordRlleMilestoneDecision(progression, {
+          languageCode,
+          level: attempt.cefrLevel,
+          pillar,
+          milestoneId: attempt.targetId,
+          scopeKey: attempt.scopeKey,
+          evidenceId,
+          decision: attempt.decision,
+          evaluatedAt: attempt.evaluatedAt,
+        });
+        if (attempt.verdict === 'mastered' && attempt.completionId) {
+          replayedCanonicalCompletionIds.add(attempt.completionId);
+        }
+        continue;
+      }
+
+      const exam = progression.pillarExams[attempt.targetId];
+      if (!exam) continue;
+      // Do not put an unpublished mastered exam into the active projection:
+      // it grants no credit and recovery will either publish it idempotently
+      // on a later read or expose a fresh server-issued operation.
+      if (attempt.verdict === 'mastered' && !attempt.completionId) continue;
+      if (
+        attempt.verdict === 'mastered'
+        && attempt.completionId
+        && replayedCanonicalCompletionIds.has(attempt.completionId)
+      ) continue;
+      if (exam.activeAttemptId !== attempt.attemptId) {
+        try {
+          progression = startRllePillarExam(progression, {
+            examId: attempt.targetId,
+            attemptId: attempt.attemptId,
+          });
+        } catch {
+          // A stale pre-started sibling must not bypass a newer failed exam and
+          // its unresolved remediation. Keep it in the audit journal, but do
+          // not project it as active or grant any progress.
+          continue;
+        }
+      }
+      if (!this.masteryAttemptIsTerminal(attempt) || !attempt.decision || !attempt.evaluatedAt) {
+        continue;
+      }
+      progression = recordRllePillarExamDecision(progression, {
+        examId: attempt.targetId,
+        attemptId: attempt.attemptId,
+        evidenceId: attempt.completionId
+          ?? attempt.assessmentSubmissionId
+          ?? attempt.attemptId,
+        decision: attempt.decision,
+        evaluatedAt: attempt.evaluatedAt,
+        // The journal validates post-failure provenance independently. Empty is
+        // honest here because the pre-failure lesson exercise ids were never a
+        // mastery proof and must not be synthesized during replay.
+        baselineExerciseIds: [],
+      });
+      if (attempt.verdict === 'mastered' && attempt.completionId) {
+        replayedCanonicalCompletionIds.add(attempt.completionId);
+      }
+      if (attempt.verdict === 'not-mastered' && attempt.remediation?.evidence.length) {
+        const evidence = attempt.remediation.evidence.map<StoredRlleTargetedRemediationEvidence>(
+          (item) => ({
+            id: item.evidenceId,
+            format: item.trainingFormat as LanguageTrainingFormat,
+            state: item.state,
+            helpUsed: false,
+            mappingVersion: RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+            policyVersion: LANGUAGE_MASTERY_POLICY_VERSION,
+            languageCode,
+            level: attempt.cefrLevel as CefrLevel,
+            pillar,
+            examId: attempt.targetId,
+            sourceAttemptId: attempt.attemptId,
+            lessonId: item.lessonId,
+            contentVersion: item.sourceContentVersion,
+            exerciseIndex: item.exerciseIndex,
+            source: item.sourceKind as 'exercise-attempt' | 'audio-native-coaching',
+            sourceId: item.sourceRefId,
+            recordedAt: item.recordedAt,
+          }),
+        );
+        progression = recordRllePillarRemediationExercises(progression, {
+          examId: attempt.targetId,
+          evidence,
+        });
+      }
+    }
+
+    const completedUnitIds = state.curriculumIds.filter((unitId) => {
+      const mapping = RLLE_LANGUAGE_MASTERY_UNIT_MAP.find((item) => item.unitId === unitId);
+      return mapping ? rlleLevelGate(progression, mapping.level).unlocked : false;
+    });
+    const milestoneMastery = { ...state.milestoneMastery };
+    const currentLesson = state.currentLesson;
+    for (const unitId of state.curriculumIds) {
+      const current = milestoneMastery[unitId] ?? this.emptyMilestoneMastery(unitId);
+      const rows = attempts.filter((attempt) => {
+        if (attempt.scopeKind === 'milestone') {
+          return progression.milestones[attempt.targetId]?.unitId === unitId;
+        }
+        if (attempt.lessonId && (state.unitLessonIds[unitId] ?? []).includes(attempt.lessonId)) {
+          return true;
+        }
+        if (currentLesson?.lessonId === attempt.lessonId) {
+          return currentLesson.unitId === unitId;
+        }
+        const mapped = RLLE_LANGUAGE_MASTERY_UNIT_MAP.find((item) => item.unitId === unitId);
+        const firstAtLevel = state.curriculumIds.find((candidate) =>
+          RLLE_LANGUAGE_MASTERY_UNIT_MAP.find((item) => item.unitId === candidate)?.level
+            === attempt.cefrLevel);
+        return mapped?.level === attempt.cefrLevel && firstAtLevel === unitId;
+      });
+      const summaries = rows.map<RlleAutonomyAttemptSummary>((attempt) => {
+        const previous = current.attempts.find((item) => item.id === attempt.attemptId);
+        return {
+          id: attempt.attemptId,
+          assessmentId: attempt.assessmentId,
+          scopeKind: attempt.scopeKind === 'unit_autonomy' ? undefined : attempt.scopeKind,
+          targetId: attempt.targetId,
+          completionId: attempt.completionId,
+          status: attempt.status === 'technical-error'
+            ? 'technical-error'
+            : attempt.status === 'evaluated'
+            ? 'evaluated'
+            : attempt.status === 'assessment_bound'
+              ? 'active'
+              : 'starting',
+          helpUsed: attempt.helpUsed,
+          answerLeak: previous?.answerLeak ?? false,
+          decision: attempt.decision,
+          startedAt: attempt.startedAt,
+          completedAt: attempt.evaluatedAt,
+        };
+      }).slice(-MAX_AUTONOMY_ATTEMPTS_PER_UNIT);
+      const active = [...rows].reverse().find((attempt) => this.masteryAttemptIsActive(attempt));
+      const latest = rows.at(-1);
+      milestoneMastery[unitId] = {
+        ...current,
+        status: active
+          ? active.status === 'assessment_bound' ? 'autonomy-active' : 'autonomy-starting'
+          : latest?.verdict === 'not-evaluable'
+            ? 'not-evaluable'
+            : current.status === 'legacy-unverified'
+              ? 'legacy-unverified'
+              : 'training',
+        attempts: summaries,
+        activeAttemptId: active?.attemptId ?? null,
+        remediation: null,
+        masteredAt: null,
+      };
+    }
+    for (const unitId of completedUnitIds) {
+      const current = milestoneMastery[unitId] ?? this.emptyMilestoneMastery(unitId);
+      milestoneMastery[unitId] = {
+        ...current,
+        status: 'mastered',
+        activeAttemptId: null,
+        remediation: null,
+        masteredAt: current.masteredAt ?? new Date().toISOString(),
+      };
+    }
+    const latestFailed = [...attempts].reverse().find((attempt) =>
+      attempt.scopeKind === 'pillar_exam'
+      && attempt.verdict === 'not-mastered'
+      && attempt.remediation?.planId
+      && progression.pillarExams[attempt.targetId]?.status !== 'mastered');
+    if (latestFailed?.remediation) {
+      const remediationUnitId = state.currentLesson?.lessonId === latestFailed.remediation.lessonId
+        ? state.currentLesson.unitId
+        : state.curriculumIds.find((unitId) =>
+            (state.unitLessonIds[unitId] ?? []).includes(latestFailed.remediation!.lessonId ?? ''))
+          ?? state.curriculumIds.find((unitId) =>
+            RLLE_LANGUAGE_MASTERY_UNIT_MAP.find((item) => item.unitId === unitId)?.level
+              === latestFailed.cefrLevel)
+          ?? null;
+      if (remediationUnitId) {
+        const current = milestoneMastery[remediationUnitId]
+          ?? this.emptyMilestoneMastery(remediationUnitId);
+        milestoneMastery[remediationUnitId] = {
+          ...current,
+          status: 'remediation',
+          activeAttemptId: null,
+          remediation: {
+            sourceAttemptId: latestFailed.attemptId,
+            planId: latestFailed.remediation.planId ?? undefined,
+            requiredExerciseCount: latestFailed.remediation.requiredExerciseCount,
+            completedExerciseCount: latestFailed.remediation.completedExerciseCount,
+            ...(latestFailed.remediation.lessonId
+              ? { lessonId: latestFailed.remediation.lessonId }
+              : {}),
+          },
+          masteredAt: null,
+        };
+      }
+    }
+    const nextMasteryTarget = await this.projectNextMasteryTarget(
+      userId,
+      profile,
+      state,
+      progression,
+      attempts,
+    );
+    const targetUnitId = nextMasteryTarget?.scopeKind === 'milestone'
+      ? progression.milestones[nextMasteryTarget.targetId]?.unitId ?? null
+      : null;
+    const currentUnitId = targetUnitId
+      ?? state.curriculumIds.find((unitId) => !completedUnitIds.includes(unitId))
+      ?? null;
+    const nextState = {
+      ...state,
+      completedUnitIds,
+      currentUnitId,
+      milestoneMastery,
+    };
+    return {
+      state: nextState,
+      progression,
+      nextMasteryTarget,
+      changed:
+        currentUnitId !== state.currentUnitId
+        || completedUnitIds.join('|') !== state.completedUnitIds.join('|')
+        || JSON.stringify(milestoneMastery) !== JSON.stringify(state.milestoneMastery),
+    };
+  }
+
+  private async projectNextMasteryTarget(
+    userId: string,
+    profile: LanguageProfile,
+    state: StoredCourseState,
+    progression: StoredRlleStrictProgression,
+    attempts: LanguageMasteryAttemptProjection[],
+  ): Promise<RlleNextMasteryTarget | null> {
+    const runtimeAvailable = this.strictMasteryAvailable(profile);
+    const orderedLevels = [...new Set(
+      state.curriculumIds
+        .map((unitId) => RLLE_LANGUAGE_MASTERY_UNIT_MAP.find((item) => item.unitId === unitId)?.level)
+        .filter((level): level is CefrLevel => Boolean(level)),
+    )];
+    const currentLevel = orderedLevels.find((level) => !rlleLevelGate(progression, level).unlocked);
+    if (!currentLevel) return null;
+    const orderedMilestones = state.curriculumIds.flatMap((unitId) => {
+      const mapped = RLLE_LANGUAGE_MASTERY_UNIT_MAP.find((item) => item.unitId === unitId);
+      return mapped?.level === currentLevel ? mapped.milestones : [];
+    });
+    const milestone = orderedMilestones.find(
+      (candidate) => progression.milestones[candidate.id]?.status !== 'mastered',
+    );
+    if (milestone) {
+      const rows = attempts.filter((attempt) =>
+        attempt.scopeKind === 'milestone' && attempt.targetId === milestone.id);
+      const active = [...rows].reverse().find((attempt) => this.masteryAttemptIsActive(attempt));
+      const unitId = progression.milestones[milestone.id]?.unitId;
+      let trainingComplete = false;
+      if (unitId && state.currentLesson?.unitId === unitId) {
+        const mastery = state.milestoneMastery[unitId] ?? this.emptyMilestoneMastery(unitId);
+        const training = await this.trainingEvidenceForLesson(
+          userId,
+          state.currentLesson,
+          mastery.trainingEvidence,
+        );
+        trainingComplete = missingLanguageTrainingFormats(training).length === 0;
+      }
+      return {
+        scopeKind: 'milestone',
+        targetId: milestone.id,
+        operationKey: active?.idempotencyKey
+          ?? this.masteryOperationKey(profile.id, 'milestone', milestone.id, rows.length, null),
+        eligible: runtimeAvailable && !active && trainingComplete,
+        blockedReason: active
+          ? 'assessment-active'
+          : !runtimeAvailable
+            ? 'capability-unavailable'
+            : !trainingComplete
+              ? 'training-incomplete'
+              : null,
+        remediationPlanId: null,
+        activeAttemptId: active?.attemptId ?? null,
+        assessmentId: active?.assessmentId ?? null,
+      };
+    }
+
+    const orderedExams = getRlleLevelPillarPlans(currentLevel);
+    const plan = orderedExams.find(
+      (candidate) => progression.pillarExams[candidate.examId]?.status !== 'mastered',
+    );
+    if (!plan) return null;
+    const exam = progression.pillarExams[plan.examId];
+    const rows = attempts.filter((attempt) =>
+      attempt.scopeKind === 'pillar_exam' && attempt.targetId === plan.examId);
+    const active = [...rows].reverse().find((attempt) =>
+      this.masteryAttemptIsActive(attempt) && exam.activeAttemptId === attempt.attemptId);
+    const failed = [...rows].reverse().find((attempt) =>
+      attempt.verdict === 'not-mastered' && attempt.remediation?.planId);
+    const remediationPlanId = failed?.remediation?.planId ?? null;
+    const eligibleState = exam.status === 'ready' || exam.status === 'not-evaluable';
+    const remediationRequired = exam.status === 'remediation';
+    return {
+      scopeKind: 'pillar_exam',
+      targetId: plan.examId,
+      operationKey: active?.idempotencyKey
+        ?? this.masteryOperationKey(
+          profile.id,
+          'pillar_exam',
+          plan.examId,
+          rows.length,
+          remediationPlanId,
+        ),
+      eligible: runtimeAvailable && !active && eligibleState,
+      blockedReason: active
+        ? 'assessment-active'
+        : remediationRequired
+          ? 'remediation-required'
+          : !runtimeAvailable
+            ? 'capability-unavailable'
+            : !eligibleState
+              ? 'prerequisite-incomplete'
+              : null,
+      remediationPlanId,
+      activeAttemptId: active?.attemptId ?? null,
+      assessmentId: active?.assessmentId ?? null,
+    };
+  }
+
+  private masteryOperationKey(
+    profileId: string,
+    scopeKind: 'milestone' | 'pillar_exam',
+    targetId: string,
+    terminalAttemptCount: number,
+    remediationPlanId: string | null,
+  ): string {
+    return `rlle-op:${createHash('sha256')
+      .update([
+        profileId,
+        RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+        LANGUAGE_MASTERY_POLICY_VERSION,
+        scopeKind,
+        targetId,
+        terminalAttemptCount,
+        remediationPlanId ?? 'initial',
+      ].join(':'))
+      .digest('hex')}`;
+  }
+
+  private masteryAttemptIsActive(attempt: LanguageMasteryAttemptProjection): boolean {
+    return attempt.status === 'started' || attempt.status === 'assessment_bound';
+  }
+
+  private masteryAttemptIsTerminal(attempt: LanguageMasteryAttemptProjection): boolean {
+    return attempt.status === 'evaluated' || attempt.status === 'technical-error';
+  }
+
   private defaultImmersion(level: CefrLevel): ImmersionIntensity {
     if (level === 'A1' || level === 'A2') return 'guided';
     if (level === 'B1' || level === 'B2') return 'mixed';
@@ -2870,7 +3939,7 @@ export class RealLifeLanguageService {
     return Boolean(
       coverage
       && this.speech.supportsSynthesis
-      && this.speech.supportsAnalysis
+      && this.speech.supportsPronunciationAssessment
       && coverage.transcriptionLanguageCodes.includes(languageCode)
       && coverage.synthesisLanguageCodes.includes(languageCode)
       && coverage.pronunciationAssessmentLanguageCodes.includes(languageCode)

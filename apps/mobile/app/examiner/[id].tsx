@@ -12,6 +12,7 @@ import {
   loadRlleCourse,
   markRlleAutonomyHelp,
   submitRlleAutonomy,
+  submitRlleScopedMastery,
 } from '../../lib/language-rll-client';
 import { useTokens } from '../../lib/design/theme';
 import type { ColorScale } from '../../lib/design/tokens';
@@ -29,11 +30,29 @@ export default function AssessmentScreen() {
     languageProfileId?: string;
     experienceSessionId?: string;
     lessonId?: string;
+    mastery?: string;
+    masteryAttemptId?: string;
+    masteryScopeKind?: string;
   }>();
   const { id } = params;
+  const scopedMasteryKind = params.masteryScopeKind === 'milestone'
+    || params.masteryScopeKind === 'pillar_exam'
+    ? params.masteryScopeKind
+    : null;
+  const scopedMastery = featureFlags.languageMasteryV1
+    && params.mastery === '1'
+    && Boolean(
+      params.languageProfileId
+      && params.experienceSessionId
+      && params.lessonId
+      && params.masteryAttemptId
+      && scopedMasteryKind,
+    );
   const autonomy = featureFlags.languageMasteryV1
+    && !scopedMastery
     && params.autonomy === '1'
     && Boolean(params.languageProfileId && params.experienceSessionId && params.lessonId);
+  const languageMasteryAssessment = scopedMastery || autonomy;
   const router = useRouter();
   const [assessment, setAssessment] = useState<AssessmentView | null>(null);
   const [answers, setAnswers] = useState<string[]>([]);
@@ -48,19 +67,27 @@ export default function AssessmentScreen() {
       setAssessment(a);
       setAnswers(a.questions.map(() => ''));
       setResult(a.latestSubmission);
-      if (autonomy && params.languageProfileId) {
+      if (languageMasteryAssessment && params.languageProfileId) {
         const loaded = await loadRlleCourse(params.languageProfileId);
         if (loaded.kind === 'live') {
           const attempt = loaded.course.milestoneMastery
             .flatMap((item) => item.attempts)
-            .find((item) => item.assessmentId === id);
+            .find((item) => scopedMastery
+              ? item.id === params.masteryAttemptId
+              : item.assessmentId === id);
           setMasteryDecision(attempt?.decision ?? null);
         }
       }
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [autonomy, id, params.languageProfileId]);
+  }, [
+    id,
+    languageMasteryAssessment,
+    params.languageProfileId,
+    params.masteryAttemptId,
+    scopedMastery,
+  ]);
 
   useEffect(() => {
     void load();
@@ -73,7 +100,25 @@ export default function AssessmentScreen() {
     setBusy(true);
     setError(null);
     try {
-      if (autonomy && params.languageProfileId && params.experienceSessionId && params.lessonId) {
+      if (
+        scopedMastery
+        && scopedMasteryKind
+        && params.languageProfileId
+        && params.experienceSessionId
+        && params.lessonId
+        && params.masteryAttemptId
+      ) {
+        const response = await submitRlleScopedMastery(params.languageProfileId, {
+          experienceSessionId: params.experienceSessionId,
+          lessonId: params.lessonId,
+          scopeKind: scopedMasteryKind,
+          attemptId: params.masteryAttemptId,
+          assessmentId: id,
+          answers,
+        });
+        setResult(response.submission);
+        setMasteryDecision(response.decision);
+      } else if (autonomy && params.languageProfileId && params.experienceSessionId && params.lessonId) {
         const response = await submitRlleAutonomy(params.languageProfileId, {
           experienceSessionId: params.experienceSessionId,
           lessonId: params.lessonId,
@@ -149,7 +194,7 @@ export default function AssessmentScreen() {
         </Card>
       ) : null}
 
-      {autonomy && !result ? (
+      {languageMasteryAssessment && !result ? (
         <Card style={styles.rulesCard} testID="language-autonomy-rules">
           <Text style={styles.rulesTitle}>{t('teacher.exam.helpNone')}</Text>
           <Text style={styles.rulesDetail}>{t('rlle.ui.autonomy.notice' as TranslationKey)}</Text>
@@ -250,7 +295,7 @@ export default function AssessmentScreen() {
         variant="ghost"
         label={t('examiner.back')}
         onPress={() => router.replace((
-          autonomy && params.languageProfileId
+          languageMasteryAssessment && params.languageProfileId
             ? `/languages/${params.languageProfileId}/course/lesson`
             : '/examiner'
         ) as never)}

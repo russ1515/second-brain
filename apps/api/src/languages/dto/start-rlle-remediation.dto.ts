@@ -1,4 +1,4 @@
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import type { StartRlleRemediationRequest } from '@second-brain/shared';
 
 export class StartRlleRemediationDto implements StartRlleRemediationRequest {
@@ -14,4 +14,9 @@ export class StartRlleRemediationDto implements StartRlleRemediationRequest {
   @MinLength(8)
   @MaxLength(200)
   idempotencyKey!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(240)
+  failedAttemptId?: string;
 }

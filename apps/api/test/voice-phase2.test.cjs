@@ -107,6 +107,223 @@ test('speech metering reserves once, measures WAV duration and does not double-c
   assert.equal(envelope.measure(result).providerRequestId, 'req-1');
 });
 
+test('generic audio analysis never substitutes for the dedicated acoustic assessment seam', async () => {
+  let genericAnalysisCalls = 0;
+  const speech = new SpeechService({
+    name: 'gemini',
+    transcribe: async () => ({
+      text: 'hello', language: 'en', provider: 'gemini', model: 'stt-test',
+    }),
+    analyze: async () => {
+      genericAnalysisCalls += 1;
+      return { text: '{"accuracy":100}' };
+    },
+  });
+
+  assert.equal(speech.supportsAnalysis, true);
+  assert.equal(speech.supportsPronunciationAssessment, false);
+  const referenceText = 'This answer must never be returned or logged.';
+  const result = await speech.assessPronunciation(oneSecondWav(), {
+    mimeType: 'audio/wav',
+    locale: 'en-US',
+    mode: 'scripted-reference',
+    rubricVersion: 'language-mastery-v1',
+    requiredDimensions: ['accuracy', 'fluency'],
+    referenceText,
+  });
+
+  assert.equal(genericAnalysisCalls, 0);
+  assert.equal(result.outcome, 'not-evaluable');
+  assert.equal(result.reason, 'assessment-provider-unavailable');
+  assert.deepEqual(result.dimensions, []);
+  assert.equal(result.provider, null);
+  assert.match(result.referenceTextFingerprint, /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(referenceText));
+});
+
+test('simulated acoustic provider is metered once and yields only normalized raw dimensions', async () => {
+  let providerCalls = 0;
+  let meteringCalls = 0;
+  let attemptCalls = 0;
+  let envelope;
+  let attemptEnvelope;
+  const acousticProvider = {
+    name: 'azure-speech-simulated',
+    model: 'pronunciation-assessment-simulated',
+    adapterVersion: 'azure-pa-adapter-v1',
+    supports: ({ locale, mode, requiredDimensions }) =>
+      locale === 'en-US'
+      && mode === 'scripted-reference'
+      && requiredDimensions.includes('accuracy')
+      && requiredDimensions.includes('fluency'),
+    assess: async () => {
+      providerCalls += 1;
+      await Promise.resolve();
+      return {
+        providerLocale: 'en-US',
+        providerRequestId: 'req-acoustic-1',
+        audioSeconds: 1,
+        outcome: 'evaluated',
+        dimensions: [
+          { kind: 'accuracy', rawValue: 92, range: { min: 0, max: 100 } },
+          { kind: 'fluency', rawValue: 88, range: { min: 0, max: 100 } },
+        ],
+        reason: null,
+      };
+    },
+  };
+  const metering = {
+    executeWithAttempts: async (input, operation) => {
+      meteringCalls += 1;
+      envelope = input;
+      const value = await operation({
+        attempt: (call, attemptInput) => {
+          attemptCalls += 1;
+          attemptEnvelope = attemptInput;
+          return call();
+        },
+      });
+      assert.equal(input.measure(value).providerRequestId, 'req-acoustic-1');
+      return value;
+    },
+  };
+  const speech = new SpeechService({
+    name: 'openai',
+    transcribe: async () => ({
+      text: 'hello', language: 'en', provider: 'openai', model: 'stt-test',
+    }),
+  }, metering, undefined, acousticProvider);
+  const options = {
+    mimeType: 'audio/wav',
+    locale: 'en-US',
+    mode: 'scripted-reference',
+    rubricVersion: 'language-mastery-v1',
+    requiredDimensions: ['accuracy', 'fluency'],
+    referenceText: 'A private scripted answer',
+  };
+
+  const [first, second] = await Promise.all([
+    speech.assessPronunciation(oneSecondWav(), options),
+    speech.assessPronunciation(oneSecondWav(), options),
+  ]);
+
+  assert.equal(providerCalls, 1);
+  assert.equal(meteringCalls, 1);
+  assert.equal(attemptCalls, 1);
+  assert.deepEqual(first, second);
+  assert.equal(first.outcome, 'evaluated');
+  assert.equal(first.provider, 'azure-speech-simulated');
+  assert.equal(first.providerAdapterVersion, 'azure-pa-adapter-v1');
+  assert.deepEqual(first.dimensions, [
+    { kind: 'accuracy', rawValue: 92, range: { min: 0, max: 100 } },
+    { kind: 'fluency', rawValue: 88, range: { min: 0, max: 100 } },
+  ]);
+  assert.equal('score' in first, false);
+  assert.equal('transcript' in first, false);
+  assert.doesNotMatch(JSON.stringify(first), /A private scripted answer/);
+  assert.equal(envelope.provider, 'azure-speech-simulated');
+  assert.equal(envelope.model, 'pronunciation-assessment-simulated');
+  assert.deepEqual(attemptEnvelope, {
+    provider: 'azure-speech-simulated',
+    model: 'pronunciation-assessment-simulated',
+  });
+  assert.equal(envelope.resource, 'VOICE_SECONDS');
+  assert.equal(envelope.units, 1);
+  assert.equal(envelope.quotaUnits(first), 1);
+  assert.doesNotMatch(JSON.stringify(envelope.metadata), /private scripted/i);
+});
+
+test('malformed or incomplete acoustic responses fail closed without a score', async () => {
+  const baseSpeech = {
+    name: 'openai',
+    transcribe: async () => ({
+      text: 'hello', language: 'en', provider: 'openai', model: 'stt-test',
+    }),
+  };
+  const options = {
+    mimeType: 'audio/wav',
+    locale: 'en-US',
+    mode: 'spontaneous',
+    rubricVersion: 'language-mastery-v1',
+    requiredDimensions: ['accuracy', 'fluency'],
+  };
+  const provider = (dimensions) => ({
+    name: 'azure-speech-simulated',
+    model: 'pronunciation-assessment-simulated',
+    adapterVersion: 'azure-pa-adapter-v1',
+    supports: () => true,
+    assess: async () => ({
+      providerLocale: 'en-US',
+      providerRequestId: 'req-invalid',
+      audioSeconds: 1,
+      outcome: 'evaluated',
+      dimensions,
+      reason: null,
+    }),
+  });
+
+  const missing = await new SpeechService(
+    baseSpeech,
+    undefined,
+    undefined,
+    provider([
+      { kind: 'accuracy', rawValue: 90, range: { min: 0, max: 100 } },
+    ]),
+  ).assessPronunciation(oneSecondWav(), options);
+  assert.equal(missing.outcome, 'technical-error');
+  assert.equal(missing.reason, 'required-dimension-missing');
+  assert.deepEqual(missing.dimensions, []);
+
+  const outOfRange = await new SpeechService(
+    baseSpeech,
+    undefined,
+    undefined,
+    provider([
+      { kind: 'accuracy', rawValue: 101, range: { min: 0, max: 100 } },
+      { kind: 'fluency', rawValue: 90, range: { min: 0, max: 100 } },
+    ]),
+  ).assessPronunciation(oneSecondWav(), options);
+  assert.equal(outOfRange.outcome, 'technical-error');
+  assert.equal(outOfRange.reason, 'provider-response-invalid');
+  assert.deepEqual(outOfRange.dimensions, []);
+});
+
+test('unmetered acoustic failures are attributed to the acoustic provider without leaking details', async () => {
+  const service = new SpeechService({
+    name: 'openai',
+    transcribe: async () => ({
+      text: 'hello', language: 'en', provider: 'openai', model: 'stt-test',
+    }),
+  }, undefined, undefined, {
+    name: 'azure-speech-simulated',
+    model: 'pronunciation-assessment-simulated',
+    adapterVersion: 'azure-pa-adapter-v1',
+    supports: () => true,
+    assess: async () => {
+      const error = new Error('private-provider-detail');
+      error.code = 'E_ACOUSTIC_TEST';
+      throw error;
+    },
+  });
+  const logs = [];
+  service.logger.error = (message) => logs.push(String(message));
+
+  const result = await service.assessPronunciation(oneSecondWav(), {
+    mimeType: 'audio/wav',
+    locale: 'en-US',
+    mode: 'spontaneous',
+    rubricVersion: 'language-mastery-v1',
+    requiredDimensions: ['accuracy', 'fluency'],
+  });
+
+  assert.equal(result.outcome, 'technical-error');
+  assert.equal(result.reason, 'provider-request-failed');
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /provider=azure-speech-simulated/);
+  assert.doesNotMatch(logs[0], /provider=openai/);
+  assert.doesNotMatch(logs[0], /private-provider-detail/);
+});
+
 test('language Professor keeps UI, native, support and target roles separate and paired', () => {
   const prompt = languageSystemPrompt({
     language: 'English',

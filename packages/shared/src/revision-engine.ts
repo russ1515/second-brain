@@ -41,6 +41,8 @@ export interface ReviewableView extends ReviewSignals {
   /** The underlying entity id (lessonId, homeworkId, conceptId…). */
   refId: string;
   title: string;
+  /** Whether this item has entered the authoritative FSRS due schedule. */
+  isScheduled: boolean;
   reps: number;
   lapses: number;
   /** Whether it is due now. */

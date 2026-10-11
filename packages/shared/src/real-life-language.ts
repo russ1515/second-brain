@@ -7,6 +7,8 @@ import type { AssessmentSubmissionView, AssessmentView } from './assessment';
 import type {
   LanguageMasteryDecision,
   LanguageTrainingEvidence,
+  LanguageTrainingEvidenceState,
+  LanguageTrainingFormat,
 } from './language-mastery';
 
 /**
@@ -132,6 +134,10 @@ export type RlleMilestoneMasteryStatus =
 export interface RlleAutonomyAttemptSummary {
   id: string;
   assessmentId: string | null;
+  /** Optional canonical strict-scope projection. Legacy aggregate attempts omit it. */
+  scopeKind?: RlleScopedMasteryKind;
+  targetId?: string;
+  completionId?: string | null;
   status: 'starting' | 'active' | 'grading' | 'evaluated' | 'technical-error';
   helpUsed: boolean;
   answerLeak: boolean;
@@ -148,6 +154,9 @@ export interface RlleMilestoneMasteryState {
   activeAttemptId: string | null;
   remediation: null | {
     sourceAttemptId: string;
+    /** Durable server-side plan joining the failed pillar exam to its generated
+     * lesson, ten new exercise attempts and retest. */
+    planId?: string;
     requiredExerciseCount: number;
     completedExerciseCount: number;
     generationKey?: string;
@@ -323,6 +332,26 @@ export interface RlleCourseProgress {
   dimensions: RlleDimensionProgress[];
 }
 
+/** Server-authoritative next strict-mastery action. Clients must never derive
+ * prerequisite, remediation or unlock state from the curriculum map. */
+export interface RlleNextMasteryTarget {
+  scopeKind: 'milestone' | 'pillar_exam';
+  targetId: string;
+  /** Stable server-issued idempotency key for this exact next operation. */
+  operationKey: string;
+  eligible: boolean;
+  blockedReason:
+    | 'capability-unavailable'
+    | 'training-incomplete'
+    | 'prerequisite-incomplete'
+    | 'remediation-required'
+    | 'assessment-active'
+    | null;
+  remediationPlanId: string | null;
+  activeAttemptId: string | null;
+  assessmentId: string | null;
+}
+
 export interface RlleCourseView {
   profileId: string;
   languageCode: SupportedLanguageCode;
@@ -337,6 +366,8 @@ export interface RlleCourseView {
    * policy are explicitly legacy-unverified and are never backfilled as 90%. */
   masteryPolicyVersion: string;
   milestoneMastery: RlleMilestoneMasteryState[];
+  /** Null when the current course has no strict mastery target. */
+  nextMasteryTarget: RlleNextMasteryTarget | null;
   currentLesson: RlleLessonOutline | null;
   currentMission: RlleWorldMissionAttempt | null;
   canDoMap: RlleCanDoCapability[];
@@ -426,6 +457,57 @@ export interface StartRlleRemediationRequest {
   experienceSessionId: string;
   lessonId: string;
   idempotencyKey: string;
+  /** Canonical failed pillar attempt. Legacy unit remediation omits it. */
+  failedAttemptId?: string;
+}
+
+export type RlleScopedMasteryKind = 'milestone' | 'pillar_exam';
+
+/** Public request carries only stable target ids. Mapping, versions, pillar,
+ * threshold and criteria are always resolved by the API. */
+export interface StartRlleScopedMasteryRequest {
+  experienceSessionId: string;
+  lessonId: string;
+  scopeKind: RlleScopedMasteryKind;
+  targetId: string;
+  idempotencyKey: string;
+  remediationPlanId?: string;
+}
+
+export interface SubmitRlleScopedMasteryRequest {
+  experienceSessionId: string;
+  lessonId: string;
+  scopeKind: RlleScopedMasteryKind;
+  attemptId: string;
+  assessmentId: string;
+  answers: string[];
+}
+
+export interface RlleScopedMasteryStartResponse {
+  attemptId: string;
+  scopeKind: RlleScopedMasteryKind;
+  targetId: string;
+  assessment: AssessmentView;
+  course: RlleCourseView;
+}
+
+export interface RlleScopedMasterySubmissionResponse {
+  attemptId: string;
+  scopeKind: RlleScopedMasteryKind;
+  targetId: string;
+  submission: AssessmentSubmissionView;
+  decision: LanguageMasteryDecision;
+  completionId: string | null;
+  course: RlleCourseView;
+}
+
+export interface RecordRlleRemediationExerciseRequest {
+  remediationPlanId: string;
+  failedAttemptId: string;
+  lessonId: string;
+  exerciseAttemptId: string;
+  exerciseIndex: number;
+  trainingFormat: LanguageTrainingFormat;
 }
 
 export interface RlleAutonomySubmissionResponse {

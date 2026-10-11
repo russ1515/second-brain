@@ -9,6 +9,14 @@ const shared = require('../../../packages/shared/dist/index.js');
 const {
   LanguageMasteryAttemptService,
 } = require('../dist/languages/language-mastery-attempt.service.js');
+const {
+  RealLifeLanguageService,
+} = require('../dist/languages/real-life-language.service.js');
+
+const CANONICAL_UNIT = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP.find((unit) => unit.milestones.length > 0);
+const CANONICAL_MILESTONE = CANONICAL_UNIT.milestones[0];
+const CANONICAL_PLAN = shared.getRlleLevelPillarPlans(CANONICAL_UNIT.level)
+  .find((plan) => plan.contentReady);
 
 function uniqueConflict() {
   return new Prisma.PrismaClientKnownRequestError('simulated concurrent unique winner', {
@@ -48,14 +56,17 @@ function memoryPrisma() {
     assessments: [],
     submissions: [],
     attempts: [],
+    remediationPlans: [],
     remediation: [],
     completions: [],
     exercises: [],
   };
 
   const matches = (row, where) => Object.entries(where ?? {}).every(([key, value]) => {
-    if (key === 'languageMasteryAttemptId' && value?.in) return value.in.includes(row[key]);
-    if (key === 'status' && value?.in) return value.in.includes(row[key]);
+    if (key === 'OR' && Array.isArray(value)) return value.some((candidate) => matches(row, candidate));
+    if (value && typeof value === 'object' && Array.isArray(value.in)) {
+      return value.in.includes(row[key]);
+    }
     return row[key] === value;
   });
   const decorate = (row) => ({
@@ -64,13 +75,23 @@ function memoryPrisma() {
     remediationEvidence: rows.remediation
       .filter((item) => item.languageMasteryAttemptId === row.id)
       .sort((a, b) => a.recordedAt - b.recordedAt),
+    failedRemediationPlan: rows.remediationPlans.find((item) => item.failedAttemptId === row.id) ?? null,
+  });
+  const decoratePlan = (row) => ({
+    ...row,
+    failedAttempt: rows.attempts.find((item) => item.id === row.failedAttemptId) ?? null,
+    evidence: rows.remediation
+      .filter((item) => item.remediationPlanId === row.id)
+      .sort((a, b) => a.recordedAt - b.recordedAt),
   });
   let attemptSequence = 0;
+  let remediationPlanSequence = 0;
   let remediationSequence = 0;
 
   const prisma = {
     rows,
     $transaction: async (callback) => callback(prisma),
+    $executeRaw: async () => 1,
     languageProfile: {
       findFirst: async ({ where }) => rows.profiles.find((row) => matches(row, where)) ?? null,
     },
@@ -92,6 +113,13 @@ function memoryPrisma() {
     },
     exerciseAttempt: {
       findFirst: async ({ where }) => rows.exercises.find((row) => matches(row, where)) ?? null,
+      findMany: async ({ where }) => rows.exercises
+        .filter((row) => row.userId === where.userId
+          && row.lessonId === where.lessonId
+          && row.contentVersion === where.contentVersion
+          && row.createdAt > where.createdAt.gt)
+        .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+        .map((row) => ({ id: row.id, exerciseIndex: row.exerciseIndex })),
     },
     languageMasteryAttempt: {
       findUnique: async ({ where }) => {
@@ -108,7 +136,11 @@ function memoryPrisma() {
         if (!row) throw new Error('not found');
         return decorate(row);
       },
-      findFirst: async ({ where }) => rows.attempts.find((row) => matches(row, where)) ?? null,
+      findFirst: async ({ where, include }) => {
+        const row = rows.attempts.find((item) => matches(item, where));
+        if (!row) return null;
+        return include?.failedRemediationPlan ? decorate(row) : row;
+      },
       findMany: async ({ where, select }) => {
         const found = rows.attempts.filter((row) => matches(row, where));
         return select ? found.map((row) => ({ id: row.id })) : found.map(decorate);
@@ -146,12 +178,46 @@ function memoryPrisma() {
       deleteMany: async ({ where }) => {
         const ids = new Set(rows.attempts.filter((row) => matches(row, where)).map((row) => row.id));
         rows.attempts = rows.attempts.filter((row) => !ids.has(row.id));
+        const planIds = new Set(rows.remediationPlans
+          .filter((row) => ids.has(row.failedAttemptId))
+          .map((row) => row.id));
+        rows.remediationPlans = rows.remediationPlans.filter((row) => !planIds.has(row.id));
         rows.remediation = rows.remediation.filter((row) => !ids.has(row.languageMasteryAttemptId));
         return { count: ids.size };
       },
     },
+    languageMasteryRemediationPlan: {
+      findFirst: async ({ where }) => {
+        const row = rows.remediationPlans.find((item) => matches(item, where));
+        return row ? decoratePlan(row) : null;
+      },
+      findUniqueOrThrow: async ({ where }) => {
+        const row = rows.remediationPlans.find((item) => item.id === where.id);
+        if (!row) throw new Error('not found');
+        return decoratePlan(row);
+      },
+      create: async ({ data }) => {
+        const row = {
+          id: `remediation-plan-${++remediationPlanSequence}`,
+          remediationLessonId: null,
+          readyAt: null,
+          lessonBoundAt: null,
+          completedAt: null,
+          startedAt: new Date('2026-10-10T08:06:00.000Z'),
+          ...data,
+        };
+        rows.remediationPlans.push(row);
+        return decoratePlan(row);
+      },
+      updateMany: async ({ where, data }) => {
+        const candidates = rows.remediationPlans.filter((row) => matches(row, where));
+        candidates.forEach((row) => Object.assign(row, data));
+        return { count: candidates.length };
+      },
+    },
     languageMasteryRemediationEvidence: {
       findFirst: async ({ where }) => rows.remediation.find((row) => matches(row, where)) ?? null,
+      count: async ({ where }) => rows.remediation.filter((row) => matches(row, where)).length,
       create: async ({ data }) => {
         const row = { id: `repair-${++remediationSequence}`, createdAt: new Date(), ...data };
         rows.remediation.push(row);
@@ -160,6 +226,7 @@ function memoryPrisma() {
     },
     learningCompletion: {
       findFirst: async ({ where }) => rows.completions.find((row) => matches(row, where)) ?? null,
+      findMany: async ({ where }) => rows.completions.filter((row) => matches(row, where)),
       update: async ({ where, data }) => {
         const row = rows.completions.find((item) => item.id === where.id);
         Object.assign(row, data);
@@ -171,27 +238,68 @@ function memoryPrisma() {
         return { count: deleted.length };
       },
     },
+    learningCompletionReviewable: {
+      findMany: async () => [],
+    },
+    reviewable: {
+      deleteMany: async () => ({ count: 0 }),
+    },
   };
   return prisma;
 }
 
 function scope(overrides = {}) {
+  const scopeKind = overrides.scopeKind ?? 'milestone';
+  const languageCode = overrides.languageCode ?? 'en';
+  const canonical = scopeKind === 'pillar_exam'
+    ? {
+        targetId: CANONICAL_PLAN.examId,
+        scopeKey: [
+          shared.RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+          languageCode,
+          CANONICAL_UNIT.level,
+          CANONICAL_PLAN.pillar,
+          CANONICAL_PLAN.examId,
+          'pillar-exam',
+        ].join(':'),
+        masteryContentVersion: null,
+        contentDefinitionId: null,
+        pillar: CANONICAL_PLAN.pillar,
+      }
+    : scopeKind === 'milestone'
+      ? {
+          targetId: CANONICAL_MILESTONE.id,
+          scopeKey: shared.rlleMilestoneEvidenceScopeKey({
+            languageCode,
+            milestone: CANONICAL_MILESTONE,
+          }),
+          masteryContentVersion: CANONICAL_MILESTONE.contentVersion,
+          contentDefinitionId: CANONICAL_MILESTONE.contentDefinitionId,
+          pillar: CANONICAL_MILESTONE.pillar,
+        }
+      : {
+          targetId: 'unit-b1-1',
+          scopeKey: `${shared.RLLE_LANGUAGE_MASTERY_MAPPING_VERSION}:${languageCode}:${CANONICAL_UNIT.level}:unit:unit-b1-1`,
+          masteryContentVersion: null,
+          contentDefinitionId: null,
+          pillar: null,
+        };
   return {
     languageProfileId: 'profile-owner',
     experienceSessionId: 'session-owner',
     lessonId: 'lesson-owner',
     idempotencyKey: 'attempt-key-1',
-    scopeKind: 'milestone',
-    scopeKey: `${shared.RLLE_LANGUAGE_MASTERY_MAPPING_VERSION}:en:B1:communication-situations:milestone-1`,
-    targetId: 'milestone-1',
+    scopeKind,
+    scopeKey: canonical.scopeKey,
+    targetId: canonical.targetId,
     mappingVersion: shared.RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
     policyVersion: shared.LANGUAGE_MASTERY_POLICY_VERSION,
-    masteryContentVersion: null,
-    contentDefinitionId: null,
+    masteryContentVersion: canonical.masteryContentVersion,
+    contentDefinitionId: canonical.contentDefinitionId,
     sourceContentVersion: 3,
-    languageCode: 'en',
-    cefrLevel: 'B1',
-    pillar: 'communication-situations',
+    languageCode,
+    cefrLevel: CANONICAL_UNIT.level,
+    pillar: canonical.pillar,
     ...overrides,
   };
 }
@@ -220,6 +328,8 @@ function bindAssessment(prisma, attempt, id = 'assessment-1') {
     userId: 'owner',
     lessonId: 'lesson-owner',
     contentVersion: 3,
+    masteryCreationKey: attempt.attemptId,
+    masteryGenerationStatus: 'ready',
   });
   return id;
 }
@@ -231,14 +341,23 @@ function submission(prisma, assessmentId, id, awarded, maximum, displayScore) {
     assessmentId,
     score: displayScore,
     results: [{ questionId: 'q1', awarded, max: maximum }],
+    masteryGenerationStatus: 'ready',
     createdAt: new Date('2026-10-10T08:05:00.000Z'),
   });
   return id;
 }
 
+function masteryService(prisma) {
+  return new LanguageMasteryAttemptService(prisma, {
+    finalizeLanguageMastery: async () => {
+      throw new Error('BLOCKED_CAPABILITY');
+    },
+  });
+}
+
 test('start is owner-scoped and idempotent without duplicating an attempt', async () => {
   const prisma = memoryPrisma();
-  const service = new LanguageMasteryAttemptService(prisma);
+  const service = masteryService(prisma);
   const create = prisma.languageMasteryAttempt.create;
   prisma.languageMasteryAttempt.create = async (args) => {
     const concurrentWinner = await create(args);
@@ -262,9 +381,122 @@ test('start is owner-scoped and idempotent without duplicating an attempt', asyn
   );
 });
 
+test('publish wrapper and reload projection reuse canonical mastery credit across lesson versions', async () => {
+  const prisma = memoryPrisma();
+  prisma.rows.lessons.push({
+    id: 'lesson-owner-v4',
+    userId: 'owner',
+    languageProfileId: 'profile-owner',
+    contentVersion: 4,
+    exercises: Array.from({ length: 24 }, (_, index) => ({
+      languageFormat: shared.LANGUAGE_TRAINING_FORMATS[index % shared.LANGUAGE_TRAINING_FORMATS.length],
+    })),
+  });
+  let finalizeCalls = 0;
+  const completionService = {
+    finalizeLanguageMastery: async (userId, input) => {
+      finalizeCalls += 1;
+      const attempt = prisma.rows.attempts.find((item) => (
+        item.userId === userId && item.attemptId === input.attemptId
+      ));
+      assert.ok(attempt);
+      const learningRefId = shared.languageMasteryLearningRef({
+        languageProfileId: attempt.languageProfileId,
+        scopeKind: 'milestone',
+        scopeKey: attempt.scopeKey,
+        policyVersion: attempt.policyVersion,
+        masteryContentVersion: attempt.masteryContentVersion,
+        contentDefinitionId: attempt.contentDefinitionId,
+      });
+      let completion = prisma.rows.completions.find((item) => (
+        item.userId === userId
+        && item.kind === 'language_milestone'
+        && item.learningRefId === learningRefId
+      ));
+      if (!completion) {
+        completion = {
+          id: 'canonical-milestone-completion',
+          userId,
+          status: 'verified',
+          kind: 'language_milestone',
+          learningRefId,
+          contentVersion: 1,
+          languageProfileId: attempt.languageProfileId,
+          languageMasteryAttemptId: attempt.id,
+        };
+        prisma.rows.completions.push(completion);
+      }
+      return { id: completion.id };
+    },
+  };
+  const service = new LanguageMasteryAttemptService(prisma, completionService);
+
+  async function evaluateAttempt({ suffix, lessonId, sourceContentVersion }) {
+    const started = await service.start('owner', scope({
+      idempotencyKey: `canonical-${suffix}`,
+      lessonId,
+      sourceContentVersion,
+    }));
+    const assessmentId = `assessment-canonical-${suffix}`;
+    prisma.rows.assessments.push({
+      id: assessmentId,
+      userId: 'owner',
+      lessonId,
+      contentVersion: sourceContentVersion,
+      masteryCreationKey: started.attemptId,
+      masteryGenerationStatus: 'ready',
+    });
+    await service.bindAssessment('owner', started.attemptId, assessmentId);
+    const submissionId = submission(
+      prisma,
+      assessmentId,
+      `submission-canonical-${suffix}`,
+      9,
+      10,
+      90,
+    );
+    await service.appendOutcome('owner', {
+      attemptId: started.attemptId,
+      assessmentSubmissionId: submissionId,
+      decision: decision('mastered', 0.9),
+      criteria: [{ id: CANONICAL_MILESTONE.criterionId, met: true, score: 0.9 }],
+    });
+    return service.publishCompletion('owner', started.attemptId);
+  }
+
+  const first = await evaluateAttempt({
+    suffix: 'v3',
+    lessonId: 'lesson-owner',
+    sourceContentVersion: 3,
+  });
+  const regenerated = await evaluateAttempt({
+    suffix: 'v4',
+    lessonId: 'lesson-owner-v4',
+    sourceContentVersion: 4,
+  });
+
+  assert.equal(first.completionId, 'canonical-milestone-completion');
+  assert.equal(regenerated.completionId, first.completionId);
+  assert.equal(prisma.rows.completions.length, 1);
+  assert.equal(finalizeCalls, 2);
+
+  const reloadedService = new LanguageMasteryAttemptService(prisma, completionService);
+  const projected = await reloadedService.projection('owner', 'profile-owner');
+  assert.equal(projected.length, 2);
+  assert.deepEqual(projected.map((item) => item.completionId), [
+    'canonical-milestone-completion',
+    'canonical-milestone-completion',
+  ]);
+  assert.equal(
+    (await reloadedService.get('owner', regenerated.attemptId)).completionId,
+    'canonical-milestone-completion',
+  );
+  assert.equal(finalizeCalls, 2);
+});
+
 test('89.9 stays 0.899 from rubric points although display score is rounded to 90', async () => {
   const prisma = memoryPrisma();
-  const service = new LanguageMasteryAttemptService(prisma);
+  const service = masteryService(prisma);
   const started = await service.start('owner', scope());
   const assessmentId = bindAssessment(prisma, started);
   await service.bindAssessment('owner', started.attemptId, assessmentId);
@@ -282,7 +514,7 @@ test('89.9 stays 0.899 from rubric points although display score is rounded to 9
     attemptId: started.attemptId,
     assessmentSubmissionId: submissionId,
     decision: decision('not-mastered', 0.899),
-    criteria: [{ id: 'criterion-1', met: false, score: 0.899 }],
+    criteria: [{ id: CANONICAL_MILESTONE.criterionId, met: false, score: 0.899 }],
   };
   const evaluated = await service.appendOutcome('owner', input);
   const replay = await service.appendOutcome('owner', input);
@@ -291,14 +523,14 @@ test('89.9 stays 0.899 from rubric points although display score is rounded to 9
   assert.equal(replay.id, evaluated.id);
   assert.equal(prisma.rows.attempts.length, 1);
   await assert.rejects(
-    service.linkPublishedCompletion('owner', started.attemptId, 'completion-1'),
+    service.publishCompletion('owner', started.attemptId),
     /BLOCKED_CAPABILITY/,
   );
 });
 
 test('90 percent publishes only after every prerequisite and criterion passes', async () => {
   const prisma = memoryPrisma();
-  const service = new LanguageMasteryAttemptService(prisma);
+  const service = masteryService(prisma);
   const started = await service.start('owner', scope({ idempotencyKey: 'pass-key' }));
   const assessmentId = bindAssessment(prisma, started, 'assessment-pass');
   await service.bindAssessment('owner', started.attemptId, assessmentId);
@@ -308,7 +540,7 @@ test('90 percent publishes only after every prerequisite and criterion passes', 
       attemptId: started.attemptId,
       assessmentSubmissionId: submissionId,
       decision: { ...decision('not-mastered', 0.9), verdict: 'unknown-runtime-verdict' },
-      criteria: [{ id: 'criterion-1', met: false, score: 0.9 }],
+      criteria: [{ id: CANONICAL_MILESTONE.criterionId, met: false, score: 0.9 }],
     }),
     /Unsupported language mastery verdict/,
   );
@@ -318,7 +550,7 @@ test('90 percent publishes only after every prerequisite and criterion passes', 
         attemptId: started.attemptId,
         assessmentSubmissionId: submissionId,
         decision: decision('mastered', invalidScore),
-        criteria: [{ id: 'criterion-1', met: true, score: 0.9 }],
+        criteria: [{ id: CANONICAL_MILESTONE.criterionId, met: true, score: 0.9 }],
       }),
       /finite normalised ratio/,
     );
@@ -327,7 +559,7 @@ test('90 percent publishes only after every prerequisite and criterion passes', 
     attemptId: started.attemptId,
     assessmentSubmissionId: submissionId,
     decision: decision('mastered', 0.9),
-    criteria: [{ id: 'criterion-1', met: true, score: 0.9 }],
+    criteria: [{ id: CANONICAL_MILESTONE.criterionId, met: true, score: 0.9 }],
   });
   prisma.rows.completions.push({
     id: 'completion-pass',
@@ -339,29 +571,29 @@ test('90 percent publishes only after every prerequisite and criterion passes', 
     languageProfileId: 'profile-owner',
     experienceSessionId: 'session-owner',
     lessonId: 'lesson-owner',
-    learningRefId: 'milestone-1',
+    learningRefId: CANONICAL_MILESTONE.id,
     contentVersion: 3,
     languageMasteryAttemptId: null,
   });
   await assert.rejects(
-    service.linkPublishedCompletion('owner', evaluated.attemptId, 'completion-pass'),
+    service.publishCompletion('owner', evaluated.attemptId),
     /BLOCKED_CAPABILITY/,
   );
   assert.equal(prisma.rows.completions[0].languageMasteryAttemptId, null);
 
-  const resumedService = new LanguageMasteryAttemptService(prisma);
+  const resumedService = masteryService(prisma);
   const [resumed] = await resumedService.projection('owner', 'profile-owner');
   assert.equal(resumed.decision.verdict, 'mastered');
-  assert.deepEqual(resumed.criteria, [{ id: 'criterion-1', met: true, score: 0.9 }]);
+  assert.deepEqual(resumed.criteria, [{ id: CANONICAL_MILESTONE.criterionId, met: true, score: 0.9 }]);
   assert.equal(resumed.completionId, null);
   const retried = await resumedService.appendOutcome('owner', {
     attemptId: started.attemptId,
     assessmentSubmissionId: submissionId,
     decision: decision('mastered', 0.9),
-    criteria: [{ id: 'criterion-1', met: true, score: 0.9 }],
+    criteria: [{ id: CANONICAL_MILESTONE.criterionId, met: true, score: 0.9 }],
   });
   await assert.rejects(
-    resumedService.linkPublishedCompletion('owner', retried.attemptId, 'completion-pass'),
+    resumedService.publishCompletion('owner', retried.attemptId),
     /BLOCKED_CAPABILITY/,
   );
   assert.equal(prisma.rows.attempts.length, 1);
@@ -371,7 +603,7 @@ test('90 percent publishes only after every prerequisite and criterion passes', 
       attemptId: started.attemptId,
       assessmentSubmissionId: submissionId,
       decision: decision('mastered', 0.9),
-      criteria: [{ id: 'criterion-1', met: true, score: 0.91 }],
+      criteria: [{ id: CANONICAL_MILESTONE.criterionId, met: true, score: 0.91 }],
     }),
     /append-only and already differs/,
   );
@@ -379,7 +611,7 @@ test('90 percent publishes only after every prerequisite and criterion passes', 
 
 test('aggregate unit autonomy is persisted but can never publish strict mastery credit', async () => {
   const prisma = memoryPrisma();
-  const service = new LanguageMasteryAttemptService(prisma);
+  const service = masteryService(prisma);
   const started = await service.start('owner', scope({
     idempotencyKey: 'unit-autonomy-key',
     scopeKind: 'unit_autonomy',
@@ -403,7 +635,7 @@ test('aggregate unit autonomy is persisted but can never publish strict mastery 
   assert.equal(evaluated.scopeKind, 'unit_autonomy');
   assert.equal(evaluated.pillar, null);
   await assert.rejects(
-    service.linkPublishedCompletion('owner', evaluated.attemptId, 'completion-unit'),
+    service.publishCompletion('owner', evaluated.attemptId),
     /BLOCKED_CAPABILITY/,
   );
   assert.equal(prisma.rows.completions[0].languageMasteryAttemptId, null);
@@ -411,7 +643,7 @@ test('aggregate unit autonomy is persisted but can never publish strict mastery 
 
 test('technical failure is append-only NOT_EVALUABLE without score, completion or remediation', async () => {
   const prisma = memoryPrisma();
-  const service = new LanguageMasteryAttemptService(prisma);
+  const service = masteryService(prisma);
   const started = await service.start('owner', scope({ idempotencyKey: 'technical-key' }));
   const input = {
     attemptId: started.attemptId,
@@ -452,12 +684,10 @@ test('technical failure is append-only NOT_EVALUABLE without score, completion o
 
 test('pillar remediation preserves neutral evidence but counts only ten new completed sources', async () => {
   const prisma = memoryPrisma();
-  const service = new LanguageMasteryAttemptService(prisma);
+  const service = masteryService(prisma);
   const started = await service.start('owner', scope({
     idempotencyKey: 'pillar-fail',
     scopeKind: 'pillar_exam',
-    targetId: 'pillar-exam-b1-1',
-    scopeKey: `${shared.RLLE_LANGUAGE_MASTERY_MAPPING_VERSION}:en:B1:communication-situations:pillar-exam-b1-1`,
   }));
   const assessmentId = bindAssessment(prisma, started, 'assessment-pillar');
   await service.bindAssessment('owner', started.attemptId, assessmentId);
@@ -466,21 +696,57 @@ test('pillar remediation preserves neutral evidence but counts only ten new comp
     attemptId: started.attemptId,
     assessmentSubmissionId: submissionId,
     decision: decision('not-mastered', 0.8),
-    criteria: [{ id: 'pillar-criterion', met: false, score: 0.8 }],
+    criteria: [{ id: CANONICAL_PLAN.mandatoryCompetencies[0].competencyId, met: false, score: 0.8 }],
   });
 
+  const remediationPlan = await service.startRemediationPlan('owner', {
+    failedAttemptId: started.attemptId,
+    idempotencyKey: 'pillar-fail-remediation',
+  });
+  const automaticThenUserReplay = await service.startRemediationPlan('owner', {
+    failedAttemptId: started.attemptId,
+    idempotencyKey: 'different-mobile-command-key',
+  });
+  assert.equal(automaticThenUserReplay.id, remediationPlan.id);
+  assert.equal(automaticThenUserReplay.generationKey, remediationPlan.generationKey);
+  await assert.rejects(
+    service.bindRemediationLesson('owner', {
+      remediationPlanId: remediationPlan.id,
+      lessonId: 'lesson-owner-fr',
+    }),
+    /New owner-scoped remediation lesson not found/,
+  );
+  prisma.rows.lessons.push({
+    id: 'lesson-remediation-owner',
+    userId: 'owner',
+    languageProfileId: 'profile-owner',
+    contentVersion: 4,
+    createdAt: new Date('2026-10-10T08:10:00.000Z'),
+    masteryRemediationGenerationKey: remediationPlan.generationKey,
+    exercises: Array.from({ length: 24 }, (_, index) => ({
+      languageFormat: shared.LANGUAGE_TRAINING_FORMATS[index % shared.LANGUAGE_TRAINING_FORMATS.length],
+    })),
+  });
+  const activePlan = await service.bindRemediationLesson('owner', {
+    remediationPlanId: remediationPlan.id,
+    lessonId: 'lesson-remediation-owner',
+  });
+  assert.equal(activePlan.status, 'active');
+  assert.equal(activePlan.remediationLessonId, 'lesson-remediation-owner');
+
   prisma.rows.exercises.push({
-    id: 'exercise-too-old', userId: 'owner', lessonId: 'lesson-owner',
-    contentVersion: 3, exerciseIndex: 11, createdAt: new Date('2026-10-10T08:04:59.000Z'),
+    id: 'exercise-too-old', userId: 'owner', lessonId: 'lesson-remediation-owner',
+    contentVersion: 4, exerciseIndex: 11, createdAt: new Date('2026-10-10T08:04:59.000Z'),
   });
   await assert.rejects(
     service.appendRemediationEvidence('owner', {
       attemptId: started.attemptId,
+      remediationPlanId: remediationPlan.id,
       evidenceId: 'repair-too-old',
       trainingFormat: shared.LANGUAGE_TRAINING_FORMATS[1],
       state: 'completed',
-      lessonId: 'lesson-owner',
-      sourceContentVersion: 3,
+      lessonId: 'lesson-remediation-owner',
+      sourceContentVersion: 4,
       exerciseIndex: 11,
       sourceKind: 'exercise-attempt',
       sourceRefId: 'exercise-too-old',
@@ -489,36 +755,18 @@ test('pillar remediation preserves neutral evidence but counts only ten new comp
   );
 
   prisma.rows.exercises.push({
-    id: 'exercise-cross-language', userId: 'owner', lessonId: 'lesson-owner-fr',
-    contentVersion: 3, exerciseIndex: 0, createdAt: new Date('2026-10-10T09:00:00.000Z'),
+    id: 'exercise-format-mismatch', userId: 'owner', lessonId: 'lesson-remediation-owner',
+    contentVersion: 4, exerciseIndex: 12, createdAt: new Date('2026-10-10T09:00:00.000Z'),
   });
   await assert.rejects(
     service.appendRemediationEvidence('owner', {
       attemptId: started.attemptId,
-      evidenceId: 'repair-cross-language',
-      trainingFormat: shared.LANGUAGE_TRAINING_FORMATS[0],
-      state: 'completed',
-      lessonId: 'lesson-owner-fr',
-      sourceContentVersion: 3,
-      exerciseIndex: 0,
-      sourceKind: 'exercise-attempt',
-      sourceRefId: 'exercise-cross-language',
-    }),
-    /Versioned remediation lesson not found/,
-  );
-
-  prisma.rows.exercises.push({
-    id: 'exercise-format-mismatch', userId: 'owner', lessonId: 'lesson-owner',
-    contentVersion: 3, exerciseIndex: 12, createdAt: new Date('2026-10-10T09:00:00.000Z'),
-  });
-  await assert.rejects(
-    service.appendRemediationEvidence('owner', {
-      attemptId: started.attemptId,
+      remediationPlanId: remediationPlan.id,
       evidenceId: 'repair-format-mismatch',
       trainingFormat: shared.LANGUAGE_TRAINING_FORMATS[3],
       state: 'completed',
-      lessonId: 'lesson-owner',
-      sourceContentVersion: 3,
+      lessonId: 'lesson-remediation-owner',
+      sourceContentVersion: 4,
       exerciseIndex: 12,
       sourceKind: 'exercise-attempt',
       sourceRefId: 'exercise-format-mismatch',
@@ -538,18 +786,19 @@ test('pillar remediation preserves neutral evidence but counts only ten new comp
     prisma.rows.exercises.push({
       id: sourceRefId,
       userId: 'owner',
-      lessonId: 'lesson-owner',
-      contentVersion: 3,
+      lessonId: 'lesson-remediation-owner',
+      contentVersion: 4,
       exerciseIndex: index,
       createdAt: new Date(`2026-10-10T09:${String(index).padStart(2, '0')}:00.000Z`),
     });
     await service.appendRemediationEvidence('owner', {
       attemptId: started.attemptId,
+      remediationPlanId: remediationPlan.id,
       evidenceId: `repair-evidence-${index}`,
       trainingFormat: shared.LANGUAGE_TRAINING_FORMATS[index % shared.LANGUAGE_TRAINING_FORMATS.length],
       state: index === 9 ? 'not-evaluable' : 'completed',
-      lessonId: 'lesson-owner',
-      sourceContentVersion: 3,
+      lessonId: 'lesson-remediation-owner',
+      sourceContentVersion: 4,
       exerciseIndex: index,
       sourceKind: 'exercise-attempt',
       sourceRefId,
@@ -559,19 +808,22 @@ test('pillar remediation preserves neutral evidence but counts only ten new comp
   assert.equal(projected.remediation.evidenceCount, 11);
   assert.equal(projected.remediation.completedExerciseCount, 10);
   assert.equal(projected.remediation.requiredExerciseCount, 10);
+  assert.equal(projected.remediation.planId, remediationPlan.id);
+  assert.equal(projected.remediation.status, 'ready_for_retest');
 
   prisma.rows.exercises.push({
-    id: 'exercise-duplicate-index', userId: 'owner', lessonId: 'lesson-owner',
-    contentVersion: 3, exerciseIndex: 0, createdAt: new Date('2026-10-10T10:00:00.000Z'),
+    id: 'exercise-duplicate-index', userId: 'owner', lessonId: 'lesson-remediation-owner',
+    contentVersion: 4, exerciseIndex: 0, createdAt: new Date('2026-10-10T10:00:00.000Z'),
   });
   await assert.rejects(
     service.appendRemediationEvidence('owner', {
       attemptId: started.attemptId,
+      remediationPlanId: remediationPlan.id,
       evidenceId: 'repair-duplicate-index',
       trainingFormat: shared.LANGUAGE_TRAINING_FORMATS[0],
       state: 'completed',
-      lessonId: 'lesson-owner',
-      sourceContentVersion: 3,
+      lessonId: 'lesson-remediation-owner',
+      sourceContentVersion: 4,
       exerciseIndex: 0,
       sourceKind: 'exercise-attempt',
       sourceRefId: 'exercise-duplicate-index',
@@ -580,9 +832,245 @@ test('pillar remediation preserves neutral evidence but counts only ten new comp
   );
 });
 
+test('reconnect recovers ten distinct post-failure ExerciseAttempts and exposes one eligible retest', async () => {
+  const prisma = memoryPrisma();
+  const journal = masteryService(prisma);
+  const failed = await journal.start('owner', scope({
+    idempotencyKey: 'pillar-reconnect-failure',
+    scopeKind: 'pillar_exam',
+  }));
+  const assessmentId = bindAssessment(prisma, failed, 'assessment-reconnect-failure');
+  await journal.bindAssessment('owner', failed.attemptId, assessmentId);
+  const submissionId = submission(
+    prisma,
+    assessmentId,
+    'submission-reconnect-failure',
+    8,
+    10,
+    80,
+  );
+  await journal.appendOutcome('owner', {
+    attemptId: failed.attemptId,
+    assessmentSubmissionId: submissionId,
+    decision: decision('not-mastered', 0.8),
+    criteria: [{
+      id: CANONICAL_PLAN.mandatoryCompetencies[0].competencyId,
+      met: false,
+      score: 0.8,
+    }],
+  });
+  const plan = await journal.startRemediationPlan('owner', {
+    failedAttemptId: failed.attemptId,
+    idempotencyKey: 'pillar-reconnect-plan',
+  });
+  prisma.rows.lessons.push({
+    id: 'lesson-reconnect-remediation',
+    userId: 'owner',
+    languageProfileId: 'profile-owner',
+    contentVersion: 5,
+    createdAt: new Date('2026-10-10T08:10:00.000Z'),
+    masteryRemediationGenerationKey: plan.generationKey,
+    exercises: Array.from({ length: 10 }, (_, index) => ({
+      languageFormat: shared.LANGUAGE_TRAINING_FORMATS[index],
+    })),
+  });
+  await journal.bindRemediationLesson('owner', {
+    remediationPlanId: plan.id,
+    lessonId: 'lesson-reconnect-remediation',
+  });
+  for (let index = 0; index < 10; index += 1) {
+    prisma.rows.exercises.push({
+      id: `exercise-reconnect-${index}`,
+      userId: 'owner',
+      lessonId: 'lesson-reconnect-remediation',
+      contentVersion: 5,
+      exerciseIndex: index,
+      correct: true,
+      score: 1,
+      createdAt: new Date(`2026-10-10T09:${String(index).padStart(2, '0')}:00.000Z`),
+    });
+  }
+
+  const a1Units = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP
+    .filter((unit) => unit.level === 'A1');
+  const publishedMilestones = a1Units.flatMap((unit) => unit.milestones)
+    .map((milestone, index) => ({
+      id: `published-row-${index}`,
+      attemptId: `published-attempt-${index}`,
+      idempotencyKey: `published-operation-${index}`,
+      scopeKind: 'milestone',
+      scopeKey: shared.rlleMilestoneEvidenceScopeKey({ languageCode: 'en', milestone }),
+      targetId: milestone.id,
+      mappingVersion: shared.RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+      policyVersion: shared.LANGUAGE_MASTERY_POLICY_VERSION,
+      masteryContentVersion: milestone.contentVersion,
+      contentDefinitionId: milestone.contentDefinitionId,
+      sourceContentVersion: 3,
+      lessonId: 'lesson-owner',
+      languageCode: 'en',
+      cefrLevel: milestone.level,
+      pillar: milestone.pillar,
+      status: 'evaluated',
+      verdict: 'mastered',
+      rawScore: 1,
+      threshold: 0.9,
+      decisionReason: 'threshold-met',
+      helpUsed: false,
+      decision: decision('mastered', 1),
+      criteria: [{ id: milestone.criterionId, met: true, score: 1 }],
+      assessmentId: `published-assessment-${index}`,
+      assessmentSubmissionId: `published-submission-${index}`,
+      completionId: `published-completion-${index}`,
+      remediation: null,
+      startedAt: '2026-10-10T08:00:00.000Z',
+      evaluatedAt: '2026-10-10T08:01:00.000Z',
+    }));
+  const masteryAttempts = {
+    projection: async (userId, profileId) => [
+      ...publishedMilestones,
+      ...await journal.projection(userId, profileId),
+    ],
+    reconcileRemediationExerciseAttempts: (...args) =>
+      journal.reconcileRemediationExerciseAttempts(...args),
+  };
+  const runtime = new RealLifeLanguageService(
+    prisma,
+    {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
+    { enabled: () => true },
+    { get: () => null },
+    {},
+    masteryAttempts,
+  );
+  runtime.strictMasteryAvailable = () => true;
+  const curriculumIds = a1Units.map((unit) => unit.unitId);
+  const state = {
+    schemaVersion: 2,
+    startLevel: 'A1',
+    level: { declared: 'A1', estimated: null, evaluated: null, target: 'A1' },
+    goal: null,
+    goalDomain: 'general',
+    curriculumIds,
+    completedUnitIds: [],
+    masteryPolicyVersion: shared.LANGUAGE_MASTERY_POLICY_VERSION,
+    legacyCompletedUnitIds: [],
+    milestoneMastery: Object.fromEntries(curriculumIds.map((unitId) => [
+      unitId,
+      runtime.emptyMilestoneMastery(unitId),
+    ])),
+    currentUnitId: curriculumIds[0],
+    unitLessonIds: { [curriculumIds[0]]: ['lesson-reconnect-remediation'] },
+    unitLastActivityAt: {},
+    currentLesson: {
+      lessonId: 'lesson-reconnect-remediation',
+      unitId: curriculumIds[0],
+    },
+    currentMission: null,
+    evidence: [],
+    gaps: [],
+    mistakeMemory: [],
+    repairLoops: [],
+    immersionIntensity: 'guided',
+    correctionIntensity: 'balanced',
+  };
+
+  const recovered = await runtime.reconcileCanonicalMastery(
+    'owner',
+    {
+      id: 'profile-owner',
+      userId: 'owner',
+      language: 'English',
+      normalizedLanguage: 'en',
+    },
+    state,
+  );
+  const recoveredFailure = (await journal.projection('owner', 'profile-owner'))
+    .find((attempt) => attempt.attemptId === failed.attemptId);
+  assert.equal(recoveredFailure.remediation.completedExerciseCount, 10);
+  assert.equal(recoveredFailure.remediation.evidenceCount, 10);
+  assert.equal(recoveredFailure.remediation.status, 'ready_for_retest');
+  assert.equal(recovered.nextMasteryTarget.scopeKind, 'pillar_exam');
+  assert.equal(recovered.nextMasteryTarget.targetId, CANONICAL_PLAN.examId);
+  assert.equal(recovered.nextMasteryTarget.remediationPlanId, plan.id);
+  assert.equal(recovered.nextMasteryTarget.eligible, true);
+  const operationKey = recovered.nextMasteryTarget.operationKey;
+
+  const replay = await runtime.reconcileCanonicalMastery(
+    'owner',
+    {
+      id: 'profile-owner',
+      userId: 'owner',
+      language: 'English',
+      normalizedLanguage: 'en',
+    },
+    recovered.state,
+  );
+  assert.equal(prisma.rows.remediation.length, 10);
+  assert.equal(replay.nextMasteryTarget.operationKey, operationKey);
+  assert.equal(replay.nextMasteryTarget.eligible, true);
+});
+
+test('a pre-started pillar attempt cannot submit after a sibling failure without completed remediation', async () => {
+  const prisma = memoryPrisma();
+  const service = masteryService(prisma);
+  const stale = await service.start('owner', scope({
+    idempotencyKey: 'pillar-prestarted-stale',
+    scopeKind: 'pillar_exam',
+  }));
+  const failing = await service.start('owner', scope({
+    idempotencyKey: 'pillar-concurrent-failure',
+    scopeKind: 'pillar_exam',
+  }));
+
+  const failedAssessment = bindAssessment(prisma, failing, 'assessment-concurrent-failure');
+  await service.bindAssessment('owner', failing.attemptId, failedAssessment);
+  const failedSubmission = submission(
+    prisma,
+    failedAssessment,
+    'submission-concurrent-failure',
+    8,
+    10,
+    80,
+  );
+  await service.appendOutcome('owner', {
+    attemptId: failing.attemptId,
+    assessmentSubmissionId: failedSubmission,
+    decision: decision('not-mastered', 0.8),
+    criteria: [{ id: CANONICAL_PLAN.mandatoryCompetencies[0].competencyId, met: false, score: 0.8 }],
+  });
+  await service.startRemediationPlan('owner', {
+    failedAttemptId: failing.attemptId,
+    idempotencyKey: 'automatic-plan-after-failure',
+  });
+
+  const staleAssessment = bindAssessment(prisma, stale, 'assessment-prestarted-stale');
+  await service.bindAssessment('owner', stale.attemptId, staleAssessment);
+  const staleSubmission = submission(
+    prisma,
+    staleAssessment,
+    'submission-prestarted-stale',
+    10,
+    10,
+    100,
+  );
+  await assert.rejects(
+    service.appendOutcome('owner', {
+      attemptId: stale.attemptId,
+      assessmentSubmissionId: staleSubmission,
+      decision: decision('mastered', 1),
+      criteria: CANONICAL_PLAN.mandatoryCompetencies.map((item) => ({
+        id: item.competencyId,
+        met: true,
+        score: 1,
+      })),
+    }),
+    /must complete its targeted remediation before submission/,
+  );
+  assert.equal(prisma.rows.attempts.find((row) => row.id === stale.id).status, 'assessment_bound');
+});
+
 test('profile reset removes linked proof before owner-scoped attempts', async () => {
   const prisma = memoryPrisma();
-  const service = new LanguageMasteryAttemptService(prisma);
+  const service = masteryService(prisma);
   const started = await service.start('owner', scope({ idempotencyKey: 'reset-key' }));
   prisma.rows.completions.push({
     id: 'completion-reset', userId: 'owner', status: 'verified',

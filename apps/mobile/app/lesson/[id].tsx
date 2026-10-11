@@ -8,6 +8,7 @@ import type {
   LessonFlowStepKey,
   LessonView,
   PronunciationCoaching,
+  RecordRlleRemediationExerciseRequest,
   SubmitAttemptResponse,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
@@ -21,7 +22,10 @@ import { ExerciseCard } from '../../components/exercise-card';
 import { SpeakButton } from '../../components/speak-button';
 import { LanguagePracticeRunner } from '../../components/language/practice-runner';
 import { createRecorder, type Recorder } from '../../lib/recorder';
-import { submitRllePronunciationTraining } from '../../lib/language-rll-client';
+import {
+  recordRlleRemediationExercise,
+  submitRllePronunciationTraining,
+} from '../../lib/language-rll-client';
 import { featureFlags } from '../../lib/feature-flags';
 
 /** One step of the pedagogical flow. */
@@ -46,10 +50,20 @@ interface FlowStep {
 export default function LessonScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
-  const { id, session, returnTo } = useLocalSearchParams<{
+  const {
+    id,
+    session,
+    returnTo,
+    languageProfileId,
+    remediationPlanId,
+    failedAttemptId,
+  } = useLocalSearchParams<{
     id: string;
     session?: string;
     returnTo?: string;
+    languageProfileId?: string;
+    remediationPlanId?: string;
+    failedAttemptId?: string;
   }>();
   const router = useRouter();
   const { t, formatLocale } = useI18n();
@@ -161,6 +175,19 @@ export default function LessonScreen() {
             experienceSessionId={session}
             index={index}
             lesson={lesson}
+            remediationEvidence={
+              featureFlags.languageMasteryV1
+              && lesson.languageProfileId
+              && languageProfileId === lesson.languageProfileId
+              && remediationPlanId
+              && failedAttemptId
+                ? {
+                    failedAttemptId,
+                    profileId: lesson.languageProfileId,
+                    remediationPlanId,
+                  }
+                : undefined
+            }
           />
         ) : (
           <ExerciseCard
@@ -264,7 +291,16 @@ export default function LessonScreen() {
     });
 
     return s;
-  }, [lesson, cards, t, router, session]);
+  }, [
+    cards,
+    failedAttemptId,
+    languageProfileId,
+    lesson,
+    remediationPlanId,
+    router,
+    session,
+    t,
+  ]);
 
   if (error && !lesson) {
     return (
@@ -447,35 +483,70 @@ function LanguageTrainingExercise({
   experienceSessionId,
   index,
   lesson,
+  remediationEvidence,
 }: {
   exercise: LessonExercise;
   experienceSessionId?: string;
   index: number;
   lesson: LessonView;
+  remediationEvidence?: {
+    failedAttemptId: string;
+    profileId: string;
+    remediationPlanId: string;
+  };
 }) {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
   const recorder = useRef<Recorder | null>(null);
+  const writtenSubmissionInFlight = useRef(false);
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SubmitAttemptResponse | null>(null);
   const [coaching, setCoaching] = useState<PronunciationCoaching | null>(null);
+  const [pendingEvidence, setPendingEvidence] =
+    useState<RecordRlleRemediationExerciseRequest | null>(null);
 
   useEffect(() => () => recorder.current?.cancel(), []);
 
+  const recordRemediationEvidence = async (
+    request: RecordRlleRemediationExerciseRequest,
+  ) => {
+    if (!remediationEvidence) {
+      throw new Error(t('rlle.ui.capabilities.blockedDetail' as TranslationKey));
+    }
+    await recordRlleRemediationExercise(remediationEvidence.profileId, request);
+    setPendingEvidence(null);
+  };
+
   const submitWritten = async (answer: string) => {
+    if (writtenSubmissionInFlight.current || result) return;
+    writtenSubmissionInFlight.current = true;
     setBusy(true);
     setError(null);
     try {
-      setResult(await api<SubmitAttemptResponse>(
+      const response = await api<SubmitAttemptResponse>(
         `/lessons/${lesson.id}/exercises/${index}/attempt`,
         { method: 'POST', body: { answer } },
-      ));
+      );
+      setResult(response);
+      if (remediationEvidence && exercise.languageFormat) {
+        const evidenceRequest: RecordRlleRemediationExerciseRequest = {
+          remediationPlanId: remediationEvidence.remediationPlanId,
+          failedAttemptId: remediationEvidence.failedAttemptId,
+          lessonId: response.attempt.lessonId,
+          exerciseAttemptId: response.attempt.id,
+          exerciseIndex: response.attempt.exerciseIndex,
+          trainingFormat: exercise.languageFormat,
+        };
+        setPendingEvidence(evidenceRequest);
+        await recordRemediationEvidence(evidenceRequest);
+      }
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
+      writtenSubmissionInFlight.current = false;
       setBusy(false);
     }
   };
@@ -522,7 +593,7 @@ function LanguageTrainingExercise({
   return (
     <View style={styles.practiceBlock}>
       <LanguagePracticeRunner
-        busy={busy}
+        busy={busy || Boolean(result)}
         exercise={exercise}
         index={index}
         language={lesson.language}
@@ -533,6 +604,21 @@ function LanguageTrainingExercise({
         voiceActive={recording}
       />
       {error ? <ErrorBanner message={error} /> : null}
+      {pendingEvidence ? (
+        <Button
+          label={t('rlle.ui.common.retry' as TranslationKey)}
+          onPress={() => {
+            setBusy(true);
+            setError(null);
+            void recordRemediationEvidence(pendingEvidence)
+              .catch((cause) => setError((cause as Error).message))
+              .finally(() => setBusy(false));
+          }}
+          busy={busy}
+          testID={`language-remediation-evidence-retry-${index}`}
+          variant="ghost"
+        />
+      ) : null}
       {attempt ? (
         <Card style={styles.practiceFeedback} testID={`language-feedback-${index}`}>
           <Text style={[styles.practiceVerdict, attempt.correct ? styles.practiceOk : styles.practiceRetry]}>
