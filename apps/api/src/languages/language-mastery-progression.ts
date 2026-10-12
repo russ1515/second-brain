@@ -238,11 +238,16 @@ export function recordRlleMilestoneDecision(
   if (milestone.evidenceHistory.some((item) => item.evidenceId === input.evidenceId)) {
     throw new Error('Language mastery milestone evidence must be append-only and unique.');
   }
-  const status: StoredRlleStrictMilestoneStatus = input.decision.verdict === 'mastered'
+  // A verified mastery proof is an acquired fact. Later retries may enrich the
+  // append-only history, but a failed or neutral observation cannot revoke it.
+  const alreadyMastered = milestone.status === 'mastered';
+  const status: StoredRlleStrictMilestoneStatus = alreadyMastered
     ? 'mastered'
-    : input.decision.verdict === 'not-evaluable'
-      ? 'not-evaluable'
-      : 'training';
+    : input.decision.verdict === 'mastered'
+      ? 'mastered'
+      : input.decision.verdict === 'not-evaluable'
+        ? 'not-evaluable'
+        : 'training';
   return refreshExamLocks({
     ...state,
     milestones: {
@@ -250,8 +255,8 @@ export function recordRlleMilestoneDecision(
       [milestone.milestoneId]: {
         ...milestone,
         status,
-        decision: input.decision,
-        evidenceId: input.evidenceId,
+        decision: alreadyMastered ? milestone.decision : input.decision,
+        evidenceId: alreadyMastered ? milestone.evidenceId : input.evidenceId,
         evidenceHistory: [
           ...milestone.evidenceHistory,
           {
@@ -260,7 +265,11 @@ export function recordRlleMilestoneDecision(
             evaluatedAt: input.evaluatedAt,
           },
         ],
-        masteredAt: status === 'mastered' ? input.evaluatedAt : null,
+        masteredAt: alreadyMastered
+          ? milestone.masteredAt
+          : status === 'mastered'
+            ? input.evaluatedAt
+            : null,
       },
     },
   });

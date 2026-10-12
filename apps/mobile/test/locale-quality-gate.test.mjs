@@ -35,9 +35,21 @@ test('a complete catalog preserves protected structures and passes the final gat
   assert.equal(report.locales[1].coveragePercent, 100);
 });
 
-test('number preservation accepts locale formatting and harmless added digits', () => {
-  const english = map({ percent: 'Target 90%', week: 'In a week' });
-  const french = map({ percent: 'Objectif 90 %', week: 'Dans 1 semaine' });
+test('number preservation accepts locale formatting, scripts, and harmless added digits', () => {
+  const english = map({
+    trailingPercent: 'Target 90%',
+    prefixPercent: 'Target 90%',
+    arabicPercent: 'Target 90%',
+    bengaliDigits: 'Target 90%',
+    week: 'In a week',
+  });
+  const french = map({
+    trailingPercent: 'Objectif 90 %',
+    prefixPercent: 'Hedef %90',
+    arabicPercent: 'الهدف 90٪',
+    bengaliDigits: 'লক্ষ্য ৯০%',
+    week: 'Dans 1 semaine',
+  });
   const report = auditCatalogSet({
     english,
     catalogs: new Map([['fr', french]]),

@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { RefreshControl, ScrollView, Text, View } from 'react-native';
+import { useLocalSearchParams } from 'expo-router';
 import type {
   BrainOverview,
+  LanguageProfileSummary,
   LearningEvidenceDimension,
   LearningHistoryEntry,
 } from '@second-brain/shared';
@@ -13,6 +15,12 @@ import { Badge, Card } from '../../components/ds/core';
 import { Page, Section } from '../../components/ds/layout';
 import { SmartEmptyState, SmartErrorState, SmartLoadingState, SmartState } from '../../components/ds/states';
 import { EvidenceProgressPanel } from '../../components/learning/evidence-progress';
+import { LanguageMasteryBulletins } from '../../components/language/course-ui';
+import { loadLanguageProfile, loadRlleCourse } from '../../lib/language-rll-client';
+import {
+  resolveBrainLanguageBulletins,
+  type BrainLanguageBulletinResult,
+} from '../../lib/brain-language-bulletins';
 
 const DIMENSION_KEYS: Record<LearningEvidenceDimension, TranslationKey> = {
   knowledge: 'globalPath.evidence.knowledge',
@@ -27,6 +35,10 @@ const DIMENSION_KEYS: Record<LearningEvidenceDimension, TranslationKey> = {
  * and recommendation panels intentionally remain outside this screen. */
 export default function BrainScreen() {
   const { user } = useAuth();
+  const params = useLocalSearchParams<{ languageProfileId?: string | string[] }>();
+  const languageProfileId = Array.isArray(params.languageProfileId)
+    ? params.languageProfileId[0]
+    : params.languageProfileId;
   const { t } = useI18n();
   const { colors: c, spacing } = useTokens();
   const overview = useQuery<BrainOverview>({
@@ -36,6 +48,17 @@ export default function BrainScreen() {
     staleTime: 30_000,
     retry: 1,
     placeholderData: (previous) => previous,
+  });
+  const languageCourses = useQuery<BrainLanguageBulletinResult>({
+    queryKey: ['brain', 'language-mastery-bulletins', user?.id, languageProfileId ?? 'all'],
+    queryFn: () => resolveBrainLanguageBulletins(languageProfileId, {
+      listProfiles: () => api<LanguageProfileSummary[]>('/languages'),
+      loadProfile: loadLanguageProfile,
+      loadCourse: loadRlleCourse,
+    }),
+    enabled: Boolean(user),
+    staleTime: 30_000,
+    retry: 1,
   });
 
   if (overview.isPending || !user) {
@@ -56,8 +79,8 @@ export default function BrainScreen() {
       contentContainerStyle={{ flexGrow: 1 }}
       refreshControl={(
         <RefreshControl
-          refreshing={overview.isRefetching}
-          onRefresh={() => { void overview.refetch(); }}
+          refreshing={overview.isRefetching || languageCourses.isRefetching}
+          onRefresh={() => { void Promise.all([overview.refetch(), languageCourses.refetch()]); }}
           tintColor={c.primary}
           colors={[c.primary]}
         />
@@ -65,6 +88,16 @@ export default function BrainScreen() {
     >
       <Page width="wide" style={{ gap: spacing.xl, paddingBottom: spacing.huge }} testID="brain-evidence-view">
         {overview.error ? <SmartState state="stale" detail={t('home4.stale')} /> : data.partial ? <SmartState state="partial" detail={t('home4.partial')} /> : null}
+        {languageCourses.isPending ? <SmartLoadingState title={t('state.loading')} /> : null}
+        {languageCourses.error || languageCourses.data?.partial ? <SmartState state="partial" detail={t('home4.partial')} /> : null}
+        {languageCourses.data?.items.map(({ profile, course }) => course.kind === 'live' ? (
+          <LanguageMasteryBulletins
+            key={profile.id}
+            bulletins={course.course.masteryBulletins}
+            units={course.course.units}
+            language={profile.language}
+          />
+        ) : null)}
         <EvidenceProgressPanel progress={data.evidenceProgress} />
         <CompletionEvidenceHistory items={data.completionHistory.items} />
       </Page>

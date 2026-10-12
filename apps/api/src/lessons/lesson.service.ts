@@ -102,12 +102,21 @@ export interface InternalLessonOptions {
   directive?: string;
   /** Server-only switch for the language mastery exercise contract. */
   languageMastery?: boolean;
+  /** Server-authored notion/criterion allow-list for one curriculum unit. */
+  languageNotions?: readonly {
+    notionId: string;
+    criterionId: string;
+  }[];
   /** Exact failed battery used only to reject duplicate remediation items
    * before the generated lesson is persisted. */
   remediationBaselineExercises?: readonly LessonExercise[];
   /** Durable server-only identity of the failed-exam remediation plan that
    * requested this lesson. It is never accepted from GenerateLessonDto. */
   masteryRemediationGenerationKey?: string;
+  /** Durable identity for any RLLE lesson generation. Stored in the existing
+   * server-only language-generation key column so retries cannot call the
+   * provider twice. */
+  languageGenerationKey?: string;
 }
 
 /** Structured lesson shape returned by the LLM. */
@@ -153,13 +162,21 @@ export class LessonService {
       userId,
       dto,
     );
-    const masteryRemediationGenerationKey = internal.masteryRemediationGenerationKey?.trim() || null;
-    if (masteryRemediationGenerationKey) {
+    const remediationKey = internal.masteryRemediationGenerationKey?.trim() || null;
+    const languageGenerationKey = internal.languageGenerationKey?.trim() || remediationKey;
+    if (
+      remediationKey
+      && internal.languageGenerationKey?.trim()
+      && remediationKey !== internal.languageGenerationKey.trim()
+    ) {
+      throw new BadRequestException('Conflicting language lesson generation keys.');
+    }
+    if (languageGenerationKey) {
       if (!internal.languageMastery || !internal.languageProfileId) {
-        throw new BadRequestException('A mastery remediation key requires an owned language profile.');
+        throw new BadRequestException('A language generation key requires an owned language profile.');
       }
       const existing = await this.prisma.lesson.findFirst({
-        where: { userId, masteryRemediationGenerationKey },
+        where: { userId, masteryRemediationGenerationKey: languageGenerationKey },
         select: { id: true },
       });
       if (existing) return this.get(userId, existing.id);
@@ -194,6 +211,7 @@ export class LessonService {
       trustedDirective,
       internal.languageMastery === true,
       internal.remediationBaselineExercises,
+      internal.languageNotions,
     );
     const persist = async (tx: Prisma.TransactionClient, raw: RawLesson) => {
       const lockKey = accountDataLockKey(userId);
@@ -218,7 +236,7 @@ export class LessonService {
         tutorSessionId: tutorSessionId ?? null,
         conceptId: conceptId ?? null,
         languageProfileId: internal.languageProfileId ?? null,
-        masteryRemediationGenerationKey,
+        masteryRemediationGenerationKey: languageGenerationKey,
         language: dto.language?.trim() || null,
         level: level ?? null,
         topic,
@@ -273,21 +291,21 @@ export class LessonService {
       return { lesson: linkedLesson, doc: createdDoc, experience: createdExperience };
     };
 
-    const generated = masteryRemediationGenerationKey
+    const generated = languageGenerationKey
       ? await this.prisma.$transaction(async (tx) => {
           // Only the server-authored remediation path holds this key-scoped
           // lock across the provider call. PostgreSQL releases the xact lock
           // on commit, rollback or connection loss, so a crashed owner never
           // leaves a durable claim that must be guessed stale by a retry.
           const generationLockKey =
-            `lesson-remediation-generation:${userId}:${masteryRemediationGenerationKey}`;
+            `lesson-language-generation:${userId}:${languageGenerationKey}`;
           await tx.$executeRaw`
             SELECT pg_advisory_xact_lock(hashtextextended(${generationLockKey}, 0))
           `;
           // Fence after taking the lock: two callers may both have missed the
           // cheap preflight read above, but only the first may reach the LLM.
           const existing = await tx.lesson.findFirst({
-            where: { userId, masteryRemediationGenerationKey },
+            where: { userId, masteryRemediationGenerationKey: languageGenerationKey },
             select: { id: true },
           });
           if (existing) return { existingLessonId: existing.id } as const;
@@ -689,13 +707,22 @@ export class LessonService {
     directive?: string,
     languageMastery = false,
     remediationBaselineExercises?: readonly LessonExercise[],
+    languageNotions?: readonly { notionId: string; criterionId: string }[],
   ): Promise<RawLesson> {
     const level = dto.level ? ` Pitch it at a ${dto.level} level.` : '';
     const language = dto.language
       ? ` This is a ${dto.language} language lesson; teach ${dto.language}.`
       : '';
+    const notionDirective = languageNotions?.length
+      ? [
+          'Every exercise must include non-empty notionIds and criterionIds arrays.',
+          'Use only these exact server-authorized notion/criterion pairs:',
+          JSON.stringify(languageNotions),
+          'Each criterionIds entry must correspond to one of the selected notionIds.',
+        ].join(' ')
+      : '';
     const baseSystem = languageMastery
-      ? `${SYSTEM_PROMPT} ${LANGUAGE_MASTERY_EXERCISE_PROMPT}`
+      ? `${SYSTEM_PROMPT} ${LANGUAGE_MASTERY_EXERCISE_PROMPT} ${notionDirective}`
       : SYSTEM_PROMPT;
     const system = directive ? `${baseSystem} ${directive}` : baseSystem;
     let text: string;
@@ -719,13 +746,14 @@ export class LessonService {
         'The teacher is temporarily unavailable. Please try again shortly.',
       );
     }
-    return this.parseLesson(text, languageMastery, remediationBaselineExercises);
+    return this.parseLesson(text, languageMastery, remediationBaselineExercises, languageNotions);
   }
 
   private parseLesson(
     raw: string,
     languageMastery = false,
     remediationBaselineExercises?: readonly LessonExercise[],
+    languageNotions?: readonly { notionId: string; criterionId: string }[],
   ): RawLesson {
     const start = raw.indexOf('{');
     const end = raw.lastIndexOf('}');
@@ -749,7 +777,7 @@ export class LessonService {
     const keyPoints = this.nonEmptyStrings(parsed.keyPoints);
     const exercises = Array.isArray(parsed.exercises)
       ? parsed.exercises
-          .map((exercise) => this.normalizeExercise(exercise, languageMastery))
+          .map((exercise) => this.normalizeExercise(exercise, languageMastery, languageNotions))
           .filter((exercise): exercise is LessonExercise => exercise !== null)
       : [];
     const exerciseTypes = new Set(exercises.map((exercise) => exercise.type));
@@ -760,12 +788,17 @@ export class LessonService {
       exercises.length >= LANGUAGE_TRAINING_FORMATS.length &&
       LANGUAGE_TRAINING_FORMATS.every((format) =>
         exercises.some((exercise) => exercise.languageFormat === format));
+    const coveredNotions = new Set(exercises.flatMap((exercise) => exercise.notionIds ?? []));
+    const notionCoverageContract = !languageNotions?.length
+      || languageNotions.every((notion) => coveredNotions.has(notion.notionId));
     const structurallyComplete =
       Boolean(objective && intro && explanation && summary && revisionSheet) &&
       examples.length >= 1 &&
       commonMisconceptions.length >= 1 &&
       questions.length >= 3 && questions.length <= 5 &&
-      (languageMastery ? languageExerciseContract : genericExerciseContract) &&
+      (languageMastery
+        ? languageExerciseContract && notionCoverageContract
+        : genericExerciseContract) &&
       keyPoints.length >= 3 && keyPoints.length <= 5;
     if (!structurallyComplete) {
       throw new UnprocessableEntityException(
@@ -849,7 +882,11 @@ export class LessonService {
 
   /** Accept only complete, known exercise shapes. Invalid QCM data is rejected
    * instead of being silently downgraded to an ungraded generic exercise. */
-  private normalizeExercise(value: unknown, languageMastery = false): LessonExercise | null {
+  private normalizeExercise(
+    value: unknown,
+    languageMastery = false,
+    languageNotions?: readonly { notionId: string; criterionId: string }[],
+  ): LessonExercise | null {
     if (!value || typeof value !== 'object') return null;
     const e = value as Record<string, unknown>;
     const types: ExerciseType[] = ['qcm', 'open', 'exercise', 'case'];
@@ -889,6 +926,24 @@ export class LessonService {
         base.dialogueTurns = dialogueTurns;
       }
       if (base.languageFormat === 'fill-blank-no-hint' && (tokens || Array.isArray(e.options))) return null;
+      if (languageNotions?.length) {
+        const ids = (candidate: unknown): string[] => Array.isArray(candidate)
+          ? [...new Set(candidate.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+              .map((item) => item.trim()))]
+          : [];
+        const notionIds = ids(e.notionIds);
+        const criterionIds = ids(e.criterionIds);
+        if (notionIds.length === 0 || criterionIds.length === 0) return null;
+        const allowed = new Map(languageNotions.map((item) => [item.notionId, item.criterionId]));
+        if (notionIds.some((id) => !allowed.has(id))) return null;
+        const expectedCriteria = new Set(notionIds.map((id) => allowed.get(id)!));
+        if (
+          criterionIds.some((id) => !expectedCriteria.has(id))
+          || [...expectedCriteria].some((id) => !criterionIds.includes(id))
+        ) return null;
+        base.notionIds = notionIds;
+        base.criterionIds = criterionIds;
+      }
     }
     if (type === 'qcm') {
       if (!Array.isArray(e.options)) return null;

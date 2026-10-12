@@ -34,6 +34,7 @@ export * from './journey';
 export * from './language';
 export * from './language-identifier';
 export * from './language-mastery';
+export * from './language-mastery-bulletin';
 export * from './language-oral-capability';
 export * from './language-mastery-map';
 export * from './learn-orchestration';

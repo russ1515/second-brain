@@ -208,7 +208,14 @@ for (const group of learningDataControlGroups) {
   }
 }
 const globalPathAliases = catalog(path.join(LOCALES_DIR, 'global-path-v1.ts'), 'aliases');
-const languageMasteryAliases = catalog(path.join(LOCALES_DIR, 'language-mastery-v1.ts'), 'languageMasteryAliases');
+const languageMasteryFile = path.join(LOCALES_DIR, 'language-mastery-v1.ts');
+const languageMasteryAliases = catalog(languageMasteryFile, 'languageMasteryAliases');
+const languageBulletinKeys = stringArray(languageMasteryFile, 'languageBulletinKeys');
+const languageBulletinCatalogs = tupleCatalog(
+  languageMasteryFile,
+  'languageBulletinTranslations',
+  languageBulletinKeys,
+);
 const overlayFiles = new Set([
   'auth-errors.ts',
   'essential.ts',
@@ -269,6 +276,7 @@ function effectiveCatalog(resource) {
     ...(libraryV1Failures.get(code) ?? new Map()),
     ...(researchWebV1.get(code) ?? new Map()),
     ...(learningDataControlCatalogs.get(code) ?? new Map()),
+    ...(languageBulletinCatalogs.get(code) ?? new Map()),
   ]);
   for (const [key, sourceKey] of globalPathAliases) {
     const value = translations.get(sourceKey);

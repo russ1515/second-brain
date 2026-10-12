@@ -1,14 +1,18 @@
 import { Text, View } from 'react-native';
 import type {
+  LanguageMasteryPillar,
   LanguageProfileSummary,
   RlleCanDoCapability,
   RlleCourseView,
   RlleCurriculumUnit,
   RlleCurriculumUnitTemplate,
+  RlleLevelMasteryBulletin,
+  RlleNotionMasteryStatus,
   RlleLessonOutline,
   RlleMissionCategory,
   RlleWorldMissionTemplate,
 } from '@second-brain/shared';
+import { LANGUAGE_MASTERY_PILLARS } from '@second-brain/shared';
 import { Badge, Button, Card, Progress } from '../ds/core';
 import { useTokens } from '../../lib/design/theme';
 import { useRlleCopy } from '../../lib/language-rll-i18n';
@@ -65,7 +69,7 @@ export function CourseEntryCard({
           : copy('rlle.ui.course.noActivity')}
       </Text>
       {course?.kind === 'preview' ? <Text style={[typography.caption, { color: c.warning }]}>{copy('rlle.ui.hub.courseUnavailable')}</Text> : null}
-      <Button label={resumable ? copy('rlle.ui.course.resume') : copy('rlle.ui.hub.openCourse')} variant="ai" onPress={onOpen} />
+      <Button testID="language-course-open" label={resumable ? copy('rlle.ui.course.resume') : copy('rlle.ui.hub.openCourse')} variant="ai" onPress={onOpen} />
     </Card>
   );
 }
@@ -97,6 +101,134 @@ export function LevelSummary({ course }: { course: RlleCourseView }) {
       ))}
     </Card>
   );
+}
+
+const PILLAR_COPY: Record<LanguageMasteryPillar, string> = {
+  'communication-situations': 'rlle.ui.bulletin.pillar.communication',
+  'grammar-structures': 'rlle.ui.bulletin.pillar.grammar',
+  'verbal-system-conjugation': 'rlle.ui.bulletin.pillar.verbal',
+  'vocabulary-target-lexicon': 'rlle.ui.bulletin.pillar.vocabulary',
+  'orthography-graphy-phonetics': 'rlle.ui.bulletin.pillar.graphy',
+};
+
+const STATUS_COPY: Record<RlleNotionMasteryStatus, string> = {
+  MASTERED: 'rlle.ui.bulletin.status.mastered',
+  NOT_MASTERED: 'rlle.ui.bulletin.status.notMastered',
+  IN_PROGRESS: 'rlle.ui.bulletin.status.inProgress',
+  NOT_EVALUABLE: 'rlle.ui.bulletin.status.notEvaluable',
+};
+
+/** Server-authoritative notion mastery. This component only groups and renders
+ * the supplied projection; it never derives a score, status or unlock. */
+export function LanguageMasteryBulletins({
+  bulletins,
+  units,
+  language,
+}: {
+  bulletins: readonly RlleLevelMasteryBulletin[];
+  units: readonly RlleCurriculumUnit[];
+  language: string;
+}) {
+  const { copy } = useRlleCopy();
+  const { colors: c, spacing, typography } = useTokens();
+  const unitById = new Map(units.map((unit) => [unit.id, unit]));
+
+  if (bulletins.length === 0) return null;
+
+  return (
+    <View style={{ gap: spacing.md }} testID="language-mastery-bulletins">
+      {bulletins.map((bulletin) => (
+        <Card key={`${bulletin.languageCode}:${bulletin.level}:${bulletin.mappingVersion}`} elevated style={{ gap: spacing.md, borderColor: c.aiAccent }} testID={`language-mastery-bulletin-${bulletin.level}`}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }}>
+            <View style={{ gap: spacing.xs, flex: 1 }}>
+              <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{copy('rlle.ui.bulletin.title')}</Text>
+              <Text style={[typography.caption, { color: c.textSecondary }]}>{language} · {bulletin.level}</Text>
+            </View>
+            <Badge
+              label={copy(bulletin.notionGateUnlocked ? 'rlle.ui.bulletin.thresholdReached' : 'rlle.ui.bulletin.thresholdPending')}
+              tone={bulletin.notionGateUnlocked ? 'success' : 'info'}
+            />
+          </View>
+          <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{copy('rlle.ui.bulletin.detail')}</Text>
+          <Progress value={bulletin.displayPercent} tone="ai" />
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
+            <BulletinMetric value={`${bulletin.displayPercent}%`} label={copy('ai.progress')} />
+            <BulletinMetric value={String(bulletin.masteredRequiredNotions)} label={copy('rlle.ui.bulletin.mastered')} />
+            <BulletinMetric value={String(bulletin.toStrengthenRequiredNotions)} label={copy('rlle.ui.bulletin.reinforce')} />
+          </View>
+          {LANGUAGE_MASTERY_PILLARS.map((pillar) => {
+            const notions = bulletin.notions.filter((notion) => notion.pillar === pillar);
+            if (notions.length === 0) return null;
+            return (
+              <View key={pillar} style={{ gap: spacing.sm }} testID={`language-bulletin-pillar-${pillar}`}>
+                <Badge label={copy(PILLAR_COPY[pillar])} tone="neutral" />
+                {notions.map((notion) => {
+                  const unit = unitById.get(notion.unitId);
+                  const curriculumFallback = copy('rlle.ui.course.curriculum');
+                  const unitLabel = unit
+                    ? localizedLabel(copy, unit.titleCode, curriculumFallback)
+                    : curriculumFallback;
+                  const notionLabel = localizedLabel(
+                    copy,
+                    `rlle.ui.strand.${notion.sourceStrand}`,
+                    unitLabel,
+                  );
+                  return (
+                    <View
+                      key={notion.notionId}
+                      style={{ borderLeftWidth: 2, borderLeftColor: notionStatusColor(notion.status, c), paddingLeft: spacing.sm, gap: 2 }}
+                      testID={`language-notion-${notion.notionId}`}
+                    >
+                      <Text style={[typography.caption, { color: c.textMuted }]}>
+                        {unitLabel}
+                      </Text>
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }}>
+                        <Text style={[typography.bodySmall, { color: c.textPrimary, flex: 1 }]}>{notionLabel}</Text>
+                        <Badge label={copy(STATUS_COPY[notion.status])} tone={notionStatusTone(notion.status)} />
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            );
+          })}
+        </Card>
+      ))}
+    </View>
+  );
+}
+
+function localizedLabel(
+  copy: (key: string) => string,
+  key: string,
+  fallback: string,
+): string {
+  const value = copy(key);
+  return value === key || value.trim().length === 0 ? fallback : value;
+}
+
+function BulletinMetric({ value, label }: { value: string; label: string }) {
+  const { colors: c, typography } = useTokens();
+  return (
+    <View style={{ minWidth: 88, gap: 2 }}>
+      <Text style={[typography.h3, { color: c.textPrimary }]}>{value}</Text>
+      <Text style={[typography.caption, { color: c.textMuted }]}>{label}</Text>
+    </View>
+  );
+}
+
+function notionStatusTone(status: RlleNotionMasteryStatus): 'success' | 'warning' | 'info' | 'neutral' {
+  if (status === 'MASTERED') return 'success';
+  if (status === 'NOT_MASTERED') return 'warning';
+  if (status === 'IN_PROGRESS') return 'info';
+  return 'neutral';
+}
+
+function notionStatusColor(status: RlleNotionMasteryStatus, colors: ReturnType<typeof useTokens>['colors']): string {
+  if (status === 'MASTERED') return colors.success;
+  if (status === 'NOT_MASTERED') return colors.warning;
+  if (status === 'IN_PROGRESS') return colors.info;
+  return colors.border;
 }
 
 export function CurriculumMap({

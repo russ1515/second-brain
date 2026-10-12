@@ -10,6 +10,7 @@ import type {
   LanguageTrainingEvidenceState,
   LanguageTrainingFormat,
 } from './language-mastery';
+import type { RlleLevelMasteryBulletin } from './language-mastery-bulletin';
 
 /**
  * Real Life Language Engine (RLLE)
@@ -366,6 +367,9 @@ export interface RlleCourseView {
    * policy are explicitly legacy-unverified and are never backfilled as 90%. */
   masteryPolicyVersion: string;
   milestoneMastery: RlleMilestoneMasteryState[];
+  /** Proof-derived notion mastery. Certification remains separate and stays
+   * locked while mandatory pillar/acoustic capabilities are unavailable. */
+  masteryBulletins: RlleLevelMasteryBulletin[];
   /** Null when the current course has no strict mastery target. */
   nextMasteryTarget: RlleNextMasteryTarget | null;
   currentLesson: RlleLessonOutline | null;

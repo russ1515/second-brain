@@ -80,7 +80,7 @@ test('pillar prerequisites accept only current mapping and policy proofs', async
   );
 });
 
-test('strict mastery routes fail closed before provider or journal writes while acoustic readiness is absent', async () => {
+test('pillar certification fails closed while non-acoustic remediation remains reachable', async () => {
   let providerCalls = 0;
   let journalWrites = 0;
   let exerciseReads = 0;
@@ -99,8 +99,8 @@ test('strict mastery routes fail closed before provider or journal writes while 
     service.startScopedMastery('owner', 'profile-1', {
       experienceSessionId: 'session-1',
       lessonId: 'lesson-1',
-      scopeKind: 'milestone',
-      targetId: 'milestone-1',
+      scopeKind: 'pillar_exam',
+      targetId: 'pillar-exam-1',
       idempotencyKey: 'retry-1',
     }),
     (error) => error?.response?.code === 'LANGUAGE_MASTERY_V1_NOT_AVAILABLE',
@@ -116,9 +116,9 @@ test('strict mastery routes fail closed before provider or journal writes while 
       exerciseIndex: 0,
       trainingFormat: 'recognition-mcq',
     }),
-    (error) => error?.response?.code === 'LANGUAGE_MASTERY_V1_NOT_AVAILABLE',
+    /Owned remediation exercise attempt not found/,
   );
-  assert.equal(exerciseReads, 0);
+  assert.equal(exerciseReads, 1);
   assert.equal(journalWrites, 0);
   assert.equal(LANGUAGE_MASTERY_RUNTIME_READINESS.nativeAcousticAssessmentIntegrated, false);
   assert.equal(LANGUAGE_MASTERY_STRICT_RUNTIME_READY, false);

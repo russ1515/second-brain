@@ -682,6 +682,39 @@ test('technical failure is append-only NOT_EVALUABLE without score, completion o
   );
 });
 
+test('milestone remediation plan survives a service reload and remains target-scoped', async () => {
+  const prisma = memoryPrisma();
+  const service = masteryService(prisma);
+  const started = await service.start('owner', scope({ idempotencyKey: 'milestone-fail' }));
+  const assessmentId = bindAssessment(prisma, started, 'assessment-milestone-fail');
+  await service.bindAssessment('owner', started.attemptId, assessmentId);
+  const submissionId = submission(
+    prisma,
+    assessmentId,
+    'submission-milestone-fail',
+    8,
+    10,
+    80,
+  );
+  await service.appendOutcome('owner', {
+    attemptId: started.attemptId,
+    assessmentSubmissionId: submissionId,
+    decision: decision('not-mastered', 0.8),
+    criteria: [{ id: CANONICAL_MILESTONE.criterionId, met: false, score: 0.8 }],
+  });
+  const plan = await service.startRemediationPlan('owner', {
+    failedAttemptId: started.attemptId,
+    idempotencyKey: 'milestone-remediation',
+  });
+  const reloaded = masteryService(prisma);
+  const projection = await reloaded.projection('owner', 'profile-owner');
+  const failed = projection.find((item) => item.attemptId === started.attemptId);
+  assert.equal(failed.scopeKind, 'milestone');
+  assert.equal(failed.targetId, CANONICAL_MILESTONE.id);
+  assert.equal(failed.remediation.planId, plan.id);
+  assert.equal(failed.remediation.status, 'preparing');
+});
+
 test('pillar remediation preserves neutral evidence but counts only ten new completed sources', async () => {
   const prisma = memoryPrisma();
   const service = masteryService(prisma);
@@ -782,25 +815,31 @@ test('pillar remediation preserves neutral evidence but counts only ten new comp
     throw uniqueConflict();
   };
   for (let index = 0; index < 11; index += 1) {
-    const sourceRefId = `exercise-${index}`;
-    prisma.rows.exercises.push({
-      id: sourceRefId,
-      userId: 'owner',
-      lessonId: 'lesson-remediation-owner',
-      contentVersion: 4,
-      exerciseIndex: index,
-      createdAt: new Date(`2026-10-10T09:${String(index).padStart(2, '0')}:00.000Z`),
-    });
+    const audio = shared.LANGUAGE_TRAINING_FORMATS[index] === 'voice-pronunciation';
+    const evidenceId = audio
+      ? `audio-training:repair-evidence-${index}`
+      : `repair-evidence-${index}`;
+    const sourceRefId = audio ? evidenceId : `exercise-${index}`;
+    if (!audio) {
+      prisma.rows.exercises.push({
+        id: sourceRefId,
+        userId: 'owner',
+        lessonId: 'lesson-remediation-owner',
+        contentVersion: 4,
+        exerciseIndex: index,
+        createdAt: new Date(`2026-10-10T09:${String(index).padStart(2, '0')}:00.000Z`),
+      });
+    }
     await service.appendRemediationEvidence('owner', {
       attemptId: started.attemptId,
       remediationPlanId: remediationPlan.id,
-      evidenceId: `repair-evidence-${index}`,
+      evidenceId,
       trainingFormat: shared.LANGUAGE_TRAINING_FORMATS[index % shared.LANGUAGE_TRAINING_FORMATS.length],
       state: index === 9 ? 'not-evaluable' : 'completed',
       lessonId: 'lesson-remediation-owner',
       sourceContentVersion: 4,
       exerciseIndex: index,
-      sourceKind: 'exercise-attempt',
+      sourceKind: audio ? 'audio-native-coaching' : 'exercise-attempt',
       sourceRefId,
     });
   }

@@ -178,3 +178,64 @@ test('lesson parser rejects an invalid QCM instead of silently downgrading it', 
   });
   assert.throws(() => service.parseLesson(raw), /complete, usable lesson/i);
 });
+
+test('language lesson parser enforces the server notion allow-list and full unit coverage', () => {
+  const { service } = fixture();
+  const notions = [
+    { notionId: 'notion-a', criterionId: 'criterion-a' },
+    { notionId: 'notion-b', criterionId: 'criterion-b' },
+  ];
+  const qcmFormats = new Set([
+    'recognition-mcq',
+    'contextual-discrimination',
+    'register-matching',
+    'listening-discrimination',
+  ]);
+  const exercises = sharedLanguageFormats().map((languageFormat, index) => ({
+    type: qcmFormats.has(languageFormat) ? 'qcm' : 'open',
+    question: `Question ${index}`,
+    answer: `Answer ${index}`,
+    languageFormat,
+    notionIds: [index === 0 ? 'notion-b' : 'notion-a'],
+    criterionIds: [index === 0 ? 'criterion-b' : 'criterion-a'],
+    ...(qcmFormats.has(languageFormat)
+      ? { options: [`Answer ${index}`, `Distractor ${index}-1`, `Distractor ${index}-2`] }
+      : {}),
+    ...(languageFormat === 'sentence-reconstruction' ? { tokens: ['I', 'learn'] } : {}),
+    ...(languageFormat === 'listening-discrimination' || languageFormat === 'voice-pronunciation'
+      ? { audioText: `Audio ${index}` }
+      : {}),
+    ...(languageFormat === 'mini-dialogue' ? { dialogueTurns: ['Hello', 'Hi'] } : {}),
+  }));
+  const raw = (items) => JSON.stringify({
+    objective: 'Objective', intro: 'Intro', explanation: 'Explanation',
+    examples: ['Example'], commonMisconceptions: ['Correction'],
+    questions: ['Q1', 'Q2', 'Q3'], exercises: items, homework: '',
+    summary: 'Summary', keyPoints: ['K1', 'K2', 'K3'], revisionSheet: 'Revision',
+  });
+  const parsed = service.parseLesson(raw(exercises), true, undefined, notions);
+  assert.deepEqual(
+    new Set(parsed.exercises.flatMap((exercise) => exercise.notionIds)),
+    new Set(['notion-a', 'notion-b']),
+  );
+  assert.throws(
+    () => service.parseLesson(raw(exercises.map((exercise) => ({
+      ...exercise, notionIds: ['notion-a'], criterionIds: ['criterion-a'],
+    }))), true, undefined, notions),
+    /complete, usable lesson/i,
+  );
+  assert.throws(
+    () => service.parseLesson(raw(exercises.map((exercise, index) => index === 0
+      ? { ...exercise, notionIds: ['notion-unknown'], criterionIds: ['criterion-b'] }
+      : exercise)), true, undefined, notions),
+    /complete, usable lesson/i,
+  );
+});
+
+function sharedLanguageFormats() {
+  return [
+    'recognition-mcq', 'contextual-discrimination', 'fill-blank-no-hint',
+    'sentence-reconstruction', 'register-matching', 'error-correction',
+    'listening-discrimination', 'guided-writing', 'voice-pronunciation', 'mini-dialogue',
+  ];
+}

@@ -50,6 +50,23 @@ const masteryKeys = [
   'rlle.ui.capabilities.blockedDetail',
   'rlle.ui.capabilities.checkMicrophone',
   'rlle.ui.capabilities.strictDisabled',
+  'rlle.ui.course.generationFailed',
+  'rlle.ui.course.generationFailedDetail',
+  'rlle.ui.bulletin.title',
+  'rlle.ui.bulletin.detail',
+  'rlle.ui.bulletin.mastered',
+  'rlle.ui.bulletin.reinforce',
+  'rlle.ui.bulletin.thresholdReached',
+  'rlle.ui.bulletin.thresholdPending',
+  'rlle.ui.bulletin.pillar.communication',
+  'rlle.ui.bulletin.pillar.grammar',
+  'rlle.ui.bulletin.pillar.verbal',
+  'rlle.ui.bulletin.pillar.vocabulary',
+  'rlle.ui.bulletin.pillar.graphy',
+  'rlle.ui.bulletin.status.mastered',
+  'rlle.ui.bulletin.status.notMastered',
+  'rlle.ui.bulletin.status.inProgress',
+  'rlle.ui.bulletin.status.notEvaluable',
 ];
 const generatedFiles = {
   ar: 'ar.ts', bn: 'bn.ts', cs: 'cs.ts', da: 'da.ts', de: 'de.ts', el: 'el.ts',
@@ -67,6 +84,7 @@ function loadOverlay() {
     fileName: overlayPath,
   }).outputText;
   const aliased = new Map();
+  const translated = new Map();
   const compiled = new Module(overlayPath, module);
   compiled.filename = overlayPath;
   compiled.paths = Module._nodeModulePaths(path.dirname(overlayPath));
@@ -74,10 +92,11 @@ function loadOverlay() {
   compiled.require = (id) => id === '../i18n'
     ? {
         extendLocaleAliases: (locale, aliases) => aliased.set(locale, aliases),
+        extendLocale: (locale, catalog) => translated.set(locale, catalog),
       }
     : normalRequire(id);
   compiled._compile(js, overlayPath);
-  return { exports: compiled.exports, aliased };
+  return { exports: compiled.exports, aliased, translated };
 }
 
 function hasGeneratedKey(code, key) {
@@ -86,20 +105,30 @@ function hasGeneratedKey(code, key) {
 }
 
 test('the autonomous mastery UI is technically covered in all 34 locales', () => {
-  const { exports, aliased } = loadOverlay();
+  const { exports, aliased, translated } = loadOverlay();
   assert.deepEqual([...exports.languageMasteryKeys], masteryKeys);
   assert.equal(aliased.size, 32);
+  assert.equal(translated.size, 32);
 
   for (const code of exports.languageMasteryLocaleCodes) {
     const aliases = aliased.get(code);
+    const translations = translated.get(code);
     assert.ok(aliases, code + ' alias overlay was not registered');
-    assert.deepEqual(Object.keys(aliases), masteryKeys);
+    assert.ok(translations, code + ' direct translation overlay was not registered');
+    assert.deepEqual(
+      [...Object.keys(aliases), ...Object.keys(translations)].sort(),
+      [...masteryKeys].sort(),
+    );
     for (const [targetKey, sourceKey] of Object.entries(aliases)) {
       assert.ok(hasGeneratedKey(code, sourceKey), code + '.' + targetKey + ' source ' + sourceKey + ' is missing');
     }
+    assert.deepEqual(Object.keys(translations), [...exports.languageBulletinKeys]);
+    for (const [targetKey, value] of Object.entries(translations)) {
+      assert.ok(value.trim(), code + '.' + targetKey + ' direct translation is blank');
+    }
   }
 
-  assert.equal(new Set(['en', 'fr', ...aliased.keys()]).size, 34);
+  assert.equal(new Set(['en', 'fr', ...translated.keys()]).size, 34);
   assert.match(
     fs.readFileSync(path.join(localeRoot, 'index.ts'), 'utf8'),
     /import ['"]\.\/language-mastery-v1['"];/,

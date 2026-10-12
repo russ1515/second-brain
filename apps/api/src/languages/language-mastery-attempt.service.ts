@@ -83,7 +83,7 @@ export interface StartLanguageMasteryAttemptInput {
   languageCode: string;
   cefrLevel: CefrLevel;
   pillar: LanguageMasteryPillar | null;
-  /** Required only for a pillar retest after a durable, completed remediation. */
+  /** Required for a milestone or pillar retest after durable remediation. */
   remediationPlanId?: string | null;
 }
 
@@ -115,10 +115,10 @@ export interface AppendLanguageMasteryRemediationInput {
   lessonId: string;
   sourceContentVersion: number;
   exerciseIndex: number;
-  /** Only a durable, owner-scoped ExerciseAttempt can count for remediation.
-   * Acoustic coaching has no canonical persisted source yet and must remain
-   * NOT_EVALUABLE rather than receiving synthetic credit. */
-  sourceKind: 'exercise-attempt';
+  /** Written work is backed by an owner-scoped ExerciseAttempt. Voice training
+   * is recorded only by the server after a real uploaded-audio coaching call;
+   * it proves completion of the training format, never pronunciation mastery. */
+  sourceKind: 'exercise-attempt' | 'audio-native-coaching';
   sourceRefId: string;
 }
 
@@ -239,12 +239,17 @@ export class LanguageMasteryAttemptService {
           }
           return this.withRelations(tx, existing.id);
         }
-        if (normalized.scopeKind === 'pillar_exam') {
+        if (
+          normalized.scopeKind === 'milestone'
+          || normalized.scopeKind === 'pillar_exam'
+        ) {
           const latestFailure = await tx.languageMasteryAttempt.findFirst({
             where: {
               userId,
               languageProfileId: normalized.languageProfileId,
-              scopeKind: LanguageMasteryScopeKind.pillar_exam,
+              scopeKind: normalized.scopeKind === 'milestone'
+                ? LanguageMasteryScopeKind.milestone
+                : LanguageMasteryScopeKind.pillar_exam,
               scopeKey: normalized.scopeKey,
               mappingVersion: normalized.mappingVersion,
               policyVersion: normalized.policyVersion,
@@ -270,7 +275,7 @@ export class LanguageMasteryAttemptService {
             )
           ) {
             throw new ConflictException(
-              'The latest failed pillar exam must complete its targeted remediation before a retest.',
+              'The latest failed mastery target must complete its targeted remediation before a retest.',
             );
           }
         }
@@ -287,7 +292,7 @@ export class LanguageMasteryAttemptService {
           });
           if (!readyPlan) {
             throw new ConflictException(
-              'A pillar retest requires a remediation plan with ten completed new exercises.',
+              'A mastery retest requires a remediation plan with ten completed new exercises.',
             );
           }
         }
@@ -316,7 +321,7 @@ export class LanguageMasteryAttemptService {
             data: { status: LanguageMasteryRemediationPlanStatus.retest_started },
           });
           if (linked.count !== 1) {
-            throw new ConflictException('Concurrent pillar retest already started.');
+            throw new ConflictException('Concurrent mastery retest already started.');
           }
         }
         return this.withRelations(tx, created.id);
@@ -613,13 +618,16 @@ export class LanguageMasteryAttemptService {
     });
     if (
       !failed
-      || failed.scopeKind !== LanguageMasteryScopeKind.pillar_exam
+      || (
+        failed.scopeKind !== LanguageMasteryScopeKind.milestone
+        && failed.scopeKind !== LanguageMasteryScopeKind.pillar_exam
+      )
       || failed.status !== LanguageMasteryAttemptStatus.evaluated
       || failed.verdict !== LanguageMasteryAttemptVerdict.not_mastered
       || !failed.evaluatedAt
     ) {
       throw new UnprocessableEntityException(
-        'Targeted remediation requires an owned evaluated failed pillar exam.',
+        'Targeted remediation requires an owned evaluated failed mastery target.',
       );
     }
     // A failed pillar has exactly one canonical remediation plan. Operation
@@ -823,7 +831,10 @@ export class LanguageMasteryAttemptService {
         !plan
         || !attempt
         || attempt.attemptId !== attemptId
-        || attempt.scopeKind !== LanguageMasteryScopeKind.pillar_exam
+        || (
+          attempt.scopeKind !== LanguageMasteryScopeKind.milestone
+          && attempt.scopeKind !== LanguageMasteryScopeKind.pillar_exam
+        )
         || attempt.status !== LanguageMasteryAttemptStatus.evaluated
         || attempt.verdict !== LanguageMasteryAttemptVerdict.not_mastered
         || plan.remediationLessonId !== evidence.lessonId
@@ -833,7 +844,7 @@ export class LanguageMasteryAttemptService {
         )
       ) {
         throw new UnprocessableEntityException(
-          'Targeted remediation evidence must belong to its durable failed-exam plan and lesson.',
+          'Targeted remediation evidence must belong to its durable failed-target plan and lesson.',
         );
       }
       const lesson = await tx.lesson.findFirst({
@@ -860,22 +871,43 @@ export class LanguageMasteryAttemptService {
         || typeof declaredExercise !== 'object'
         || Array.isArray(declaredExercise)
         || declaredExercise.languageFormat !== evidence.trainingFormat
+        || (
+          attempt.scopeKind === LanguageMasteryScopeKind.milestone
+          && (
+            !Array.isArray(declaredExercise.notionIds)
+            || !declaredExercise.notionIds.includes(attempt.targetId)
+          )
+        )
       ) {
         throw new BadRequestException('Remediation format does not match the versioned lesson exercise.');
       }
-      const source = await tx.exerciseAttempt.findFirst({
-        where: {
-          id: evidence.sourceRefId,
-          userId,
-          lessonId: evidence.lessonId,
-          exerciseIndex: evidence.exerciseIndex,
-        },
-        select: { id: true, contentVersion: true, createdAt: true },
-      });
-      if (!source || source.contentVersion !== evidence.sourceContentVersion) {
-        throw new NotFoundException('Owned versioned remediation exercise attempt not found.');
+      let recordedAt: Date;
+      if (evidence.sourceKind === 'exercise-attempt') {
+        const source = await tx.exerciseAttempt.findFirst({
+          where: {
+            id: evidence.sourceRefId,
+            userId,
+            lessonId: evidence.lessonId,
+            exerciseIndex: evidence.exerciseIndex,
+          },
+          select: { id: true, contentVersion: true, createdAt: true },
+        });
+        if (!source || source.contentVersion !== evidence.sourceContentVersion) {
+          throw new NotFoundException('Owned versioned remediation exercise attempt not found.');
+        }
+        recordedAt = source.createdAt;
+      } else {
+        if (
+          evidence.trainingFormat !== 'voice-pronunciation'
+          || evidence.state !== 'completed'
+          || evidence.sourceRefId !== evidence.evidenceId
+          || !evidence.sourceRefId.startsWith('audio-training:')
+        ) {
+          throw new BadRequestException('Audio remediation evidence must come from server-recorded voice coaching.');
+        }
+        recordedAt = new Date();
       }
-      if (!attempt.evaluatedAt || source.createdAt <= attempt.evaluatedAt) {
+      if (!attempt.evaluatedAt || recordedAt <= attempt.evaluatedAt) {
         throw new UnprocessableEntityException(
           'Targeted remediation must use a genuinely new exercise completed after the failed exam.',
         );
@@ -917,7 +949,7 @@ export class LanguageMasteryAttemptService {
           policyVersion: attempt.policyVersion,
           ...evidence,
           state: this.prismaRemediationState(evidence.state),
-          recordedAt: source.createdAt,
+          recordedAt,
           evidenceHash,
         },
       });
@@ -1298,8 +1330,8 @@ export class LanguageMasteryAttemptService {
       }
     }
     if (input.remediationPlanId) {
-      if (input.scopeKind !== 'pillar_exam') {
-        throw new BadRequestException('Only a pillar exam can be linked to a remediation retest.');
+      if (input.scopeKind !== 'milestone' && input.scopeKind !== 'pillar_exam') {
+        throw new BadRequestException('Only a mastery target can be linked to a remediation retest.');
       }
       const plan = await tx.languageMasteryRemediationPlan.findFirst({
         where: { id: input.remediationPlanId, userId },
@@ -1313,6 +1345,11 @@ export class LanguageMasteryAttemptService {
         || plan.mappingVersion !== input.mappingVersion
         || plan.policyVersion !== input.policyVersion
         || plan.masteryContentVersion !== input.masteryContentVersion
+        || plan.failedAttempt.scopeKind !== (
+          input.scopeKind === 'milestone'
+            ? LanguageMasteryScopeKind.milestone
+            : LanguageMasteryScopeKind.pillar_exam
+        )
         || plan.failedAttempt.pillar !== input.pillar
       ) {
         throw new NotFoundException('Owned compatible language remediation plan not found.');
@@ -1438,8 +1475,8 @@ export class LanguageMasteryAttemptService {
     if (!Number.isInteger(input.exerciseIndex) || input.exerciseIndex < 0) {
       throw new BadRequestException('A valid remediation exercise index is required.');
     }
-    if (input.sourceKind !== 'exercise-attempt') {
-      throw new BadRequestException('Remediation evidence requires a durable owned exercise attempt.');
+    if (!['exercise-attempt', 'audio-native-coaching'].includes(input.sourceKind)) {
+      throw new BadRequestException('Unknown remediation evidence source.');
     }
     return {
       remediationPlanId: this.required(
@@ -1556,7 +1593,10 @@ export class LanguageMasteryAttemptService {
       completionId: row.completion?.status === 'verified'
         ? row.completion.id
         : canonicalCompletionId,
-      remediation: row.scopeKind === LanguageMasteryScopeKind.pillar_exam
+      remediation: (
+        row.scopeKind === LanguageMasteryScopeKind.milestone
+        || row.scopeKind === LanguageMasteryScopeKind.pillar_exam
+      )
         && row.verdict === LanguageMasteryAttemptVerdict.not_mastered
         ? {
             planId: row.failedRemediationPlan?.id ?? null,
@@ -1656,7 +1696,7 @@ export class LanguageMasteryAttemptService {
     }
   }
 
-  /** Revalidate the latest durable pillar failure at evaluation time.
+  /** Revalidate the latest durable scoped failure at evaluation time.
    *
    * Two pillar attempts may have been started before either result existed.
    * Once one fails, the other pre-started attempt must not bypass the newly
@@ -1676,12 +1716,15 @@ export class LanguageMasteryAttemptService {
       remediationPlanId: string | null;
     },
   ): Promise<void> {
-    if (attempt.scopeKind !== LanguageMasteryScopeKind.pillar_exam) return;
+    if (
+      attempt.scopeKind !== LanguageMasteryScopeKind.milestone
+      && attempt.scopeKind !== LanguageMasteryScopeKind.pillar_exam
+    ) return;
     const latestFailure = await tx.languageMasteryAttempt.findFirst({
       where: {
         userId,
         languageProfileId: attempt.languageProfileId,
-        scopeKind: LanguageMasteryScopeKind.pillar_exam,
+        scopeKind: attempt.scopeKind,
         scopeKey: attempt.scopeKey,
         mappingVersion: attempt.mappingVersion,
         policyVersion: attempt.policyVersion,
@@ -1700,7 +1743,7 @@ export class LanguageMasteryAttemptService {
       || latestFailure.failedRemediationPlan.status !== LanguageMasteryRemediationPlanStatus.retest_started
     ) {
       throw new ConflictException(
-        'The latest failed pillar exam must complete its targeted remediation before submission.',
+        'The latest failed mastery target must complete its targeted remediation before submission.',
       );
     }
   }

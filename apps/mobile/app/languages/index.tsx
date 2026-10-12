@@ -29,7 +29,7 @@ import { LanguageBadge, LanguageSelector } from '../../components/ds/language';
 import { Page, PageHeader, ResponsiveSplit, Section } from '../../components/ds/layout';
 import { SmartEmptyState, SmartErrorState, SmartLoadingState } from '../../components/ds/states';
 import { CourseEntryCard } from '../../components/language/course-ui';
-import { loadRlleCourse, type RlleCourseLoad } from '../../lib/language-rll-client';
+import { loadRlleCourse, startRlleCourse, type RlleCourseLoad } from '../../lib/language-rll-client';
 
 export default function LanguagesScreen() {
   const { user, offline } = useAuth();
@@ -100,6 +100,7 @@ export default function LanguagesScreen() {
     if (!learningCode || !user) return;
     setCreating(true);
     setError(null);
+    const requestedGoal = goal.trim();
     try {
       const created = await api<LanguageProfileSummary>('/languages', {
         method: 'POST',
@@ -108,13 +109,26 @@ export default function LanguagesScreen() {
           ...(nativeCode ? { nativeLanguage: nativeCode } : {}),
           mode,
           cefrLevel: level,
-          ...(goal.trim() ? { goal: goal.trim() } : {}),
+          ...(requestedGoal ? { goal: requestedGoal } : {}),
         },
       });
       await saveActiveLanguage(user.id, created.id);
       setActiveId(created.id);
       setGoal('');
-      await load();
+      try {
+        await startRlleCourse(created.id, {
+          startFrom: 'declared-level',
+          targetLevel: created.cefrLevel,
+          ...(requestedGoal ? { goal: requestedGoal } : {}),
+          idempotencyKey: `mobile-course:${created.id}:profile-goal`,
+        });
+        router.push(`/languages/${encodeURIComponent(created.id)}/course` as never);
+      } catch {
+        // The language profile is intentionally kept: course creation can be
+        // retried from its own screen without losing the learner's choices.
+        await load().catch(() => undefined);
+        router.push(`/languages/${encodeURIComponent(created.id)}/course?generation=failed` as never);
+      }
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
@@ -203,8 +217,8 @@ export default function LanguagesScreen() {
                   <LanguageSelector value={nativeCode} onChange={setNativeCode} mode="learning" label={t('languageSelector.nativeLabel')} />
                   <SegmentedControl options={CEFR_LEVELS} value={level} onChange={setLevel} />
                   <SegmentedControl options={LANGUAGE_MODES.slice(0, 3)} value={mode} onChange={setMode} labelFor={(value) => t(`langmode.${value}` as TranslationKey)} />
-                  <Input label={t('languages11.goal.label')} value={goal} onChangeText={setGoal} placeholder={t('languages11.goal.placeholder')} maxLength={300} />
-                  <Button label={t('languages11.create.action')} loading={creating} onPress={() => void create()} />
+                  <Input testID="language-course-goal" label={t('languages11.goal.label')} value={goal} onChangeText={setGoal} placeholder={t('languages11.goal.placeholder')} maxLength={300} />
+                  <Button testID="language-generate-course" label={t('rlle.ui.course.notStarted')} loading={creating} onPress={() => void create()} />
                 </Card>
               ) : null}
               {profiles && profiles.length > 1 ? (

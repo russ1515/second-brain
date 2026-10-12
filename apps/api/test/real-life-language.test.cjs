@@ -29,7 +29,11 @@ function harness(options = {}) {
   const assessmentCreations = [];
   const assessments = new Map();
   const masteryAttempts = new Map();
+  const remediationPlans = new Map();
+  const remediationEvidence = new Map();
+  const generatedLessons = new Map();
   let nextId = 1;
+  let submissionCount = 0;
   let conversationStarts = 0;
   let failedAutonomyActivePersist = false;
   const toSession = (request, id = `experience-${nextId++}`) => ({
@@ -104,15 +108,26 @@ function harness(options = {}) {
     },
     card: { count: async () => 0 },
     exerciseAttempt: {
+      findFirst: async ({ where }) => attempts.find((attempt) =>
+        attempt.id === where.id
+        && attempt.userId === where.userId
+        && attempt.lessonId === where.lessonId
+        && attempt.exerciseIndex === where.exerciseIndex) ?? null,
       findMany: async ({ where }) => attempts
         .filter((attempt) => attempt.userId === where.userId && attempt.lessonId === where.lessonId
           && (where.contentVersion === undefined || attempt.contentVersion === where.contentVersion))
         .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime()),
     },
     lesson: {
-      findFirst: async ({ where }) => where.id === 'lesson-1' && where.userId === 'user-1'
-        ? { contentVersion: 1 }
-        : null,
+      findFirst: async ({ where }) => {
+        if (where.id === 'lesson-1' && where.userId === 'user-1') {
+          return { id: 'lesson-1', userId: 'user-1', contentVersion: 1, exercises: lessonExercises };
+        }
+        const generated = generatedLessons.get(where.id);
+        return generated && where.userId === 'user-1'
+          ? { ...generated, userId: 'user-1', contentVersion: 1 }
+          : null;
+      },
     },
   };
   const languages = {
@@ -144,13 +159,28 @@ function harness(options = {}) {
   const lessons = {
     generate: async (...args) => {
       lessonGenerations.push(args);
-      return {
-        id: 'lesson-1', languageProfileId: profile.id, topic: 'First contact',
-        objective: 'Introduce yourself in a real exchange.', sourceDocumentId: null,
-        exercises: lessonExercises,
+      const internal = args[2] ?? {};
+      const isRemediation = Boolean(internal.masteryRemediationGenerationKey);
+      const generated = {
+        id: isRemediation ? 'lesson-remediation-1' : 'lesson-1',
+        languageProfileId: profile.id,
+        topic: isRemediation ? 'Targeted remediation' : 'First contact',
+        objective: isRemediation
+          ? 'Strengthen only the failed notion.'
+          : 'Introduce yourself in a real exchange.',
+        sourceDocumentId: null,
+        exercises: isRemediation
+          ? lessonExercises.map((exercise) => ({
+              ...exercise,
+              notionIds: internal.languageNotions.map((item) => item.notionId),
+              criterionIds: internal.languageNotions.map((item) => item.criterionId),
+            }))
+          : lessonExercises,
       };
+      generatedLessons.set(generated.id, generated);
+      return generated;
     },
-    get: async () => ({
+    get: async (_userId, lessonId) => generatedLessons.get(lessonId) ?? ({
       id: 'lesson-1', languageProfileId: profile.id, topic: 'First contact',
       objective: 'Introduce yourself in a real exchange.', sourceDocumentId: null,
       exercises: lessonExercises,
@@ -170,6 +200,31 @@ function harness(options = {}) {
       return { id: tutorSessionId, experienceSession };
     },
   };
+  const submitAssessment = async (_userId, id, answers) => {
+    const item = assessments.get(id);
+    const submissionIndex = submissionCount++;
+    const awarded = options.scopedAwardedPointsSequence?.[submissionIndex]
+      ?? options.scopedAwardedPoints
+      ?? 9;
+    const maximum = options.scopedMaximumPointsSequence?.[submissionIndex]
+      ?? options.scopedMaximumPoints
+      ?? 10;
+    const submission = {
+      id: `submission-${submissionIndex + 1}`, assessmentId: id,
+      score: options.scopedSubmissionScoreSequence?.[submissionIndex]
+        ?? options.scopedSubmissionScore
+        ?? 90,
+      results: item.view.questions.map((question, index) => ({
+        questionId: question.id, prompt: question.prompt, learnerAnswer: answers[index],
+        awarded, max: maximum, verdict: 'partial', why: 'Observed production.', how: 'Keep practising.',
+        errorMade: 'Minor detail.', howToAvoid: 'Review it.',
+      })),
+      summary: 'Autonomous production reached the threshold.', advice: 'Continue.',
+      createdAt: '2026-09-14T08:40:00.000Z',
+    };
+    item.view = { ...item.view, latestSubmission: submission };
+    return submission;
+  };
   const service = new RealLifeLanguageService(
     prisma, languages, lessons,
     conversations,
@@ -188,7 +243,7 @@ function harness(options = {}) {
       create: async (_userId, _dto, internal) => {
         assessmentCreations.push(internal);
         const assessment = {
-          id: 'assessment-1', type: 'open', topic: 'Autonomy', title: 'Autonomy',
+          id: `assessment-${assessmentCreations.length}`, type: 'open', topic: 'Autonomy', title: 'Autonomy',
           level: 'beginner',
           questions: [1, 2, 3].map((index) => ({
             id: `question-${index}`, prompt: `Produce answer ${index}.`, format: 'open', points: 10,
@@ -219,21 +274,9 @@ function harness(options = {}) {
         item.metadata = { ...item.metadata, helpUsed: true };
         return item.metadata;
       },
-      submit: async (_userId, id, answers) => {
-        const item = assessments.get(id);
-        const submission = {
-          id: 'submission-1', assessmentId: id, score: 90,
-          results: item.view.questions.map((question, index) => ({
-            questionId: question.id, prompt: question.prompt, learnerAnswer: answers[index],
-            awarded: 9, max: 10, verdict: 'partial', why: 'Observed production.', how: 'Keep practising.',
-            errorMade: 'Minor detail.', howToAvoid: 'Review it.',
-          })),
-          summary: 'Autonomous production reached the threshold.', advice: 'Continue.',
-          createdAt: '2026-09-14T08:40:00.000Z',
-        };
-        item.view = { ...item.view, latestSubmission: submission };
-        return submission;
-      },
+      submit: submitAssessment,
+      submitLanguageMasteryOnce: async (userId, id, _attemptId, answers) =>
+        submitAssessment(userId, id, answers),
     },
     {
       coachSpeaking: async () => ({
@@ -251,8 +294,46 @@ function harness(options = {}) {
     },
     { supportsSynthesis: true, supportsAnalysis: true },
     {
-      projection: async () => [],
-      reconcileRemediationExerciseAttempts: async () => null,
+      projection: async () => {
+        const external = options.masteryProjection?.() ?? [];
+        if (!options.useMasteryJournalProjection) return external;
+        const journal = [...masteryAttempts.values()].map((entry) => {
+          const plan = remediationPlans.get(entry.attemptId) ?? null;
+          const evidence = plan ? (remediationEvidence.get(plan.id) ?? []) : [];
+          return {
+            id: entry.attemptId,
+            ...entry,
+            completionId: entry.completionId ?? null,
+            threshold: shared.LANGUAGE_MASTERY_THRESHOLD,
+            evaluatedAt: entry.evaluatedAt ?? null,
+            remediation: plan ? {
+              planId: plan.id,
+              generationKey: plan.generationKey,
+              lessonId: plan.lessonId ?? null,
+              requiredExerciseCount: 10,
+              completedExerciseCount: evidence.length,
+              evidenceCount: evidence.length,
+              status: evidence.length >= 10 ? 'ready_for_retest' : plan.lessonId ? 'active' : 'preparing',
+              evidence,
+            } : null,
+          };
+        });
+        return [...external, ...journal];
+      },
+      reconcileRemediationExerciseAttempts: async (_userId, attemptId) => {
+        if (!options.useMasteryJournalProjection) return null;
+        const plan = remediationPlans.get(attemptId);
+        const evidence = plan ? (remediationEvidence.get(plan.id) ?? []) : [];
+        return {
+          ...masteryAttempts.get(attemptId),
+          remediation: plan ? {
+            planId: plan.id,
+            evidenceCount: evidence.length,
+            completedExerciseCount: evidence.length,
+            requiredExerciseCount: 10,
+          } : null,
+        };
+      },
       start: async (_userId, input) => {
         const attemptId = `journal:${input.idempotencyKey}`;
         const existing = masteryAttempts.get(attemptId);
@@ -287,9 +368,31 @@ function harness(options = {}) {
           ...entry,
           status: 'evaluated',
           verdict: input.decision.verdict,
+          rawScore: input.decision.rawScore,
+          decision: input.decision,
+          criteria: input.criteria,
+          assessmentSubmissionId: input.assessmentSubmissionId,
+          evaluatedAt: '2026-09-14T08:40:00.000Z',
         });
         masteryJournal.push({ event: 'outcome', ...input });
-        return { ...input, status: 'evaluated' };
+        return {
+          ...entry,
+          ...input,
+          completionId: null,
+          status: 'evaluated',
+          verdict: input.decision.verdict,
+          evaluatedAt: '2026-09-14T08:40:00.000Z',
+        };
+      },
+      publishCompletion: async (_userId, attemptId) => {
+        const entry = masteryAttempts.get(attemptId);
+        const published = {
+          ...entry,
+          completionId: entry.completionId ?? `completion:${attemptId}`,
+        };
+        masteryAttempts.set(attemptId, published);
+        masteryJournal.push({ event: 'publish', attemptId, completionId: published.completionId });
+        return published;
       },
       appendNotEvaluable: async (_userId, input) => {
         const entry = masteryAttempts.get(input.attemptId);
@@ -301,6 +404,44 @@ function harness(options = {}) {
         masteryJournal.push({ event: 'not-evaluable', ...input });
         return { ...input, status: 'evaluated' };
       },
+      startRemediationPlan: async (_userId, input) => {
+        const existing = remediationPlans.get(input.failedAttemptId);
+        if (existing) return existing;
+        const plan = {
+          id: `plan:${input.failedAttemptId}`,
+          failedAttemptId: input.failedAttemptId,
+          generationKey: `generation:${input.failedAttemptId}`,
+          requiredExerciseCount: 10,
+          completedExerciseCount: 0,
+          status: 'preparing',
+        };
+        remediationPlans.set(input.failedAttemptId, plan);
+        remediationEvidence.set(plan.id, []);
+        return plan;
+      },
+      bindRemediationLesson: async (_userId, input) => {
+        const plan = [...remediationPlans.values()].find((item) => item.id === input.remediationPlanId);
+        plan.lessonId = input.lessonId;
+        return { ...plan, remediationLessonId: input.lessonId, status: 'active' };
+      },
+      appendRemediationEvidence: async (_userId, input) => {
+        const plan = [...remediationPlans.values()].find((item) => item.id === input.remediationPlanId);
+        const evidence = remediationEvidence.get(plan.id);
+        if (!evidence.some((item) => item.evidenceId === input.evidenceId)) evidence.push(input);
+        return {
+          ...masteryAttempts.get(input.attemptId),
+          remediation: {
+            planId: plan.id,
+            generationKey: plan.generationKey,
+            lessonId: plan.lessonId,
+            requiredExerciseCount: 10,
+            completedExerciseCount: evidence.length,
+            evidenceCount: evidence.length,
+            status: evidence.length >= 10 ? 'ready_for_retest' : 'active',
+            evidence,
+          },
+        };
+      },
     },
   );
   if (!options.useRealActivationGate) {
@@ -308,13 +449,56 @@ function harness(options = {}) {
   }
   return {
     service, sessions, experiences, attempts, finalizedUnits, lessonExercises, masteryJournal,
-    lessonGenerations, assessmentCreations,
+    lessonGenerations, assessmentCreations, remediationPlans, remediationEvidence,
     conversationStarts: () => conversationStarts,
   };
 }
 
+function masteredMilestoneProjection(milestones) {
+  return milestones.map((milestone, index) => ({
+    id: `row-${index}`,
+    attemptId: `attempt-${index}`,
+    idempotencyKey: `key-${index}`,
+    scopeKind: 'milestone',
+    scopeKey: shared.rlleMilestoneEvidenceScopeKey({ languageCode: 'en', milestone }),
+    targetId: milestone.id,
+    mappingVersion: shared.RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+    policyVersion: shared.LANGUAGE_MASTERY_POLICY_VERSION,
+    masteryContentVersion: milestone.contentVersion,
+    contentDefinitionId: milestone.contentDefinitionId,
+    sourceContentVersion: 1,
+    lessonId: 'lesson-1',
+    languageCode: 'en',
+    cefrLevel: milestone.level,
+    pillar: milestone.pillar,
+    status: 'evaluated',
+    verdict: 'mastered',
+    rawScore: 0.9,
+    threshold: 0.9,
+    decisionReason: 'threshold-met',
+    helpUsed: false,
+    decision: {
+      policyVersion: shared.LANGUAGE_MASTERY_POLICY_VERSION,
+      verdict: 'mastered',
+      reason: 'threshold-met',
+      trainingComplete: true,
+      missingTrainingFormats: [],
+      rawScore: 0.9,
+      threshold: 0.9,
+      helpUsed: false,
+    },
+    criteria: [{ id: milestone.criterionId, met: true, score: 0.9 }],
+    assessmentId: `assessment-${index}`,
+    assessmentSubmissionId: `submission-${index}`,
+    completionId: `completion-${index}`,
+    remediation: null,
+    startedAt: '2026-09-14T08:30:00.000Z',
+    evaluatedAt: '2026-09-14T08:40:00.000Z',
+  }));
+}
+
 test('course from zero keeps the complete A1→B1 spine and distinguishes declared/evaluated levels', async () => {
-  const { service } = harness();
+  const { service, lessonGenerations } = harness();
   const result = await service.startCourse('user-1', 'language-1', {
     startFrom: 'zero', targetLevel: 'B1', goalDomain: 'work',
   });
@@ -327,6 +511,71 @@ test('course from zero keeps the complete A1→B1 spine and distinguishes declar
   assert.equal(result.course.progress.completedUnits, 0);
   assert.equal(result.course.canDoMap.every((item) => item.status === 'not-evaluated'), true);
   assert.equal(result.session.currentStep.metadata.rlleCourse.immersionIntensity, 'guided');
+  assert.equal(result.course.currentLesson.lessonId, 'lesson-1');
+  assert.equal(lessonGenerations.length, 1);
+  const mapped = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP
+    .find((item) => item.unitId === 'a1-first-contact').milestones;
+  assert.deepEqual(
+    new Set(lessonGenerations[0][2].languageNotions.map((item) => item.notionId)),
+    new Set(mapped.map((item) => item.id)),
+  );
+  const retried = await service.startCourse('user-1', 'language-1', {
+    startFrom: 'zero', targetLevel: 'B1', goalDomain: 'work',
+  });
+  assert.equal(retried.course.currentLesson.lessonId, result.course.currentLesson.lessonId);
+  assert.equal(lessonGenerations.length, 1);
+  assert.ok(result.course.masteryBulletins.length >= 1);
+});
+
+test('course creation infers its domain from the explicit learner objective', async () => {
+  const { service } = harness();
+  const result = await service.startCourse('user-1', 'language-1', {
+    startFrom: 'zero', targetLevel: 'A1', goal: 'Préparer un entretien professionnel',
+  });
+  assert.equal(result.course.goal, 'Préparer un entretien professionnel');
+  assert.equal(result.course.goalDomain, 'work');
+});
+
+test('canonical unit mastery closes the active lesson and opens the next unit', async () => {
+  let projection = [];
+  const { service } = harness({ masteryProjection: () => projection });
+  await service.startCourse('user-1', 'language-1', {
+    startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
+  });
+  const firstMapping = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP
+    .find((item) => item.unitId === 'a1-first-contact');
+  projection = masteredMilestoneProjection(firstMapping.milestones);
+  const reconciled = await service.course('user-1', 'language-1');
+  assert.equal(reconciled.currentLesson.status, 'completed');
+  assert.equal(reconciled.units.find((unit) => unit.id === 'a1-first-contact').status, 'completed');
+  assert.equal(reconciled.units.find((unit) => unit.id === 'a1-daily-needs').status, 'in-progress');
+  const next = await service.startLesson('user-1', 'language-1', { unitId: 'a1-daily-needs' });
+  assert.equal(next.course.currentLesson.unitId, 'a1-daily-needs');
+});
+
+test('the raw 90 percent notion gate advances to the next level without strict certification', async () => {
+  let projection = [];
+  const { service } = harness({
+    masteryProjection: () => projection,
+    strictMastery: false,
+  });
+  await service.startCourse('user-1', 'language-1', {
+    startFrom: 'zero', targetLevel: 'A2', goalDomain: 'general',
+  });
+  const a1 = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP
+    .filter((item) => item.level === 'A1')
+    .flatMap((item) => item.milestones);
+  projection = masteredMilestoneProjection(a1.slice(0, Math.ceil(a1.length * 0.9)));
+  const reconciled = await service.course('user-1', 'language-1');
+  const bulletin = reconciled.masteryBulletins.find((item) => item.level === 'A1');
+  assert.ok(bulletin.rawMasteryRatio >= 0.9);
+  assert.equal(bulletin.notionGateUnlocked, true);
+  assert.equal(reconciled.units.filter((unit) => unit.level === 'A1').every((unit) => unit.status === 'completed'), true);
+  assert.equal(reconciled.nextMasteryTarget.scopeKind, 'milestone');
+  const target = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP
+    .flatMap((item) => item.milestones)
+    .find((item) => item.id === reconciled.nextMasteryTarget.targetId);
+  assert.equal(target.level, 'A2');
 });
 
 test('authored mastery supplements are injected into the existing unit generation contract', async () => {
@@ -549,24 +798,30 @@ test('autonomy start reconciles a bound journal after the course-state write is 
   assert.equal(masteryJournal.filter((entry) => entry.event === 'bind').length, 1);
 });
 
-test('the real activation gate remains legacy until acoustic evidence and canonical publication are integrated', async () => {
+test('canonical notions stay available while strict acoustic certification remains blocked', async () => {
   const { service } = harness({ useRealActivationGate: true });
   const started = await service.startCourse('user-1', 'language-1', {
     startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
   });
-  assert.equal(started.course.masteryPolicyVersion, 'legacy');
-  assert.equal(started.session.currentStep.metadata.rlleCourse.masteryPolicyVersion, null);
+  assert.equal(started.course.masteryPolicyVersion, shared.LANGUAGE_MASTERY_POLICY_VERSION);
+  assert.equal(
+    started.session.currentStep.metadata.rlleCourse.masteryPolicyVersion,
+    shared.LANGUAGE_MASTERY_POLICY_VERSION,
+  );
+  assert.ok(started.course.currentLesson);
   await assert.rejects(
-    () => service.startAutonomy('user-1', 'language-1', {
+    () => service.startScopedMastery('user-1', 'language-1', {
       experienceSessionId: started.session.id,
       lessonId: 'lesson-1',
+      scopeKind: 'pillar_exam',
+      targetId: 'blocked-pillar-exam',
       idempotencyKey: 'blocked-autonomy-attempt',
     }),
     /not available/i,
   );
 });
 
-test('feature-off lessons retain the deployed completion and finalizer flow', async () => {
+test('non-acoustic notion course never falls back to legacy whole-unit credit', async () => {
   const { service, attempts, finalizedUnits, lessonExercises } = harness({
     strictMastery: false,
   });
@@ -580,6 +835,7 @@ test('feature-off lessons retain the deployed completion and finalizer flow', as
   );
   const outline = started.course.currentLesson;
   for (let index = 0; index < lessonExercises.length; index += 1) {
+    if (lessonExercises[index].languageFormat === 'voice-pronunciation') continue;
     attempts.push({
       id: 'legacy-attempt-' + index,
       userId: 'user-1',
@@ -593,6 +849,13 @@ test('feature-off lessons retain the deployed completion and finalizer flow', as
       createdAt: new Date('2026-09-14T08:' + String(10 + index) + ':00.000Z'),
     });
   }
+  await service.recordVoiceTraining(
+    'user-1',
+    'language-1',
+    { experienceSessionId: started.session.id, lessonId: outline.lessonId, exerciseIndex: 8 },
+    { buffer: Buffer.from('technical-audio'), mimetype: 'audio/webm', originalname: 'course.webm', size: 15 },
+    2,
+  );
   let course = started.course;
   for (const stage of outline.stages.filter((item) => item.status !== 'skipped')) {
     course = await service.advanceLesson(
@@ -603,12 +866,178 @@ test('feature-off lessons retain the deployed completion and finalizer flow', as
       stage.kind,
     );
   }
-  assert.equal(course.currentLesson.status, 'completed');
-  assert.equal(course.progress.completedUnits, 1);
-  assert.equal(course.masteryPolicyVersion, 'legacy');
-  assert.equal(finalizedUnits.length, 1);
-  assert.deepEqual(finalizedUnits[0].evidenceIds.length > 0, true);
-  assert.equal(Object.hasOwn(finalizedUnits[0], 'policyVersion'), false);
+  assert.equal(course.currentLesson.status, 'active');
+  assert.equal(course.progress.completedUnits, 0);
+  assert.equal(course.masteryPolicyVersion, shared.LANGUAGE_MASTERY_POLICY_VERSION);
+  assert.ok(course.masteryBulletins.length > 0);
+  assert.equal(course.nextMasteryTarget.scopeKind, 'milestone');
+  assert.equal(course.nextMasteryTarget.eligible, true);
+  assert.equal(finalizedUnits.length, 0);
+});
+
+test('a failed milestone generates target-only remediation and becomes retest-ready after ten new formats', async () => {
+  const runtime = harness({
+    strictMastery: false,
+    useMasteryJournalProjection: true,
+    scopedSubmissionScoreSequence: [89.9, 90],
+    scopedAwardedPointsSequence: [899, 900],
+    scopedMaximumPointsSequence: [1000, 1000],
+  });
+  const {
+    service,
+    attempts,
+    lessonExercises,
+    lessonGenerations,
+    remediationPlans,
+    remediationEvidence,
+  } = runtime;
+  const started = await service.startCourse('user-1', 'language-1', {
+    startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
+  });
+  const outline = started.course.currentLesson;
+  for (let index = 0; index < lessonExercises.length; index += 1) {
+    if (lessonExercises[index].languageFormat === 'voice-pronunciation') continue;
+    attempts.push({
+      id: `milestone-training-${index}`,
+      userId: 'user-1',
+      lessonId: outline.lessonId,
+      contentVersion: 1,
+      exerciseIndex: index,
+      correct: true,
+      score: 1,
+      feedback: 'Completed.',
+      correction: 'Correct.',
+      createdAt: new Date(`2026-09-14T08:${String(10 + index).padStart(2, '0')}:00.000Z`),
+    });
+  }
+  await service.recordVoiceTraining(
+    'user-1',
+    'language-1',
+    { experienceSessionId: started.session.id, lessonId: outline.lessonId, exerciseIndex: 8 },
+    { buffer: Buffer.from('technical-audio'), mimetype: 'audio/webm', originalname: 'milestone.webm', size: 15 },
+    2,
+  );
+  let course = started.course;
+  for (const stage of outline.stages.filter((item) => item.status !== 'skipped')) {
+    course = await service.advanceLesson(
+      'user-1',
+      'language-1',
+      started.session.id,
+      outline.lessonId,
+      stage.kind,
+    );
+  }
+  const target = course.nextMasteryTarget;
+  assert.equal(target.scopeKind, 'milestone');
+  assert.equal(target.eligible, true);
+  const assessment = await service.startScopedMastery('user-1', 'language-1', {
+    experienceSessionId: started.session.id,
+    lessonId: outline.lessonId,
+    scopeKind: 'milestone',
+    targetId: target.targetId,
+    idempotencyKey: target.operationKey,
+  });
+  const failed = await service.submitScopedMastery('user-1', 'language-1', {
+    experienceSessionId: started.session.id,
+    lessonId: outline.lessonId,
+    scopeKind: 'milestone',
+    attemptId: assessment.attemptId,
+    assessmentId: assessment.assessment.id,
+    answers: ['One', 'Two', 'Three'],
+  });
+  assert.equal(failed.decision.verdict, 'not-mastered');
+  assert.equal(failed.decision.rawScore, 0.899);
+  const plan = remediationPlans.get(failed.attemptId);
+  assert.ok(plan);
+
+  const remediation = await service.startRemediation('user-1', 'language-1', {
+    experienceSessionId: started.session.id,
+    lessonId: outline.lessonId,
+    failedAttemptId: failed.attemptId,
+    idempotencyKey: `milestone-failure:${failed.attemptId}`,
+  });
+  const generation = lessonGenerations.find((args) =>
+    args[2]?.masteryRemediationGenerationKey === plan.generationKey);
+  assert.ok(generation);
+  assert.deepEqual(generation[2].languageNotions, [{
+    notionId: target.targetId,
+    criterionId: shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP
+      .flatMap((unit) => unit.milestones)
+      .find((milestone) => milestone.id === target.targetId).criterionId,
+  }]);
+  const remediationLesson = remediation.course.currentLesson;
+  assert.notEqual(remediationLesson.lessonId, outline.lessonId);
+
+  for (let index = 0; index < shared.LANGUAGE_TRAINING_FORMATS.length; index += 1) {
+    if (shared.LANGUAGE_TRAINING_FORMATS[index] === 'voice-pronunciation') continue;
+    const exerciseAttemptId = `milestone-remediation-attempt-${index}`;
+    attempts.push({
+      id: exerciseAttemptId,
+      userId: 'user-1',
+      lessonId: remediationLesson.lessonId,
+      contentVersion: 1,
+      exerciseIndex: index,
+      correct: true,
+      score: 1,
+      feedback: 'Completed targeted remediation.',
+      correction: 'Correct.',
+      createdAt: new Date(`2026-09-14T09:${String(index).padStart(2, '0')}:00.000Z`),
+    });
+    await service.recordRemediationExercise('user-1', 'language-1', {
+      remediationPlanId: plan.id,
+      failedAttemptId: failed.attemptId,
+      lessonId: remediationLesson.lessonId,
+      exerciseAttemptId,
+      exerciseIndex: index,
+      trainingFormat: shared.LANGUAGE_TRAINING_FORMATS[index],
+    });
+  }
+  const voiceIndex = shared.LANGUAGE_TRAINING_FORMATS.indexOf('voice-pronunciation');
+  const voiceResult = await service.recordVoiceTraining(
+    'user-1',
+    'language-1',
+    {
+      experienceSessionId: started.session.id,
+      lessonId: remediationLesson.lessonId,
+      exerciseIndex: voiceIndex,
+    },
+    { buffer: Buffer.from('technical-audio'), mimetype: 'audio/webm', originalname: 'remediation.webm', size: 15 },
+    2,
+  );
+  assert.equal(voiceResult.coaching.transcript, 'Hello');
+  assert.equal(remediationEvidence.get(plan.id).length, 10);
+  const reloaded = await service.course('user-1', 'language-1');
+  assert.equal(reloaded.nextMasteryTarget.targetId, target.targetId);
+  assert.equal(reloaded.nextMasteryTarget.remediationPlanId, plan.id);
+  assert.equal(reloaded.nextMasteryTarget.eligible, true);
+
+  const retest = await service.startScopedMastery('user-1', 'language-1', {
+    experienceSessionId: started.session.id,
+    lessonId: remediationLesson.lessonId,
+    scopeKind: 'milestone',
+    targetId: target.targetId,
+    idempotencyKey: reloaded.nextMasteryTarget.operationKey,
+    remediationPlanId: plan.id,
+  });
+  const mastered = await service.submitScopedMastery('user-1', 'language-1', {
+    experienceSessionId: started.session.id,
+    lessonId: remediationLesson.lessonId,
+    scopeKind: 'milestone',
+    attemptId: retest.attemptId,
+    assessmentId: retest.assessment.id,
+    answers: ['One', 'Two', 'Three'],
+  });
+  assert.equal(mastered.decision.verdict, 'mastered');
+  const afterReconnect = await service.course('user-1', 'language-1');
+  const masteredNotion = afterReconnect.masteryBulletins
+    .flatMap((bulletin) => bulletin.notions)
+    .find((notion) => notion.notionId === target.targetId);
+  assert.equal(masteredNotion.status, 'MASTERED');
+  assert.notEqual(
+    afterReconnect.milestoneMastery.find((item) => item.unitId === outline.unitId)?.status,
+    'remediation',
+  );
+  assert.notEqual(afterReconnect.nextMasteryTarget?.targetId, target.targetId);
 });
 
 test('an aggregate autonomy result never invokes the strict completion finalizer', async () => {

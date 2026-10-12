@@ -140,6 +140,7 @@ export class LanguageController {
     return this.rlle.course(user.userId, id);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post(':id/course/start')
   @HttpCode(HttpStatus.CREATED)
   courseStart(

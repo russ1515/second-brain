@@ -21,7 +21,7 @@ import { Alert, Badge, Button, Card, Progress, SegmentedControl } from '../../..
 import { Page, PageHeader, ResponsiveSplit, Section } from '../../../../components/ds/layout';
 import { SmartErrorState, SmartLoadingState } from '../../../../components/ds/states';
 import { ContextBar } from '../../../../components/context/context-bar';
-import { CurriculumMap, DimensionProgress, LevelSummary, RecoveryPanel } from '../../../../components/language/course-ui';
+import { CurriculumMap, DimensionProgress, LanguageMasteryBulletins, LevelSummary, RecoveryPanel } from '../../../../components/language/course-ui';
 import { useTokens } from '../../../../lib/design/theme';
 import { actionDestinationHref } from '../../../../lib/action-destination';
 import { useRlleCopy } from '../../../../lib/language-rll-i18n';
@@ -38,8 +38,9 @@ import {
 const START_POINTS = ['zero', 'declared-level'] as const;
 
 export default function LanguageCourseScreen() {
-  const params = useLocalSearchParams<{ id: string | string[] }>();
+  const params = useLocalSearchParams<{ id: string | string[]; generation?: string | string[] }>();
   const profileId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const generationFailed = (Array.isArray(params.generation) ? params.generation[0] : params.generation) === 'failed';
   const router = useRouter();
   const { copy } = useRlleCopy();
   const { colors: c, spacing, typography } = useTokens();
@@ -81,7 +82,9 @@ export default function LanguageCourseScreen() {
     : null;
   const hasBrainEvidence = Boolean(
     course?.canDoMap.some((item) => item.evidence.length > 0) ||
-    course?.progress.dimensions.some((item) => item.evidenceCount > 0),
+    course?.progress.dimensions.some((item) => item.evidenceCount > 0) ||
+    course?.masteryBulletins.some((bulletin) =>
+      bulletin.notions.some((notion) => notion.status !== 'IN_PROGRESS')),
   );
 
   const resume = async () => {
@@ -123,6 +126,13 @@ export default function LanguageCourseScreen() {
         />
         {error ? <SmartErrorState detail={error} retryable onRetry={() => void load()} /> : null}
         {courseLoad.kind === 'preview' ? <Alert tone="warning" title={copy('rlle.ui.hub.courseUnavailable')} detail={copy('rlle.ui.course.offline')} /> : null}
+        {generationFailed && !course?.currentLesson ? (
+          <Alert
+            tone="warning"
+            title={copy('rlle.ui.course.generationFailed')}
+            detail={copy('rlle.ui.course.generationFailedDetail')}
+          />
+        ) : null}
         {course?.experienceSession ? <ContextBar items={course.experienceSession.activeContexts.items} /> : null}
 
         {course?.status === 'not-started' ? (
@@ -168,9 +178,18 @@ export default function LanguageCourseScreen() {
         <ResponsiveSplit
           secondaryWidth={340}
           primary={
-            <Section title={copy('rlle.ui.course.curriculum')} description={copy('rlle.ui.course.curriculumDetail')}>
-              <CurriculumMap units={units} tracked={Boolean(course && course.status !== 'not-started')} onOpenUnit={openUnit} />
-            </Section>
+            <View style={{ gap: spacing.lg }}>
+              {course ? (
+                <LanguageMasteryBulletins
+                  bulletins={course.masteryBulletins}
+                  units={course.units}
+                  language={profile.language}
+                />
+              ) : null}
+              <Section title={copy('rlle.ui.course.curriculum')} description={copy('rlle.ui.course.curriculumDetail')}>
+                <CurriculumMap units={units} tracked={Boolean(course && course.status !== 'not-started')} onOpenUnit={openUnit} />
+              </Section>
+            </View>
           }
           secondary={
             <View style={{ gap: spacing.md }}>
@@ -276,7 +295,7 @@ function StartCourseCard({ profile, onStarted }: { profile: LanguageProfileDetai
         <SegmentedControl options={LANGUAGE_CORRECTION_INTENSITIES} value={correction} onChange={setCorrection} labelFor={(value) => copy(`languages11.correction.${value}`)} />
       </View>
       {error ? <SmartErrorState detail={error} retryable onRetry={() => void start()} /> : null}
-      <Button label={copy('rlle.ui.course.start')} variant="ai" loading={busy} onPress={() => void start()} />
+      <Button testID="language-course-start" label={copy('rlle.ui.course.start')} variant="ai" loading={busy} onPress={() => void start()} />
     </Card>
   );
 }

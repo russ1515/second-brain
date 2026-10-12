@@ -164,6 +164,45 @@ test('milestone decisions retain append-only evidence history', () => {
   );
 });
 
+test('mastered milestone remains acquired after later failed and NOT_EVALUABLE observations', () => {
+  let state = levelState('B1');
+  const milestone = Object.values(state.milestones)[0];
+  state = masterMilestone(state, milestone, 'verified-completion');
+  const masteredAt = state.milestones[milestone.milestoneId].masteredAt;
+  const masteryEvidenceId = state.milestones[milestone.milestoneId].evidenceId;
+
+  state = progression.recordRlleMilestoneDecision(state, {
+    languageCode: 'en',
+    level: milestone.level,
+    pillar: milestone.pillar,
+    milestoneId: milestone.milestoneId,
+    scopeKey: milestone.scopeKey,
+    evidenceId: 'later-failed-attempt',
+    decision: decision('not-mastered', 0.7),
+    evaluatedAt: '2026-10-09T12:01:00.000Z',
+  });
+  state = progression.recordRlleMilestoneDecision(state, {
+    languageCode: 'en',
+    level: milestone.level,
+    pillar: milestone.pillar,
+    milestoneId: milestone.milestoneId,
+    scopeKey: milestone.scopeKey,
+    evidenceId: 'later-neutral-attempt',
+    decision: decision('not-evaluable', null),
+    evaluatedAt: '2026-10-09T12:02:00.000Z',
+  });
+
+  const acquired = state.milestones[milestone.milestoneId];
+  assert.equal(acquired.status, 'mastered');
+  assert.equal(acquired.evidenceId, masteryEvidenceId);
+  assert.equal(acquired.masteredAt, masteredAt);
+  assert.equal(acquired.decision.verdict, 'mastered');
+  assert.deepEqual(
+    acquired.evidenceHistory.map((item) => item.evidenceId),
+    [masteryEvidenceId, 'later-failed-attempt', 'later-neutral-attempt'],
+  );
+});
+
 test('a content-complete level has five ordered pillar exams and no exam opens before its milestones', () => {
   let state = levelState('B1');
   const plans = shared.getRlleLevelPillarPlans('B1');

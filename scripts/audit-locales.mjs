@@ -88,9 +88,30 @@ function protectedBrandExpression(brand) {
   return new RegExp(`(?<![A-Za-z0-9])${escapeRegExp(brand)}(?![A-Za-z0-9])`, 'g');
 }
 
+const DECIMAL_DIGIT_RANGES = [
+  [0x0660, 0x0669], // Arabic-Indic
+  [0x06f0, 0x06f9], // Eastern Arabic-Indic
+  [0x09e6, 0x09ef], // Bengali
+];
+
+function normalizeDecimalDigits(value) {
+  return [...value]
+    .map((character) => {
+      const codePoint = character.codePointAt(0);
+      const range = DECIMAL_DIGIT_RANGES.find(([start, end]) => codePoint >= start && codePoint <= end);
+      return range ? String(codePoint - range[0]) : character;
+    })
+    .join('');
+}
+
 function normalizedNumbers(value) {
-  return [...value.matchAll(/\d+(?:[.,]\d+)*(?:\s*%)?/g)]
-    .map((match) => match[0].replace(/\s+(?=%)/g, '').replaceAll(',', '.'))
+  const normalizedDigits = normalizeDecimalDigits(value);
+  return [...normalizedDigits.matchAll(/(?:[%٪]\s*)?\d+(?:[.,]\d+)*(?:\s*[%٪])?/g)]
+    .map((match) => {
+      const hasPercent = /[%٪]/.test(match[0]);
+      const number = match[0].replace(/[%٪\s]/g, '').replaceAll(',', '.');
+      return `${number}${hasPercent ? '%' : ''}`;
+    })
     .sort();
 }
 
@@ -314,6 +335,12 @@ export function auditRepository() {
   const learningDataControlAfrica = readTupleCatalog(LEARNING_DATA_CONTROL_AFRICA_FILE, 'learningDataControlAfricaValues', learningDataControlKeys);
   const globalPathAliases = readCatalog(GLOBAL_PATH_V1_FILE, 'aliases');
   const languageMasteryAliases = readCatalog(LANGUAGE_MASTERY_V1_FILE, 'languageMasteryAliases');
+  const languageBulletinKeys = readStringArray(LANGUAGE_MASTERY_V1_FILE, 'languageBulletinKeys');
+  const languageBulletinTranslations = readTupleCatalog(
+    LANGUAGE_MASTERY_V1_FILE,
+    'languageBulletinTranslations',
+    languageBulletinKeys,
+  );
   const catalogs = new Map([
     ['en', english],
     ['fr', french],
@@ -344,6 +371,7 @@ export function auditRepository() {
       ...(learningDataControlAsia.get(code) ?? new Map()),
       ...(learningDataControlAfrica.get(code) ?? new Map()),
     ]);
+    const languageBulletin = languageBulletinTranslations.get(code) ?? new Map();
     const beforeAliases = new Map([
       ...base,
       ...essential,
@@ -371,7 +399,11 @@ export function auditRepository() {
         return typeof value === 'string' && value.trim().length > 0 ? [[target, value]] : [];
       }),
     );
-    catalogs.set(code, new Map([...beforeMasteryAliases, ...languageMastery]));
+    catalogs.set(code, new Map([
+      ...beforeMasteryAliases,
+      ...languageMastery,
+      ...languageBulletin,
+    ]));
     layersByLocale.set(code, [
       { name: path.relative(LOCALES_DIR, file).replaceAll('\\', '/'), entries: base },
       { name: 'essential.ts', entries: essential },
@@ -387,6 +419,7 @@ export function auditRepository() {
       { name: 'learning-data-control-v1', entries: learningDataControl },
       { name: 'global-path-v1.ts', entries: globalPath },
       { name: 'language-mastery-v1.ts', entries: languageMastery },
+      { name: 'language-mastery-v1.ts:languageBulletinTranslations', entries: languageBulletin },
     ]);
   }
 

@@ -311,6 +311,15 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
     LANGUAGE_MASTERY_V1_FILE,
     'languageMasteryAliases',
   );
+  const languageBulletinKeys = readStringArray(
+    LANGUAGE_MASTERY_V1_FILE,
+    'languageBulletinKeys',
+  );
+  const languageBulletinTranslations = readTupleCatalog(
+    LANGUAGE_MASTERY_V1_FILE,
+    'languageBulletinTranslations',
+    languageBulletinKeys,
+  );
   const libraryOrganization = readTupleCatalog(
     LIBRARY_V1_FILE,
     'organizationLabels',
@@ -342,6 +351,7 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
       ...(learningDataControlAsia.get(code) ?? new Map()),
       ...(learningDataControlAfrica.get(code) ?? new Map()),
     ]);
+    const languageBulletin = languageBulletinTranslations.get(code) ?? new Map();
     const effective = new Map([
       ...base,
       ...essential,
@@ -355,6 +365,7 @@ export function buildPlan(codes, batchSize = DEFAULT_BATCH_SIZE) {
       ...failures,
       ...researchWeb,
       ...learningDataControl,
+      ...languageBulletin,
     ]);
     for (const [key, sourceKey] of globalPathAliases) {
       const value = effective.get(sourceKey);
