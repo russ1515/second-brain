@@ -84,6 +84,7 @@ test('interface locale persists separately from the pedagogical explanation loca
   let preferredLanguage = 'no';
   let interfaceLanguage = 'fr';
   let upsert;
+  let lockAcquired = false;
   const prisma = {
     user: {
       findUnique: async () => ({
@@ -106,7 +107,10 @@ test('interface locale persists separately from the pedagogical explanation loca
     },
   };
   prisma.$transaction = async (callback) => callback({
-    $queryRaw: async () => undefined,
+    $executeRaw: async () => {
+      lockAcquired = true;
+      return 1;
+    },
     onboardingProfile: prisma.onboardingProfile,
   });
   const service = new AuthService(prisma, {}, {}, {}, {}, {});
@@ -119,6 +123,7 @@ test('interface locale persists separately from the pedagogical explanation loca
     create: { userId: 'user-locale', extra: { interfaceLanguage: 'zh-Hant', keepMe: true } },
     update: { extra: { interfaceLanguage: 'zh-Hant', keepMe: true } },
   });
+  assert.equal(lockAcquired, true);
   assert.equal(updated.interfaceLanguage, 'zh-Hant');
   assert.equal(updated.preferredLanguage, 'nb');
 });

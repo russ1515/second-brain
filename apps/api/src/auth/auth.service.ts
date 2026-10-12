@@ -283,7 +283,7 @@ export class AuthService {
   async setLocale(userId: string, locale: string): Promise<AuthUser> {
     await this.prisma.$transaction(async (tx) => {
       const lockKey = `onboarding-profile:${userId}`;
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const existing = await tx.onboardingProfile.findUnique({
         where: { userId },
         select: { extra: true },
