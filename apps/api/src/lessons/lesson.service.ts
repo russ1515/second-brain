@@ -721,10 +721,12 @@ export class LessonService {
       : '';
     const notionDirective = languageNotions?.length
       ? [
-          'Every exercise must include non-empty notionIds and criterionIds arrays.',
+          'Every exercise must include a non-empty notionIds array.',
           'Use only these exact server-authorized notion/criterion pairs:',
           JSON.stringify(languageNotions),
-          'Each criterionIds entry must correspond to one of the selected notionIds.',
+          'Cover every authorized notion at least once across the complete exercise battery.',
+          'When the response schema assigns notions to a format, follow that exact assignment.',
+          'Select notionIds only; criterionIds are attached authoritatively by the server.',
         ].join(' ')
       : '';
     const baseSystem = languageMastery
@@ -773,20 +775,61 @@ export class LessonService {
         'A structured language lesson requires server-authored notions.',
       );
     }
-    const notionIds = languageNotions.map((item) => item.notionId);
-    const criterionIds = languageNotions.map((item) => item.criterionId);
-    const nullableStringArray = (minimum = 1, maximum?: number) => ({
-      type: ['array', 'null'],
-      items: { type: 'string', minLength: 1 },
-      minItems: minimum,
-      ...(maximum === undefined ? {} : { maxItems: maximum }),
-    });
+    const notionAssignments = this.languageExerciseNotionAssignments(languageNotions);
     const stringArray = (minimum: number, maximum?: number) => ({
       type: 'array',
       items: { type: 'string', minLength: 1 },
       minItems: minimum,
       ...(maximum === undefined ? {} : { maxItems: maximum }),
     });
+    const qcmFormats = new Set<LanguageTrainingFormat>([
+      'recognition-mcq',
+      'contextual-discrimination',
+      'register-matching',
+      'listening-discrimination',
+    ]);
+    const typeByFormat: Record<LanguageTrainingFormat, ExerciseType> = {
+      'recognition-mcq': 'qcm',
+      'contextual-discrimination': 'qcm',
+      'fill-blank-no-hint': 'open',
+      'sentence-reconstruction': 'exercise',
+      'register-matching': 'qcm',
+      'error-correction': 'exercise',
+      'listening-discrimination': 'qcm',
+      'guided-writing': 'open',
+      'voice-pronunciation': 'open',
+      'mini-dialogue': 'case',
+    };
+    const exerciseProperties = Object.fromEntries(
+      LANGUAGE_TRAINING_FORMATS.map((format) => [format, {
+        type: 'object',
+        additionalProperties: false,
+        description: `Generate an exercise that directly practices these server-assigned notions: ${notionAssignments[format].join(', ')}.`,
+        required: [
+          'type', 'question', 'answer', 'options', 'languageFormat', 'tokens',
+          'audioText', 'dialogueTurns', 'notionIds',
+        ],
+        properties: {
+          type: { type: 'string', enum: [typeByFormat[format]] },
+          question: { type: 'string', minLength: 1 },
+          answer: { type: 'string', minLength: 1 },
+          options: qcmFormats.has(format) ? stringArray(3, 4) : { type: 'null' },
+          languageFormat: { type: 'string', enum: [format] },
+          tokens: format === 'sentence-reconstruction' ? stringArray(2) : { type: 'null' },
+          audioText: format === 'listening-discrimination' || format === 'voice-pronunciation'
+            ? { type: 'string', minLength: 1 }
+            : { type: 'null' },
+          dialogueTurns: format === 'mini-dialogue' ? stringArray(2, 3) : { type: 'null' },
+          notionIds: {
+            type: 'array',
+            description: 'Return every assigned notion id exactly once.',
+            items: { type: 'string', enum: notionAssignments[format] },
+            minItems: notionAssignments[format].length,
+            maxItems: notionAssignments[format].length,
+          },
+        },
+      }]),
+    );
     return {
       name: 'second_brain_language_lesson',
       description: 'A concise structured language lesson with exactly one activity for each required training format.',
@@ -806,40 +849,11 @@ export class LessonService {
           commonMisconceptions: stringArray(1),
           questions: stringArray(3, 5),
           exercises: {
-            type: 'array',
-            minItems: LANGUAGE_TRAINING_FORMATS.length,
-            maxItems: LANGUAGE_TRAINING_FORMATS.length,
-            description: `Exactly one exercise for each format: ${LANGUAGE_TRAINING_FORMATS.join(', ')}.`,
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              required: [
-                'type', 'question', 'answer', 'options', 'languageFormat', 'tokens',
-                'audioText', 'dialogueTurns', 'notionIds', 'criterionIds',
-              ],
-              properties: {
-                type: { type: 'string', enum: ['qcm', 'open', 'exercise', 'case'] },
-                question: { type: 'string', minLength: 1 },
-                answer: { type: 'string', minLength: 1 },
-                options: nullableStringArray(3, 4),
-                languageFormat: { type: 'string', enum: [...LANGUAGE_TRAINING_FORMATS] },
-                tokens: nullableStringArray(2),
-                audioText: { type: ['string', 'null'] },
-                dialogueTurns: nullableStringArray(2, 3),
-                notionIds: {
-                  type: 'array',
-                  items: { type: 'string', enum: notionIds },
-                  minItems: 1,
-                  maxItems: Math.max(1, notionIds.length),
-                },
-                criterionIds: {
-                  type: 'array',
-                  items: { type: 'string', enum: criterionIds },
-                  minItems: 1,
-                  maxItems: Math.max(1, criterionIds.length),
-                },
-              },
-            },
+            type: 'object',
+            additionalProperties: false,
+            description: 'Exactly one exercise for every canonical training format.',
+            required: [...LANGUAGE_TRAINING_FORMATS],
+            properties: exerciseProperties,
           },
           homework: { type: 'string' },
           summary: { type: 'string', minLength: 1 },
@@ -848,6 +862,33 @@ export class LessonService {
         },
       },
     };
+  }
+
+  /** Assign all canonical notions to the ten formats before calling a provider.
+   *  This makes exercise linkage deterministic and keeps the curriculum—not a
+   *  probabilistic response—as the authority for notion coverage. */
+  private languageExerciseNotionAssignments(
+    languageNotions: readonly { notionId: string; criterionId: string }[],
+  ): Record<LanguageTrainingFormat, string[]> {
+    if (languageNotions.length === 0) {
+      throw new UnprocessableEntityException(
+        'A structured language lesson requires server-authored notions.',
+      );
+    }
+    const assignments = Object.fromEntries(
+      LANGUAGE_TRAINING_FORMATS.map((format) => [format, [] as string[]]),
+    ) as Record<LanguageTrainingFormat, string[]>;
+    languageNotions.forEach((notion, index) => {
+      assignments[LANGUAGE_TRAINING_FORMATS[index % LANGUAGE_TRAINING_FORMATS.length]].push(
+        notion.notionId,
+      );
+    });
+    LANGUAGE_TRAINING_FORMATS.forEach((format, index) => {
+      if (assignments[format].length === 0) {
+        assignments[format].push(languageNotions[index % languageNotions.length].notionId);
+      }
+    });
+    return assignments;
   }
 
   private parseLesson(
@@ -876,8 +917,27 @@ export class LessonService {
     const commonMisconceptions = this.nonEmptyStrings(parsed.commonMisconceptions);
     const questions = this.nonEmptyStrings(parsed.questions);
     const keyPoints = this.nonEmptyStrings(parsed.keyPoints);
-    const exercises = Array.isArray(parsed.exercises)
+    const structuredExercises = languageMastery
+      && parsed.exercises
+      && typeof parsed.exercises === 'object'
+      && !Array.isArray(parsed.exercises)
+        ? parsed.exercises as Record<string, unknown>
+        : null;
+    const notionAssignments = structuredExercises && languageNotions?.length
+      ? this.languageExerciseNotionAssignments(languageNotions)
+      : null;
+    const rawExercises = Array.isArray(parsed.exercises)
       ? parsed.exercises
+      : structuredExercises
+        ? LANGUAGE_TRAINING_FORMATS.map((format) => {
+            const candidate = structuredExercises[format];
+            return candidate && typeof candidate === 'object' && notionAssignments
+              ? { ...candidate, notionIds: notionAssignments[format] }
+              : candidate;
+          })
+        : [];
+    const exercises = rawExercises.length > 0
+      ? rawExercises
           .map((exercise) => this.normalizeExercise(exercise, languageMastery, languageNotions))
           .filter((exercise): exercise is LessonExercise => exercise !== null)
       : [];
@@ -1033,17 +1093,20 @@ export class LessonService {
               .map((item) => item.trim()))]
           : [];
         const notionIds = ids(e.notionIds);
-        const criterionIds = ids(e.criterionIds);
-        if (notionIds.length === 0 || criterionIds.length === 0) return null;
+        const suppliedCriterionIds = ids(e.criterionIds);
+        if (notionIds.length === 0) return null;
         const allowed = new Map(languageNotions.map((item) => [item.notionId, item.criterionId]));
         if (notionIds.some((id) => !allowed.has(id))) return null;
         const expectedCriteria = new Set(notionIds.map((id) => allowed.get(id)!));
         if (
-          criterionIds.some((id) => !expectedCriteria.has(id))
-          || [...expectedCriteria].some((id) => !criterionIds.includes(id))
+          suppliedCriterionIds.length > 0
+          && (
+            suppliedCriterionIds.some((id) => !expectedCriteria.has(id))
+            || [...expectedCriteria].some((id) => !suppliedCriterionIds.includes(id))
+          )
         ) return null;
         base.notionIds = notionIds;
-        base.criterionIds = criterionIds;
+        base.criterionIds = [...expectedCriteria];
       }
     }
     if (type === 'qcm') {

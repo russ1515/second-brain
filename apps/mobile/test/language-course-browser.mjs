@@ -394,7 +394,7 @@ try {
     && new URL(response.url()).pathname
       === `/api/experience-sessions/${createdCourse.experienceSession.id}/resume`
   ), { timeout: 30_000 });
-  await resumePage.getByRole('button', { name: 'Reprendre mon cours' }).click();
+  await resumePage.getByRole('button', { name: 'Reprendre mon cours', exact: true }).first().click();
   assert.equal((await resumeResponsePromise).ok(), true, 'COURSE_RESUME_RESPONSE');
   await waitForCourseStatus(resumePage, createdProfileId, 'active');
   evidence.reloginResume = 'PASS';

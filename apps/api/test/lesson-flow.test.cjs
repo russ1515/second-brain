@@ -243,16 +243,28 @@ test('language lesson parser enforces the server notion allow-list and full unit
     /complete, usable lesson/i,
   );
 
-  const strictOutput = exercises.map((exercise) => ({
-    ...exercise,
-    options: exercise.options ?? null,
-    tokens: exercise.tokens ?? null,
-    audioText: exercise.audioText ?? null,
-    dialogueTurns: exercise.dialogueTurns ?? null,
-  }));
-  assert.equal(
-    service.parseLesson(raw(strictOutput), true, undefined, notions).exercises.length,
-    sharedLanguageFormats().length,
+  const strictOutput = Object.fromEntries(exercises.map((exercise) => [
+    exercise.languageFormat,
+    {
+      ...exercise,
+      options: exercise.options ?? null,
+      tokens: exercise.tokens ?? null,
+      audioText: exercise.audioText ?? null,
+      dialogueTurns: exercise.dialogueTurns ?? null,
+      criterionIds: undefined,
+    },
+  ]));
+  const strictParsed = service.parseLesson(raw(strictOutput), true, undefined, notions);
+  assert.equal(strictParsed.exercises.length, sharedLanguageFormats().length);
+  assert.deepEqual(
+    strictParsed.exercises[0].criterionIds,
+    ['criterion-a'],
+    'criteria are derived from the server-authored notion mapping',
+  );
+  assert.deepEqual(
+    new Set(strictParsed.exercises.flatMap((exercise) => exercise.notionIds)),
+    new Set(['notion-a', 'notion-b']),
+    'structured exercise linkage covers every server-authored notion',
   );
 });
 
@@ -264,15 +276,21 @@ test('language lesson generation uses a strict provider schema for the canonical
   ];
   const format = service.languageLessonJsonSchema(notions);
   const exercises = format.schema.properties.exercises;
-  const exercise = exercises.items;
+  const recognition = exercises.properties['recognition-mcq'];
+  const reconstruction = exercises.properties['sentence-reconstruction'];
 
   assert.equal(format.strict, true);
-  assert.equal(exercises.minItems, sharedLanguageFormats().length);
-  assert.equal(exercises.maxItems, sharedLanguageFormats().length);
-  assert.deepEqual(exercise.properties.languageFormat.enum, sharedLanguageFormats());
-  assert.deepEqual(exercise.properties.notionIds.items.enum, ['notion-a', 'notion-b']);
-  assert.deepEqual(exercise.properties.criterionIds.items.enum, ['criterion-a', 'criterion-b']);
-  assert.equal(exercise.additionalProperties, false);
+  assert.equal(exercises.type, 'object');
+  assert.deepEqual(exercises.required, sharedLanguageFormats());
+  assert.deepEqual(recognition.properties.languageFormat.enum, ['recognition-mcq']);
+  assert.deepEqual(recognition.properties.type.enum, ['qcm']);
+  assert.equal(recognition.properties.options.type, 'array');
+  assert.deepEqual(recognition.properties.notionIds.items.enum, ['notion-a']);
+  assert.equal(recognition.properties.notionIds.minItems, 1);
+  assert.equal(recognition.properties.notionIds.maxItems, 1);
+  assert.equal(Object.hasOwn(recognition.properties, 'criterionIds'), false);
+  assert.equal(reconstruction.properties.tokens.type, 'array');
+  assert.equal(reconstruction.additionalProperties, false);
   assert.throws(
     () => service.languageLessonJsonSchema([]),
     /requires server-authored notions/i,

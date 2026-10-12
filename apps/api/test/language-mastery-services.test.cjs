@@ -118,8 +118,9 @@ test('language lesson generation enforces the exact ten official format identifi
   assert.equal(observed[0].options.operation, 'lesson');
   assert.equal(observed[0].options.jsonSchema.strict, true);
   assert.deepEqual(
-    observed[0].options.jsonSchema.schema.properties.exercises.items.properties.notionIds.items.enum,
-    ['notion-a', 'notion-b'],
+    observed[0].options.jsonSchema.schema.properties.exercises
+      .properties['recognition-mcq'].properties.notionIds.items.enum,
+    ['notion-a'],
   );
   for (const format of LANGUAGE_TRAINING_FORMATS) {
     assert.match(observed[0].messages[0].content, new RegExp(format));
