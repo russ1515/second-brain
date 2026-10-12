@@ -1,4 +1,11 @@
-import { Inject, Injectable, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
+import {
+  HttpException,
+  Inject,
+  Injectable,
+  Logger,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import {
   ACOUSTIC_ASSESSMENT_CONTRACT_VERSION,
@@ -36,10 +43,6 @@ import { RequestContextService } from '../common/request-context.service';
 export class SpeechService {
   private readonly logger = new Logger(SpeechService.name);
   private readonly inFlight = new Map<string, Promise<unknown>>();
-  private readonly synthesisCache = new Map<
-    string,
-    { value: SynthesisResult; expiresAt: number }
-  >();
   private consecutiveFailures = 0;
   private circuitOpenUntil = 0;
 
@@ -149,7 +152,7 @@ export class SpeechService {
     // When compressed duration is unknown, reserve the full accepted duration
     // before a future billable call. ProviderMetering releases the unused part.
     const reservedSeconds = seconds ?? 600;
-    const key = this.key('pronunciation-assessment', audio, normalized);
+    const key = this.key('pronunciation-assessment', audio, normalized, feature);
 
     return this.deduplicate(key, async () => {
       try {
@@ -217,7 +220,11 @@ export class SpeechService {
           provider,
           seconds,
         );
-      } catch {
+      } catch (error) {
+        // Quota, entitlement and other application-policy failures are
+        // authoritative. They must reach the client with their original code
+        // instead of being disguised as neutral acoustic evidence.
+        if (error instanceof HttpException && error.getStatus() < 500) throw error;
         return this.acousticFailure(
           normalized,
           fingerprint,
@@ -234,7 +241,7 @@ export class SpeechService {
     options: TranscribeOptions,
     feature = 'TUTOR_VOICE',
   ): Promise<TranscriptionResult> {
-    const key = this.key('stt', audio, options);
+    const key = this.key('stt', audio, options, feature);
     const seconds = this.wavSeconds(audio, options.mimeType)
       ?? this.boundedDuration(options.durationSeconds);
     return this.deduplicate(key, () => this.metering?.executeWithAttempts(
@@ -262,9 +269,7 @@ export class SpeechService {
         `Speech provider "${this.provider.name}" cannot synthesize speech.`,
       );
     }
-    const key = this.key('tts', text, options ?? {});
-    const cached = this.synthesisCache.get(key);
-    if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.value);
+    const key = this.key('tts', text, options ?? {}, feature);
     const synthesize = this.provider.synthesize;
     return this.deduplicate(key, async () => {
       // Reserve a conservative upper bound before the billable call. WAV output
@@ -297,12 +302,6 @@ export class SpeechService {
         },
         (attempts) => this.execute('SPEECH_SYNTHESIS_UNAVAILABLE', 60_000, providerCall, attempts),
       ) ?? this.execute('SPEECH_SYNTHESIS_UNAVAILABLE', 60_000, providerCall));
-      this.synthesisCache.set(key, { value, expiresAt: Date.now() + 10 * 60_000 });
-      while (this.synthesisCache.size > 20) {
-        const oldest = this.synthesisCache.keys().next().value as string | undefined;
-        if (!oldest) break;
-        this.synthesisCache.delete(oldest);
-      }
       return value;
     });
   }
@@ -315,7 +314,7 @@ export class SpeechService {
       );
     }
     const analyze = this.provider.analyze;
-    const key = this.key('analysis', audio, options);
+    const key = this.key('analysis', audio, options, feature);
     const seconds = this.wavSeconds(audio, options.mimeType)
       ?? this.boundedDuration(options.durationSeconds);
     return this.deduplicate(key, () => this.metering?.executeWithAttempts(
@@ -722,8 +721,24 @@ export class SpeechService {
     });
   }
 
-  private key(kind: string, value: Buffer | string, options: object): string {
+  private key(
+    kind: string,
+    value: Buffer | string,
+    options: object,
+    feature: string,
+  ): string {
+    const context = this.requestContext?.current();
     return createHash('sha256')
+      // Cache/in-flight work may never cross an authenticated account,
+      // request operation or product feature. These values are hashed and are
+      // never logged. Without an HTTP context, isolated unit/startup work keeps
+      // a deterministic private scope.
+      .update(context?.userId ?? 'NO_AUTHENTICATED_USER')
+      .update('\u0000')
+      .update(context?.requestId ?? 'NO_REQUEST_CONTEXT')
+      .update('\u0000')
+      .update(feature)
+      .update('\u0000')
       .update(kind)
       .update(value)
       .update(JSON.stringify(options))

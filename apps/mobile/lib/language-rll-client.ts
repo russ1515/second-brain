@@ -2,7 +2,9 @@ import {
   RLLE_CAN_DO_MAP,
   RLLE_CURRICULUM,
   RLLE_WORLD_MISSIONS,
+  type LanguageMasteryDecision,
   type LanguageProfileDetail,
+  type LessonView,
   type MarkRlleAutonomyHelpRequest,
   type PronunciationCoaching,
   type RlleAutonomyHelpResponse,
@@ -52,6 +54,22 @@ export interface RlleMissionCatalogItem extends RlleWorldMissionTemplate {
 export interface RlleMissionCatalog {
   items: RlleMissionCatalogItem[];
   live: boolean;
+}
+
+export interface RlleAcousticMasteryPrompt {
+  exerciseIndex: number;
+  referenceText: string;
+  spontaneousPrompt: string;
+}
+
+export interface RlleAcousticMasteryResponse {
+  attemptId: string;
+  outcome: 'evaluated' | 'not-evaluable';
+  decision: LanguageMasteryDecision;
+  criteria: Array<{ id: string; met: boolean; score: number | null }>;
+  assessmentSubmissionId: string | null;
+  completionId: string | null;
+  replayed: boolean;
 }
 
 function endpoint(profileId: string, suffix: string): string {
@@ -172,6 +190,74 @@ export function submitRlleScopedMastery(
     method: 'POST',
     body: request,
   });
+}
+
+/** Resolve the actual, versioned voice exercise attached to the active lesson.
+ * The server remains authoritative and validates this index/reference again;
+ * this projection exists only so the learner can see what to record. */
+export async function loadRlleAcousticMasteryPrompt(
+  lessonId: string,
+): Promise<RlleAcousticMasteryPrompt | null> {
+  const lesson = await api<LessonView>(`/lessons/${encodeURIComponent(lessonId)}`);
+  const exerciseIndex = lesson.exercises.findIndex(
+    (exercise) => exercise.languageFormat === 'voice-pronunciation'
+      && Boolean(exercise.audioText?.trim()),
+  );
+  if (exerciseIndex < 0) return null;
+  const exercise = lesson.exercises[exerciseIndex]!;
+  return {
+    exerciseIndex,
+    referenceText: exercise.audioText!.trim(),
+    spontaneousPrompt: exercise.question.trim(),
+  };
+}
+
+function audioExtension(mimeType: string): 'mp4' | 'ogg' | 'wav' | 'webm' {
+  if (mimeType.includes('mp4')) return 'mp4';
+  if (mimeType.includes('ogg')) return 'ogg';
+  if (mimeType.includes('wav')) return 'wav';
+  return 'webm';
+}
+
+/** Submit the two independent native-audio observations required by the
+ * versioned pronunciation rubric. A retry deliberately reuses the stable
+ * server operation key; no client duration or client-authored score is sent. */
+export async function submitRlleAcousticMastery(
+  profileId: string,
+  request: {
+    experienceSessionId: string;
+    lessonId: string;
+    targetId: string;
+    idempotencyKey: string;
+    exerciseIndex: number;
+    scriptedRecording: Recording;
+    spontaneousRecording: Recording;
+    remediationPlanId?: string;
+  },
+): Promise<RlleAcousticMasteryResponse> {
+  const form = new FormData();
+  form.append(
+    'scriptedAudio',
+    request.scriptedRecording.blob,
+    `scripted-pronunciation.${audioExtension(request.scriptedRecording.mimeType)}`,
+  );
+  form.append(
+    'spontaneousAudio',
+    request.spontaneousRecording.blob,
+    `spontaneous-pronunciation.${audioExtension(request.spontaneousRecording.mimeType)}`,
+  );
+  form.append('experienceSessionId', request.experienceSessionId);
+  form.append('lessonId', request.lessonId);
+  form.append('targetId', request.targetId);
+  form.append('idempotencyKey', request.idempotencyKey);
+  form.append('exerciseIndex', String(request.exerciseIndex));
+  if (request.remediationPlanId) {
+    form.append('remediationPlanId', request.remediationPlanId);
+  }
+  return apiUpload<RlleAcousticMasteryResponse>(
+    endpoint(profileId, '/course/mastery/acoustic'),
+    form,
+  );
 }
 
 /** Records only an already-persisted ExerciseAttempt. Replaying the exact

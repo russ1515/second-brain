@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { LanguageProfileDetail, RlleCourseView, RlleLessonStageKind } from '@second-brain/shared';
@@ -12,6 +12,7 @@ import { useRlleCopy } from '../../../../lib/language-rll-i18n';
 import { featureFlags } from '../../../../lib/feature-flags';
 import {
   advanceRlleLesson,
+  loadRlleAcousticMasteryPrompt,
   loadLanguageProfile,
   loadRlleCourse,
   pauseRlleSession,
@@ -20,8 +21,19 @@ import {
   startRlleLesson,
   startRlleRemediation,
   startRlleScopedMastery,
+  submitRlleAcousticMastery,
+  type RlleAcousticMasteryPrompt,
   type RlleCourseLoad,
 } from '../../../../lib/language-rll-client';
+import {
+  createRecorder,
+  RECORDING_SUPPORTED,
+  type Recorder,
+  type Recording,
+} from '../../../../lib/recorder';
+
+type AcousticRecordingSlot = 'scripted' | 'spontaneous';
+type PreparedAcousticPrompt = RlleAcousticMasteryPrompt & { operationKey: string };
 
 export default function StructuredLanguageLessonScreen() {
   const params = useLocalSearchParams<{ id: string | string[]; unitId?: string | string[] }>();
@@ -35,6 +47,15 @@ export default function StructuredLanguageLessonScreen() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const acousticRecorder = useRef<Recorder | null>(null);
+  const [acousticPrompt, setAcousticPrompt] = useState<PreparedAcousticPrompt | null>(null);
+  const [acousticRecordingSlot, setAcousticRecordingSlot] = useState<AcousticRecordingSlot | null>(null);
+  const [acousticRecordings, setAcousticRecordings] = useState<Partial<Record<AcousticRecordingSlot, Recording>>>({});
+  const [acousticFeedback, setAcousticFeedback] = useState<{
+    tone: 'success' | 'warning';
+    title: string;
+  } | null>(null);
+  const [acousticRetryPending, setAcousticRetryPending] = useState(false);
 
   const load = useCallback(async () => {
     if (!profileId) return;
@@ -49,6 +70,7 @@ export default function StructuredLanguageLessonScreen() {
   }, [profileId]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => () => acousticRecorder.current?.cancel(), []);
 
   if (!profile || !courseLoad) {
     if (error) return <SmartErrorState detail={error} retryable onRetry={() => void load()} />;
@@ -221,6 +243,113 @@ export default function StructuredLanguageLessonScreen() {
     }
   };
 
+  const prepareAcousticMastery = async () => {
+    if (
+      !outline?.lessonId
+      || !nextMasteryTarget
+      || nextMasteryTarget.assessmentMode !== 'acoustic'
+    ) return;
+    setBusy('acoustic-prepare');
+    setError(null);
+    setAcousticFeedback(null);
+    setAcousticRetryPending(false);
+    try {
+      const prompt = await loadRlleAcousticMasteryPrompt(outline.lessonId);
+      if (!prompt) {
+        setError(copy('rlle.ui.capabilities.blockedDetail'));
+        return;
+      }
+      setAcousticPrompt({ ...prompt, operationKey: nextMasteryTarget.operationKey });
+      setAcousticRecordings({});
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const toggleAcousticRecording = async (slot: AcousticRecordingSlot) => {
+    if (busy === 'acoustic-submit') return;
+    setError(null);
+    setAcousticFeedback(null);
+    if (acousticRecordingSlot) {
+      if (acousticRecordingSlot !== slot) return;
+      setBusy('acoustic-recording');
+      try {
+        const active = acousticRecorder.current;
+        if (!active) throw new Error(copy('voice.error.notRecording'));
+        const recording = await active.stop();
+        setAcousticRecordings((current) => ({ ...current, [slot]: recording }));
+        acousticRecorder.current = null;
+        setAcousticRecordingSlot(null);
+      } catch (cause) {
+        acousticRecorder.current?.cancel();
+        acousticRecorder.current = null;
+        setAcousticRecordingSlot(null);
+        setError((cause as Error).message);
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+    setBusy('acoustic-recording');
+    try {
+      acousticRecorder.current = createRecorder();
+      await acousticRecorder.current.start();
+      setAcousticRecordingSlot(slot);
+    } catch (cause) {
+      acousticRecorder.current?.cancel();
+      acousticRecorder.current = null;
+      setError((cause as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const submitAcousticMastery = async () => {
+    if (
+      !outline?.lessonId
+      || !course?.experienceSession
+      || !nextMasteryTarget
+      || nextMasteryTarget.assessmentMode !== 'acoustic'
+      || !acousticPrompt
+      || acousticPrompt.operationKey !== nextMasteryTarget.operationKey
+      || !acousticRecordings.scripted
+      || !acousticRecordings.spontaneous
+    ) return;
+    setBusy('acoustic-submit');
+    setError(null);
+    setAcousticFeedback(null);
+    setAcousticRetryPending(false);
+    try {
+      const response = await submitRlleAcousticMastery(profile.id, {
+        experienceSessionId: course.experienceSession.id,
+        lessonId: outline.lessonId,
+        targetId: nextMasteryTarget.targetId,
+        idempotencyKey: nextMasteryTarget.operationKey,
+        exerciseIndex: acousticPrompt.exerciseIndex,
+        scriptedRecording: acousticRecordings.scripted,
+        spontaneousRecording: acousticRecordings.spontaneous,
+        remediationPlanId: nextMasteryTarget.remediationPlanId ?? undefined,
+      });
+      const evaluable = response.outcome === 'evaluated';
+      setAcousticFeedback({
+        tone: evaluable && response.decision.verdict === 'mastered' ? 'success' : 'warning',
+        title: copy(`rlle.ui.autonomy.verdict.${response.decision.verdict}`),
+      });
+      setAcousticRecordings({});
+      setAcousticPrompt(null);
+      await load();
+    } catch (cause) {
+      // Keep both blobs and the stable operation key so a transient network
+      // failure can be retried without recording or charging twice.
+      setAcousticRetryPending(true);
+      setError((cause as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const resumeScopedMasteryAssessment = () => {
     if (
       !nextMasteryTarget?.activeAttemptId
@@ -298,8 +427,17 @@ export default function StructuredLanguageLessonScreen() {
           action={requestedUnit ? <Badge label={requestedUnit.level} tone="info" /> : undefined}
         />
         {courseLoad.kind === 'preview' ? <Alert tone="warning" title={copy('rlle.ui.hub.courseUnavailable')} /> : null}
-        {error ? <SmartErrorState detail={error} retryable onRetry={() => void load()} /> : null}
+        {error ? (
+          <SmartErrorState
+            detail={error}
+            retryable
+            onRetry={acousticRetryPending
+              ? () => void submitAcousticMastery()
+              : () => void load()}
+          />
+        ) : null}
         {notice ? <Alert tone="success" title={notice} /> : null}
+        {acousticFeedback ? <Alert tone={acousticFeedback.tone} title={acousticFeedback.title} /> : null}
         {course?.experienceSession ? <ContextBar items={course.experienceSession.activeContexts.items} /> : null}
 
         {!outline ? (
@@ -334,7 +472,9 @@ export default function StructuredLanguageLessonScreen() {
                     onPress={() => void completeStage()}
                   />
                 ) : null}
-                {outline.status === 'active' && nextMasteryTarget?.eligible ? (
+                {outline.status === 'active'
+                  && nextMasteryTarget?.eligible
+                  && nextMasteryTarget.assessmentMode !== 'acoustic' ? (
                   <Button
                     variant="ai"
                     label={copy('rlle.ui.autonomy.start')}
@@ -343,6 +483,92 @@ export default function StructuredLanguageLessonScreen() {
                   />
                 ) : null}
                 {outline.status === 'active'
+                  && nextMasteryTarget?.eligible
+                  && nextMasteryTarget.assessmentMode === 'acoustic' ? (
+                    <Card testID="language-acoustic-mastery" style={{ gap: spacing.sm }}>
+                      <Badge label={copy('rlle.ui.training.format.voice-pronunciation')} tone="ai" />
+                      <Text style={[typography.bodySmall, { color: c.textSecondary }]}>
+                        {copy('rlle.ui.capabilities.detail')}
+                      </Text>
+                      {!RECORDING_SUPPORTED ? (
+                        <Alert tone="warning" title={copy('learn.oral.noVoice')} />
+                      ) : !acousticPrompt
+                        || acousticPrompt.operationKey !== nextMasteryTarget.operationKey ? (
+                          <Button
+                            testID="language-acoustic-prepare"
+                            variant="ai"
+                            label={copy('rlle.ui.autonomy.start')}
+                            loading={busy === 'acoustic-prepare'}
+                            onPress={() => void prepareAcousticMastery()}
+                          />
+                        ) : (
+                          <>
+                            <View style={{ gap: spacing.xs }}>
+                              <Text style={[typography.label, { color: c.textPrimary }]}>
+                                {copy('lesson.readAloud')}
+                              </Text>
+                              <Text style={[typography.body, { color: c.textPrimary }]}>
+                                {acousticPrompt.referenceText}
+                              </Text>
+                              {acousticRecordings.scripted ? (
+                                <Badge label={copy('learn.oral.ready')} tone="success" />
+                              ) : null}
+                              <Button
+                                testID="language-acoustic-scripted-record"
+                                variant="secondary"
+                                icon={acousticRecordingSlot === 'scripted' ? '■' : '🎙'}
+                                label={acousticRecordingSlot === 'scripted'
+                                  ? copy('learn.oral.stop')
+                                  : acousticRecordings.scripted
+                                    ? copy('rlle.ui.common.retry')
+                                    : copy('lang.record')}
+                                disabled={Boolean(acousticRecordingSlot && acousticRecordingSlot !== 'scripted')}
+                                onPress={() => void toggleAcousticRecording('scripted')}
+                              />
+                            </View>
+                            <View style={{ gap: spacing.xs }}>
+                              <Text style={[typography.label, { color: c.textPrimary }]}>
+                                {copy('lang.speakFreely')}
+                              </Text>
+                              <Text style={[typography.bodySmall, { color: c.textSecondary }]}>
+                                {acousticPrompt.spontaneousPrompt}
+                              </Text>
+                              {acousticRecordings.spontaneous ? (
+                                <Badge label={copy('learn.oral.ready')} tone="success" />
+                              ) : null}
+                              <Button
+                                testID="language-acoustic-spontaneous-record"
+                                variant="secondary"
+                                icon={acousticRecordingSlot === 'spontaneous' ? '■' : '🎙'}
+                                label={acousticRecordingSlot === 'spontaneous'
+                                  ? copy('learn.oral.stop')
+                                  : acousticRecordings.spontaneous
+                                    ? copy('rlle.ui.common.retry')
+                                    : copy('lang.record')}
+                                disabled={Boolean(acousticRecordingSlot && acousticRecordingSlot !== 'spontaneous')}
+                                onPress={() => void toggleAcousticRecording('spontaneous')}
+                              />
+                            </View>
+                            <Button
+                              testID="language-acoustic-submit"
+                              variant="ai"
+                              label={copy(acousticRetryPending
+                                ? 'rlle.ui.common.retry'
+                                : 'rlle.ui.autonomy.start')}
+                              loading={busy === 'acoustic-submit'}
+                              disabled={Boolean(
+                                acousticRecordingSlot
+                                || !acousticRecordings.scripted
+                                || !acousticRecordings.spontaneous
+                              )}
+                              onPress={() => void submitAcousticMastery()}
+                            />
+                          </>
+                        )}
+                    </Card>
+                  ) : null}
+                {outline.status === 'active'
+                  && nextMasteryTarget?.assessmentMode !== 'acoustic'
                   && nextMasteryTarget?.activeAttemptId
                   && nextMasteryTarget.assessmentId ? (
                     <Button

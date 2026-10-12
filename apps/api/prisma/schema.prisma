@@ -561,6 +561,8 @@ model LanguageProfile {
   normalizedLanguage String
   /// The learner's own language, used for translations and glosses.
   nativeLanguage     String?
+  /// Source for explanations/instructions on this path: interface | native.
+  teachingLanguageSource String @default("interface")
   mode               LanguageMode @default(beginner)
   /// CEFR / CECRL level (Sprint 7.3): A1 | A2 | B1 | B2 | C1 | C2.
   cefrLevel          String       @default("A1")

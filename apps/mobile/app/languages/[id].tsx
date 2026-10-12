@@ -48,6 +48,7 @@ import { CourseEntryCard } from '../../components/language/course-ui';
 import { OralCapabilityCard } from '../../components/language/oral-capability-card';
 import { loadRlleCourse, type RlleCourseLoad } from '../../lib/language-rll-client';
 import { featureFlags } from '../../lib/feature-flags';
+import { teachingSpeechLanguage } from '../../lib/language-teaching';
 
 function firstParam(value?: string | string[]): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -391,7 +392,7 @@ function VocabularyPractice({ profileId, courseContext, onChanged }: { profileId
 }
 
 function SkillPractice({ profile, kind }: { profile: LanguageProfileDetail; kind: 'grammar' | 'conjugation' | 'comprehension' }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   const [topic, setTopic] = useState('');
   const [result, setResult] = useState<LanguageSkillResponse | null>(null);
@@ -408,7 +409,7 @@ function SkillPractice({ profile, kind }: { profile: LanguageProfileDetail; kind
       <Input value={topic} onChangeText={setTopic} label={t(`languages11.practice.${kind}` as TranslationKey)} placeholder={t('lang.skillPlaceholder')} />
       {error ? <SmartErrorState detail={error} /> : null}
       <DsButton label={t('languages11.generate')} loading={busy} onPress={() => void run()} />
-      {result ? <View style={{ gap: spacing.sm }}><Text style={[typography.title, { color: c.textPrimary }]}>{result.title}</Text><SpeakButton text={result.content} language={profile.language} label={t('lang.listen')} /><Markdown text={result.content} /></View> : null}
+      {result ? <View style={{ gap: spacing.sm }}><Text style={[typography.title, { color: c.textPrimary }]}>{result.title}</Text><SpeakButton text={result.content} language={teachingSpeechLanguage(profile, locale)} label={t('lang.listen')} /><Markdown text={result.content} /></View> : null}
     </DsCard>
   );
 }
@@ -416,7 +417,7 @@ function SkillPractice({ profile, kind }: { profile: LanguageProfileDetail; kind
 function LegacyLanguageScreen() {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { width } = useResponsive();
   const wide = width >= 1024;
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -587,7 +588,7 @@ function LegacyLanguageScreen() {
         {skill ? (
           <Card style={styles.skillCard}>
             <Text style={styles.skillTitle}>{skill.title}</Text>
-            <SpeakButton text={skill.content} language={profile?.language} label={t('lang.listen')} />
+            <SpeakButton text={skill.content} language={profile ? teachingSpeechLanguage(profile, locale) : undefined} label={t('lang.listen')} />
             <Markdown text={skill.content} />
           </Card>
         ) : null}

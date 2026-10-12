@@ -1,7 +1,7 @@
 # Language Mastery — Azure pronunciation assessment readiness
 
-Status: **provider-independent software seam complete; Azure transport and
-acoustic capability not activated**.
+Status: **provider-independent software seam and canonical evidence bridge
+complete; Azure transport and acoustic capability not activated**.
 
 This note records the bounded preparation for the proposed Azure Speech
 Pronunciation Assessment integration. It is not proof that Azure supports a
@@ -19,6 +19,9 @@ locale, that a resource exists, or that an acoustic assessment has run.
 - `LANGUAGE_MASTERY_PRONUNCIATION_ASSESSMENT_LANGUAGES` remains the
   operational allowlist. It must stay empty for Azure until each locale is
   verified with the exact deployed resource and assessment mode.
+- `LANGUAGE_MASTERY_PRONUNCIATION_ASSESSMENT_LOCALES` is the separate explicit
+  product-code to provider-locale registry. Both entries are required; neither
+  a target-language name nor STT support is used to guess a provider locale.
 - `AssessmentSubmission`, the versioned language-mastery rubric and the
   server decision remain authoritative. A provider result never grants mastery
   directly and no second scoring engine is introduced.
@@ -59,6 +62,30 @@ wire compatibility, locale support, acoustic quality or operational readiness.
 No Azure SDK, endpoint, resource, credential or provider response schema has
 been invented from unverified information.
 
+The language API now exposes a bounded multipart acoustic mastery route using
+two recordings (`scriptedAudio` and `spontaneousAudio`). It resolves the
+reference phrase from the versioned lesson, never from client input, and joins
+validated results to the existing `AssessmentSubmission` ->
+`LanguageMasteryAttempt` -> `LearningCompletion` chain. The direct route and
+course projection share one server-authoritative activation gate. A disabled
+feature, missing dedicated provider, incomplete coverage lists or missing exact
+locale is rejected as capability unavailable before journal creation or a
+provider call. Once that gate is open, a provider response missing a mandatory
+dimension remains a scoreless `NOT_EVALUABLE`; it creates no submission,
+completion, remediation credit or unlock. Second Brain does not persist either
+recording. Client-declared duration is not accepted for quota reservation:
+decodable WAV duration is measured server-side and compressed audio keeps the
+existing conservative reservation until provider measurement. Quota and
+entitlement exceptions retain their application HTTP status; they are not
+rewritten as neutral evidence. Retries first reconcile an already-persisted
+submission and repair an interrupted completion/remediation side effect before
+any new provider call.
+
+The multipart boundary accepts only the recorder containers currently used by
+the product (WebM, MP4/M4A, Ogg and WAV), and validates their container
+signature before any journal write or provider reservation. MIME labels alone
+are not trusted.
+
 ## Required acoustic contract
 
 The A2 phonetic supplement requires both:
@@ -66,10 +93,12 @@ The A2 phonetic supplement requires both:
 1. `scripted-reference`: reading/repetition against a known target;
 2. `spontaneous`: a new utterance without a reference answer to copy.
 
-Accuracy and fluency are mandatory dimensions. Prosody is optional and can be
-used only when the exact locale/mode/provider response supplies it. A transcript
-may support spoken-content evaluation, but `transcriptionSufficient=false`
-for pronunciation.
+Accuracy and fluency are mandatory transport dimensions. The authored
+stress/rhythm criterion also makes prosody mandatory for this specific
+milestone, even though the provider-independent contract permits other rubrics
+to treat it as optional. If the exact locale/mode/provider cannot return it,
+the milestone is `NOT_EVALUABLE`. A transcript may support spoken-content
+evaluation, but `transcriptionSufficient=false` for pronunciation.
 
 The normalized result must retain at least:
 
@@ -95,12 +124,18 @@ The following remain neutral and award no score, remediation or unlock:
 - resource, region or credentials unavailable;
 - locale not verified for the requested assessment mode;
 - required acoustic dimension absent;
-- timeout, quota or provider failure;
+- timeout or provider failure after a provider call cannot yield a validated result;
 - response schema/range not validated.
 
 These attempts remain in history. A later fresh attempt may be evaluated, but
 must not overwrite the neutral attempt. Written work, STT confidence or a good
 transcript cannot substitute for required acoustic proof.
+
+Quota exhaustion is different: the authoritative reservation rejects the
+operation before the acoustic provider is called. The retryable journal entry
+may remain `started`, but no neutral assessment, score, proof or credit is
+published. A later retry therefore cannot rewrite history or imply that audio
+was acoustically evaluated.
 
 ## Registry comparison checkpoint
 
@@ -118,6 +153,14 @@ must never be reused as pronunciation support.
 Until that one-time official comparison and an operational smoke test are
 recorded, the allowlist stays empty and the strict path remains
 `BLOCKED_CAPABILITY`.
+
+Strict activation also remains blocked until the selected real adapter either
+supports a durable provider idempotency key for each scripted/spontaneous call,
+or a server-side encrypted normalized-result checkpoint is implemented. The
+current journal safely reconciles an already-durable canonical submission and
+repairs completion/remediation side effects, but a process failure after a
+provider response and before canonical submission could otherwise repeat a
+billable call. No real provider is bound while this prerequisite remains open.
 
 ## Single grouped external-prerequisite request
 
@@ -196,6 +239,8 @@ Before adding a language code to the pronunciation allowlist:
 - verify scripted and spontaneous modes for the exact locale;
 - verify accuracy and fluency; record prosody only if actually returned;
 - prove request ownership, idempotence and one-time ledger finalization;
+- prove durable replay after a process failure between each provider response
+  and canonical submission, without purchasing the same evidence twice;
 - prove raw audio and secrets are absent from logs and evidence;
 - exercise the real microphone path on a technical account;
 - confirm failed/technical attempts persist without zero, punishment or unlock.

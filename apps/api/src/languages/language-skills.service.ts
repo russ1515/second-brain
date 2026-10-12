@@ -35,7 +35,7 @@ export class LanguageSkillsService {
     const user = [
       `Teach ${focus} in ${profile.language}.`,
       'Structure it as markdown: a clear explanation of the rule, 3-4 example',
-      'sentences (each glossed in the native language unless in immersion mode),',
+      'sentences (each followed immediately by its teaching-language correspondence),',
       'the most common mistakes learners make, and 3 short practice exercises',
       'followed by an answer key.',
     ].join(' ');

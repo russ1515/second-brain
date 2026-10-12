@@ -20,6 +20,7 @@ import { Button, Card, ErrorBanner, Loading } from '../components/ui';
 import { Markdown } from '../components/markdown';
 import { ExerciseCard } from '../components/exercise-card';
 import { SpeakButton } from '../components/speak-button';
+import { useTeachingSpeechLanguage } from '../lib/language-teaching';
 
 interface Phase {
   key: string;
@@ -50,6 +51,9 @@ export default function DailySessionScreen() {
   const [nextPlan, setNextPlan] = useState<DayPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState(0);
+  const teachingSpeechLanguage = useTeachingSpeechLanguage(
+    lesson?.languageProfileId ?? undefined,
+  );
 
   // Boot the session: start it, then load everything it needs — once.
   useEffect(() => {
@@ -121,7 +125,7 @@ export default function DailySessionScreen() {
       node: (
         <>
           <Markdown text={lesson.explanation} />
-          <SpeakButton text={lesson.explanation} language={lesson.language ?? undefined} label={t('lesson.readAloud')} />
+          <SpeakButton text={lesson.explanation} language={teachingSpeechLanguage} label={t('lesson.readAloud')} />
         </>
       ),
     });
@@ -228,7 +232,7 @@ export default function DailySessionScreen() {
       node: <NextPlan plan={nextPlan} t={t} />,
     });
     return p;
-  }, [lesson, plan, cards, homework, due, report, nextPlan, t]);
+  }, [lesson, plan, cards, homework, due, report, nextPlan, t, teachingSpeechLanguage]);
 
   if (error && !lesson) {
     return (

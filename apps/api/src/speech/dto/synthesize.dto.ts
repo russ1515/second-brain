@@ -4,7 +4,7 @@ import type { SynthesizeRequest } from '@second-brain/shared';
 export class SynthesizeDto implements SynthesizeRequest {
   @IsString()
   @IsNotEmpty()
-  @MaxLength(5000)
+  @MaxLength(4096)
   text!: string;
 
   @IsOptional()

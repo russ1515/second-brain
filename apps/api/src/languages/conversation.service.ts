@@ -328,9 +328,14 @@ export class ConversationService {
       : 'Pick a simple everyday situation suited to their level and open it.';
     const ratio =
       effectiveRatio >= 1
-        ? `Write ENTIRELY in ${profile.language}. Do not translate anything.`
-        : `Write roughly ${Math.round(effectiveRatio * 100)}% in ` +
-          `${profile.language}, glossing the rest as your mode requires.`;
+        ? `Keep dialogue and requested learner production in ${profile.language}, ` +
+          `with each target-language line immediately followed by its concise ` +
+          `${roles.supportLanguage} correspondence. Keep every pedagogical ` +
+          `introduction, instruction, explanation and correction in ${roles.supportLanguage}.`
+        : `Use ${profile.language} for roughly ${Math.round(effectiveRatio * 100)}% ` +
+          `of the dialogue/examples only, with each target-language line immediately ` +
+          `followed by its concise ${roles.supportLanguage} correspondence. Keep ` +
+          `all pedagogical prose in ${roles.supportLanguage}.`;
 
     try {
       const result = await this.llm.generate(

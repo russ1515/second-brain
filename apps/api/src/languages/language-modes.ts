@@ -34,9 +34,10 @@ const MODES: Record<LanguageMode, ModeSpec> = {
   intermediate: {
     directive:
       'The learner knows the basics. Use everyday vocabulary and common past/' +
-      'future tenses. Explain in the target language first, then gloss only the ' +
-      'parts likely to be new. Push them to produce full sentences, not single ' +
-      'words. Correct errors explicitly and briefly.',
+      'future tenses. Keep every explanation in the designated support language. ' +
+      'Use the target language for examples, dialogue and learner production, ' +
+      'with an immediate support-language correspondence outside autonomous ' +
+      'assessment. Push full sentences, not single words, and correct explicitly.',
     level: 'intermediate',
     targetLanguageRatio: 0.6,
   },
@@ -44,7 +45,9 @@ const MODES: Record<LanguageMode, ModeSpec> = {
     directive:
       'The learner is fluent but imprecise. Work on nuance, register, idiom and ' +
       'natural phrasing rather than basic grammar. Point out what a native ' +
-      'speaker would actually say instead. Only gloss rare or literary items.',
+      'speaker would actually say instead. Keep the explanation in the designated ' +
+      'support language and pair every target-language model with its immediate ' +
+      'support-language correspondence outside autonomous assessment.',
     level: 'advanced',
     targetLanguageRatio: 0.85,
   },
@@ -75,11 +78,10 @@ const MODES: Record<LanguageMode, ModeSpec> = {
   },
   immersion: {
     directive:
-      'Speak ONLY the target language — no translation, no native-language ' +
-      'glosses. When the learner does not understand, rephrase more simply in ' +
-      'the target language, use examples and description. Never break character ' +
-      'into the native language, even if asked to translate a word: define it ' +
-      'in the target language instead.',
+      'Keep dialogues, examples and learner production in the target language. ' +
+      'Keep pedagogical instructions, explanations and corrections in the ' +
+      'selected support language, while making target-language practice as ' +
+      'continuous and demanding as the learner level permits.',
     level: 'advanced',
     targetLanguageRatio: 1,
   },
@@ -90,10 +92,11 @@ export function modeSpec(mode: LanguageMode): ModeSpec {
 }
 
 /**
- * Immersion depth (Sprint 7.8 ⭐): the share of the conversation spoken in the
- * TARGET language, which rises automatically with the learner's CEFR level. A
- * beginner meets ~60% target / 40% native; by C2 it is full immersion. This is
- * what makes immersion "evolve automatically with the learner's level".
+ * Immersion depth (Sprint 7.8 ⭐): the share of PRACTICE material (dialogues,
+ * examples and requested learner production) in the target language. Pedagogical
+ * prose never follows this ratio: it always remains in the selected support
+ * language. This preserves progressive immersion without changing the language
+ * of explanations, instructions, corrections or summaries.
  */
 const IMMERSION_RATIO_BY_CEFR: Record<string, number> = {
   A1: 0.6,
@@ -117,26 +120,26 @@ function immersionDirective(
 ): string {
   const ratio = immersionRatio(cefrLevel);
   const target = Math.round(ratio * 100);
-  const native = nativeLanguage ?? 'the learner\'s native language';
+  const support = nativeLanguage ?? 'the selected support language';
 
   if (ratio >= 1) {
     return (
-      `Full immersion: speak ONLY ${language}. Never translate. If the learner ` +
-      `does not understand, rephrase more simply in ${language}, use examples ` +
-      `and description — never switch to ${native}.`
+      `Full target-language practice: keep dialogue, examples and requested ` +
+      `learner production in ${language}. Keep any pedagogical explanation or ` +
+      `correction concise and in ${support}; do not disguise guidance as target-language practice.`
     );
   }
 
   return (
-    `Adaptive immersion: speak roughly ${target}% in ${language} and only about ` +
-    `${100 - target}% in ${native} — this share shifts further toward ` +
-    `${language} as the learner's level rises, so lean into ${language}. ` +
+    `Adaptive immersion: allocate roughly ${target}% of practice material to ` +
+    `${language}; this ratio applies only to dialogues, examples and requested ` +
+    `learner production, never to pedagogical prose. ` +
     `Recovery protocol when you detect the learner did not understand (they ask ` +
-    `you to repeat, reply in ${native}, say they are lost, go silent, or clearly ` +
+    `you to repeat, reply in ${support}, say they are lost, go silent, or clearly ` +
     `misunderstand): FIRST reformulate the same idea more simply in ${language}; ` +
-    `if they still struggle, give a SHORT explanation in ${native}; THEN return ` +
-    `to ${language} and carry on. Keep ${native} for these recovery moments and ` +
-    `the small everyday share above — always drift back to ${language}.`
+    `if they still struggle, give a SHORT explanation in ${support}; THEN return ` +
+    `to target-language practice. All instructions, explanations, corrections ` +
+    `and summaries remain in ${support} throughout.`
   );
 }
 
@@ -191,11 +194,11 @@ export function languageSystemPrompt(params: {
   const immersion = immersionIntensity
     ? {
         guided:
-          ` Guided immersion: introduce ${language} progressively and explain difficult points briefly in ${nativeLanguage ?? 'the learner\'s UI language'}.`,
+          ` Guided immersion: introduce ${language} progressively in examples and practice; keep all pedagogy in ${support}.`,
         mixed:
-          ` Mixed immersion: keep most of the exchange in ${language}, with concise explanations in ${nativeLanguage ?? 'the learner\'s UI language'} only when they unlock understanding.`,
+          ` Mixed immersion: keep most practice in ${language}, while every explanation, instruction and correction remains in ${support}.`,
         full:
-          ` Full immersion: use only ${language}; simplify or reformulate in ${language} instead of translating.`,
+          ` Full immersion practice: use ${language} for dialogue, examples and learner production; keep every pedagogical passage and correction in ${support}.`,
       }[immersionIntensity]
     : '';
   const correction = correctionIntensity
@@ -218,6 +221,14 @@ export function languageSystemPrompt(params: {
       ` For every pedagogical phrase or model sentence in ${target}, put the ${target} line first, then its directly associated concise ${support} meaning on the next line. ` +
       `Keep ${target} visually primary. Explain corrections in ${support}, but keep the corrected model in ${target}. ` +
       'Never produce arbitrary mixed-language sentences: each sentence must belong to one language.';
+  const teachingLanguageRule =
+    ` Mandatory teaching-language rule: write every introduction, explanation, ` +
+    `instruction, rule, correction, feedback and summary in ${support}. Use ` +
+    `${target} only for examples, dialogues, expressions and the learner's ` +
+    `requested production, with an immediate ${support} correspondence when ` +
+    `the activity is not an autonomous assessment. During an autonomous ` +
+    `assessment, keep instructions understandable in ${support} but reveal no ` +
+    `translation, hint, model answer or correction before submission.`;
 
   return [
     `You are a professional ${language} teacher — not a chatbot and not a`,
@@ -226,6 +237,7 @@ export function languageSystemPrompt(params: {
     'as the moment calls for.',
     native,
     languageRoles,
+    teachingLanguageRule,
     bilingual,
     `Teaching mode: ${mode}. ${directive}${immersion}${correction}${aim}${cefr}`,
   ].join(' ');

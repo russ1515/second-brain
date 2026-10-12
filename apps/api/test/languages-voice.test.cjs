@@ -6,8 +6,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { ForbiddenException } = require('@nestjs/common');
 const { languageSystemPrompt } = require('../dist/languages/language-modes.js');
 const { SpeechController } = require('../dist/speech/speech.controller.js');
+const { LanguageService } = require('../dist/languages/language.service.js');
 
 const root = path.resolve(__dirname, '../../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
@@ -23,6 +25,61 @@ test('language Professor prompt keeps target, UI language, CEFR, immersion and c
   assert.match(prompt, /B1/);
   assert.match(prompt, /Guided immersion/);
   assert.match(prompt, /Correction intensity is detailed/);
+});
+
+test('language profile persists the trusted teaching-language source and rejects an unavailable native source', async () => {
+  const now = new Date('2026-10-12T10:00:00.000Z');
+  let stored = null;
+  const prisma = {
+    profile: { findUnique: async () => ({ preferredLanguage: 'fr' }) },
+    deck: { create: async () => ({ id: 'deck-1' }) },
+    card: {
+      count: async () => 0,
+    },
+    languageProfile: {
+      findMany: async () => [],
+      findUnique: async () => stored,
+      create: async ({ data }) => {
+        stored = { id: 'lp-1', createdAt: now, updatedAt: now, ...data };
+        return stored;
+      },
+      update: async ({ data }) => {
+        stored = { ...stored, ...data, updatedAt: now };
+        return stored;
+      },
+    },
+    lesson: {
+      count: async () => 0,
+      findFirst: async () => null,
+    },
+    tutorSession: {
+      count: async () => 0,
+      findFirst: async () => null,
+    },
+  };
+  const service = new LanguageService(prisma, {}, {});
+
+  const created = await service.create('u1', {
+    language: 'English',
+    nativeLanguage: 'Lingala',
+    teachingLanguageSource: 'native',
+  });
+  assert.equal(created.teachingLanguageSource, 'native');
+  assert.equal(stored.teachingLanguageSource, 'native');
+  assert.equal((await service.promptRoles('u1', stored)).supportLanguage, 'Lingala');
+
+  const updated = await service.update('u1', 'lp-1', {
+    teachingLanguageSource: 'interface',
+  });
+  assert.equal(updated.teachingLanguageSource, 'interface');
+  assert.equal((await service.promptRoles('u1', stored)).supportLanguage, 'French');
+
+  await assert.rejects(
+    () => service.update('u1', 'lp-1', {
+      nativeLanguage: '', teachingLanguageSource: 'native',
+    }),
+    /supported native language/i,
+  );
 });
 
 test('speech endpoints report real capabilities and return provider transcription unchanged', async () => {
@@ -109,6 +166,27 @@ test('speech endpoints report real capabilities and return provider transcriptio
   const result = await controller.transcribe({ originalname: 'turn.webm', mimetype: 'audio/webm', size: 5, buffer: Buffer.from('hello') }, 'en');
   assert.equal(result.text, 'hello');
   assert.equal(result.language, 'en');
+});
+
+test('TTS endpoint preserves quota errors instead of rewriting them as provider downtime', async () => {
+  const quotaError = new ForbiddenException({
+    code: 'QUOTA_EXHAUSTED',
+    message: 'Voice quota is exhausted.',
+  });
+  const controller = new SpeechController({
+    activeProvider: 'openai',
+    supportsSynthesis: true,
+    synthesize: async () => {
+      throw quotaError;
+    },
+  });
+
+  await assert.rejects(
+    controller.synthesize({ text: 'Bonjour', language: 'fr' }),
+    (error) => error === quotaError
+      && error.getStatus() === 403
+      && error.getResponse().code === 'QUOTA_EXHAUSTED',
+  );
 });
 
 test('language conversations create a language ExperienceSession and Tutor reuses it', () => {

@@ -1,4 +1,8 @@
-import { resolveUXFeatureFlags, verifiedLanguageCodes } from '@second-brain/shared';
+import {
+  resolveUXFeatureFlags,
+  toSupportedLanguage,
+  verifiedLanguageCodes,
+} from '@second-brain/shared';
 
 /** Typed application configuration, assembled from validated environment variables. */
 function strictBooleanEnvironment(name: string, fallback: boolean): boolean {
@@ -7,6 +11,34 @@ function strictBooleanEnvironment(name: string, fallback: boolean): boolean {
   if (value === 'true') return true;
   if (value === 'false') return false;
   throw new Error(`${name} must be exactly "true" or "false".`);
+}
+
+/** Explicit product-code -> provider-locale registry. Merely accepting a
+ * language hint for STT is never enough to claim pronunciation coverage. */
+function verifiedPronunciationLocales(value: string | undefined): Record<string, string> {
+  if (!value?.trim()) return {};
+  const result: Record<string, string> = {};
+  for (const entry of value.split(',')) {
+    const [rawCode, rawLocale, ...extra] = entry.split('=');
+    const code = toSupportedLanguage(rawCode?.trim());
+    const locale = rawLocale?.trim();
+    if (
+      extra.length > 0
+      || !code
+      || !locale
+      || locale.length > 80
+      || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})+$/.test(locale)
+    ) {
+      throw new Error(
+        'LANGUAGE_MASTERY_PRONUNCIATION_ASSESSMENT_LOCALES must contain comma-separated productCode=provider-Locale entries.',
+      );
+    }
+    if (result[code] && result[code] !== locale) {
+      throw new Error(`Duplicate pronunciation locale mapping for ${code}.`);
+    }
+    result[code] = locale;
+  }
+  return result;
 }
 
 export default () => ({
@@ -117,6 +149,9 @@ export default () => ({
       ),
       pronunciationAssessmentLanguageCodes: verifiedLanguageCodes(
         process.env.LANGUAGE_MASTERY_PRONUNCIATION_ASSESSMENT_LANGUAGES,
+      ),
+      pronunciationAssessmentLocales: verifiedPronunciationLocales(
+        process.env.LANGUAGE_MASTERY_PRONUNCIATION_ASSESSMENT_LOCALES,
       ),
     },
   },

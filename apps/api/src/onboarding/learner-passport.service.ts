@@ -10,6 +10,7 @@ import type {
   KycTeacher,
   KnownLanguage,
   KnownLanguageLevel,
+  LanguageTeachingSource,
   LearnerPassportDeclared,
   LearnerPassportLanguageProgress,
   LearnerPassportLearningDna,
@@ -56,6 +57,7 @@ type LanguageRow = {
   language: string;
   normalizedLanguage: string;
   nativeLanguage: string | null;
+  teachingLanguageSource: string;
   cefrLevel: string;
   goal: string | null;
   updatedAt: Date;
@@ -251,7 +253,10 @@ export class LearnerPassportService {
   async tutorContext(
     userId: string,
     includeAdaptiveSignals: boolean,
-    options: { includeLanguageLearningContext?: boolean } = {},
+    options: {
+      includeLanguageLearningContext?: boolean;
+      suppressGlobalLanguageDirectives?: boolean;
+    } = {},
   ): Promise<LearnerPassportTutorContext> {
     const base = await this.loadBase(userId, false);
     const declared = this.declared(base.onboarding, base.profile);
@@ -270,8 +275,14 @@ export class LearnerPassportService {
     if (declared.subjects.length) lines.push(`Declared subjects: ${declared.subjects.slice(0, 8).map((v) => this.promptValue(v)).join(', ')}.`);
     if (declared.academicGoals.length) lines.push(`Declared goals: ${declared.academicGoals.slice(0, 6).map((v) => this.promptValue(v)).join(', ')}.`);
     if (includeAdaptiveSignals && declared.learningPreferences.length) lines.push(`Declared learning preferences: ${declared.learningPreferences.slice(0, 6).map((v) => this.promptValue(v)).join(', ')}.`);
-    if (declared.explanationLanguage) lines.push(`General explanation language: ${declared.explanationLanguage}.`);
-    if (declared.teachingLanguage) {
+    // An explicit LanguageProfile owns the teaching/support language for that
+    // path. Keep every other Passport signal, but do not append the user's
+    // global language preferences after the path-specific language prompt:
+    // their later position could otherwise override the persisted path choice.
+    if (!options.suppressGlobalLanguageDirectives && declared.explanationLanguage) {
+      lines.push(`General explanation language: ${declared.explanationLanguage}.`);
+    }
+    if (!options.suppressGlobalLanguageDirectives && declared.teachingLanguage) {
       lines.push(
         `Teaching language: ${declared.teachingLanguage}. Preserve necessary technical terms in that language and, when useful, give a short example in it; keep explanations in the general explanation language.`,
       );
@@ -369,7 +380,10 @@ export class LearnerPassportService {
     learnerProfile: LearnerProfile | null,
   ): LearnerPassportView {
     const declared = this.declared(base.onboarding, base.profile);
-    const languageProgress = base.languages.map((row) => this.languageProgress(row));
+    const languageProgress = base.languages.map((row) => this.languageProgress(
+      row,
+      declared.interfaceLanguage ?? this.language(base.profile?.preferredLanguage),
+    ));
     const learningDna: LearnerPassportLearningDna | null = base.dna
       ? {
           traits: (Array.isArray(base.dna.traits) ? base.dna.traits : []) as unknown as DnaTrait[],
@@ -443,14 +457,24 @@ export class LearnerPassportService {
     };
   }
 
-  private languageProgress(row: LanguageRow): LearnerPassportLanguageProgress {
+  private languageProgress(
+    row: LanguageRow,
+    interfaceLanguage: SupportedLanguageCode | null,
+  ): LearnerPassportLanguageProgress {
     const dates = [row.lessons[0]?.createdAt, row.tutorSessions[0]?.updatedAt]
       .filter((value): value is Date => value instanceof Date);
+    const teachingLanguageSource: LanguageTeachingSource =
+      row.teachingLanguageSource === 'native' ? 'native' : 'interface';
+    const nativeLanguage = this.language(row.nativeLanguage);
     return {
       profileId: row.id,
       language: row.language,
       languageCode: this.language(row.normalizedLanguage) ?? this.language(row.language),
       nativeLanguage: this.text(row.nativeLanguage, 80),
+      teachingLanguageSource,
+      teachingLanguage: teachingLanguageSource === 'native'
+        ? nativeLanguage
+        : interfaceLanguage,
       declaredLevel: this.cefr(row.cefrLevel) ?? 'A1',
       evaluatedLevel: null,
       goal: this.text(row.goal, 300),

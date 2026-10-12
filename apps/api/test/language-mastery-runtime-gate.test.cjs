@@ -120,8 +120,33 @@ test('pillar certification fails closed while non-acoustic remediation remains r
   );
   assert.equal(exerciseReads, 1);
   assert.equal(journalWrites, 0);
-  assert.equal(LANGUAGE_MASTERY_RUNTIME_READINESS.nativeAcousticAssessmentIntegrated, false);
-  assert.equal(LANGUAGE_MASTERY_STRICT_RUNTIME_READY, false);
+  assert.equal(LANGUAGE_MASTERY_RUNTIME_READINESS.nativeAcousticAssessmentIntegrated, true);
+  assert.equal(LANGUAGE_MASTERY_STRICT_RUNTIME_READY, true);
+});
+
+test('strict mastery requires an exact pronunciation provider locale for the product language code', () => {
+  let pronunciationAssessmentLocales = {};
+  const service = serviceWithPrisma({}, {
+    featureFlags: { enabled: () => true },
+    config: {
+      get: () => ({
+        transcriptionLanguageCodes: ['en'],
+        synthesisLanguageCodes: ['en'],
+        pronunciationAssessmentLanguageCodes: ['en'],
+        pronunciationAssessmentLocales,
+      }),
+    },
+    speech: {
+      supportsSynthesis: true,
+      supportsPronunciationAssessment: true,
+      activePronunciationAssessmentProvider: 'azure-speech-simulated',
+    },
+  });
+  const profile = { language: 'English', normalizedLanguage: 'en' };
+
+  assert.equal(service.strictMasteryAvailable(profile), false);
+  pronunciationAssessmentLocales = { en: 'en-US' };
+  assert.equal(service.strictMasteryAvailable(profile), true);
 });
 
 test('canonical language normalisation preserves the registered zh-Hant casing', () => {

@@ -1,16 +1,20 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import {
   CEFR_LEVELS,
+  LANGUAGE_TEACHING_SOURCES,
   LANGUAGE_MODES,
   SUPPORTED_LANGUAGES,
   languageNextAction,
+  toSupportedLanguage,
   type CefrLevel,
   type ExperienceSession,
   type ExperienceSessionPage,
   type LanguageMode,
   type LanguageProfileSummary,
+  type LanguageTeachingSource,
+  type LearnerPassportView,
   type SupportedLanguageCode,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
@@ -32,7 +36,7 @@ import { CourseEntryCard } from '../../components/language/course-ui';
 import { loadRlleCourse, startRlleCourse, type RlleCourseLoad } from '../../lib/language-rll-client';
 
 export default function LanguagesScreen() {
-  const { user, offline } = useAuth();
+  const { user, offline, setInterfaceLanguage } = useAuth();
   const { locale, formatLocale, setLocale, t } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   const router = useRouter();
@@ -41,36 +45,59 @@ export default function LanguagesScreen() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [recentCodes, setRecentCodes] = useState<string[]>([]);
   const [learningCode, setLearningCode] = useState<string | null>(null);
-  const [nativeCode, setNativeCode] = useState<string | null>(locale);
+  const [registeredNativeCode, setRegisteredNativeCode] = useState<SupportedLanguageCode | null>(null);
+  const [nativeCode, setNativeCode] = useState<string | null>(null);
+  const [teachingSource, setTeachingSource] = useState<LanguageTeachingSource>('interface');
+  const [interfaceLocaleSaving, setInterfaceLocaleSaving] = useState(false);
   const [mode, setMode] = useState<LanguageMode>('beginner');
   const [level, setLevel] = useState<CefrLevel>('A1');
   const [goal, setGoal] = useState('');
   const [creating, setCreating] = useState(false);
+  const [savingTeachingSource, setSavingTeachingSource] = useState(false);
+  const [teachingSourceSaved, setTeachingSourceSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [course, setCourse] = useState<RlleCourseLoad | null>(null);
+  const loadRevision = useRef(0);
+  const selectionRevision = useRef(0);
+  const teachingSaveRevision = useRef(0);
+  const selectionPersistence = useRef<Promise<void>>(Promise.resolve());
+  const activeIdRef = useRef<string | null>(activeId);
+  const teachingSourceRef = useRef<LanguageTeachingSource>(teachingSource);
+  activeIdRef.current = activeId;
+  teachingSourceRef.current = teachingSource;
 
   const load = useCallback(async () => {
     if (!user) return;
+    const revision = ++loadRevision.current;
     setError(null);
     try {
-      const [nextProfiles, resumable, savedActive, recent] = await Promise.all([
+      const [nextProfiles, resumable, savedActive, recent, passport] = await Promise.all([
         api<LanguageProfileSummary[]>('/languages'),
         api<ExperienceSessionPage>('/experience-sessions/resumable?limit=20').catch(() => ({ items: [], nextCursor: null })),
         loadActiveLanguage(user.id),
         loadRecentLanguageCodes(user.id),
+        api<LearnerPassportView>('/learner-passport').catch(() => null),
       ]);
+      const registeredNative = passport?.declared.nativeOrPrimaryLanguage ?? null;
+      const selected = nextProfiles.find((profile) => profile.id === savedActive) ?? nextProfiles[0] ?? null;
+      const nextCourse = selected ? await loadRlleCourse(selected.id).catch(() => null) : null;
+      if (revision !== loadRevision.current) return;
       setProfiles(nextProfiles);
       setSessions(resumable.items.filter((session) => session.type === 'language'));
       setRecentCodes(recent);
-      const selected = nextProfiles.find((profile) => profile.id === savedActive) ?? nextProfiles[0] ?? null;
+      activeIdRef.current = selected?.id ?? null;
       setActiveId(selected?.id ?? null);
       setLearningCode(selected?.languageCode ?? null);
-      setNativeCode(selected?.nativeLanguageCode ?? locale);
-      setCourse(selected ? await loadRlleCourse(selected.id).catch(() => null) : null);
+      setRegisteredNativeCode(registeredNative);
+      setNativeCode(selected?.nativeLanguageCode ?? registeredNative);
+      teachingSourceRef.current = selected?.teachingLanguageSource ?? 'interface';
+      setTeachingSource(teachingSourceRef.current);
+      setTeachingSourceSaved(false);
+      setCourse(nextCourse);
     } catch (cause) {
-      setError((cause as Error).message);
+      if (revision === loadRevision.current) setError((cause as Error).message);
     }
-  }, [locale, user]);
+  }, [user]);
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
@@ -82,17 +109,66 @@ export default function LanguagesScreen() {
     : null;
 
   const selectLearning = async (code: string) => {
+    const revision = ++selectionRevision.current;
+    ++loadRevision.current;
+    ++teachingSaveRevision.current;
+    setSavingTeachingSource(false);
     setLearningCode(code);
-    if (user) {
-      await rememberLanguageCode(user.id, code);
-      setRecentCodes(await loadRecentLanguageCodes(user.id));
-    }
     const existing = profiles?.find((profile) => profile.languageCode === code);
     if (existing && user) {
+      activeIdRef.current = existing.id;
       setActiveId(existing.id);
-      await saveActiveLanguage(user.id, existing.id);
-      setNativeCode(existing.nativeLanguageCode ?? locale);
-      setCourse(await loadRlleCourse(existing.id).catch(() => null));
+      setNativeCode(existing.nativeLanguageCode ?? registeredNativeCode);
+      teachingSourceRef.current = existing.teachingLanguageSource;
+      setTeachingSource(existing.teachingLanguageSource);
+      setTeachingSourceSaved(false);
+      setCourse(null);
+    } else {
+      // A new target is a new path. Never leak the previous path's course,
+      // native language or teaching-source choice into its creation form.
+      activeIdRef.current = null;
+      setActiveId(null);
+      setCourse(null);
+      setNativeCode(registeredNativeCode);
+      teachingSourceRef.current = 'interface';
+      setTeachingSource('interface');
+      setTeachingSourceSaved(false);
+    }
+    if (!user) return;
+    const persist = selectionPersistence.current.then(async () => {
+      await rememberLanguageCode(user.id, code);
+      if (existing) await saveActiveLanguage(user.id, existing.id);
+    });
+    selectionPersistence.current = persist.catch(() => undefined);
+    try {
+      await persist;
+      const [recent, nextCourse] = await Promise.all([
+        loadRecentLanguageCodes(user.id),
+        existing ? loadRlleCourse(existing.id).catch(() => null) : Promise.resolve(null),
+      ]);
+      if (revision !== selectionRevision.current) return;
+      setRecentCodes(recent);
+      setCourse(nextCourse);
+    } catch (cause) {
+      if (revision === selectionRevision.current) setError((cause as Error).message);
+    }
+  };
+
+  const changeInterfaceLocale = async (next: SupportedLanguageCode) => {
+    if (interfaceLocaleSaving) return;
+    const previous = locale;
+    setInterfaceLocaleSaving(true);
+    setError(null);
+    setLocale(next);
+    try {
+      // I18n updates optimistically; await the same authoritative account
+      // contract before course generation can resolve an interface source.
+      await setInterfaceLanguage(next);
+    } catch (cause) {
+      setLocale(previous);
+      setError((cause as Error).message);
+    } finally {
+      setInterfaceLocaleSaving(false);
     }
   };
 
@@ -107,12 +183,14 @@ export default function LanguagesScreen() {
         body: {
           language: learningCode,
           ...(nativeCode ? { nativeLanguage: nativeCode } : {}),
+          teachingLanguageSource: teachingSource,
           mode,
           cefrLevel: level,
           ...(requestedGoal ? { goal: requestedGoal } : {}),
         },
       });
       await saveActiveLanguage(user.id, created.id);
+      activeIdRef.current = created.id;
       setActiveId(created.id);
       setGoal('');
       try {
@@ -133,6 +211,37 @@ export default function LanguagesScreen() {
       setError((cause as Error).message);
     } finally {
       setCreating(false);
+    }
+  };
+
+  const saveTeachingLanguage = async () => {
+    if (!active) return;
+    const revision = ++teachingSaveRevision.current;
+    const profileId = active.id;
+    const requestedSource = teachingSource;
+    setSavingTeachingSource(true);
+    setTeachingSourceSaved(false);
+    setError(null);
+    try {
+      const updated = await api<LanguageProfileSummary>(`/languages/${encodeURIComponent(active.id)}`, {
+        method: 'PATCH',
+        body: { teachingLanguageSource: teachingSource },
+      });
+      setProfiles((current) => current?.map((profile) => profile.id === updated.id ? updated : profile) ?? null);
+      if (
+        revision !== teachingSaveRevision.current
+        || activeIdRef.current !== profileId
+        || teachingSourceRef.current !== requestedSource
+      ) return;
+      teachingSourceRef.current = updated.teachingLanguageSource;
+      setTeachingSource(updated.teachingLanguageSource);
+      setTeachingSourceSaved(true);
+    } catch (cause) {
+      if (revision === teachingSaveRevision.current && activeIdRef.current === profileId) {
+        setError((cause as Error).message);
+      }
+    } finally {
+      if (revision === teachingSaveRevision.current) setSavingTeachingSource(false);
     }
   };
 
@@ -208,17 +317,71 @@ export default function LanguagesScreen() {
             <View style={{ gap: spacing.md }}>
               <Card style={{ gap: spacing.md }}>
                 <Text style={[typography.title, { color: c.textPrimary }]}>{t('languages11.preferences')}</Text>
-                <LanguageSelector value={locale} onChange={setLocale} mode="ui" />
+                <LanguageSelector
+                  value={locale}
+                  onChange={(code) => {
+                    const supported = toSupportedLanguage(code);
+                    if (supported) void changeInterfaceLocale(supported);
+                  }}
+                  mode="ui"
+                />
                 <LanguageSelector value={learningCode} onChange={(code) => void selectLearning(code)} mode="learning" recentCodes={recentCodes} />
+                {active ? (
+                  <>
+                    <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('passport.teachingLanguage')}</Text>
+                    <SegmentedControl
+                      testID="language-teaching-source"
+                      options={active.nativeLanguageCode ? LANGUAGE_TEACHING_SOURCES : ['interface'] as const}
+                      value={teachingSource}
+                      onChange={(source) => {
+                        ++teachingSaveRevision.current;
+                        teachingSourceRef.current = source;
+                        setTeachingSource(source);
+                        setSavingTeachingSource(false);
+                        setTeachingSourceSaved(false);
+                      }}
+                      labelFor={(source) => source === 'native'
+                        ? `${t('profile.card.nativeLanguage')} · ${active.nativeLanguageCode ? SUPPORTED_LANGUAGES[active.nativeLanguageCode].name : ''}`
+                        : `${t('onb.languages.interface')} · ${SUPPORTED_LANGUAGES[locale as SupportedLanguageCode]?.name ?? locale}`}
+                    />
+                    <Text style={[typography.caption, { color: c.textMuted }]}>{t('rlle.ui.teachingLanguage.detail')}</Text>
+                    <Button
+                      testID="language-teaching-source-save"
+                      label={t('rlle.ui.course.preferences.save')}
+                      variant="secondary"
+                      loading={savingTeachingSource}
+                      disabled={interfaceLocaleSaving}
+                      onPress={() => void saveTeachingLanguage()}
+                    />
+                    {teachingSourceSaved ? (
+                      <Alert
+                        tone="success"
+                        title={t('rlle.ui.course.preferences.saved')}
+                        detail={t('rlle.ui.teachingLanguage.existingCourse')}
+                      />
+                    ) : null}
+                  </>
+                ) : null}
               </Card>
               {learningCode && !selectedExists ? (
                 <Card style={{ gap: spacing.md }}>
                   <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('languages11.create.title').replace('{language}', SUPPORTED_LANGUAGES[learningCode as SupportedLanguageCode]?.name ?? learningCode)}</Text>
                   <LanguageSelector value={nativeCode} onChange={setNativeCode} mode="learning" label={t('languageSelector.nativeLabel')} />
+                  <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('passport.teachingLanguage')}</Text>
+                  <SegmentedControl
+                    testID="language-create-teaching-source"
+                    options={nativeCode ? LANGUAGE_TEACHING_SOURCES : ['interface'] as const}
+                    value={teachingSource}
+                    onChange={setTeachingSource}
+                    labelFor={(source) => source === 'native'
+                      ? `${t('profile.card.nativeLanguage')} · ${nativeCode ? SUPPORTED_LANGUAGES[nativeCode as SupportedLanguageCode]?.name ?? nativeCode : ''}`
+                      : `${t('onb.languages.interface')} · ${SUPPORTED_LANGUAGES[locale as SupportedLanguageCode]?.name ?? locale}`}
+                  />
+                  <Text style={[typography.caption, { color: c.textMuted }]}>{t('rlle.ui.teachingLanguage.detail')}</Text>
                   <SegmentedControl options={CEFR_LEVELS} value={level} onChange={setLevel} />
                   <SegmentedControl options={LANGUAGE_MODES.slice(0, 3)} value={mode} onChange={setMode} labelFor={(value) => t(`langmode.${value}` as TranslationKey)} />
                   <Input testID="language-course-goal" label={t('languages11.goal.label')} value={goal} onChangeText={setGoal} placeholder={t('languages11.goal.placeholder')} maxLength={300} />
-                  <Button testID="language-generate-course" label={t('rlle.ui.course.notStarted')} loading={creating} onPress={() => void create()} />
+                  <Button testID="language-generate-course" label={t('rlle.ui.course.notStarted')} loading={creating} disabled={interfaceLocaleSaving} onPress={() => void create()} />
                 </Card>
               ) : null}
               {profiles && profiles.length > 1 ? (

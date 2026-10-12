@@ -35,6 +35,7 @@ import { ContextBar } from '../../components/context/context-bar';
 import { SpeakButton } from '../../components/speak-button';
 import { VoiceState } from '../../components/ds/language';
 import { pauseSpeaking, resumeSpeaking, speak, stopSpeaking } from '../../lib/speak';
+import { useTeachingSpeechLanguage } from '../../lib/language-teaching';
 import {
   ProgressNarrative,
   ResultActionBar,
@@ -95,9 +96,14 @@ export default function TutorSessionScreen() {
   const scroll = useRef<ScrollView | null>(null);
   const busy = workState === 'THINKING' || workState === 'TRANSCRIPTION';
   const recording = workState === 'LISTENING' || workState === 'PAUSED';
-  const activeSpeechLanguage = typeof session?.experienceSession?.currentStep?.metadata?.language === 'string'
-    ? session.experienceSession.currentStep.metadata.language
-    : undefined;
+  const linkedLanguageProfileId = languageProfileId
+    ?? session?.experienceSession?.links.languageProfileId
+    ?? undefined;
+  const selectedTeachingLanguage = useTeachingSpeechLanguage(linkedLanguageProfileId);
+  const activeSpeechLanguage = selectedTeachingLanguage
+    ?? (typeof session?.experienceSession?.currentStep?.metadata?.teachingLanguage === 'string'
+      ? session.experienceSession.currentStep.metadata.teachingLanguage
+      : undefined);
 
   useEffect(() => () => { recorder.current?.cancel(); stopSpeaking(); }, []);
 
@@ -362,7 +368,7 @@ export default function TutorSessionScreen() {
   const experience = session.experienceSession ?? null;
   const objective = experience?.currentStep?.label ?? experience?.intent ?? session.title ?? t('tutor.discussion');
   const contexts = experience?.activeContexts.items ?? [];
-  const targetLanguage = activeSpeechLanguage;
+  const speechLanguage = activeSpeechLanguage;
   const continueCompleted = () => {
     if (!experience) return;
     const document = contexts.find((item) => item.kind === 'document' && item.referenceId);
@@ -483,7 +489,7 @@ export default function TutorSessionScreen() {
                 onSavePdf={message.role === 'assistant'
                   ? () => void saveTutorReplyAsPdf(objective, message.content, formatLocale).catch((caught) => setFailure(toFailure(caught)))
                   : undefined}
-                trailing={message.role === 'assistant' ? <SpeakButton text={message.content} language={targetLanguage} /> : undefined}
+                trailing={message.role === 'assistant' ? <SpeakButton text={message.content} language={speechLanguage} /> : undefined}
               />
             ))}
             {experience ? <ProgressNarrative session={experience} /> : null}

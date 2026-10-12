@@ -7,10 +7,12 @@ import {
 } from 'class-validator';
 import {
   CEFR_LEVELS,
+  LANGUAGE_TEACHING_SOURCES,
   LANGUAGE_MODES,
   type CefrLevel,
   type CreateLanguageProfileRequest,
   type LanguageMode,
+  type LanguageTeachingSource,
 } from '@second-brain/shared';
 
 export class CreateLanguageProfileDto implements CreateLanguageProfileRequest {
@@ -23,6 +25,10 @@ export class CreateLanguageProfileDto implements CreateLanguageProfileRequest {
   @IsString()
   @MaxLength(60)
   nativeLanguage?: string;
+
+  @IsOptional()
+  @IsIn(LANGUAGE_TEACHING_SOURCES as readonly string[])
+  teachingLanguageSource?: LanguageTeachingSource;
 
   @IsOptional()
   @IsIn(LANGUAGE_MODES as readonly string[])

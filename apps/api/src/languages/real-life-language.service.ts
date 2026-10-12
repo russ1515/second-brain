@@ -24,7 +24,6 @@ import {
   LANGUAGE_MASTERY_THRESHOLD,
   LANGUAGE_REMEDIATION_MINIMUM_EXERCISES,
   LANGUAGE_TRAINING_FORMATS,
-  RLLE_LANGUAGE_MASTERY_MAPPING_AUDIT,
   RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
   RLLE_LANGUAGE_MASTERY_UNIT_MAP,
   getRlleLevelPillarPlans,
@@ -97,6 +96,7 @@ import {
   type StartRlleScopedMasteryRequest,
   type SubmitRlleScopedMasteryRequest,
   type RecordRlleRemediationExerciseRequest,
+  type SupportedLanguageCode,
   type UpdateRlleCoursePreferencesRequest,
 } from '@second-brain/shared';
 import { ConfigService } from '@nestjs/config';
@@ -116,7 +116,7 @@ import { FeatureFlagsService } from '../config/feature-flags.service';
 import { SpeechService } from '../speech/speech.service';
 import { LanguageMasteryAttemptService } from './language-mastery-attempt.service';
 import type { LanguageMasteryAttemptProjection } from './language-mastery-attempt.service';
-import { LANGUAGE_MASTERY_STRICT_RUNTIME_READY } from './language-mastery-readiness';
+import { languageMasteryStrictRuntimeAvailable } from './language-mastery-readiness';
 import {
   createRlleStrictProgression,
   recordRlleMilestoneDecision,
@@ -4061,6 +4061,9 @@ export class RealLifeLanguageService {
       (candidate) => candidate.oralRole !== 'audio-native-assessment',
     ) ?? incompleteMilestones[0];
     if (milestone) {
+      const assessmentMode = milestone.oralRole === 'audio-native-assessment'
+        ? 'acoustic' as const
+        : 'generated' as const;
       const rows = attempts.filter((attempt) =>
         attempt.scopeKind === 'milestone' && attempt.targetId === milestone.id);
       const active = [...rows].reverse().find((attempt) => this.masteryAttemptIsActive(attempt));
@@ -4090,6 +4093,7 @@ export class RealLifeLanguageService {
       }
       return {
         scopeKind: 'milestone',
+        assessmentMode,
         targetId: milestone.id,
         operationKey: active?.idempotencyKey
           ?? this.masteryOperationKey(
@@ -4100,18 +4104,18 @@ export class RealLifeLanguageService {
             remediationPlanId,
           ),
         eligible:
-          milestone.oralRole !== 'audio-native-assessment'
-          && !active
+          !active
           && remediationReady
-          && trainingComplete,
+          && trainingComplete
+          && (assessmentMode !== 'acoustic' || strictRuntimeAvailable),
         blockedReason: active
           ? 'assessment-active'
           : !remediationReady
             ? 'remediation-required'
-          : milestone.oralRole === 'audio-native-assessment'
-            ? 'capability-unavailable'
             : !trainingComplete
               ? 'training-incomplete'
+              : assessmentMode === 'acoustic' && !strictRuntimeAvailable
+                ? 'capability-unavailable'
               : null,
         remediationPlanId,
         activeAttemptId: active?.attemptId ?? null,
@@ -4136,6 +4140,7 @@ export class RealLifeLanguageService {
     const remediationRequired = exam.status === 'remediation';
     return {
       scopeKind: 'pillar_exam',
+      assessmentMode: 'generated',
       targetId: plan.examId,
       operationKey: active?.idempotencyKey
         ?? this.masteryOperationKey(
@@ -4228,29 +4233,24 @@ export class RealLifeLanguageService {
   }
 
   private strictMasteryAvailable(profile: LanguageProfile): boolean {
-    if (
-      !LANGUAGE_MASTERY_STRICT_RUNTIME_READY
-      ||
-      !this.featureFlags.enabled('languageMasteryV1')
-      || !RLLE_LANGUAGE_MASTERY_MAPPING_AUDIT.activationReady
-    ) {
-      return false;
-    }
     const languageCode = this.languageCode(profile);
     const coverage = this.config.get<Pick<
       LanguageMasterySpeechCoverage,
       | 'transcriptionLanguageCodes'
       | 'synthesisLanguageCodes'
       | 'pronunciationAssessmentLanguageCodes'
-    >>('speech.languageMasteryV1');
-    return Boolean(
-      coverage
-      && this.speech.supportsSynthesis
-      && this.speech.supportsPronunciationAssessment
-      && coverage.transcriptionLanguageCodes.includes(languageCode)
-      && coverage.synthesisLanguageCodes.includes(languageCode)
-      && coverage.pronunciationAssessmentLanguageCodes.includes(languageCode)
-    );
+    > & {
+      pronunciationAssessmentLocales?: Partial<Record<SupportedLanguageCode, string>>;
+    }>('speech.languageMasteryV1');
+    return languageMasteryStrictRuntimeAvailable({
+      featureEnabled: this.featureFlags.enabled('languageMasteryV1'),
+      languageCode,
+      coverage,
+      supportsSynthesis: this.speech.supportsSynthesis,
+      supportsPronunciationAssessment: this.speech.supportsPronunciationAssessment,
+      pronunciationAssessmentProvider:
+        this.speech.activePronunciationAssessmentProvider,
+    });
   }
 
   private masteryContentDirective(unitId: string): string {

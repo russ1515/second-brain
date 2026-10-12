@@ -17,6 +17,7 @@ import { saveTutorSessionDraft } from '../../lib/tutor/session-draft';
 import { Button, Card, ErrorBanner, Loading } from '../../components/ui';
 import { ContextBar } from '../../components/context/context-bar';
 import { SpeakButton } from '../../components/speak-button';
+import { useTeachingSpeechLanguage } from '../../lib/language-teaching';
 import {
   pauseSpeaking,
   playSynthesis,
@@ -569,6 +570,7 @@ function OralExercise({
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
+  const teachingLanguage = useTeachingSpeechLanguage(languageProfileId);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [turns, setTurns] = useState<{ role: 'teacher' | 'you'; text: string }[]>([]);
   const [status, setStatus] = useState<
@@ -711,7 +713,7 @@ function OralExercise({
             <View key={i} style={turn.role === 'you' ? styles.youBubble : styles.teacherBubble}>
               <Text style={styles.bubbleWho}>{turn.role === 'you' ? t('learn.oral.you') : t('learn.oral.teacher')}</Text>
               <Text style={styles.bubbleText}>{turn.text}</Text>
-              {turn.role === 'teacher' ? <SpeakButton text={turn.text} language={targetLanguage} /> : null}
+              {turn.role === 'teacher' ? <SpeakButton text={turn.text} language={teachingLanguage} /> : null}
             </View>
           ))}
 
@@ -759,6 +761,7 @@ function OralExam({
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
   const { t } = useI18n();
+  const teachingLanguage = useTeachingSpeechLanguage(languageProfileId);
   const [phase, setPhase] = useState<'setup' | 'starting' | 'exam' | 'evaluating' | 'result'>('setup');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [turns, setTurns] = useState<{ role: 'examiner' | 'you'; text: string }[]>([]);
@@ -814,7 +817,7 @@ function OralExam({
       const opening = [...detail.messages].reverse().find((message) => message.role === 'assistant');
       if (opening) {
         setStatus('speaking');
-        await speak(opening.content, targetLanguage).catch((cause) => {
+        await speak(opening.content, teachingLanguage).catch((cause) => {
           setError((cause as Error).message);
         });
         setStatus('ready');
@@ -952,7 +955,7 @@ function OralExam({
             <View key={i} style={turn.role === 'you' ? styles.youBubble : styles.teacherBubble}>
               <Text style={styles.bubbleWho}>{turn.role === 'you' ? t('learn.oral.you') : t('learn.exam.examiner')}</Text>
               <Text style={styles.bubbleText}>{turn.text}</Text>
-              {turn.role === 'examiner' ? <SpeakButton text={turn.text} language={targetLanguage} /> : null}
+              {turn.role === 'examiner' ? <SpeakButton text={turn.text} language={teachingLanguage} /> : null}
             </View>
           ))}
 

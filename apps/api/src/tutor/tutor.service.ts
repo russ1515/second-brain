@@ -52,6 +52,7 @@ import {
   type AgeTeachingPolicy,
 } from './teaching-strategy';
 import { localeDirective, resolveLocale } from '../common/learning-locale';
+import { resolveLanguageTeachingRoles } from '../common/language-teaching';
 import { UsageService } from '../usage/usage.service';
 import {
   inferTeacherSubject,
@@ -497,12 +498,11 @@ export class TutorService {
       }
     }
 
-    const hasExplicitLanguageContext = Boolean(
-      session.languageProfileId ||
-      experience.activeContexts.items.some(
-        (item) => item.kind === 'language' && item.referenceId,
-      ),
+    const effectiveLanguageProfileId = this.languageProfileIdForSession(
+      session,
+      experience,
     );
+    const hasExplicitLanguageContext = Boolean(effectiveLanguageProfileId);
     const passport = await this.loadPassportContext(
       userId,
       adaptationEnabled,
@@ -511,7 +511,7 @@ export class TutorService {
     // Language steering: language-practice sessions get the Professor role.
     const language = await this.loadLanguage(
       userId,
-      session.languageProfileId,
+      effectiveLanguageProfileId,
       experience,
       passport,
     );
@@ -715,6 +715,18 @@ export class TutorService {
 
   // ── internals ────────────────────────────────────────────────────────────
 
+  private languageProfileIdForSession(
+    session: Pick<SessionRow, 'languageProfileId'>,
+    experience: Pick<ExperienceSession, 'links' | 'activeContexts'>,
+  ): string | null {
+    return session.languageProfileId
+      ?? experience.links?.languageProfileId
+      ?? experience.activeContexts.items.find(
+        (item) => item.kind === 'language' && item.referenceId,
+      )?.referenceId
+      ?? null;
+  }
+
   /** Load the profile behind a language session. Tolerates deletion (FK is
    *  SetNull) and reads via Prisma rather than LanguageService — that would make
    *  TutorModule depend on LanguageModule, which depends on this one. */
@@ -736,6 +748,7 @@ export class TutorService {
       },
     });
     if (!profile) return undefined;
+    const promptRoles = await resolveLanguageTeachingRoles(this.prisma, userId, profile);
     const metadata = experience?.currentStep?.metadata;
     const immersionIntensity = metadata?.immersionIntensity;
     const correctionIntensity = metadata?.correctionIntensity;
@@ -788,17 +801,11 @@ export class TutorService {
     return {
       language: profile.language,
       targetLanguage:
-        toSupportedLanguage(profile.normalizedLanguage)
-        ?? toSupportedLanguage(profile.language)
+        promptRoles.targetLanguage
         ?? passport?.targetLanguage
         ?? null,
-      interfaceLanguage: passport?.interfaceLanguage ?? null,
-      supportLanguage:
-        passport?.interfaceLanguage
-        ?? passport?.explanationLanguage
-        ?? passport?.teachingLanguage
-        ?? passport?.nativeOrPrimaryLanguage
-        ?? null,
+      interfaceLanguage: promptRoles.interfaceLanguage,
+      supportLanguage: promptRoles.supportLanguage,
       nativeLanguage: profile.nativeLanguage ?? passport?.nativeOrPrimaryLanguage ?? null,
       mode: profile.mode as LanguageMode,
       goal: profile.goal,
@@ -947,12 +954,13 @@ export class TutorService {
   private async loadPassportContext(
     userId: string,
     includeAdaptiveSignals: boolean,
-    includeLanguageLearningContext: boolean,
+    hasExplicitLanguageContext: boolean,
   ): Promise<LearnerPassportTutorContext> {
     // Passport state is authoritative for declared adaptation. Failing closed
     // avoids silently replacing a persisted age band with an unadapted default.
     return this.learnerPassport.tutorContext(userId, includeAdaptiveSignals, {
-      includeLanguageLearningContext,
+      includeLanguageLearningContext: hasExplicitLanguageContext,
+      suppressGlobalLanguageDirectives: hasExplicitLanguageContext,
     });
   }
 

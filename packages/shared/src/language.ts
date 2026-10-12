@@ -38,6 +38,13 @@ export const CEFR_LEVELS: readonly CefrLevel[] = [
   'C2',
 ] as const;
 
+/** Where a language-learning path gets the language used for explanations,
+ * instructions, corrections and summaries. The actual language is always
+ * resolved server-side from persisted profile/interface data; clients choose
+ * the source, never an arbitrary prompt language. */
+export const LANGUAGE_TEACHING_SOURCES = ['native', 'interface'] as const;
+export type LanguageTeachingSource = (typeof LANGUAGE_TEACHING_SOURCES)[number];
+
 export interface LanguageProfileSummary {
   id: string;
   language: string;
@@ -45,6 +52,7 @@ export interface LanguageProfileSummary {
   languageCode: SupportedLanguageCode | null;
   nativeLanguage: string | null;
   nativeLanguageCode: SupportedLanguageCode | null;
+  teachingLanguageSource: LanguageTeachingSource;
   mode: LanguageMode;
   /** CEFR / CECRL level (Sprint 7.3). */
   cefrLevel: CefrLevel;
@@ -72,6 +80,7 @@ export interface LanguageProfileDetail extends LanguageProfileSummary {
 export interface CreateLanguageProfileRequest {
   language: string;
   nativeLanguage?: string;
+  teachingLanguageSource?: LanguageTeachingSource;
   mode?: LanguageMode;
   cefrLevel?: CefrLevel;
   goal?: string;
@@ -79,6 +88,7 @@ export interface CreateLanguageProfileRequest {
 
 export interface UpdateLanguageProfileRequest {
   nativeLanguage?: string;
+  teachingLanguageSource?: LanguageTeachingSource;
   mode?: LanguageMode;
   cefrLevel?: CefrLevel;
   goal?: string;

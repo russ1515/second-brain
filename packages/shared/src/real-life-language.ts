@@ -338,6 +338,10 @@ export interface RlleCourseProgress {
 export interface RlleNextMasteryTarget {
   scopeKind: 'milestone' | 'pillar_exam';
   targetId: string;
+  /** The server-selected evidence path for this exact target. Clients render
+   * the corresponding generated assessment or native-audio capture, but must
+   * never infer the modality from a target id or curriculum label. */
+  assessmentMode: 'generated' | 'acoustic';
   /** Stable server-issued idempotency key for this exact next operation. */
   operationKey: string;
   eligible: boolean;

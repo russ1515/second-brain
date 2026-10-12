@@ -27,6 +27,7 @@ import {
   submitRllePronunciationTraining,
 } from '../../lib/language-rll-client';
 import { featureFlags } from '../../lib/feature-flags';
+import { useTeachingSpeechLanguage } from '../../lib/language-teaching';
 
 /** One step of the pedagogical flow. */
 interface FlowStep {
@@ -74,6 +75,9 @@ export default function LessonScreen() {
   const [flow, setFlow] = useState<LessonFlowProgress | null>(null);
   const [flowBusy, setFlowBusy] = useState(false);
   const [confirmNext, setConfirmNext] = useState<LessonFlowStepKey | null>(null);
+  const teachingSpeechLanguage = useTeachingSpeechLanguage(
+    lesson?.languageProfileId ?? languageProfileId,
+  );
 
   const load = useCallback(async () => {
     try {
@@ -123,7 +127,7 @@ export default function LessonScreen() {
           <Markdown text={lesson.explanation} />
           <SpeakButton
             text={lesson.explanation}
-            language={lesson.language ?? undefined}
+            language={teachingSpeechLanguage}
             label={t('lesson.readAloud')}
           />
         </>
@@ -300,6 +304,7 @@ export default function LessonScreen() {
     router,
     session,
     t,
+    teachingSpeechLanguage,
   ]);
 
   if (error && !lesson) {

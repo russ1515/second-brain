@@ -14,7 +14,7 @@ import type {
 } from '@second-brain/shared';
 import { LlmService } from '../llm/llm.service';
 import { LanguageService } from './language.service';
-import { languageSystemPrompt, modeSpec } from './language-modes';
+import { languageSystemPrompt } from './language-modes';
 
 const MAX_ESSAY_CHARS = 6000;
 
@@ -42,10 +42,12 @@ export class LanguageWritingService {
   ): Promise<LanguageDialogue> {
     const profile = await this.languages.requireOwned(userId, profileId);
     const mode = profile.mode as LanguageMode;
-    const spec = modeSpec(mode);
     const roles = await this.languages.promptRoles(userId, profile);
     const native = roles.supportLanguage;
-    const withGloss = spec.targetLanguageRatio < 1;
+    // A dialogue is study material, not an autonomous assessment. Every target
+    // line therefore keeps its immediate teaching-language correspondence,
+    // including in immersion mode.
+    const withGloss = true;
 
     const system =
       languageSystemPrompt({
@@ -57,11 +59,9 @@ export class LanguageWritingService {
       }) +
       ` Write a short, natural ${profile.language} dialogue (6-10 turns) the` +
       ` learner can study. Respond with ONLY a JSON object (no markdown):` +
-      ` {"title","lines":[{"speaker","text"${withGloss ? `,"translation"` : ''}}]}` +
-      ` where "text" is in ${profile.language}` +
-      (withGloss
-        ? ` and "translation" is the ${native} gloss of that line.`
-        : ` and you give NO translation (immersion).`);
+      ` {"title","lines":[{"speaker","text","translation"}]}` +
+      ` where "text" is in ${profile.language} and "translation" is the ` +
+      `${native} correspondence of that line.`;
 
     const setting = scenario?.trim()
       ? `Scenario: "${scenario.trim()}".`

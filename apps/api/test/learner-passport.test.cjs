@@ -58,7 +58,8 @@ function readPrisma(overrides = {}, ageBand = '12to15') {
     languageProfile: {
       findMany: async () => [{
         id: 'lp1', language: 'English', normalizedLanguage: 'en',
-        nativeLanguage: 'French', cefrLevel: 'B1', goal: 'Academic fluency',
+        nativeLanguage: 'French', teachingLanguageSource: 'native',
+        cefrLevel: 'B1', goal: 'Academic fluency',
         updatedAt, _count: { lessons: 2, tutorSessions: 3 },
         lessons: [{ createdAt: updatedAt }], tutorSessions: [],
       }],
@@ -89,6 +90,8 @@ test('GET projection keeps declared, observed and verified provenance separate',
   assert.equal(passport.observed.source, 'OBSERVED');
   assert.equal(passport.observed.learnerProfile, observed);
   assert.equal(passport.observed.languageProgress[0].evaluatedLevel, null);
+  assert.equal(passport.observed.languageProgress[0].teachingLanguageSource, 'native');
+  assert.equal(passport.observed.languageProgress[0].teachingLanguage, 'fr');
   assert.deepEqual(passport.verified, {
     source: 'VERIFIED', available: false, fields: [],
   });
@@ -152,6 +155,107 @@ test('Tutor context adapts age/languages but explicitly preserves assessment rul
   assert.match(context.directive, /Declared learning language goal: en \(current=B1, target=C1\)/);
   assert.match(context.directive, /Observed Learning DNA signals/);
   assert.match(context.directive, /must never lower, change or bypass.*assessment rubric/i);
+});
+
+test('explicit LanguageProfile keeps Passport signals without global language overrides', async () => {
+  const service = new LearnerPassportService(readPrisma(), { profile: async () => null });
+  const context = await service.tutorContext('u1', true, {
+    includeLanguageLearningContext: true,
+    suppressGlobalLanguageDirectives: true,
+  });
+
+  assert.equal(context.explanationLanguage, 'fr');
+  assert.equal(context.teachingLanguage, 'en');
+  assert.match(context.directive, /adolescent/i);
+  assert.match(context.directive, /Declared goals: Pass the final exam/);
+  assert.match(context.directive, /Declared known languages and levels: en=B1/);
+  assert.match(context.directive, /Declared learning language goal: en \(current=B1, target=C1\)/);
+  assert.match(context.directive, /Observed Learning DNA signals/);
+  assert.doesNotMatch(context.directive, /General explanation language:/);
+  assert.doesNotMatch(context.directive, /Teaching language:/);
+
+  const tutor = new TutorService({}, {}, {}, {}, {}, {}, {}, {});
+  const finalPrompt = tutor.systemPrompt(
+    undefined,
+    {
+      language: 'English',
+      targetLanguage: 'English',
+      interfaceLanguage: 'French',
+      supportLanguage: 'Lingala',
+      nativeLanguage: 'Lingala',
+      mode: 'beginner',
+      goal: 'Introduce myself',
+      cefrLevel: 'A1',
+      recentVocabulary: [],
+      recentMistakes: [],
+    },
+    undefined,
+    undefined,
+    undefined,
+    'fr',
+    undefined,
+    undefined,
+    context.directive,
+  );
+  assert.match(finalPrompt, /every introduction, explanation, instruction, rule, correction, feedback and summary in Lingala/i);
+  assert.match(finalPrompt, /immediate Lingala correspondence/i);
+  assert.doesNotMatch(finalPrompt, /General explanation language: fr/);
+  assert.doesNotMatch(finalPrompt, /Teaching language: en/);
+});
+
+test('Tutor requests path-owned language priority only for an explicit language context', async () => {
+  const calls = [];
+  const tutor = new TutorService({}, {}, {}, {}, {}, {}, {}, {
+    tutorContext: async (_userId, _adaptive, options) => {
+      calls.push(options);
+      return { directive: '', learningPreferences: [] };
+    },
+  });
+
+  await tutor.loadPassportContext('u1', true, false);
+  await tutor.loadPassportContext('u1', true, true);
+
+  assert.deepEqual(calls, [
+    {
+      includeLanguageLearningContext: false,
+      suppressGlobalLanguageDirectives: false,
+    },
+    {
+      includeLanguageLearningContext: true,
+      suppressGlobalLanguageDirectives: true,
+    },
+  ]);
+});
+
+test('restored Tutor resolves the explicit language profile from Experience links or context', () => {
+  const tutor = new TutorService({}, {}, {}, {}, {}, {}, {}, {});
+  const base = {
+    activeContexts: { items: [] },
+    links: { languageProfileId: 'language-from-links' },
+  };
+  assert.equal(
+    tutor.languageProfileIdForSession({ languageProfileId: null }, base),
+    'language-from-links',
+  );
+  assert.equal(
+    tutor.languageProfileIdForSession(
+      { languageProfileId: null },
+      {
+        activeContexts: {
+          items: [{ kind: 'language', referenceId: 'language-from-context' }],
+        },
+        links: { languageProfileId: null },
+      },
+    ),
+    'language-from-context',
+  );
+  assert.equal(
+    tutor.languageProfileIdForSession(
+      { languageProfileId: 'language-from-session' },
+      base,
+    ),
+    'language-from-session',
+  );
 });
 
 test('Persisted Passport age maps to a distinct ITE policy and final Teacher Context', async () => {

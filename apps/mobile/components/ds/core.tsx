@@ -180,16 +180,18 @@ export function SegmentedControl<T extends string>({
   onChange,
   labelFor,
   wrap = false,
+  testID,
 }: {
   options: readonly T[];
   value: T;
   onChange: (v: T) => void;
   labelFor?: (v: T) => string;
   wrap?: boolean;
+  testID?: string;
 }) {
   const { colors: c, radius } = useTokens();
   return (
-    <View style={{ flexDirection: 'row', flexWrap: wrap ? 'wrap' : 'nowrap', gap: wrap ? 3 : 0, backgroundColor: c.surfaceSunken, borderRadius: radius.sm, padding: 3, alignSelf: wrap ? 'stretch' : 'flex-start' }}>
+    <View testID={testID} style={{ flexDirection: 'row', flexWrap: wrap ? 'wrap' : 'nowrap', gap: wrap ? 3 : 0, backgroundColor: c.surfaceSunken, borderRadius: radius.sm, padding: 3, alignSelf: wrap ? 'stretch' : 'flex-start' }}>
       {options.map((o) => {
         const active = o === value;
         return (

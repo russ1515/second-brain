@@ -60,7 +60,7 @@ export class VocabularyService {
     const count = this.clampCount(dto.count);
     const deckId = await this.languages.ensureVocabDeck(profile);
 
-    const items = await this.mine(profile, source, count);
+    const items = await this.mine(userId, profile, source, count);
     if (items.length === 0) {
       throw new UnprocessableEntityException(
         'The teacher did not return any usable vocabulary. Try again.',
@@ -158,11 +158,12 @@ export class VocabularyService {
   }
 
   private async mine(
+    userId: string,
     profile: LanguageProfile,
     source: string,
     count: number,
   ): Promise<VocabularyItem[]> {
-    const native = profile.nativeLanguage ?? 'English';
+    const native = (await this.languages.promptRoles(userId, profile)).supportLanguage;
     const spec = modeSpec(profile.mode);
     const system = [
       `You are a professional ${profile.language} teacher building vocabulary`,

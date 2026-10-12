@@ -1,4 +1,4 @@
-import type { CefrLevel } from './language';
+import type { CefrLevel, LanguageTeachingSource } from './language';
 import type { SupportedLanguageCode } from './languages';
 import type { LearnerProfile } from './learner-profile';
 import type { DnaTrait } from './learning-dna';
@@ -62,6 +62,10 @@ export interface LearnerPassportLanguageProgress {
   language: string;
   languageCode: SupportedLanguageCode | null;
   nativeLanguage: string | null;
+  /** Persisted choice for this language path, independent from the target. */
+  teachingLanguageSource: LanguageTeachingSource;
+  /** Resolved language used for explanations on this path. */
+  teachingLanguage: SupportedLanguageCode | null;
   declaredLevel: CefrLevel;
   /** Null until an existing assessment engine records a defensible level. */
   evaluatedLevel: CefrLevel | null;

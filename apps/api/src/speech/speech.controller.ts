@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpException,
   HttpCode,
   HttpStatus,
   Logger,
@@ -26,6 +27,7 @@ import {
   LANGUAGE_MASTERY_POLICY_VERSION,
   RLLE_LANGUAGE_MASTERY_MAPPING_AUDIT,
   type LanguageMasterySpeechCoverage,
+  type SupportedLanguageCode,
   type UXFeatureFlags,
 } from '@second-brain/shared';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
@@ -54,14 +56,24 @@ export class SpeechController {
 
   @Get('capabilities')
   capabilities(): SpeechCapabilities {
-    const configured = this.config?.get<Omit<LanguageMasterySpeechCoverage, 'enabled' | 'policyVersion'>>(
+    const configured = this.config?.get<
+      Omit<LanguageMasterySpeechCoverage, 'enabled' | 'policyVersion'> & {
+        pronunciationAssessmentLocales?: Partial<Record<SupportedLanguageCode, string>>;
+      }
+    >(
       'speech.languageMasteryV1',
     );
     const features = this.config?.get<UXFeatureFlags>('features');
     const transcriptionLanguageCodes = configured?.transcriptionLanguageCodes ?? [];
     const synthesisLanguageCodes = configured?.synthesisLanguageCodes ?? [];
-    const pronunciationAssessmentLanguageCodes =
-      configured?.pronunciationAssessmentLanguageCodes ?? [];
+    // A product-code allowlist alone cannot prove acoustic coverage. Publish a
+    // language only when the exact provider locale is configured as well; the
+    // dedicated adapter still validates mode and dimension support per call.
+    const pronunciationAssessmentLanguageCodes = (
+      configured?.pronunciationAssessmentLanguageCodes ?? []
+    ).filter((languageCode) => Boolean(
+      configured?.pronunciationAssessmentLocales?.[languageCode]?.trim(),
+    ));
     const fullyCoveredLanguage = transcriptionLanguageCodes.some((languageCode) =>
       synthesisLanguageCodes.includes(languageCode)
       && pronunciationAssessmentLanguageCodes.includes(languageCode));
@@ -138,6 +150,7 @@ export class SpeechController {
     try {
       return await this.speech.synthesize(dto.text, { language: dto.language });
     } catch (error) {
+      if (error instanceof HttpException) throw error;
       this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'Your teacher’s voice is temporarily unavailable. Please try again shortly.',

@@ -10,10 +10,14 @@ import type {
   LanguageMode,
   LanguageProfileDetail,
   LanguageProfileSummary,
+  LanguageTeachingSource,
 } from '@second-brain/shared';
 import { SUPPORTED_LANGUAGES, toSupportedLanguage } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
-import { resolveLocale } from '../common/learning-locale';
+import {
+  resolveLanguageTeachingRoles,
+  type LanguageTeachingRoles,
+} from '../common/language-teaching';
 import type { CreateLanguageProfileDto } from './dto/create-language-profile.dto';
 import type { UpdateLanguageProfileDto } from './dto/update-language-profile.dto';
 import { immersionRatio } from './language-modes';
@@ -45,6 +49,12 @@ export class LanguageService {
       throw new ConflictException(`You are already learning ${existing.language}.`);
     }
 
+    // Validate the complete profile contract before creating its dependent
+    // FSRS deck. An invalid native-teaching choice must leave no orphan data.
+    const nativeLanguage = this.canonicalLanguageName(dto.nativeLanguage);
+    const teachingLanguageSource = dto.teachingLanguageSource ?? 'interface';
+    this.assertTeachingLanguageAvailable(teachingLanguageSource, nativeLanguage);
+
     // The vocabulary deck is the link between a language and FSRS.
     const deck = await this.prisma.deck.create({
       data: {
@@ -59,7 +69,8 @@ export class LanguageService {
         userId,
         language,
         normalizedLanguage,
-        nativeLanguage: this.canonicalLanguageName(dto.nativeLanguage),
+        nativeLanguage,
+        teachingLanguageSource,
         mode: dto.mode ?? 'beginner',
         cefrLevel: dto.cefrLevel ?? 'A1',
         goal: dto.goal?.trim() || null,
@@ -117,15 +128,22 @@ export class LanguageService {
     id: string,
     dto: UpdateLanguageProfileDto,
   ): Promise<LanguageProfileSummary> {
-    await this.requireOwned(userId, id);
+    const current = await this.requireOwned(userId, id);
+    const nativeLanguage = dto.nativeLanguage !== undefined
+      ? this.canonicalLanguageName(dto.nativeLanguage)
+      : current.nativeLanguage;
+    const teachingLanguageSource = dto.teachingLanguageSource
+      ?? this.teachingLanguageSource(current.teachingLanguageSource);
+    this.assertTeachingLanguageAvailable(teachingLanguageSource, nativeLanguage);
     const profile = await this.prisma.languageProfile.update({
       where: { id },
       data: {
         ...(dto.mode !== undefined ? { mode: dto.mode } : {}),
         ...(dto.cefrLevel !== undefined ? { cefrLevel: dto.cefrLevel } : {}),
         ...(dto.nativeLanguage !== undefined
-          ? { nativeLanguage: this.canonicalLanguageName(dto.nativeLanguage) }
+          ? { nativeLanguage }
           : {}),
+        ...(dto.teachingLanguageSource !== undefined ? { teachingLanguageSource } : {}),
         ...(dto.goal !== undefined ? { goal: dto.goal.trim() || null } : {}),
       },
     });
@@ -234,24 +252,9 @@ export class LanguageService {
    */
   async promptRoles(
     userId: string,
-    profile: Pick<LanguageProfile, 'language' | 'normalizedLanguage'>,
-  ): Promise<{
-    interfaceLanguage: string;
-    supportLanguage: string;
-    targetLanguage: string;
-  }> {
-    const interfaceLanguage = await resolveLocale(this.prisma, userId);
-    const code =
-      toSupportedLanguage(profile.normalizedLanguage) ??
-      toSupportedLanguage(profile.language);
-    const targetLanguage = code
-      ? SUPPORTED_LANGUAGES[code].englishName
-      : profile.language;
-    return {
-      interfaceLanguage,
-      supportLanguage: interfaceLanguage,
-      targetLanguage,
-    };
+    profile: Pick<LanguageProfile, 'language' | 'normalizedLanguage' | 'nativeLanguage' | 'teachingLanguageSource'>,
+  ): Promise<LanguageTeachingRoles> {
+    return resolveLanguageTeachingRoles(this.prisma, userId, profile);
   }
 
   /** Every profile gets a vocabulary deck at creation, but the FK is SetNull —
@@ -300,6 +303,21 @@ export class LanguageService {
     return code ? SUPPORTED_LANGUAGES[code].englishName : language.trim();
   }
 
+  private teachingLanguageSource(value: string): LanguageTeachingSource {
+    return value === 'native' ? 'native' : 'interface';
+  }
+
+  private assertTeachingLanguageAvailable(
+    source: LanguageTeachingSource,
+    nativeLanguage: string | null,
+  ): void {
+    if (source === 'native' && !toSupportedLanguage(nativeLanguage)) {
+      throw new BadRequestException(
+        'A supported native language must be registered before it can be used as the teaching language.',
+      );
+    }
+  }
+
   private countVocab(userId: string, deckId: string | null): Promise<number> {
     if (!deckId) return Promise.resolve(0);
     return this.prisma.card.count({ where: { userId, deckId } });
@@ -324,6 +342,7 @@ export class LanguageService {
       languageCode,
       nativeLanguage: profile.nativeLanguage,
       nativeLanguageCode,
+      teachingLanguageSource: this.teachingLanguageSource(profile.teachingLanguageSource),
       mode: profile.mode as LanguageMode,
       cefrLevel: profile.cefrLevel as CefrLevel,
       goal: profile.goal,

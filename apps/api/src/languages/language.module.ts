@@ -15,6 +15,8 @@ import { ExaminerModule } from '../examiner/examiner.module';
 import { FeatureFlagsModule } from '../config/feature-flags.module';
 import { LanguageMasteryAttemptController } from './language-mastery-attempt.controller';
 import { LanguageMasteryAttemptService } from './language-mastery-attempt.service';
+import { LanguageAcousticMasteryController } from './language-acoustic-mastery.controller';
+import { LanguageAcousticMasteryService } from './language-acoustic-mastery.service';
 
 /** Language engine (Phase 5, Educational Engine): the professional language
  *  teacher. It orchestrates rather than duplicates — vocabulary is ordinary
@@ -30,7 +32,11 @@ import { LanguageMasteryAttemptService } from './language-mastery-attempt.servic
     ExaminerModule,
     FeatureFlagsModule,
   ],
-  controllers: [LanguageController, LanguageMasteryAttemptController],
+  controllers: [
+    LanguageController,
+    LanguageMasteryAttemptController,
+    LanguageAcousticMasteryController,
+  ],
   providers: [
     LanguageService,
     VocabularyService,
@@ -40,6 +46,7 @@ import { LanguageMasteryAttemptService } from './language-mastery-attempt.servic
     LanguageSkillsService,
     RealLifeLanguageService,
     LanguageMasteryAttemptService,
+    LanguageAcousticMasteryService,
   ],
   exports: [LanguageService, RealLifeLanguageService, LanguageMasteryAttemptService],
 })

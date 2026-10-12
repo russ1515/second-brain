@@ -8,6 +8,10 @@ const shared = require('../../../packages/shared/dist/index.js');
 const {
   RealLifeLanguageService,
 } = require('../dist/languages/real-life-language.service.js');
+const {
+  createRlleStrictProgression,
+  recordRlleMilestoneDecision,
+} = require('../dist/languages/language-mastery-progression.js');
 
 const PROFILE = {
   id: 'profile-runtime',
@@ -192,4 +196,102 @@ test('all A1 milestone proofs project the first A1 pillar exam before any A2 tar
   assert.equal(reconciled.nextMasteryTarget.eligible, true);
   assert.equal(reconciled.nextMasteryTarget.remediationPlanId, null);
   assert.equal(reconciled.nextMasteryTarget.targetId.includes(':A2:'), false);
+});
+
+test('native-acoustic target is explicit and eligible only with strict runtime plus complete training', async () => {
+  const unit = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP.find(
+    (candidate) => candidate.unitId === 'a2-routines',
+  );
+  const acoustic = unit.milestones.find(
+    (milestone) => milestone.oralRole === 'audio-native-assessment',
+  );
+  assert.ok(acoustic);
+  const formats = [...shared.LANGUAGE_TRAINING_FORMATS];
+  const voiceIndex = formats.indexOf('voice-pronunciation');
+  const exerciseAttempts = formats.flatMap((format, index) => format === 'voice-pronunciation'
+    ? []
+    : [{
+        id: `exercise-${index}`, exerciseIndex: index,
+        createdAt: new Date(`2026-10-12T10:${String(index).padStart(2, '0')}:00.000Z`),
+      }]);
+  const lessons = {
+    get: async () => ({
+      exercises: formats.map((languageFormat) => ({ languageFormat })),
+    }),
+  };
+  const prisma = {
+    lesson: { findFirst: async () => ({ contentVersion: 1 }) },
+    exerciseAttempt: { findMany: async () => exerciseAttempts },
+  };
+  const service = new RealLifeLanguageService(
+    prisma,
+    {}, lessons, {}, {}, {}, {}, {}, {}, {}, {},
+    { enabled: () => true },
+    { get: () => null },
+    {},
+    {},
+  );
+  const state = courseState(service, [unit.unitId]);
+  state.currentLesson = {
+    lessonId: 'lesson-a2',
+    unitId: unit.unitId,
+    status: 'active',
+    lastActivityAt: '2026-10-12T10:00:00.000Z',
+  };
+  state.milestoneMastery[unit.unitId].trainingEvidence = formats.map((format, index) => ({
+    id: `training-${index}`,
+    format,
+    state: 'completed',
+    helpUsed: false,
+    lessonId: 'lesson-a2',
+    contentVersion: 1,
+    exerciseIndex: index,
+    ...(index === voiceIndex
+      ? { source: 'audio-native-coaching', sourceId: 'voice-coaching-1' }
+      : {}),
+  }));
+  let progression = createRlleStrictProgression({
+    languageCode: 'en',
+    curriculumUnitIds: [unit.unitId],
+  });
+  const masteryDecision = {
+    policyVersion: shared.LANGUAGE_MASTERY_POLICY_VERSION,
+    verdict: 'mastered',
+    reason: 'threshold-met',
+    trainingComplete: true,
+    missingTrainingFormats: [],
+    rawScore: 1,
+    threshold: shared.LANGUAGE_MASTERY_THRESHOLD,
+    helpUsed: false,
+  };
+  unit.milestones.filter((milestone) => milestone.id !== acoustic.id).forEach((milestone, index) => {
+    progression = recordRlleMilestoneDecision(progression, {
+      languageCode: 'en',
+      level: milestone.level,
+      pillar: milestone.pillar,
+      milestoneId: milestone.id,
+      scopeKey: progression.milestones[milestone.id].scopeKey,
+      evidenceId: `proof-${index}`,
+      decision: masteryDecision,
+      evaluatedAt: '2026-10-12T10:30:00.000Z',
+    });
+  });
+
+  service.strictMasteryAvailable = () => true;
+  const available = await service.projectNextMasteryTarget(
+    'owner', PROFILE, state, progression, [],
+  );
+  assert.equal(available.targetId, acoustic.id);
+  assert.equal(available.assessmentMode, 'acoustic');
+  assert.equal(available.eligible, true);
+  assert.equal(available.blockedReason, null);
+
+  service.strictMasteryAvailable = () => false;
+  const blocked = await service.projectNextMasteryTarget(
+    'owner', PROFILE, state, progression, [],
+  );
+  assert.equal(blocked.targetId, acoustic.id);
+  assert.equal(blocked.assessmentMode, 'acoustic');
+  assert.equal(blocked.eligible, false);
+  assert.equal(blocked.blockedReason, 'capability-unavailable');
 });

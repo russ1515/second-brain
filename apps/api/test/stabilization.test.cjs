@@ -298,7 +298,7 @@ test('LLM: exhausted quota opens the circuit without retry multiplication', asyn
   assert.equal(calls, 1);
 });
 
-test('voice: synthesis is deduplicated in flight and cached after success', async () => {
+test('voice: synthesis is deduplicated only in flight and later calls are re-metered', async () => {
   let calls = 0;
   let release;
   const value = { audioBase64: 'UklGRg==', mimeType: 'audio/wav' };
@@ -315,8 +315,33 @@ test('voice: synthesis is deduplicated in flight and cached after success', asyn
   assert.strictEqual(first, second);
   release(value);
   assert.deepEqual(await first, value);
-  assert.deepEqual(await service.synthesize('Bonjour', { language: 'fr' }), value);
-  assert.equal(calls, 1);
+  const replay = service.synthesize('Bonjour', { language: 'fr' });
+  release(value);
+  assert.deepEqual(await replay, value);
+  assert.equal(calls, 2);
+});
+
+test('voice: in-flight synthesis is isolated by authenticated account and feature', async () => {
+  let calls = 0;
+  let current = { userId: 'learner-a', requestId: 'req-a' };
+  const resolvers = [];
+  const value = { audioBase64: 'UklGRg==', mimeType: 'audio/wav' };
+  const service = new SpeechService({
+    name: 'controlled-speech',
+    transcribe: async () => ({ text: '' }),
+    synthesize: async () => {
+      calls += 1;
+      return new Promise((resolve) => resolvers.push(resolve));
+    },
+  }, undefined, { current: () => current });
+
+  const first = service.synthesize('Bonjour', { language: 'fr' }, 'LESSON_VOICE');
+  current = { userId: 'learner-b', requestId: 'req-b' };
+  const second = service.synthesize('Bonjour', { language: 'fr' }, 'LESSON_VOICE');
+  assert.equal(calls, 2);
+  resolvers.forEach((resolve) => resolve(value));
+  assert.deepEqual(await first, value);
+  assert.deepEqual(await second, value);
 });
 
 test('billing: incomplete mobile-store verifiers fail closed', async () => {

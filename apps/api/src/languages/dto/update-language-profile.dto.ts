@@ -1,9 +1,11 @@
 import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import {
   CEFR_LEVELS,
+  LANGUAGE_TEACHING_SOURCES,
   LANGUAGE_MODES,
   type CefrLevel,
   type LanguageMode,
+  type LanguageTeachingSource,
   type UpdateLanguageProfileRequest,
 } from '@second-brain/shared';
 
@@ -12,6 +14,10 @@ export class UpdateLanguageProfileDto implements UpdateLanguageProfileRequest {
   @IsString()
   @MaxLength(60)
   nativeLanguage?: string;
+
+  @IsOptional()
+  @IsIn(LANGUAGE_TEACHING_SOURCES as readonly string[])
+  teachingLanguageSource?: LanguageTeachingSource;
 
   @IsOptional()
   @IsIn(LANGUAGE_MODES as readonly string[])

@@ -18,6 +18,7 @@ import { SpeechService } from '../speech/speech.service';
 import { LessonService } from '../lessons/lesson.service';
 import { TutorService } from './tutor.service';
 import type { UploadedFileLike } from '../documents/extraction/text-extraction.service';
+import { resolveLanguageTeachingRoles } from '../common/language-teaching';
 
 export interface VoiceTurnOptions {
   /** Voice the tutor's reply back as audio (requires a TTS-capable provider). */
@@ -105,7 +106,10 @@ export class VoiceService {
         : await this.buildWrittenPackage(userId, sessionId);
 
     const audioReply = options.speak
-      ? await this.synthesize(message.content, options.language)
+      ? await this.synthesize(
+          message.content,
+          await this.replyLanguageHint(userId, sessionId, options.language),
+        )
       : undefined;
 
     return {
@@ -185,5 +189,23 @@ export class VoiceService {
     if (!session || session.userId !== userId) {
       throw new NotFoundException('Tutor session not found.');
     }
+  }
+
+  private async replyLanguageHint(
+    userId: string,
+    sessionId: string,
+    fallback?: string,
+  ): Promise<string | undefined> {
+    const session = await this.prisma.tutorSession.findFirst({
+      where: { id: sessionId, userId },
+      select: { languageProfile: true },
+    });
+    if (!session?.languageProfile) return fallback;
+    const roles = await resolveLanguageTeachingRoles(
+      this.prisma,
+      userId,
+      session.languageProfile,
+    );
+    return roles.supportLanguageCode;
   }
 }

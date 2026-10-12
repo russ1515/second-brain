@@ -6,9 +6,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { ForbiddenException } = require('@nestjs/common');
 const { OpenAISpeechProvider } = require('../dist/speech/providers/openai-speech.provider.js');
 const { SpeechService } = require('../dist/speech/speech.service.js');
 const { languageSystemPrompt } = require('../dist/languages/language-modes.js');
+const {
+  resolveLanguageTeachingRoles,
+} = require('../dist/common/language-teaching.js');
+const {
+  SUPPORTED_LANGUAGE_CODES,
+  SUPPORTED_LANGUAGES,
+} = require('@second-brain/shared');
 
 const root = path.resolve(__dirname, '../../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
@@ -54,6 +62,8 @@ test('OpenAI speech maps STT/TTS through the existing provider contract without 
     assert.equal(body.model, 'gpt-tts-test');
     assert.equal(body.voice, 'voice-test');
     assert.equal(body.response_format, 'wav');
+    assert.match(body.instructions, /French as the primary narration language/);
+    assert.match(body.instructions, /Do not translate, omit or add content/);
     assert.equal(body.input, 'Bonjour');
     return {
       ...response({}, { 'x-request-id': 'req-tts' }),
@@ -66,7 +76,7 @@ test('OpenAI speech maps STT/TTS through the existing provider contract without 
   assert.equal(transcript.language, 'zh');
   assert.equal(transcript.audioSeconds, 3);
   assert.equal(transcript.providerRequestId, 'req-stt');
-  const speech = await provider.synthesize('Bonjour');
+  const speech = await provider.synthesize('Bonjour', { language: 'fr' });
   assert.equal(speech.mimeType, 'audio/wav');
   assert.equal(speech.providerRequestId, 'req-tts');
   assert.equal(calls.length, 2);
@@ -233,6 +243,90 @@ test('simulated acoustic provider is metered once and yields only normalized raw
   assert.doesNotMatch(JSON.stringify(envelope.metadata), /private scripted/i);
 });
 
+test('acoustic quota rejection keeps the authoritative 403 and never calls the provider', async () => {
+  let providerCalls = 0;
+  const quotaError = new ForbiddenException({
+    code: 'QUOTA_EXHAUSTED',
+    message: 'Voice quota is exhausted.',
+  });
+  const service = new SpeechService({
+    name: 'openai',
+    transcribe: async () => ({
+      text: 'hello', language: 'en', provider: 'openai', model: 'stt-test',
+    }),
+  }, {
+    executeWithAttempts: async () => {
+      throw quotaError;
+    },
+  }, undefined, {
+    name: 'azure-speech-simulated',
+    model: 'pronunciation-assessment-simulated',
+    adapterVersion: 'azure-pa-adapter-v1',
+    supports: () => true,
+    assess: async () => {
+      providerCalls += 1;
+      throw new Error('must not be reached');
+    },
+  });
+
+  await assert.rejects(
+    service.assessPronunciation(oneSecondWav(), {
+      mimeType: 'audio/wav',
+      locale: 'en-US',
+      mode: 'spontaneous',
+      rubricVersion: 'language-mastery-v1',
+      requiredDimensions: ['accuracy', 'fluency'],
+    }),
+    (error) => error === quotaError
+      && error.getStatus() === 403
+      && error.getResponse().code === 'QUOTA_EXHAUSTED',
+  );
+  assert.equal(providerCalls, 0);
+});
+
+test('compressed acoustic input reserves the conservative server cap until provider measurement', async () => {
+  let envelope;
+  const service = new SpeechService({
+    name: 'openai',
+    transcribe: async () => ({
+      text: 'hello', language: 'en', provider: 'openai', model: 'stt-test',
+    }),
+  }, {
+    executeWithAttempts: async (input, operation) => {
+      envelope = input;
+      return operation({ attempt: (call) => call() });
+    },
+  }, undefined, {
+    name: 'azure-speech-simulated',
+    model: 'pronunciation-assessment-simulated',
+    adapterVersion: 'azure-pa-adapter-v1',
+    supports: () => true,
+    assess: async () => ({
+      providerLocale: 'en-US',
+      providerRequestId: 'req-compressed',
+      audioSeconds: 2,
+      outcome: 'evaluated',
+      dimensions: [
+        { kind: 'accuracy', rawValue: 95, range: { min: 0, max: 100 } },
+        { kind: 'fluency', rawValue: 95, range: { min: 0, max: 100 } },
+      ],
+      reason: null,
+    }),
+  });
+
+  const result = await service.assessPronunciation(Buffer.from('compressed-webm'), {
+    mimeType: 'audio/webm',
+    locale: 'en-US',
+    mode: 'spontaneous',
+    rubricVersion: 'language-mastery-v1',
+    requiredDimensions: ['accuracy', 'fluency'],
+  });
+
+  assert.equal(envelope.units, 600);
+  assert.equal(envelope.metadata.durationMeasurement, 'NOT_INSTRUMENTED');
+  assert.equal(envelope.quotaUnits(result), 2);
+});
+
 test('malformed or incomplete acoustic responses fail closed without a score', async () => {
   const baseSpeech = {
     name: 'openai',
@@ -341,15 +435,41 @@ test('language Professor keeps UI, native, support and target roles separate and
   assert.match(prompt, /target.*line first/i);
   assert.match(prompt, /next line/i);
   assert.match(prompt, /Never produce arbitrary mixed-language sentences/);
+  assert.match(prompt, /every introduction, explanation, instruction, rule, correction, feedback and summary in fr/i);
+  assert.match(prompt, /autonomous assessment[\s\S]*reveal no translation, hint, model answer or correction/i);
 });
 
-test('Tutor context uses the UI locale as support before profile fallbacks without replacing the target', () => {
-  const source = read('apps/api/src/tutor/tutor.service.ts');
-  const ui = source.indexOf('passport?.interfaceLanguage', source.indexOf('supportLanguage:'));
-  const explanation = source.indexOf('passport?.explanationLanguage', ui);
-  const teaching = source.indexOf('passport?.teachingLanguage', explanation);
-  assert.ok(ui >= 0 && explanation > ui && teaching > explanation);
-  assert.match(source, /targetLanguage:[\s\S]*profile\.normalizedLanguage[\s\S]*passport\?\.targetLanguage/);
+test('per-path teaching language resolves from native or interface without replacing any target', async () => {
+  const prisma = {
+    profile: { findUnique: async () => ({ preferredLanguage: 'fr' }) },
+  };
+  const base = {
+    language: 'English', normalizedLanguage: 'en', nativeLanguage: 'Lingala',
+  };
+  const fromInterface = await resolveLanguageTeachingRoles(prisma, 'u1', {
+    ...base, teachingLanguageSource: 'interface',
+  });
+  assert.equal(fromInterface.supportLanguage, 'French');
+  assert.equal(fromInterface.supportLanguageCode, 'fr');
+  assert.equal(fromInterface.targetLanguage, 'English');
+
+  const fromNative = await resolveLanguageTeachingRoles(prisma, 'u1', {
+    ...base, teachingLanguageSource: 'native',
+  });
+  assert.equal(fromNative.supportLanguage, 'Lingala');
+  assert.equal(fromNative.supportLanguageCode, 'ln');
+  assert.equal(fromNative.targetLanguage, 'English');
+
+  for (const targetCode of SUPPORTED_LANGUAGE_CODES) {
+    const target = await resolveLanguageTeachingRoles(prisma, 'u1', {
+      ...base,
+      language: SUPPORTED_LANGUAGES[targetCode].englishName,
+      normalizedLanguage: targetCode,
+      teachingLanguageSource: 'interface',
+    });
+    assert.equal(target.supportLanguage, 'French');
+    assert.equal(target.targetLanguage, SUPPORTED_LANGUAGES[targetCode].englishName);
+  }
 });
 
 test('Tutor voice UI preserves one session, provides playback controls and oral exam safeguards', () => {

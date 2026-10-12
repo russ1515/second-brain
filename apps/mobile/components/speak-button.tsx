@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import {
   pauseSpeaking,
@@ -10,6 +10,8 @@ import {
 import { useTokens } from '../lib/design/theme';
 import type { ColorScale } from '../lib/design/tokens';
 import { useI18n } from '../lib/i18n';
+import { FIRST_AUDIO_TARGET_MS } from '../lib/speech-playback';
+import { createClientRequestId } from '../lib/request-id';
 import { IconButton } from './ds/core';
 
 /**
@@ -23,10 +25,13 @@ export function SpeakButton({
   text,
   language,
   label,
+  onFirstAudio,
 }: {
   text: string;
   language?: string;
   label?: string;
+  /** Optional instrumentation hook; reports real playback start, not API completion. */
+  onFirstAudio?: (latencyMs: number) => void;
 }) {
   const { colors: c } = useTokens();
   const { t } = useI18n();
@@ -34,23 +39,72 @@ export function SpeakButton({
   const idleLabel = label ?? t('lesson.readAloud');
   const [state, setState] = useState<'idle' | 'loading' | 'playing' | 'paused'>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [slowStart, setSlowStart] = useState(false);
+  const attemptRef = useRef(0);
+  const controllerRef = useRef<AbortController | null>(null);
+  const requestIdRef = useRef<string | null>(null);
+  const slowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearSlowTimer = () => {
+    if (slowTimerRef.current) clearTimeout(slowTimerRef.current);
+    slowTimerRef.current = null;
+  };
 
   // Leaving the screen must not leave a voice talking to an empty room.
-  useEffect(() => () => stopSpeaking(), []);
+  useEffect(() => () => {
+    attemptRef.current += 1;
+    controllerRef.current?.abort();
+    clearSlowTimer();
+    stopSpeaking();
+  }, []);
 
   if (!PLAYBACK_SUPPORTED) return null;
 
   const start = async () => {
-    if (state !== 'idle') return;
+    const attempt = attemptRef.current + 1;
+    attemptRef.current = attempt;
+    const requestId = createClientRequestId('tts');
+    requestIdRef.current = requestId;
+    controllerRef.current?.abort();
+    stopSpeaking();
+    clearSlowTimer();
+    const controller = new AbortController();
+    controllerRef.current = controller;
     setError(null);
+    setSlowStart(false);
     setState('loading');
+    slowTimerRef.current = setTimeout(() => {
+      if (attemptRef.current === attempt) setSlowStart(true);
+    }, FIRST_AUDIO_TARGET_MS);
     try {
-      setState('playing');
-      await speak(text, language); // resolves when playback actually ends
+      await speak(text, language, {
+        signal: controller.signal,
+        requestId,
+        onFirstAudio: (latencyMs) => {
+          if (attemptRef.current !== attempt || controller.signal.aborted) return;
+          clearSlowTimer();
+          setSlowStart(false);
+          setState('playing');
+          onFirstAudio?.(latencyMs);
+        },
+      }); // resolves when playback actually ends
     } catch (e) {
-      setError((e as Error).message);
+      if (attemptRef.current === attempt && !controller.signal.aborted) {
+        const message = (e as Error).message;
+        setError(
+          message === 'TTS_TEXT_REQUIRED' || message === 'TTS_TEXT_TOO_LONG'
+            ? t('error.validation')
+            : message,
+        );
+      }
     } finally {
-      setState('idle');
+      if (attemptRef.current === attempt) {
+        clearSlowTimer();
+        controllerRef.current = null;
+        requestIdRef.current = null;
+        setSlowStart(false);
+        setState('idle');
+      }
     }
   };
 
@@ -69,7 +123,13 @@ export function SpeakButton({
   };
 
   const stop = () => {
+    attemptRef.current += 1;
+    controllerRef.current?.abort();
+    controllerRef.current = null;
+    requestIdRef.current = null;
+    clearSlowTimer();
     stopSpeaking();
+    setSlowStart(false);
     setState('idle');
   };
 
@@ -78,11 +138,19 @@ export function SpeakButton({
       <View style={styles.controls}>
         {state === 'idle' || state === 'loading' ? (
           state === 'loading' ? (
-            <View accessibilityLabel={idleLabel} accessibilityRole="progressbar" style={styles.loading}>
-              <ActivityIndicator size="small" color={c.warning} />
-            </View>
+            <>
+              <View accessibilityLabel={t('state.loading')} accessibilityRole="progressbar" style={styles.loading}>
+                <ActivityIndicator size="small" color={c.warning} />
+                {slowStart ? <Text style={styles.status}>{t('state.loading')}</Text> : null}
+              </View>
+              <IconButton icon="⏹" label={t('learn.oral.stop')} onPress={stop} />
+            </>
           ) : (
-            <IconButton icon="🔊" label={idleLabel} onPress={() => void start()} />
+            <IconButton
+              icon={error ? '↻' : '🔊'}
+              label={error ? t('app.tryAgain') : idleLabel}
+              onPress={() => void start()}
+            />
           )
         ) : (
           <>
@@ -102,6 +170,13 @@ export function SpeakButton({
 
 const makeStyles = (c: ColorScale) => StyleSheet.create({
   controls: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
-  loading: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  loading: {
+    minHeight: 44,
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  status: { color: c.textMuted, fontSize: 12 },
   error: { color: c.error, fontSize: 12, marginTop: 6 },
 });

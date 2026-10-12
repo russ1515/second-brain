@@ -1,7 +1,11 @@
 import { Blob } from 'node:buffer';
 import { FormData } from 'undici';
 import { Logger } from '@nestjs/common';
-import { speechLanguageTag } from '@second-brain/shared';
+import {
+  SUPPORTED_LANGUAGES,
+  speechLanguageTag,
+  toSupportedLanguage,
+} from '@second-brain/shared';
 import type { SynthesisResult, TranscriptionResult } from '@second-brain/shared';
 import type {
   SpeechProvider,
@@ -92,10 +96,17 @@ export class OpenAISpeechProvider implements SpeechProvider {
 
   async synthesize(
     text: string,
-    _options?: SynthesizeOptions,
+    options?: SynthesizeOptions,
   ): Promise<SynthesisResult> {
     this.assertConfigured(this.ttsModel, 'OPENAI_SPEECH_TTS_MODEL_MISSING');
     if (!this.voice.trim()) throw new OpenAISpeechError('OPENAI_SPEECH_VOICE_MISSING', 400);
+    const languageCode = toSupportedLanguage(options?.language);
+    const languageInstruction = languageCode
+      ? `Use ${SUPPORTED_LANGUAGES[languageCode].englishName} as the primary narration language. ` +
+        'Preserve and pronounce passages written in other languages as written. ' +
+        'Do not translate, omit or add content.'
+      : undefined;
+    const supportsInstructions = !/^tts-1(?:-hd)?$/i.test(this.ttsModel.trim());
     const response = await this.request(
       'https://api.openai.com/v1/audio/speech',
       JSON.stringify({
@@ -103,6 +114,9 @@ export class OpenAISpeechProvider implements SpeechProvider {
         voice: this.voice,
         input: text,
         response_format: 'wav',
+        ...(languageInstruction && supportsInstructions
+          ? { instructions: languageInstruction }
+          : {}),
       }),
       { 'Content-Type': 'application/json' },
     );

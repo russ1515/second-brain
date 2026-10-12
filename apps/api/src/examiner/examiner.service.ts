@@ -86,6 +86,29 @@ export interface InternalAssessmentCreateOptions {
   masteryCreationKey?: string;
 }
 
+export interface AcousticLanguageMasteryAssessmentInput {
+  attemptId: string;
+  profileId: string;
+  courseSessionId: string;
+  unitId: string;
+  lessonId: string;
+  contentVersion: number;
+  policyVersion: string;
+  criterionIds: string[];
+  topic: string;
+  difficulty: AssessmentDifficulty;
+}
+
+export interface AcousticLanguageMasterySubmissionInput {
+  attemptId: string;
+  /** Hash of the normalized, provider-safe acoustic envelopes. Raw audio,
+   * reference text and provider response bodies are deliberately excluded. */
+  evidenceHash: string;
+  results: GradedAnswer[];
+  summary: string;
+  advice: string;
+}
+
 const EXAMINER_PERSONA =
   'You are an experienced, fair examiner AND teacher. You write clear, valid ' +
   'assessments and mark them honestly. Your feedback is never a bare grade: ' +
@@ -758,6 +781,212 @@ export class ExaminerService {
       });
       throw error;
     }
+  }
+
+  /**
+   * Materialise the canonical Assessment side of a native-acoustic mastery
+   * attempt without invoking the LLM examiner. The acoustic provider has
+   * already measured the audio; this record supplies the same immutable,
+   * owner-scoped provenance used by every other mastery submission.
+   */
+  async createAcousticLanguageMasteryAssessment(
+    userId: string,
+    input: AcousticLanguageMasteryAssessmentInput,
+  ): Promise<AssessmentView> {
+    const metadata = this.validateLanguageMasteryMetadata({
+      policyVersion: input.policyVersion,
+      profileId: input.profileId,
+      courseSessionId: input.courseSessionId,
+      unitId: input.unitId,
+      lessonId: input.lessonId,
+      attemptId: input.attemptId,
+      criterionIds: input.criterionIds,
+    });
+    if (!Number.isInteger(input.contentVersion) || input.contentVersion < 1) {
+      throw new BadRequestException('A positive acoustic assessment content version is required.');
+    }
+    if (new Set(metadata.criterionIds).size !== metadata.criterionIds.length) {
+      throw new BadRequestException('Acoustic mastery criterion ids must be unique.');
+    }
+    const creationHash = createHash('sha256').update(JSON.stringify({
+      userId,
+      ...metadata,
+      contentVersion: input.contentVersion,
+      topic: input.topic.trim(),
+      difficulty: input.difficulty,
+      modality: 'audio-native-pronunciation-assessment',
+    })).digest('hex');
+
+    const assessment = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const existing = await tx.assessment.findFirst({
+        where: { userId, masteryCreationKey: input.attemptId },
+      });
+      if (existing) {
+        if (
+          existing.masteryCreationHash !== creationHash
+          || existing.lessonId !== metadata.lessonId
+          || existing.contentVersion !== input.contentVersion
+        ) {
+          throw new ConflictException(
+            'Acoustic mastery assessment key was already used for different immutable input.',
+          );
+        }
+        return existing;
+      }
+
+      const teacherPolicy = resolveTeacherPolicy(null, {
+        mode: 'oral_exam',
+        intent: 'assessment',
+        difficulty: input.difficulty,
+        assessment: true,
+      });
+      const createdAt = new Date().toISOString();
+      const questions: StoredQuestion[] = metadata.criterionIds.map((criterionId, index) => ({
+        id: `acoustic-${index + 1}`,
+        prompt: 'Provide the required native-audio pronunciation evidence.',
+        format: 'open',
+        points: 1,
+        answerKey: 'Server-verified native acoustic evidence is required.',
+        rubric: criterionId,
+      }));
+      return tx.assessment.create({
+        data: {
+          userId,
+          type: 'oral',
+          topic: input.topic.trim().slice(0, 500),
+          title: this.titleFor('oral', input.topic.trim()),
+          level: input.difficulty,
+          lessonId: metadata.lessonId,
+          contentVersion: input.contentVersion,
+          masteryCreationKey: input.attemptId,
+          masteryCreationHash: creationHash,
+          masteryGenerationStatus: 'ready',
+          questions: {
+            version: 2,
+            teacherPolicy,
+            questions,
+            languageMastery: {
+              ...metadata,
+              helpUsed: false,
+              answerLeak: false,
+              sealedAt: createdAt,
+              createdAt,
+            },
+          } as unknown as Prisma.InputJsonValue,
+        },
+      });
+    });
+    return this.toView(assessment, null);
+  }
+
+  /** Persist normalized acoustic evidence as the canonical graded submission.
+   * The marker answers contain no transcript or audio; the detailed result is
+   * limited to provider-independent, validated dimensions prepared by the
+   * language domain. */
+  async recordAcousticLanguageMasterySubmission(
+    userId: string,
+    assessmentId: string,
+    input: AcousticLanguageMasterySubmissionInput,
+  ): Promise<AssessmentSubmissionView> {
+    const assessment = await this.requireOwned(userId, assessmentId);
+    const payload = this.readPayload(assessment.questions);
+    if (
+      !payload.languageMastery
+      || payload.languageMastery.attemptId !== input.attemptId
+      || payload.questions.length === 0
+      || input.results.length !== payload.questions.length
+      || input.results.some((result, index) => (
+        result.questionId !== payload.questions[index]?.id
+        || !Number.isFinite(result.awarded)
+        || !Number.isFinite(result.max)
+        || result.max <= 0
+        || result.awarded < 0
+        || result.awarded > result.max
+      ))
+    ) {
+      throw new BadRequestException('Normalized acoustic mastery evidence is invalid.');
+    }
+    if (!/^[a-f0-9]{64}$/.test(input.evidenceHash)) {
+      throw new BadRequestException('Acoustic evidence hash is invalid.');
+    }
+    const awarded = input.results.reduce((sum, item) => sum + item.awarded, 0);
+    const maximum = input.results.reduce((sum, item) => sum + item.max, 0);
+    const score = (awarded / maximum) * 100;
+    const submissionKey = `language-mastery:${input.attemptId}`;
+    const submissionHash = createHash('sha256').update(JSON.stringify({
+      userId,
+      assessmentId,
+      attemptId: input.attemptId,
+      evidenceHash: input.evidenceHash,
+      results: input.results,
+    })).digest('hex');
+
+    const submission = await this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const existing = await tx.assessmentSubmission.findFirst({
+        where: { userId, masterySubmissionKey: submissionKey },
+      });
+      if (existing) {
+        if (
+          existing.assessmentId !== assessmentId
+          || existing.masterySubmissionHash !== submissionHash
+        ) {
+          throw new ConflictException(
+            'Acoustic mastery submission key was already used for different evidence.',
+          );
+        }
+        return existing;
+      }
+      return tx.assessmentSubmission.create({
+        data: {
+          assessmentId,
+          userId,
+          answers: payload.questions.map(() => '[audio-native-evidence]') as unknown as Prisma.InputJsonValue,
+          score,
+          results: input.results as unknown as Prisma.InputJsonValue,
+          summary: input.summary.slice(0, 2_000),
+          advice: input.advice.slice(0, 2_000),
+          masterySubmissionKey: submissionKey,
+          masterySubmissionHash: submissionHash,
+          masteryGenerationStatus: 'ready',
+        },
+      });
+    });
+    return this.toSubmissionView(submission);
+  }
+
+  /** Recover the canonical submission after an interruption between its
+   * durable insert and the mastery journal append. This lookup never invokes a
+   * provider and is deliberately keyed by the owner-scoped attempt identity. */
+  async findAcousticLanguageMasterySubmission(
+    userId: string,
+    attemptId: string,
+  ): Promise<AssessmentSubmissionView | null> {
+    const normalizedAttemptId = attemptId.trim();
+    if (!normalizedAttemptId || normalizedAttemptId.length > 240) {
+      throw new BadRequestException('A valid acoustic mastery attempt id is required.');
+    }
+    const assessment = await this.prisma.assessment.findFirst({
+      where: {
+        userId,
+        masteryCreationKey: normalizedAttemptId,
+        masteryGenerationStatus: 'ready',
+      },
+      select: { id: true },
+    });
+    if (!assessment) return null;
+    const submission = await this.prisma.assessmentSubmission.findFirst({
+      where: {
+        userId,
+        assessmentId: assessment.id,
+        masterySubmissionKey: `language-mastery:${normalizedAttemptId}`,
+        OR: [{ masteryGenerationStatus: null }, { masteryGenerationStatus: 'ready' }],
+      },
+    });
+    return submission ? this.toSubmissionView(submission) : null;
   }
 
   private async claimMasterySubmission(

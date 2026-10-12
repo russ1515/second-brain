@@ -24,6 +24,15 @@ import {
   saveCachedAuthUser,
   saveSession,
 } from './storage';
+import { clearSpeechCache } from './speech-api';
+import { stopSpeaking } from './speak';
+
+function clearAccountSpeech(): void {
+  // Account boundaries invalidate both metered audio data and anything that
+  // could still become audible after an asynchronous native setup step.
+  stopSpeaking();
+  clearSpeechCache();
+}
 
 interface AuthState {
   user: AuthUser | null;
@@ -133,6 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // 401 once behind a refresh, so reaching here with 401 means the
         // session really is gone.
         if (e instanceof ApiError && e.status === 401) {
+          clearAccountSpeech();
           await clearSession();
         } else if (!cancelled) {
           // Session kept, API unreachable — say so instead of pretending they
@@ -151,6 +161,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const accept = useCallback(async (res: AuthResponse) => {
     localeWriteSequence.current += 1;
+    clearAccountSpeech();
     await saveSession({
       accessToken: res.tokens.accessToken,
       refreshToken: res.tokens.refreshToken,
@@ -265,6 +276,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: { refreshToken: session.refreshToken },
       }).catch(() => undefined); // logging out locally must always succeed
     }
+    clearAccountSpeech();
     await clearSession();
     setUser(null);
     setOffline(false);

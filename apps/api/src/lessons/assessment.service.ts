@@ -24,6 +24,7 @@ import { LlmService } from '../llm/llm.service';
 import { RootCauseService } from '../concepts/root-cause.service';
 import { localeDirective, resolveLocale } from '../common/learning-locale';
 import { ExperienceSessionService } from '../experience-sessions/experience-session.service';
+import { resolveLanguageTeachingRoles } from '../common/language-teaching';
 
 const MAX_ANSWER_CHARS = 4000;
 
@@ -64,6 +65,7 @@ export interface MarkContext {
   topic: string;
   language: string | null;
   conceptId: string | null;
+  languageProfileId?: string | null;
 }
 
 /**
@@ -103,6 +105,7 @@ export class AssessmentService {
       topic: lesson.topic,
       language: lesson.language,
       conceptId: lesson.conceptId,
+      languageProfileId: lesson.languageProfileId,
     };
     const teacherPolicy = await this.teacherPolicyForLesson(userId, lesson);
     const verdict = await this.mark(userId, ctx, exercise, answer, teacherPolicy);
@@ -279,9 +282,7 @@ export class AssessmentService {
     answer: string,
     policy: TeacherPolicySnapshot,
   ): Promise<RawVerdict> {
-    const language = ctx.language
-      ? ` This is a ${ctx.language} language exercise; mark the ${ctx.language} too.`
-      : localeDirective(await resolveLocale(this.prisma, userId));
+    const language = await this.markingLanguageDirective(userId, ctx);
     let text: string;
     try {
       const result = await this.llm.generate(
@@ -310,6 +311,31 @@ export class AssessmentService {
       );
     }
     return this.parse(text);
+  }
+
+  private async markingLanguageDirective(
+    userId: string,
+    ctx: MarkContext,
+  ): Promise<string> {
+    if (ctx.languageProfileId) {
+      const profile = await this.prisma.languageProfile.findFirst({
+        where: { id: ctx.languageProfileId, userId },
+      });
+      if (profile) {
+        const roles = await resolveLanguageTeachingRoles(this.prisma, userId, profile);
+        return (
+          ` This is a ${roles.targetLanguage} language exercise. Assess the learner's ` +
+          `${roles.targetLanguage} production against the unchanged rubric. Write every ` +
+          `explanation, correction rationale and feedback field in ${roles.supportLanguage}; ` +
+          `keep corrected examples and target expressions in ${roles.targetLanguage}, with ` +
+          `their immediate ${roles.supportLanguage} correspondence. The assessment has ` +
+          `already been submitted, so correction may now be shown.`
+        );
+      }
+    }
+    return ctx.language
+      ? ` This is a ${ctx.language} language exercise; mark the ${ctx.language} too.`
+      : localeDirective(await resolveLocale(this.prisma, userId));
   }
 
   /**

@@ -115,7 +115,7 @@ export class PronunciationService {
       goal: profile.goal,
       cefrLevel: profile.cefrLevel,
     });
-    const nativeLang = profile.nativeLanguage || 'English';
+    const nativeLang = promptRoles.supportLanguage;
     const tried = context?.trim()
       ? `The learner was trying to say/talk about: "${context.trim()}". `
       : '';
