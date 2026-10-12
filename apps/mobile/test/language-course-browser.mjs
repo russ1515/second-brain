@@ -436,7 +436,7 @@ try {
       if (createdExperienceSessionId) {
         const resumable = await requireApi(
           cleanupPage,
-          '/api/experience-sessions/resumable?limit=100',
+          '/api/experience-sessions/resumable?limit=50',
         );
         assert.ok(Array.isArray(resumable?.items), 'RESUMABLE_SESSION_PAGE');
         assert.equal(
