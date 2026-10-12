@@ -86,6 +86,19 @@ export class OpenAIProvider implements LLMProvider {
         ? { max_output_tokens: options.maxOutputTokens }
         : {}),
       ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+      ...(options?.jsonSchema ? {
+        text: {
+          format: {
+            type: 'json_schema',
+            name: options.jsonSchema.name,
+            ...(options.jsonSchema.description
+              ? { description: options.jsonSchema.description }
+              : {}),
+            schema: options.jsonSchema.schema,
+            strict: options.jsonSchema.strict ?? true,
+          },
+        },
+      } : {}),
     };
 
     let response: OpenAIFetchResponse;
@@ -114,6 +127,13 @@ export class OpenAIProvider implements LLMProvider {
     }
     const parsed = asRecord(payload);
     if (!parsed) throw new OpenAIProviderError('OPENAI_RESPONSE_INVALID', 502);
+    const responseStatus = stringValue(parsed.status);
+    if (responseStatus && responseStatus !== 'completed') {
+      throw new OpenAIProviderError(
+        `OPENAI_RESPONSE_${responseStatus.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`,
+        502,
+      );
+    }
     const text = responseText(parsed);
     if (!text) throw new OpenAIProviderError('OPENAI_RESPONSE_TEXT_MISSING', 502);
 

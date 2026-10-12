@@ -21,6 +21,15 @@ export interface LLMGenerateOptions {
   maxOutputTokens?: number;
   /** Stable internal operation name used to apply an explicit request budget. */
   operation?: string;
+  /** Optional provider-agnostic JSON Schema contract. Providers that support
+   *  strict structured output must enforce it; unsupported providers may
+   *  ignore it and callers still validate the returned value server-side. */
+  jsonSchema?: {
+    name: string;
+    description?: string;
+    schema: Record<string, unknown>;
+    strict?: boolean;
+  };
 }
 
 export interface LLMGenerateResult {

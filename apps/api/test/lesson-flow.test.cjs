@@ -230,6 +230,53 @@ test('language lesson parser enforces the server notion allow-list and full unit
       : exercise)), true, undefined, notions),
     /complete, usable lesson/i,
   );
+  assert.throws(
+    () => service.parseLesson(raw(exercises.map((exercise, index) => index === 0
+      ? { ...exercise, notionIds: ['notion-b'], criterionIds: ['criterion-a'] }
+      : exercise)), true, undefined, notions),
+    /complete, usable lesson/i,
+  );
+  assert.throws(
+    () => service.parseLesson(raw(exercises.map((exercise, index) => index === exercises.length - 1
+      ? { ...exercise, languageFormat: exercises[0].languageFormat }
+      : exercise)), true, undefined, notions),
+    /complete, usable lesson/i,
+  );
+
+  const strictOutput = exercises.map((exercise) => ({
+    ...exercise,
+    options: exercise.options ?? null,
+    tokens: exercise.tokens ?? null,
+    audioText: exercise.audioText ?? null,
+    dialogueTurns: exercise.dialogueTurns ?? null,
+  }));
+  assert.equal(
+    service.parseLesson(raw(strictOutput), true, undefined, notions).exercises.length,
+    sharedLanguageFormats().length,
+  );
+});
+
+test('language lesson generation uses a strict provider schema for the canonical formats and notions', () => {
+  const { service } = fixture();
+  const notions = [
+    { notionId: 'notion-a', criterionId: 'criterion-a' },
+    { notionId: 'notion-b', criterionId: 'criterion-b' },
+  ];
+  const format = service.languageLessonJsonSchema(notions);
+  const exercises = format.schema.properties.exercises;
+  const exercise = exercises.items;
+
+  assert.equal(format.strict, true);
+  assert.equal(exercises.minItems, sharedLanguageFormats().length);
+  assert.equal(exercises.maxItems, sharedLanguageFormats().length);
+  assert.deepEqual(exercise.properties.languageFormat.enum, sharedLanguageFormats());
+  assert.deepEqual(exercise.properties.notionIds.items.enum, ['notion-a', 'notion-b']);
+  assert.deepEqual(exercise.properties.criterionIds.items.enum, ['criterion-a', 'criterion-b']);
+  assert.equal(exercise.additionalProperties, false);
+  assert.throws(
+    () => service.languageLessonJsonSchema([]),
+    /requires server-authored notions/i,
+  );
 });
 
 function sharedLanguageFormats() {

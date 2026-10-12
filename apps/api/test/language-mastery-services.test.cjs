@@ -88,7 +88,15 @@ function lessonServiceWithLlm(text, observed) {
 
 test('language lesson generation enforces the exact ten official format identifiers', async () => {
   const observed = [];
-  const exercises = languageExercises();
+  const notions = [
+    { notionId: 'notion-a', criterionId: 'criterion-a' },
+    { notionId: 'notion-b', criterionId: 'criterion-b' },
+  ];
+  const exercises = languageExercises().map((exercise, index) => ({
+    ...exercise,
+    notionIds: [index === 0 ? 'notion-b' : 'notion-a'],
+    criterionIds: [index === 0 ? 'criterion-b' : 'criterion-a'],
+  }));
   const service = lessonServiceWithLlm(JSON.stringify(lessonDocument(exercises)), observed);
 
   const generated = await service.generateLesson(
@@ -97,6 +105,8 @@ test('language lesson generation enforces the exact ten official format identifi
     { language: 'Japanese', level: 'beginner' },
     'Trusted language directive.',
     true,
+    undefined,
+    notions,
   );
 
   assert.deepEqual(
@@ -106,6 +116,11 @@ test('language lesson generation enforces the exact ten official format identifi
   assert.equal(new Set(generated.exercises.map((exercise) => exercise.languageFormat)).size, 10);
   assert.equal(observed.length, 1);
   assert.equal(observed[0].options.operation, 'lesson');
+  assert.equal(observed[0].options.jsonSchema.strict, true);
+  assert.deepEqual(
+    observed[0].options.jsonSchema.schema.properties.exercises.items.properties.notionIds.items.enum,
+    ['notion-a', 'notion-b'],
+  );
   for (const format of LANGUAGE_TRAINING_FORMATS) {
     assert.match(observed[0].messages[0].content, new RegExp(format));
   }

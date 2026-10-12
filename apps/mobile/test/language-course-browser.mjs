@@ -57,7 +57,7 @@ let localeRestore = 'NOT_NEEDED';
 async function login(page, returnTo = '/languages') {
   await page.goto(
     `${baseUrl}/sign-in?mode=login&returnTo=${encodeURIComponent(returnTo)}`,
-    { waitUntil: 'networkidle' },
+    { waitUntil: 'domcontentloaded' },
   );
   await page.locator('input[autocomplete="email"]').fill(email);
   await page.locator('input[type="password"]').fill(password);
@@ -186,7 +186,12 @@ try {
     localeChanged = true;
   }
 
-  await primaryPage.goto(`${baseUrl}/languages`, { waitUntil: 'networkidle' });
+  const profilesLoadedPromise = primaryPage.waitForResponse((response) => (
+    response.request().method() === 'GET'
+    && new URL(response.url()).pathname === '/api/languages'
+  ), { timeout: 30_000 });
+  await primaryPage.goto(`${baseUrl}/languages`, { waitUntil: 'domcontentloaded' });
+  await profilesLoadedPromise;
   await primaryPage.getByText('Ta pratique des langues', { exact: true }).waitFor({ state: 'visible' });
   evidence.uiFrench = 'PASS';
 
@@ -338,7 +343,7 @@ try {
     fullPage: true,
   });
 
-  await primaryPage.goto(`${baseUrl}/languages`, { waitUntil: 'networkidle' });
+  await primaryPage.goto(`${baseUrl}/languages`, { waitUntil: 'domcontentloaded' });
   await primaryPage.getByTestId('language-course-entry').waitFor({ state: 'visible' });
   await primaryPage.getByTestId('language-course-open').click();
   await primaryPage.waitForURL(
@@ -396,7 +401,7 @@ try {
 
   await resumePage.goto(
     `${baseUrl}/brain?languageProfileId=${encodeURIComponent(createdProfileId)}`,
-    { waitUntil: 'networkidle' },
+    { waitUntil: 'domcontentloaded' },
   );
   await resumePage.getByTestId('brain-evidence-view').waitFor({ state: 'visible' });
   await resumePage.getByTestId('language-mastery-bulletin-A1').waitFor({ state: 'visible' });

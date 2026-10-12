@@ -15,6 +15,7 @@ import type {
   LessonFlowStepKey,
   LessonSummary,
   LessonView,
+  LLMGenerateOptions,
   KycTeacher,
   LanguageTrainingFormat,
 } from '@second-brain/shared';
@@ -709,6 +710,11 @@ export class LessonService {
     remediationBaselineExercises?: readonly LessonExercise[],
     languageNotions?: readonly { notionId: string; criterionId: string }[],
   ): Promise<RawLesson> {
+    if (languageMastery && !languageNotions?.length) {
+      throw new UnprocessableEntityException(
+        'A structured language lesson requires server-authored notions.',
+      );
+    }
     const level = dto.level ? ` Pitch it at a ${dto.level} level.` : '';
     const language = dto.language
       ? ` This is a ${dto.language} language lesson; teach ${dto.language}.`
@@ -737,7 +743,13 @@ export class LessonService {
               (context ? `\n\nGround it in my notes where relevant:\n${context}` : ''),
           },
         ],
-        { temperature: 0.4, operation: 'lesson' },
+        {
+          temperature: 0.4,
+          operation: 'lesson',
+          ...(languageMastery
+            ? { jsonSchema: this.languageLessonJsonSchema(languageNotions ?? []) }
+            : {}),
+        },
       );
       text = result.text;
     } catch (error) {
@@ -747,6 +759,95 @@ export class LessonService {
       );
     }
     return this.parseLesson(text, languageMastery, remediationBaselineExercises, languageNotions);
+  }
+
+  /** The provider guarantees the JSON envelope while the parser below remains
+   *  authoritative for semantic rules (format coverage, QCM correctness and
+   *  notion/criterion pairing). This prevents a valid provider response with
+   *  prose or missing fields from becoming an unusable 422 course shell. */
+  private languageLessonJsonSchema(
+    languageNotions: readonly { notionId: string; criterionId: string }[],
+  ): NonNullable<LLMGenerateOptions['jsonSchema']> {
+    if (languageNotions.length === 0) {
+      throw new UnprocessableEntityException(
+        'A structured language lesson requires server-authored notions.',
+      );
+    }
+    const notionIds = languageNotions.map((item) => item.notionId);
+    const criterionIds = languageNotions.map((item) => item.criterionId);
+    const nullableStringArray = (minimum = 1, maximum?: number) => ({
+      type: ['array', 'null'],
+      items: { type: 'string', minLength: 1 },
+      minItems: minimum,
+      ...(maximum === undefined ? {} : { maxItems: maximum }),
+    });
+    const stringArray = (minimum: number, maximum?: number) => ({
+      type: 'array',
+      items: { type: 'string', minLength: 1 },
+      minItems: minimum,
+      ...(maximum === undefined ? {} : { maxItems: maximum }),
+    });
+    return {
+      name: 'second_brain_language_lesson',
+      description: 'A concise structured language lesson with exactly one activity for each required training format.',
+      strict: true,
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'objective', 'intro', 'explanation', 'examples', 'commonMisconceptions',
+          'questions', 'exercises', 'homework', 'summary', 'keyPoints', 'revisionSheet',
+        ],
+        properties: {
+          objective: { type: 'string', minLength: 1 },
+          intro: { type: 'string', minLength: 1 },
+          explanation: { type: 'string', minLength: 1 },
+          examples: stringArray(1),
+          commonMisconceptions: stringArray(1),
+          questions: stringArray(3, 5),
+          exercises: {
+            type: 'array',
+            minItems: LANGUAGE_TRAINING_FORMATS.length,
+            maxItems: LANGUAGE_TRAINING_FORMATS.length,
+            description: `Exactly one exercise for each format: ${LANGUAGE_TRAINING_FORMATS.join(', ')}.`,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: [
+                'type', 'question', 'answer', 'options', 'languageFormat', 'tokens',
+                'audioText', 'dialogueTurns', 'notionIds', 'criterionIds',
+              ],
+              properties: {
+                type: { type: 'string', enum: ['qcm', 'open', 'exercise', 'case'] },
+                question: { type: 'string', minLength: 1 },
+                answer: { type: 'string', minLength: 1 },
+                options: nullableStringArray(3, 4),
+                languageFormat: { type: 'string', enum: [...LANGUAGE_TRAINING_FORMATS] },
+                tokens: nullableStringArray(2),
+                audioText: { type: ['string', 'null'] },
+                dialogueTurns: nullableStringArray(2, 3),
+                notionIds: {
+                  type: 'array',
+                  items: { type: 'string', enum: notionIds },
+                  minItems: 1,
+                  maxItems: Math.max(1, notionIds.length),
+                },
+                criterionIds: {
+                  type: 'array',
+                  items: { type: 'string', enum: criterionIds },
+                  minItems: 1,
+                  maxItems: Math.max(1, criterionIds.length),
+                },
+              },
+            },
+          },
+          homework: { type: 'string' },
+          summary: { type: 'string', minLength: 1 },
+          keyPoints: stringArray(3, 5),
+          revisionSheet: { type: 'string', minLength: 1 },
+        },
+      },
+    };
   }
 
   private parseLesson(

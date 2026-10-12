@@ -196,6 +196,65 @@ test('OpenAI Responses adapter sends normalized scan pages through the existing 
   });
 });
 
+test('OpenAI Responses adapter forwards a strict JSON Schema without changing provider selection', async () => {
+  const calls = [];
+  const provider = new OpenAIProvider('test-key', 'configured-test-model', async (_url, init) => {
+    calls.push(JSON.parse(init.body));
+    return jsonResponse({
+      id: 'structured-response-id',
+      model: 'configured-test-model',
+      output: [{
+        type: 'message', role: 'assistant',
+        content: [{ type: 'output_text', text: '{"result":"ok"}' }],
+      }],
+      usage: { input_tokens: 8, output_tokens: 4, total_tokens: 12 },
+    });
+  });
+  const schema = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['result'],
+    properties: { result: { type: 'string' } },
+  };
+
+  const result = await provider.generate([{ role: 'user', content: 'Return the result.' }], {
+    jsonSchema: {
+      name: 'controlled_result',
+      description: 'Controlled test shape.',
+      schema,
+      strict: true,
+    },
+  });
+
+  assert.equal(result.text, '{"result":"ok"}');
+  assert.deepEqual(calls[0].text, {
+    format: {
+      type: 'json_schema',
+      name: 'controlled_result',
+      description: 'Controlled test shape.',
+      schema,
+      strict: true,
+    },
+  });
+});
+
+test('OpenAI Responses adapter rejects an incomplete structured response before parsing text', async () => {
+  const provider = new OpenAIProvider('test-key', 'configured-test-model', async () => jsonResponse({
+    id: 'incomplete-response-id',
+    model: 'configured-test-model',
+    status: 'incomplete',
+    output: [{
+      type: 'message', role: 'assistant',
+      content: [{ type: 'output_text', text: '{"partial":true}' }],
+    }],
+  }));
+
+  await assert.rejects(
+    () => provider.generate([{ role: 'user', content: 'Return a structured result.' }]),
+    (error) => error.code === 'OPENAI_RESPONSE_INCOMPLETE' && error.status === 502,
+  );
+});
+
 test('OpenAI adapter refuses missing credentials and never exposes a provider error body', async () => {
   let missingKeyFetchCalled = false;
   const missingKey = new OpenAIProvider('', 'configured-test-model', async () => {
