@@ -3,7 +3,11 @@ import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
 import { tr } from './i18n';
 import type { SynthesisResult } from '@second-brain/shared';
-import { LIGHT_PREFETCH_MAX, narrationSegments } from './speech-playback';
+import {
+  createNarrationPauseGate,
+  playNarrationSegments,
+  type NarrationPauseGate,
+} from './speech-playback';
 
 export { synthesize };
 
@@ -16,7 +20,10 @@ type ActivePlayback = {
 };
 
 let current: ActivePlayback | null = null;
-let activeNarration: AbortController | null = null;
+let activeNarration: {
+  controller: AbortController;
+  pauseGate: NarrationPauseGate;
+} | null = null;
 
 export interface SpeakLifecycle {
   signal?: AbortSignal;
@@ -31,54 +38,41 @@ export async function speak(
   language?: string,
   lifecycle: SpeakLifecycle = {},
 ): Promise<void> {
-  const { lead, tail } = narrationSegments(text);
   stopSpeaking();
-  const narration = new AbortController();
+  const controller = new AbortController();
+  const pauseGate = createNarrationPauseGate();
+  const narration = { controller, pauseGate };
   activeNarration = narration;
-  const cancel = () => narration.abort();
+  const cancel = () => controller.abort();
   lifecycle.signal?.addEventListener('abort', cancel, { once: true });
-  if (lifecycle.signal?.aborted) narration.abort();
+  if (lifecycle.signal?.aborted) controller.abort();
 
   const startedAt = Date.now();
-  const leadRequestId = lifecycle.requestId ? `${lifecycle.requestId}:lead` : undefined;
-  const tailRequestId = lifecycle.requestId ? `${lifecycle.requestId}:tail` : undefined;
-  let tailRequest: Promise<{ value: SynthesisResult | null; error: unknown }> | null = null;
   let firstAudioReported = false;
   const onFirstAudio = () => {
-    if (firstAudioReported || narration.signal.aborted) return;
+    if (firstAudioReported || controller.signal.aborted) return;
     firstAudioReported = true;
     lifecycle.onFirstAudio?.(Date.now() - startedAt);
   };
 
   try {
-    const first = await synthesize(lead, language, narration.signal, leadRequestId);
-    if (narration.signal.aborted) return;
-    if (tail && tail.length <= LIGHT_PREFETCH_MAX) {
-      tailRequest = synthesize(tail, language, narration.signal, tailRequestId).then(
-        (value) => ({ value, error: null }),
-        (error) => ({ value: null, error }),
-      );
-    }
-    await playSynthesisSegment(first, onFirstAudio, narration.signal);
-    if (!tail || narration.signal.aborted) return;
-    const prepared = await (tailRequest ?? synthesize(
-      tail,
-      language,
-      narration.signal,
-      tailRequestId,
-    ).then(
-      (value) => ({ value, error: null }),
-      (error) => ({ value: null, error }),
-    ));
-    if (prepared.error) throw prepared.error;
-    const remainder = prepared.value;
-    if (!remainder) throw new Error(tr('voice.error.playback'));
-    if (narration.signal.aborted) return;
-    await playSynthesisSegment(remainder, undefined, narration.signal);
+    await playNarrationSegments(text, {
+      signal: controller.signal,
+      requestId: lifecycle.requestId,
+      onFirstAudio,
+      waitUntilPlayable: pauseGate.wait,
+      synthesize: (segment, signal, requestId) => synthesize(
+        segment,
+        language,
+        signal,
+        requestId,
+      ),
+      play: playSynthesisSegment,
+    });
   } catch (error) {
     // Account changes and explicit Stop are expected cancellation paths. Do
     // not surface their AbortError as a failure belonging to the next learner.
-    if (!narration.signal.aborted) throw error;
+    if (!controller.signal.aborted) throw error;
   } finally {
     lifecycle.signal?.removeEventListener('abort', cancel);
     if (activeNarration === narration) activeNarration = null;
@@ -88,10 +82,15 @@ export async function speak(
 /** Play audio returned by a voice turn without paying for a duplicate TTS. */
 export async function playSynthesis(result: SynthesisResult): Promise<void> {
   stopSpeaking();
-  const narration = new AbortController();
+  const controller = new AbortController();
+  const pauseGate = createNarrationPauseGate();
+  const narration = { controller, pauseGate };
   activeNarration = narration;
   try {
-    await playSynthesisSegment(result, undefined, narration.signal);
+    await pauseGate.wait(controller.signal);
+    if (!controller.signal.aborted) {
+      await playSynthesisSegment(result, undefined, controller.signal);
+    }
   } finally {
     if (activeNarration === narration) activeNarration = null;
   }
@@ -174,7 +173,7 @@ async function playSynthesisSegment(
 }
 
 export function stopSpeaking(): void {
-  activeNarration?.abort();
+  activeNarration?.controller.abort();
   activeNarration = null;
   stopPlayback();
 }
@@ -188,17 +187,45 @@ function stopPlayback(): void {
 }
 
 export async function pauseSpeaking(): Promise<boolean> {
-  if (!current) return false;
-  const status = await current.sound.getStatusAsync();
-  if (!status.isLoaded || !status.isPlaying) return false;
-  await current.sound.pauseAsync();
-  return true;
+  const narration = activeNarration;
+  if (!narration) return false;
+  const newlyPaused = narration.pauseGate.pause();
+  const active = current;
+  if (!active) return newlyPaused;
+  try {
+    const status = await active.sound.getStatusAsync();
+    if (activeNarration !== narration) return false;
+    // The lead may finish while the native status request is in flight. The
+    // narration gate already owns the learner's pause intent, so keep it and
+    // let the next segment wait rather than reporting a failed pause.
+    if (current !== active) return true;
+    if (status.isLoaded && status.isPlaying) await active.sound.pauseAsync();
+    return newlyPaused || (status.isLoaded && !status.isPlaying);
+  } catch (error) {
+    narration.pauseGate.resume();
+    throw error;
+  }
 }
 
 export async function resumeSpeaking(): Promise<boolean> {
-  if (!current) return false;
-  const status = await current.sound.getStatusAsync();
-  if (!status.isLoaded || status.isPlaying) return false;
-  await current.sound.playAsync();
-  return true;
+  const narration = activeNarration;
+  if (!narration) return false;
+  const active = current;
+  const narrationWasPaused = narration.pauseGate.paused;
+  if (!active) return narration.pauseGate.resume();
+  const gateResumed = narration.pauseGate.resume();
+  try {
+    const status = await active.sound.getStatusAsync();
+    if (activeNarration !== narration) return false;
+    if (current !== active) return gateResumed || narrationWasPaused;
+    if (!narrationWasPaused && (!status.isLoaded || status.isPlaying)) return false;
+    if (status.isLoaded && !status.isPlaying) {
+      await active.sound.playAsync();
+      return true;
+    }
+    return gateResumed;
+  } catch (error) {
+    if (activeNarration === narration) narration.pauseGate.pause();
+    throw error;
+  }
 }

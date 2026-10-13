@@ -23,8 +23,12 @@ import type {
 } from '@second-brain/shared';
 import {
   CEFR_LEVELS,
+  decideRlleLevelPillarGate,
+  getRlleLevelPillarPlans,
   KNOWN_LANGUAGE_LEVELS,
+  LANGUAGE_MASTERY_POLICY_VERSION,
   LEARNING_CATEGORIES,
+  RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
   sanitizeTeacherPreferences,
   toSupportedLanguage,
 } from '@second-brain/shared';
@@ -64,6 +68,14 @@ type LanguageRow = {
   _count: { lessons: number; tutorSessions: number };
   lessons: Array<{ createdAt: Date }>;
   tutorSessions: Array<{ updatedAt: Date }>;
+  masteryAttempts?: Array<{
+    targetId: string;
+    cefrLevel: string;
+    scopeKind: 'milestone' | 'pillar_exam';
+    pillar: string;
+    rawScore: number | null;
+    completion: { id: string } | null;
+  }>;
 };
 
 @Injectable()
@@ -348,11 +360,13 @@ export class LearnerPassportService {
           _count: { select: { lessons: true, tutorSessions: true } },
           lessons: { select: { createdAt: true }, orderBy: { createdAt: 'desc' as const }, take: 1 },
           tutorSessions: { select: { updatedAt: true }, orderBy: { updatedAt: 'desc' as const }, take: 1 },
+          masteryAttempts: this.passportMasteryAttemptsInclude(),
         }
       : {
           _count: { select: { lessons: true, tutorSessions: true } },
           lessons: { select: { createdAt: true }, take: 0 },
           tutorSessions: { select: { updatedAt: true }, take: 0 },
+          masteryAttempts: this.passportMasteryAttemptsInclude(),
         };
     const [onboarding, profile, languages, dna] = await Promise.all([
       this.prisma.onboardingProfile.findUnique({ where: { userId } }),
@@ -466,6 +480,24 @@ export class LearnerPassportService {
     const teachingLanguageSource: LanguageTeachingSource =
       row.teachingLanguageSource === 'native' ? 'native' : 'interface';
     const nativeLanguage = this.language(row.nativeLanguage);
+    const evaluatedLevel = [...CEFR_LEVELS].reverse().find((level) => {
+      const attempts = (row.masteryAttempts ?? []).filter((attempt) =>
+        attempt.completion && attempt.cefrLevel === level);
+      return decideRlleLevelPillarGate({
+        level,
+        milestones: attempts
+          .filter((attempt) => attempt.scopeKind === 'milestone')
+          .map((attempt) => ({ milestoneId: attempt.targetId, verdict: 'mastered' as const })),
+        exams: attempts
+          .filter((attempt) => attempt.scopeKind === 'pillar_exam')
+          .map((attempt) => ({
+            examId: attempt.targetId,
+            pillar: attempt.pillar as ReturnType<typeof getRlleLevelPillarPlans>[number]['pillar'],
+            verdict: 'mastered' as const,
+            rawScore: attempt.rawScore,
+          })),
+      }).unlocked;
+    }) ?? null;
     return {
       profileId: row.id,
       language: row.language,
@@ -476,13 +508,38 @@ export class LearnerPassportService {
         ? nativeLanguage
         : interfaceLanguage,
       declaredLevel: this.cefr(row.cefrLevel) ?? 'A1',
-      evaluatedLevel: null,
+      // A declared level or a rounded unit score is not verified progress.
+      // Only the complete canonical level gate (every required milestone,
+      // including acoustic proof, plus five verified pillar exams) can project
+      // an evaluated CEFR level into the Learner Passport.
+      evaluatedLevel,
       goal: this.text(row.goal, 300),
       lessonCount: row._count.lessons,
       sessionCount: row._count.tutorSessions,
       lastActivityAt: dates.length
         ? new Date(Math.max(...dates.map((value) => value.getTime()))).toISOString()
         : null,
+    };
+  }
+
+  private passportMasteryAttemptsInclude() {
+    return {
+      where: {
+        scopeKind: { in: ['milestone' as const, 'pillar_exam' as const] },
+        status: 'evaluated' as const,
+        verdict: 'mastered' as const,
+        mappingVersion: RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+        policyVersion: LANGUAGE_MASTERY_POLICY_VERSION,
+        completion: { is: { status: 'verified' as const } },
+      },
+      select: {
+        targetId: true,
+        cefrLevel: true,
+        scopeKind: true,
+        pillar: true,
+        rawScore: true,
+        completion: { select: { id: true } },
+      },
     };
   }
 

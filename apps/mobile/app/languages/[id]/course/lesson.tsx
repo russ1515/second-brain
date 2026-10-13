@@ -6,7 +6,7 @@ import { Alert, Badge, Button, Card } from '../../../../components/ds/core';
 import { Page, PageHeader, ResponsiveSplit, Section } from '../../../../components/ds/layout';
 import { SmartErrorState, SmartLoadingState } from '../../../../components/ds/states';
 import { ContextBar } from '../../../../components/context/context-bar';
-import { LessonStages } from '../../../../components/language/course-ui';
+import { LanguageMasteryBulletins, LessonStages } from '../../../../components/language/course-ui';
 import { useTokens } from '../../../../lib/design/theme';
 import { useRlleCopy } from '../../../../lib/language-rll-i18n';
 import { featureFlags } from '../../../../lib/feature-flags';
@@ -439,6 +439,13 @@ export default function StructuredLanguageLessonScreen() {
         {notice ? <Alert tone="success" title={notice} /> : null}
         {acousticFeedback ? <Alert tone={acousticFeedback.tone} title={acousticFeedback.title} /> : null}
         {course?.experienceSession ? <ContextBar items={course.experienceSession.activeContexts.items} /> : null}
+        {course ? (
+          <LanguageMasteryBulletins
+            bulletins={course.masteryBulletins}
+            units={course.units}
+            language={profile.language}
+          />
+        ) : null}
 
         {!outline ? (
           <Card elevated style={{ gap: spacing.md, borderColor: c.aiAccent }}>
@@ -482,6 +489,23 @@ export default function StructuredLanguageLessonScreen() {
                     onPress={() => void startScopedMasteryAssessment()}
                   />
                 ) : null}
+                {outline.status === 'active'
+                  && nextMasteryTarget?.assessmentMode === 'acoustic'
+                  && !nextMasteryTarget.eligible
+                  && nextMasteryTarget.blockedReason === 'capability-unavailable' ? (
+                    <Card
+                      testID="language-acoustic-capability-blocked"
+                      style={{ gap: spacing.sm, borderColor: c.warning }}
+                    >
+                      <Badge
+                        label={copy('rlle.ui.capabilities.notEvaluable')}
+                        tone="warning"
+                      />
+                      <Text style={[typography.bodySmall, { color: c.textSecondary }]}>
+                        {copy('rlle.ui.capabilities.blockedDetail')}
+                      </Text>
+                    </Card>
+                  ) : null}
                 {outline.status === 'active'
                   && nextMasteryTarget?.eligible
                   && nextMasteryTarget.assessmentMode === 'acoustic' ? (

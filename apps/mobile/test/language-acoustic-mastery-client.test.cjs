@@ -61,3 +61,18 @@ test('the learner sees the actual versioned pronunciation exercise', () => {
   assert.match(lesson, /acousticPrompt\.referenceText/);
   assert.match(lesson, /acousticPrompt\.spontaneousPrompt/);
 });
+
+test('an unavailable acoustic target stays locked and explains NOT_EVALUABLE', () => {
+  const start = lesson.indexOf('testID="language-acoustic-capability-blocked"');
+  const end = lesson.indexOf("nextMasteryTarget?.eligible", start);
+  const blockedCard = lesson.slice(start, end);
+
+  assert.ok(start >= 0 && end > start, 'the blocked acoustic card must be isolated from the eligible flow');
+  assert.match(lesson, /testID="language-acoustic-capability-blocked"/);
+  assert.match(lesson, /nextMasteryTarget\?\.assessmentMode === 'acoustic'/);
+  assert.match(lesson, /!nextMasteryTarget\.eligible/);
+  assert.match(lesson, /nextMasteryTarget\.blockedReason === 'capability-unavailable'/);
+  assert.match(lesson, /rlle\.ui\.capabilities\.notEvaluable/);
+  assert.match(lesson, /rlle\.ui\.capabilities\.blockedDetail/);
+  assert.doesNotMatch(blockedCard, /<Button/);
+});

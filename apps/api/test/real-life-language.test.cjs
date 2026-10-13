@@ -35,6 +35,7 @@ function harness(options = {}) {
   let nextId = 1;
   let submissionCount = 0;
   let conversationStarts = 0;
+  let courseCompletionCount = 0;
   let failedAutonomyActivePersist = false;
   const toSession = (request, id = `experience-${nextId++}`) => ({
     id, userId: 'user-1', version: 1, type: request.type ?? 'language',
@@ -87,6 +88,7 @@ function harness(options = {}) {
     },
     complete: async (userId, id) => {
       const previous = await experiences.get(userId, id);
+      if (previous.status !== 'completed') courseCompletionCount += 1;
       const next = { ...previous, status: 'completed', completedAt: '2026-09-14T09:00:00.000Z' };
       sessions.set(id, next);
       return next;
@@ -107,6 +109,18 @@ function harness(options = {}) {
       },
     },
     card: { count: async () => 0 },
+    languageMasteryAttempt: {
+      findMany: async ({ where }) => (options.masteryProjection?.() ?? [])
+        .filter((attempt) =>
+          attempt.scopeKind === 'milestone'
+          && where.targetId.in.includes(attempt.targetId)
+          && attempt.verdict === 'mastered'
+          && attempt.completionId)
+        .map((attempt) => ({
+          targetId: attempt.targetId,
+          completion: { id: attempt.completionId },
+        })),
+    },
     exerciseAttempt: {
       findFirst: async ({ where }) => attempts.find((attempt) =>
         attempt.id === where.id
@@ -451,14 +465,15 @@ function harness(options = {}) {
     service, sessions, experiences, attempts, finalizedUnits, lessonExercises, masteryJournal,
     lessonGenerations, assessmentCreations, remediationPlans, remediationEvidence,
     conversationStarts: () => conversationStarts,
+    courseCompletionCount: () => courseCompletionCount,
   };
 }
 
-function masteredMilestoneProjection(milestones) {
+function masteredMilestoneProjection(milestones, startIndex = 0) {
   return milestones.map((milestone, index) => ({
-    id: `row-${index}`,
-    attemptId: `attempt-${index}`,
-    idempotencyKey: `key-${index}`,
+    id: `row-${startIndex + index}`,
+    attemptId: `attempt-${startIndex + index}`,
+    idempotencyKey: `key-${startIndex + index}`,
     scopeKind: 'milestone',
     scopeKey: shared.rlleMilestoneEvidenceScopeKey({ languageCode: 'en', milestone }),
     targetId: milestone.id,
@@ -488,9 +503,57 @@ function masteredMilestoneProjection(milestones) {
       helpUsed: false,
     },
     criteria: [{ id: milestone.criterionId, met: true, score: 0.9 }],
-    assessmentId: `assessment-${index}`,
-    assessmentSubmissionId: `submission-${index}`,
-    completionId: `completion-${index}`,
+    assessmentId: `assessment-${startIndex + index}`,
+    assessmentSubmissionId: `submission-${startIndex + index}`,
+    completionId: `completion-${startIndex + index}`,
+    remediation: null,
+    startedAt: '2026-09-14T08:30:00.000Z',
+    evaluatedAt: '2026-09-14T08:40:00.000Z',
+  }));
+}
+
+function masteredPillarExamProjection(level, startIndex = 100) {
+  return shared.getRlleLevelPillarPlans(level).map((plan, index) => ({
+    attemptId: `pillar-attempt-${startIndex + index}`,
+    idempotencyKey: `pillar-operation-${startIndex + index}`,
+    userId: 'user-1',
+    languageProfileId: profile.id,
+    experienceSessionId: 'experience-1',
+    scopeKind: 'pillar_exam',
+    targetId: plan.examId,
+    scopeKey: `${plan.level}:${plan.pillar}`,
+    mappingVersion: shared.RLLE_LANGUAGE_MASTERY_MAPPING_VERSION,
+    policyVersion: shared.LANGUAGE_MASTERY_POLICY_VERSION,
+    contentDefinitionId: plan.examId,
+    sourceContentVersion: 1,
+    lessonId: 'lesson-1',
+    languageCode: 'en',
+    cefrLevel: level,
+    pillar: plan.pillar,
+    status: 'evaluated',
+    verdict: 'mastered',
+    rawScore: 0.9,
+    threshold: 0.9,
+    decisionReason: 'threshold-met',
+    helpUsed: false,
+    decision: {
+      policyVersion: shared.LANGUAGE_MASTERY_POLICY_VERSION,
+      verdict: 'mastered',
+      reason: 'threshold-met',
+      trainingComplete: true,
+      missingTrainingFormats: [],
+      rawScore: 0.9,
+      threshold: 0.9,
+      helpUsed: false,
+    },
+    criteria: plan.mandatoryCompetencies.map((competency) => ({
+      id: competency.competencyId,
+      met: true,
+      score: 0.9,
+    })),
+    assessmentId: `pillar-assessment-${startIndex + index}`,
+    assessmentSubmissionId: `pillar-submission-${startIndex + index}`,
+    completionId: `pillar-completion-${startIndex + index}`,
     remediation: null,
     startedAt: '2026-09-14T08:30:00.000Z',
     evaluatedAt: '2026-09-14T08:40:00.000Z',
@@ -570,12 +633,135 @@ test('the raw 90 percent notion gate advances to the next level without strict c
   const bulletin = reconciled.masteryBulletins.find((item) => item.level === 'A1');
   assert.ok(bulletin.rawMasteryRatio >= 0.9);
   assert.equal(bulletin.notionGateUnlocked, true);
+  assert.equal(bulletin.strictCertification.unlocked, false);
   assert.equal(reconciled.units.filter((unit) => unit.level === 'A1').every((unit) => unit.status === 'completed'), true);
   assert.equal(reconciled.nextMasteryTarget.scopeKind, 'milestone');
   const target = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP
     .flatMap((item) => item.milestones)
     .find((item) => item.id === reconciled.nextMasteryTarget.targetId);
   assert.equal(target.level, 'A2');
+});
+
+test('completed A1 notions keep a real lesson active so the first pillar exam is reachable', async () => {
+  let projection = [];
+  const runtime = harness({ masteryProjection: () => projection, strictMastery: true });
+  const started = await runtime.service.startCourse('user-1', 'language-1', {
+    startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
+  });
+  const a1 = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP
+    .filter((item) => item.level === 'A1')
+    .flatMap((item) => item.milestones);
+  projection = masteredMilestoneProjection(a1);
+
+  const waitingForExam = await runtime.service.course('user-1', 'language-1');
+  assert.equal(waitingForExam.nextMasteryTarget.scopeKind, 'pillar_exam');
+  assert.equal(waitingForExam.nextMasteryTarget.eligible, true);
+  assert.equal(waitingForExam.currentLesson.status, 'active');
+  assert.equal(
+    waitingForExam.units.find((unit) => unit.id === waitingForExam.currentLesson.unitId).status,
+    'in-progress',
+  );
+  assert.equal(waitingForExam.level.evaluated, null);
+
+  const opened = await runtime.service.startScopedMastery('user-1', 'language-1', {
+    experienceSessionId: started.session.id,
+    lessonId: waitingForExam.currentLesson.lessonId,
+    scopeKind: 'pillar_exam',
+    targetId: waitingForExam.nextMasteryTarget.targetId,
+    idempotencyKey: waitingForExam.nextMasteryTarget.operationKey,
+  });
+  assert.equal(opened.scopeKind, 'pillar_exam');
+  assert.equal(opened.course.currentLesson.status, 'active');
+  assert.equal(opened.course.nextMasteryTarget.blockedReason, 'assessment-active');
+});
+
+test('the final canonical proof completes the course session once and replay is idempotent', async () => {
+  let projection = [];
+  const runtime = harness({ masteryProjection: () => projection, strictMastery: true });
+  const started = await runtime.service.startCourse('user-1', 'language-1', {
+    startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
+  });
+  const a1 = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP
+    .filter((item) => item.level === 'A1')
+    .flatMap((item) => item.milestones);
+  projection = [
+    ...masteredMilestoneProjection(a1),
+    ...masteredPillarExamProjection('A1'),
+  ];
+
+  const completed = await runtime.service.course('user-1', 'language-1');
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.level.evaluated.level, 'A1');
+  assert.equal(completed.level.evaluated.evidenceCount, 5);
+  assert.equal(completed.level.evaluated.source, 'assessment');
+  assert.equal(
+    completed.masteryBulletins.find((bulletin) => bulletin.level === 'A1')
+      .strictCertification.unlocked,
+    true,
+  );
+  assert.equal(completed.currentLesson.status, 'completed');
+  assert.equal(completed.progress.completedUnits, completed.progress.totalUnits);
+  assert.equal(runtime.sessions.get(started.session.id).status, 'completed');
+  assert.equal(runtime.courseCompletionCount(), 1);
+
+  const replay = await runtime.service.course('user-1', 'language-1');
+  assert.equal(replay.status, 'completed');
+  assert.equal(runtime.courseCompletionCount(), 1);
+});
+
+test('90 percent navigation never terminally completes neutral, remediating or acoustic-blocked courses', async () => {
+  const a1 = shared.RLLE_LANGUAGE_MASTERY_UNIT_MAP
+    .filter((item) => item.level === 'A1')
+    .flatMap((item) => item.milestones);
+  const acoustic = a1.find((item) => item.oralRole === 'audio-native-assessment');
+  assert.ok(acoustic);
+
+  for (const scenario of ['not-evaluable', 'remediation', 'acoustic-pending', 'capability-unavailable']) {
+    let projection = masteredMilestoneProjection(a1.filter((item) => item.id !== acoustic.id));
+    if (scenario === 'not-evaluable') {
+      projection.push({
+        ...masteredMilestoneProjection([acoustic], 100)[0],
+        verdict: 'not-evaluable', rawScore: null, completionId: null,
+        decision: {
+          policyVersion: shared.LANGUAGE_MASTERY_POLICY_VERSION,
+          verdict: 'not-evaluable', reason: 'missing-evaluation', rawScore: null,
+          threshold: 0.9, completed: false, helpUsed: false,
+          missingTrainingFormats: [], unevaluatedAutonomyItemIds: [acoustic.id],
+        },
+      });
+    } else if (scenario === 'remediation') {
+      const failed = a1.find((item) => item.id !== acoustic.id);
+      projection = masteredMilestoneProjection(a1.filter((item) =>
+        item.id !== acoustic.id && item.id !== failed.id));
+      projection.push({
+        ...masteredMilestoneProjection([failed], 200)[0],
+        verdict: 'not-mastered', rawScore: 0.899, completionId: null,
+        decision: {
+          policyVersion: shared.LANGUAGE_MASTERY_POLICY_VERSION,
+          verdict: 'not-mastered', reason: 'below-threshold', rawScore: 0.899,
+          threshold: 0.9, completed: true, helpUsed: false,
+          missingTrainingFormats: [], unevaluatedAutonomyItemIds: [],
+        },
+        remediation: {
+          planId: 'plan-below-threshold', requiredExerciseCount: 10,
+          completedExerciseCount: 0, evidenceCount: 0, status: 'preparing', evidence: [],
+        },
+      });
+      projection.push(...masteredMilestoneProjection([acoustic], 100));
+    }
+    projection.push(...masteredPillarExamProjection('A1', 300));
+    const runtime = harness({
+      masteryProjection: () => projection,
+      strictMastery: scenario !== 'capability-unavailable',
+    });
+    const started = await runtime.service.startCourse('user-1', 'language-1', {
+      startFrom: 'zero', targetLevel: 'A1', goalDomain: 'general',
+    });
+    const projected = await runtime.service.course('user-1', 'language-1');
+    assert.equal(projected.status, 'active', scenario);
+    assert.equal(runtime.sessions.get(started.session.id).status, 'active', scenario);
+    assert.equal(runtime.courseCompletionCount(), 0, scenario);
+  }
 });
 
 test('authored mastery supplements are injected into the existing unit generation contract', async () => {

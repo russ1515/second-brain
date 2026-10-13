@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type {
   ContextItem,
@@ -86,15 +86,18 @@ export default function TutorSessionScreen() {
   const [notice, setNotice] = useState<string | null>(null);
   const [missionFeedback, setMissionFeedback] = useState<RlleMissionEvaluation | null>(null);
   const recorder = useRef<Recorder | null>(null);
+  const recordingStartInFlight = useRef(false);
+  const screenActive = useRef(true);
   const lastRecording = useRef<Recording | null>(null);
   const recordingStartedAt = useRef(0);
   const pausedStartedAt = useRef(0);
   const pausedDuration = useRef(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [voiceDraft, setVoiceDraft] = useState(false);
-  const [voicePlayback, setVoicePlayback] = useState<'playing' | 'paused' | null>(null);
+  const [recordingStarting, setRecordingStarting] = useState(false);
+  const [voicePlayback, setVoicePlayback] = useState<'loading' | 'playing' | 'paused' | null>(null);
   const scroll = useRef<ScrollView | null>(null);
-  const busy = workState === 'THINKING' || workState === 'TRANSCRIPTION';
+  const busy = workState === 'THINKING' || workState === 'TRANSCRIPTION' || recordingStarting;
   const recording = workState === 'LISTENING' || workState === 'PAUSED';
   const linkedLanguageProfileId = languageProfileId
     ?? session?.experienceSession?.links.languageProfileId
@@ -105,7 +108,17 @@ export default function TutorSessionScreen() {
       ? session.experienceSession.currentStep.metadata.teachingLanguage
       : undefined);
 
-  useEffect(() => () => { recorder.current?.cancel(); stopSpeaking(); }, []);
+  useEffect(() => {
+    screenActive.current = true;
+    return () => {
+      screenActive.current = false;
+      recordingStartInFlight.current = false;
+      const activeRecorder = recorder.current;
+      recorder.current = null;
+      activeRecorder?.cancel();
+      stopSpeaking();
+    };
+  }, []);
 
   useEffect(() => {
     if (workState !== 'LISTENING') return;
@@ -197,8 +210,10 @@ export default function TutorSessionScreen() {
       await load(false);
       requestAnimationFrame(() => scroll.current?.scrollToEnd({ animated: true }));
       if (viaVoice && spokenReply) {
-        setVoicePlayback('playing');
-        await speak(spokenReply, activeSpeechLanguage).catch((cause) => {
+        setVoicePlayback('loading');
+        await speak(spokenReply, activeSpeechLanguage, {
+          onFirstAudio: () => setVoicePlayback('playing'),
+        }).catch((cause) => {
           setFailure({ kind: 'provider', message: (cause as Error).message });
         });
         setVoicePlayback(null);
@@ -218,11 +233,22 @@ export default function TutorSessionScreen() {
   };
 
   const startRecording = async () => {
+    if (recordingStartInFlight.current || recorder.current) return;
+    recordingStartInFlight.current = true;
+    setRecordingStarting(true);
     setFailure(null);
     setNotice(null);
+    stopSpeaking();
+    setVoicePlayback(null);
+    let nextRecorder: Recorder | null = null;
     try {
-      recorder.current = createRecorder();
-      await recorder.current.start();
+      nextRecorder = createRecorder();
+      recorder.current = nextRecorder;
+      await nextRecorder.start();
+      if (recorder.current !== nextRecorder) {
+        nextRecorder.cancel();
+        return;
+      }
       lastRecording.current = null;
       recordingStartedAt.current = Date.now();
       pausedStartedAt.current = 0;
@@ -230,8 +256,15 @@ export default function TutorSessionScreen() {
       setElapsedSeconds(0);
       setWorkState('LISTENING');
     } catch (error) {
-      setFailure(toFailure(error));
-      setWorkState('ERROR');
+      nextRecorder?.cancel();
+      if (recorder.current === nextRecorder) recorder.current = null;
+      if (screenActive.current) {
+        setFailure(toFailure(error));
+        setWorkState('ERROR');
+      }
+    } finally {
+      recordingStartInFlight.current = false;
+      if (screenActive.current) setRecordingStarting(false);
     }
   };
 
@@ -516,6 +549,26 @@ export default function TutorSessionScreen() {
             {voiceFocused || recording || voiceDraft || lastRecording.current ? (
               <VoiceState state={workState} elapsedSeconds={recording || elapsedSeconds ? elapsedSeconds : undefined} transcript={voiceDraft ? draft : undefined} />
             ) : null}
+            {voiceFocused && voiceDraft ? (
+              <Text
+                testID="tutor-voice-review-hint"
+                style={[typography.caption, { color: c.textSecondary }]}
+              >
+                {t('voice11.transcript.edit')}
+              </Text>
+            ) : null}
+            {voiceFocused && RECORDING_SUPPORTED && !voicePlayback ? (
+              <Button
+                icon={recording ? '■' : '🎙'}
+                label={recording ? t('voice11.transcribe') : t('tutor.speak')}
+                onPress={recording ? () => void stopAndTranscribe() : () => void startRecording()}
+                disabled={busy && !recording}
+                loading={recordingStarting}
+                variant="secondary"
+                fullWidth
+                testID="tutor-voice-toggle"
+              />
+            ) : null}
             <View style={{ width: '100%', minWidth: 0, flexDirection: 'row', alignItems: 'flex-end', gap: spacing.xs, borderWidth: 1, borderColor: c.border, borderRadius: radius.lg, backgroundColor: c.surface, padding: spacing.xs }}>
               <TextInput
                 style={{
@@ -537,12 +590,15 @@ export default function TutorSessionScreen() {
                 maxLength={4_000}
                 testID="tutor-input"
               />
-              {RECORDING_SUPPORTED && !voicePlayback ? (
-                <IconButton
+              {!voiceFocused && RECORDING_SUPPORTED && !voicePlayback ? (
+                <Button
                   icon={recording ? '■' : '🎙'}
                   label={recording ? t('voice11.transcribe') : t('tutor.speak')}
                   onPress={recording ? () => void stopAndTranscribe() : () => void startRecording()}
                   disabled={busy && !recording}
+                  loading={recordingStarting}
+                  variant="secondary"
+                  size="sm"
                   testID="tutor-voice-toggle"
                 />
               ) : null}
@@ -555,6 +611,17 @@ export default function TutorSessionScreen() {
               />
             </View>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs }}>
+              {voicePlayback === 'loading' ? (
+                <View
+                  accessibilityLabel={t('state.loading')}
+                  accessibilityRole="progressbar"
+                  style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}
+                  testID="tutor-voice-loading"
+                >
+                  <ActivityIndicator size="small" color={c.aiAccent} />
+                  <Text style={[typography.caption, { color: c.textSecondary }]}>{t('state.loading')}</Text>
+                </View>
+              ) : null}
               {voicePlayback === 'playing' ? <IconButton icon="⏸" label={t('voice11.pause')} onPress={() => void pausePlayback()} /> : null}
               {voicePlayback === 'paused' ? <IconButton icon="▶" label={t('voice11.resume')} onPress={() => void resumePlayback()} /> : null}
               {voicePlayback ? <IconButton icon="⏹" label={t('learn.oral.stop')} onPress={stopPlayback} /> : null}

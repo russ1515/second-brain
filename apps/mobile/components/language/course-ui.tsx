@@ -13,7 +13,7 @@ import type {
   RlleWorldMissionTemplate,
 } from '@second-brain/shared';
 import { LANGUAGE_MASTERY_PILLARS } from '@second-brain/shared';
-import { Badge, Button, Card, Progress } from '../ds/core';
+import { Alert, Badge, Button, Card, Progress } from '../ds/core';
 import { useTokens } from '../../lib/design/theme';
 import { useRlleCopy } from '../../lib/language-rll-i18n';
 import type { RlleCourseLoad, RlleMissionCatalogItem } from '../../lib/language-rll-client';
@@ -150,6 +150,13 @@ export function LanguageMasteryBulletins({
             />
           </View>
           <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{copy('rlle.ui.bulletin.detail')}</Text>
+          {bulletin.notionGateUnlocked && bulletin.strictCertification.unlocked === false ? (
+            <Alert
+              tone="warning"
+              title={copy('rlle.ui.capabilities.blocked')}
+              detail={copy('rlle.ui.capabilities.blockedDetail')}
+            />
+          ) : null}
           <Progress value={bulletin.displayPercent} tone="ai" />
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
             <BulletinMetric value={`${bulletin.displayPercent}%`} label={copy('ai.progress')} />

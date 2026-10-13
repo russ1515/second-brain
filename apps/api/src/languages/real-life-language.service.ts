@@ -39,6 +39,7 @@ import {
   missingLanguageTrainingFormats,
   canDoStatus,
   curriculumForGoal,
+  decideRlleLevelPillarGate,
   measuredCoursePercent,
   projectRlleLevelMasteryBulletin,
   toSupportedLanguage,
@@ -216,6 +217,12 @@ export class RealLifeLanguageService {
     if (reconciled.changed) {
       session = await this.persistCourse(userId, profile, session, state);
     }
+    session = await this.completeCanonicalCourseSessionIfEligible(
+      userId,
+      session,
+      state,
+      reconciled.progression,
+    );
     let view = {
       ...this.toCourseView(profile, session, state, reconciled.nextMasteryTarget),
       masteryBulletins: await this.projectMasteryBulletins(userId, profile, state),
@@ -1710,6 +1717,12 @@ export class RealLifeLanguageService {
     const canonical = await this.reconcileCanonicalMastery(userId, profile, state, false);
     state = canonical.state;
     session = await this.persistCourse(userId, profile, session, state);
+    session = await this.completeCanonicalCourseSessionIfEligible(
+      userId,
+      session,
+      state,
+      canonical.progression,
+    );
     return {
       attemptId: journal.attemptId,
       scopeKind: request.scopeKind,
@@ -2829,12 +2842,12 @@ export class RealLifeLanguageService {
       const current = state.currentUnitId === unit.id;
       return {
         ...unit,
-        status: completed
-          ? 'completed'
-          : legacy
-            ? 'legacy-unverified'
-            : current
-              ? 'in-progress'
+        status: current
+          ? 'in-progress'
+          : completed
+            ? 'completed'
+            : legacy
+              ? 'legacy-unverified'
               : unit.id === firstIncomplete
                 ? 'available'
                 : 'locked',
@@ -2934,31 +2947,60 @@ export class RealLifeLanguageService {
     const languageCode = this.languageCode(profile);
     const attempts = (await this.masteryAttempts.projection(userId, profile.id))
       .filter((attempt) =>
-        attempt.scopeKind === 'milestone'
-        && attempt.mappingVersion === RLLE_LANGUAGE_MASTERY_MAPPING_VERSION
+        attempt.mappingVersion === RLLE_LANGUAGE_MASTERY_MAPPING_VERSION
         && attempt.policyVersion === LANGUAGE_MASTERY_POLICY_VERSION
         && attempt.languageCode === languageCode);
-    const evidence = attempts.map((attempt) => ({
+    const evidence = attempts
+      .filter((attempt) => attempt.scopeKind === 'milestone')
+      .map((attempt) => ({
       targetId: attempt.targetId,
       verdict: attempt.verdict,
       // projection() only exposes completionId for a verified canonical row.
       verifiedCompletionId: attempt.completionId,
-    }));
+      }));
     const levels = [...new Set(
       RLLE_LANGUAGE_MASTERY_UNIT_MAP
         .filter((mapping) => state.curriculumIds.includes(mapping.unitId))
         .map((mapping) => mapping.level),
     )];
-    return levels.map((level) => projectRlleLevelMasteryBulletin({
-      languageCode,
-      level,
-      curriculumUnitIds: state.curriculumIds,
-      evidence,
-      // Five-pillar/acoustic certification intentionally stays independent.
-      strictCertificationUnlocked: this.strictMasteryAvailable(profile)
-        ? undefined
-        : false,
-    }));
+    return levels.map((level) => {
+      const latestExamById = new Map<string, LanguageMasteryAttemptProjection>();
+      for (const attempt of attempts) {
+        if (attempt.scopeKind === 'pillar_exam' && attempt.cefrLevel === level) {
+          latestExamById.set(attempt.targetId, attempt);
+        }
+      }
+      const gate = decideRlleLevelPillarGate({
+        level,
+        milestones: attempts
+          .filter((attempt) =>
+            attempt.scopeKind === 'milestone'
+            && attempt.cefrLevel === level
+            && attempt.verdict === 'mastered'
+            && attempt.completionId)
+          .map((attempt) => ({ milestoneId: attempt.targetId, verdict: 'mastered' as const })),
+        exams: [...latestExamById.values()]
+          .filter((attempt) => attempt.completionId || attempt.verdict !== 'mastered')
+          .map((attempt) => ({
+            examId: attempt.targetId,
+            pillar: attempt.pillar as (typeof LANGUAGE_MASTERY_PILLARS)[number],
+            verdict: attempt.verdict ?? 'not-evaluable',
+            rawScore: attempt.rawScore,
+          })),
+      });
+      return projectRlleLevelMasteryBulletin({
+        languageCode,
+        level,
+        curriculumUnitIds: state.curriculumIds,
+        evidence,
+        // `false` is reserved for unavailable strict/acoustic capability so
+        // clients can show an honest capability block. While available but
+        // incomplete, `null` remains neutral; a complete canonical gate is true.
+        strictCertificationUnlocked: this.strictMasteryAvailable(profile)
+          ? gate.unlocked ? true : null
+          : false,
+      });
+    });
   }
 
   private canDoMap(curriculumIds: string[], evidence: RlleCapabilityEvidence[]): RlleCanDoCapability[] {
@@ -3477,9 +3519,15 @@ export class RealLifeLanguageService {
       profile,
       stateInput,
     );
-    const session = reconciled.changed
+    let session = reconciled.changed
       ? await this.persistCourse(userId, profile, sessionInput, reconciled.state)
       : sessionInput;
+    session = await this.completeCanonicalCourseSessionIfEligible(
+      userId,
+      session,
+      reconciled.state,
+      reconciled.progression,
+    );
     return {
       course: await this.canonicalCourseView(
         userId,
@@ -3991,29 +4039,78 @@ export class RealLifeLanguageService {
       progression,
       attempts,
     );
+    const pillarTargetLevel = nextMasteryTarget?.scopeKind === 'pillar_exam'
+      ? progression.pillarExams[nextMasteryTarget.targetId]?.level ?? null
+      : null;
+    const pillarTargetUnitId = pillarTargetLevel
+      ? (
+          state.currentLesson
+          && RLLE_LANGUAGE_MASTERY_UNIT_MAP.find(
+            (mapping) => mapping.unitId === state.currentLesson!.unitId,
+          )?.level === pillarTargetLevel
+            ? state.currentLesson.unitId
+            : state.curriculumIds.find((unitId) =>
+                RLLE_LANGUAGE_MASTERY_UNIT_MAP.find((mapping) => mapping.unitId === unitId)?.level
+                  === pillarTargetLevel) ?? null
+        )
+      : null;
     const targetUnitId = nextMasteryTarget?.scopeKind === 'milestone'
       ? progression.milestones[nextMasteryTarget.targetId]?.unitId ?? null
-      : null;
+      : pillarTargetUnitId;
     const currentUnitId = targetUnitId
       ?? state.curriculumIds.find((unitId) => !completedUnitIds.includes(unitId))
       ?? null;
+    const keepCurrentLessonForMastery = Boolean(
+      state.currentLesson
+      && currentUnitId === state.currentLesson.unitId
+      && nextMasteryTarget,
+    );
     const currentLessonComplete = Boolean(
       state.currentLesson
       && state.currentLesson.status === 'active'
+      && !keepCurrentLessonForMastery
       && (
         completedUnitIds.includes(state.currentLesson.unitId)
         || (currentUnitId !== null && currentUnitId !== state.currentLesson.unitId)
       ),
     );
-    const projectedCurrentLesson = currentLessonComplete && state.currentLesson
+    const projectedCurrentLesson = keepCurrentLessonForMastery && state.currentLesson
+      ? { ...state.currentLesson, status: 'active' as const }
+      : currentLessonComplete && state.currentLesson
+        ? {
+            ...state.currentLesson,
+            status: 'completed' as const,
+            lastActivityAt: new Date().toISOString(),
+          }
+        : state.currentLesson;
+    const evaluatedLevel = [...CEFR_LEVELS]
+      .filter((level) => state.curriculumIds.some((unitId) =>
+        RLLE_LANGUAGE_MASTERY_UNIT_MAP.find((mapping) => mapping.unitId === unitId)?.level === level))
+      .filter((level) => rlleLevelGate(progression, level).unlocked)
+      .at(-1) ?? null;
+    const evaluatedAt = evaluatedLevel
+      ? attempts
+          .filter((attempt) =>
+            attempt.scopeKind === 'pillar_exam'
+            && attempt.cefrLevel === evaluatedLevel
+            && attempt.verdict === 'mastered'
+            && attempt.completionId
+            && attempt.evaluatedAt)
+          .map((attempt) => attempt.evaluatedAt!)
+          .sort()
+          .at(-1) ?? null
+      : null;
+    const evaluatedEvidence: StoredCourseState['level']['evaluated'] = evaluatedLevel && evaluatedAt
       ? {
-          ...state.currentLesson,
-          status: 'completed' as const,
-          lastActivityAt: new Date().toISOString(),
+          level: evaluatedLevel,
+          evidenceCount: getRlleLevelPillarPlans(evaluatedLevel).length,
+          measuredAt: evaluatedAt,
+          source: 'assessment',
         }
-      : state.currentLesson;
+      : null;
     const nextState = {
       ...state,
+      level: { ...state.level, evaluated: evaluatedEvidence },
       completedUnitIds,
       currentUnitId,
       currentLesson: projectedCurrentLesson,
@@ -4025,10 +4122,57 @@ export class RealLifeLanguageService {
       nextMasteryTarget,
       changed:
         currentUnitId !== state.currentUnitId
+        || JSON.stringify(evaluatedEvidence) !== JSON.stringify(state.level.evaluated)
         || completedUnitIds.join('|') !== state.completedUnitIds.join('|')
         || projectedCurrentLesson?.status !== state.currentLesson?.status
         || JSON.stringify(milestoneMastery) !== JSON.stringify(state.milestoneMastery),
     };
+  }
+
+  /** Close the durable course session only after the canonical journal proves
+   * the whole course complete. The 90% navigation projection remains useful,
+   * but a neutral NOT_EVALUABLE result, unresolved remediation or missing
+   * required acoustic capability must never be promoted into a terminal
+   * course success. ExperienceSession.complete is itself idempotent, which
+   * makes replay after reconnect safe. */
+  private async completeCanonicalCourseSessionIfEligible(
+    userId: string,
+    session: ExperienceSession,
+    state: StoredCourseState,
+    progression: StoredRlleStrictProgression,
+  ): Promise<ExperienceSession> {
+    if (session.status === 'completed') return session;
+    if (
+      state.currentUnitId !== null
+      || state.completedUnitIds.length !== state.curriculumIds.length
+    ) return session;
+    if (
+      state.currentMission
+      && ['active', 'paused', 'needs-retry'].includes(state.currentMission.status)
+    ) return session;
+    if (Object.values(state.milestoneMastery).some((mastery) =>
+      mastery.remediation
+      || ['remediation', 'remediation-starting'].includes(mastery.status))) {
+      return session;
+    }
+
+    const curriculumUnits = new Set(state.curriculumIds);
+    const requiredMilestones = RLLE_LANGUAGE_MASTERY_UNIT_MAP
+      .filter((mapping) => curriculumUnits.has(mapping.unitId))
+      .flatMap((mapping) => mapping.milestones);
+    const missingRequiredAcousticProof = requiredMilestones.some((milestone) =>
+      milestone.oralRole === 'audio-native-assessment'
+      && progression.milestones[milestone.id]?.status !== 'mastered');
+    if (missingRequiredAcousticProof) return session;
+    const requiredLevels = [...new Set(requiredMilestones.map((milestone) => milestone.level))];
+    if (requiredLevels.some((level) => !rlleLevelGate(progression, level).unlocked)) {
+      return session;
+    }
+    if (requiredMilestones.some((milestone) =>
+      progression.milestones[milestone.id]?.status === 'not-evaluable')) {
+      return session;
+    }
+    return this.experiences.complete(userId, session.id);
   }
 
   private async projectNextMasteryTarget(

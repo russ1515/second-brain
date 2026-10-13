@@ -6,6 +6,7 @@ import type {
   AssessmentView,
   GradedAnswer,
   LanguageMasteryDecision,
+  RlleCourseView,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
 import {
@@ -58,6 +59,7 @@ export default function AssessmentScreen() {
   const [answers, setAnswers] = useState<string[]>([]);
   const [result, setResult] = useState<AssessmentSubmissionView | null>(null);
   const [masteryDecision, setMasteryDecision] = useState<LanguageMasteryDecision | null>(null);
+  const [masteryCourse, setMasteryCourse] = useState<RlleCourseView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -70,6 +72,7 @@ export default function AssessmentScreen() {
       if (languageMasteryAssessment && params.languageProfileId) {
         const loaded = await loadRlleCourse(params.languageProfileId);
         if (loaded.kind === 'live') {
+          setMasteryCourse(loaded.course);
           const attempt = loaded.course.milestoneMastery
             .flatMap((item) => item.attempts)
             .find((item) => scopedMastery
@@ -118,6 +121,7 @@ export default function AssessmentScreen() {
         });
         setResult(response.submission);
         setMasteryDecision(response.decision);
+        setMasteryCourse(response.course);
       } else if (autonomy && params.languageProfileId && params.experienceSessionId && params.lessonId) {
         const response = await submitRlleAutonomy(params.languageProfileId, {
           experienceSessionId: params.experienceSessionId,
@@ -164,6 +168,20 @@ export default function AssessmentScreen() {
     (result?.results ?? []).map((r) => [r.questionId, r]),
   );
   const allAnswered = answers.every((a) => a.trim().length > 0);
+  const continueLanguageCourse = () => {
+    if (!params.languageProfileId || !masteryCourse) return;
+    const nextUnit = masteryCourse.units.find((unit) =>
+      unit.status === 'in-progress' || unit.status === 'available');
+    const resumableLessonUnitId = masteryCourse.currentLesson
+      && ['active', 'paused'].includes(masteryCourse.currentLesson.status)
+      ? masteryCourse.currentLesson.unitId
+      : null;
+    const serverUnitId = resumableLessonUnitId ?? nextUnit?.id ?? null;
+    const destination = masteryCourse.status === 'completed' || !serverUnitId
+      ? `/languages/${params.languageProfileId}/course`
+      : `/languages/${params.languageProfileId}/course/lesson?unitId=${encodeURIComponent(serverUnitId)}`;
+    router.replace(destination as never);
+  };
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -289,6 +307,14 @@ export default function AssessmentScreen() {
           <Text style={styles.adviceLabel}>{t('examiner.next')}</Text>
           <Text style={styles.advice}>{result.advice}</Text>
         </Card>
+      ) : null}
+
+      {result && languageMasteryAssessment && masteryCourse ? (
+        <Button
+          label={t('lesson.continue')}
+          onPress={continueLanguageCourse}
+          testID="language-mastery-continue"
+        />
       ) : null}
 
       <Button

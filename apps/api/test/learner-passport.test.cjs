@@ -19,7 +19,11 @@ const {
   resolveAgeTeachingPolicy,
   selectStrategy,
 } = require('../dist/tutor/teaching-strategy.js');
-const { resolveTeacherPolicy } = require('@second-brain/shared');
+const {
+  getRlleLevelPillarPlans,
+  RLLE_LANGUAGE_MASTERY_UNIT_MAP,
+  resolveTeacherPolicy,
+} = require('@second-brain/shared');
 
 const updatedAt = new Date('2026-09-30T10:00:00.000Z');
 
@@ -95,6 +99,65 @@ test('GET projection keeps declared, observed and verified provenance separate',
   assert.deepEqual(passport.verified, {
     source: 'VERIFIED', available: false, fields: [],
   });
+});
+
+test('Passport evaluatedLevel requires every canonical milestone and five verified pillar completions', async () => {
+  const completedExams = getRlleLevelPillarPlans('A1').map((plan, index) => ({
+    targetId: plan.examId,
+    cefrLevel: 'A1',
+    scopeKind: 'pillar_exam',
+    pillar: plan.pillar,
+    rawScore: 0.9,
+    completion: { id: `completion-${index + 1}` },
+  }));
+  const completedMilestones = RLLE_LANGUAGE_MASTERY_UNIT_MAP
+    .filter((mapping) => mapping.level === 'A1')
+    .flatMap((mapping) => mapping.milestones)
+    .map((milestone, index) => ({
+      targetId: milestone.id,
+      cefrLevel: 'A1',
+      scopeKind: 'milestone',
+      pillar: milestone.pillar,
+      rawScore: 0.9,
+      completion: { id: `milestone-completion-${index + 1}` },
+    }));
+  const completeGate = [...completedMilestones, ...completedExams];
+  const withCanonicalProof = readPrisma({
+    languageProfile: {
+      findMany: async () => [{
+        id: 'lp1', language: 'English', normalizedLanguage: 'en',
+        nativeLanguage: 'French', teachingLanguageSource: 'native',
+        // A declared B1 must not be treated as an evaluated B1.
+        cefrLevel: 'B1', goal: 'Academic fluency', updatedAt,
+        _count: { lessons: 2, tutorSessions: 3 }, lessons: [], tutorSessions: [],
+        masteryAttempts: completeGate,
+      }],
+    },
+  });
+  const verified = await new LearnerPassportService(
+    withCanonicalProof,
+    { profile: async () => null },
+  ).get('u1');
+  assert.equal(verified.observed.languageProgress[0].declaredLevel, 'B1');
+  assert.equal(verified.observed.languageProgress[0].evaluatedLevel, 'A1');
+
+  const missingOne = readPrisma({
+    languageProfile: {
+      findMany: async () => [{
+        id: 'lp1', language: 'English', normalizedLanguage: 'en',
+        nativeLanguage: 'French', teachingLanguageSource: 'native',
+        cefrLevel: 'B1', goal: 'Academic fluency', updatedAt,
+        _count: { lessons: 2, tutorSessions: 3 }, lessons: [], tutorSessions: [],
+        masteryAttempts: completeGate.filter((attempt) =>
+          attempt.targetId !== completedMilestones[0].targetId),
+      }],
+    },
+  });
+  const incomplete = await new LearnerPassportService(
+    missingOne,
+    { profile: async () => null },
+  ).get('u1');
+  assert.equal(incomplete.observed.languageProgress[0].evaluatedLevel, null);
 });
 
 test('Onboarding persists the existing ageBand field and a fresh service instance reloads it', async () => {

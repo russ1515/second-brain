@@ -7,9 +7,11 @@ const ROOT = path.resolve(__dirname, '..', '..', '..');
 const {
   FIRST_AUDIO_TARGET_MS,
   FIRST_NARRATION_SEGMENT_MAX,
-  LIGHT_PREFETCH_MAX,
+  FIRST_NARRATION_SEGMENT_MIN,
   TTS_TEXT_MAX,
+  createNarrationPauseGate,
   narrationSegments,
+  playNarrationSegments,
 } = require('../lib/speech-playback.ts');
 
 test('short narration remains one metered synthesis request', () => {
@@ -20,12 +22,23 @@ test('short narration remains one metered synthesis request', () => {
 });
 
 test('long narration starts with a complete short sentence and keeps all content', () => {
-  const text = `Welcome to the lesson. ${'This is the detailed explanation. '.repeat(14)}`.trim();
+  const text = `${'This is the detailed explanation. '.repeat(14)}A final recap.`.trim();
   const parts = narrationSegments(text);
 
-  assert.equal(parts.lead, 'Welcome to the lesson.');
+  assert.ok(parts.lead.endsWith('.'));
+  assert.ok(parts.lead.length >= FIRST_NARRATION_SEGMENT_MIN);
   assert.ok(parts.lead.length <= FIRST_NARRATION_SEGMENT_MAX);
   assert.ok(parts.tail);
+  assert.equal(`${parts.lead} ${parts.tail}`, text);
+});
+
+test('a short greeting is kept with enough narration to prepare its continuation', () => {
+  const text = `Bonjour ! ${'Voici une explication pédagogique sans autre ponctuation '.repeat(35)}`.trim();
+  const parts = narrationSegments(text);
+
+  assert.notEqual(parts.lead, 'Bonjour !');
+  assert.ok(parts.lead.length >= FIRST_NARRATION_SEGMENT_MIN);
+  assert.ok(parts.lead.length <= FIRST_NARRATION_SEGMENT_MAX);
   assert.equal(`${parts.lead} ${parts.tail}`, text);
 });
 
@@ -75,17 +88,149 @@ test('speaker UI measures first playback honestly and exposes delayed loading pl
   assert.match(api, /signal: controller\.signal/);
   assert.match(api, /\.\.\.\(requestId \? \{ requestId \} : \{\}\)/);
   assert.match(api, /if \(!signal\) synthesisInFlight\.set\(key, request\)/);
-  assert.match(web, /tail\.length <= LIGHT_PREFETCH_MAX/);
-  assert.match(native, /tail\.length <= LIGHT_PREFETCH_MAX/);
-  assert.match(web, /`\$\{lifecycle\.requestId\}:lead`/);
-  assert.match(web, /`\$\{lifecycle\.requestId\}:tail`/);
-  assert.match(native, /`\$\{lifecycle\.requestId\}:lead`/);
-  assert.match(native, /`\$\{lifecycle\.requestId\}:tail`/);
-  assert.match(web, /synthesize\(lead, language, narration\.signal, leadRequestId\)/);
-  assert.match(native, /synthesize\(lead, language, narration\.signal, leadRequestId\)/);
-  assert.match(web, /playSynthesisSegment\(first, onFirstAudio, narration\.signal\)/);
-  assert.match(native, /playSynthesisSegment\(first, onFirstAudio, narration\.signal\)/);
+  assert.match(web, /playNarrationSegments\(text/);
+  assert.match(native, /playNarrationSegments\(text/);
   assert.match(web, /signal\?\.addEventListener\('abort', cancel/);
   assert.match(native, /signal\?\.addEventListener\('abort', cancel/);
-  assert.equal(LIGHT_PREFETCH_MAX, 800);
+  assert.match(native, /if \(current !== active\) return true/);
+  assert.match(native, /if \(current !== active\) return gateResumed \|\| narrationWasPaused/);
+});
+
+test('continuation synthesis starts before lead playback finishes and playback stays ordered', async () => {
+  const events = [];
+  let finishLead;
+  const leadFinished = new Promise((resolve) => { finishLead = resolve; });
+  const text = `Bonjour ! ${'Une explication suffisamment longue continue ici sans interruption. '.repeat(30)}`;
+
+  const playback = playNarrationSegments(text, {
+    requestId: 'tts-test',
+    synthesize: async (_segment, _signal, requestId) => {
+      events.push(`synthesize:${requestId}`);
+      return requestId;
+    },
+    play: async (result) => {
+      events.push(`play:start:${result}`);
+      if (result === 'tts-test:lead') await leadFinished;
+      events.push(`play:end:${result}`);
+    },
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, [
+    'synthesize:tts-test:lead',
+    'synthesize:tts-test:tail',
+    'play:start:tts-test:lead',
+  ]);
+  finishLead();
+  await playback;
+  assert.deepEqual(events, [
+    'synthesize:tts-test:lead',
+    'synthesize:tts-test:tail',
+    'play:start:tts-test:lead',
+    'play:end:tts-test:lead',
+    'play:start:tts-test:tail',
+    'play:end:tts-test:tail',
+  ]);
+});
+
+test('pause before first audio persists until resume without resynthesis', async () => {
+  const pauseGate = createNarrationPauseGate();
+  const synthesisIds = [];
+  const played = [];
+  let releaseLeadSynthesis;
+  const leadSynthesisGate = new Promise((resolve) => { releaseLeadSynthesis = resolve; });
+  const text = `Bonjour ! ${'Une longue leçon se poursuit avec le même contenu pédagogique. '.repeat(30)}`;
+
+  const playback = playNarrationSegments(text, {
+    requestId: 'tts-pause-before-start',
+    waitUntilPlayable: pauseGate.wait,
+    synthesize: async (_segment, _signal, requestId) => {
+      synthesisIds.push(requestId);
+      if (requestId === 'tts-pause-before-start:lead') await leadSynthesisGate;
+      return requestId;
+    },
+    play: async (result) => { played.push(result); },
+  });
+
+  pauseGate.pause();
+  releaseLeadSynthesis();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(synthesisIds, [
+    'tts-pause-before-start:lead',
+    'tts-pause-before-start:tail',
+  ]);
+  assert.deepEqual(played, []);
+
+  pauseGate.resume();
+  await playback;
+  assert.deepEqual(synthesisIds, [
+    'tts-pause-before-start:lead',
+    'tts-pause-before-start:tail',
+  ]);
+  assert.deepEqual(played, [
+    'tts-pause-before-start:lead',
+    'tts-pause-before-start:tail',
+  ]);
+});
+
+test('pause in the inter-segment gap prevents a spontaneous tail restart', async () => {
+  const pauseGate = createNarrationPauseGate();
+  const synthesisIds = [];
+  const played = [];
+  let releaseTailSynthesis;
+  const tailSynthesisGate = new Promise((resolve) => { releaseTailSynthesis = resolve; });
+  const text = `Bonjour ! ${'Une longue leçon se poursuit avec le même contenu pédagogique. '.repeat(30)}`;
+
+  const playback = playNarrationSegments(text, {
+    requestId: 'tts-pause-gap',
+    waitUntilPlayable: pauseGate.wait,
+    synthesize: async (_segment, _signal, requestId) => {
+      synthesisIds.push(requestId);
+      if (requestId === 'tts-pause-gap:tail') await tailSynthesisGate;
+      return requestId;
+    },
+    play: async (result) => { played.push(result); },
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(played, ['tts-pause-gap:lead']);
+  pauseGate.pause();
+  releaseTailSynthesis();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(played, ['tts-pause-gap:lead']);
+
+  pauseGate.resume();
+  await playback;
+  assert.deepEqual(synthesisIds, ['tts-pause-gap:lead', 'tts-pause-gap:tail']);
+  assert.deepEqual(played, ['tts-pause-gap:lead', 'tts-pause-gap:tail']);
+});
+
+test('Stop prevents continuation playback without a third synthesis', async () => {
+  const controller = new AbortController();
+  const synthesisIds = [];
+  const played = [];
+  let releaseLead;
+  const leadGate = new Promise((resolve) => { releaseLead = resolve; });
+  const text = `Bonjour ! ${'Une longue leçon se poursuit avec le même contenu pédagogique. '.repeat(30)}`;
+
+  const playback = playNarrationSegments(text, {
+    signal: controller.signal,
+    requestId: 'tts-stop',
+    synthesize: async (_segment, _signal, requestId) => {
+      synthesisIds.push(requestId);
+      return requestId;
+    },
+    play: async (result) => {
+      played.push(result);
+      if (result === 'tts-stop:lead') await leadGate;
+    },
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(synthesisIds, ['tts-stop:lead', 'tts-stop:tail']);
+  controller.abort();
+  releaseLead();
+  await playback;
+  assert.deepEqual(synthesisIds, ['tts-stop:lead', 'tts-stop:tail']);
+  assert.deepEqual(played, ['tts-stop:lead']);
 });

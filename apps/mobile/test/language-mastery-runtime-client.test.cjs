@@ -18,6 +18,10 @@ const examiner = fs.readFileSync(
   path.join(ROOT, 'apps/mobile/app/examiner/[id].tsx'),
   'utf8',
 );
+const courseUi = fs.readFileSync(
+  path.join(ROOT, 'apps/mobile/components/language/course-ui.tsx'),
+  'utf8',
+);
 const lesson = fs.readFileSync(
   path.join(ROOT, 'apps/mobile/app/lesson/[id].tsx'),
   'utf8',
@@ -35,6 +39,23 @@ test('mobile uses the canonical scoped mastery API contracts', () => {
   assert.match(examiner, /attemptId: params\.masteryAttemptId/);
   assert.match(examiner, /assessmentId: id/);
   assert.match(examiner, /answers,/);
+  assert.match(examiner, /setMasteryCourse\(response\.course\)/);
+  assert.match(examiner, /testID="language-mastery-continue"/);
+  assert.match(examiner, /masteryCourse\.status === 'completed'/);
+  assert.match(examiner, /\['active', 'paused'\]\.includes\(masteryCourse\.currentLesson\.status\)/);
+  assert.match(examiner, /resumableLessonUnitId \?\? nextUnit\?\.id/);
+  assert.match(examiner, /router\.replace\(destination as never\)/);
+});
+
+test('course and lesson surface the server bulletin capability lock without a client gate', () => {
+  assert.match(
+    courseUi,
+    /bulletin\.notionGateUnlocked && bulletin\.strictCertification\.unlocked === false/,
+  );
+  assert.match(courseUi, /rlle\.ui\.capabilities\.blocked/);
+  assert.match(courseUi, /rlle\.ui\.capabilities\.blockedDetail/);
+  assert.match(courseLesson, /<LanguageMasteryBulletins/);
+  assert.match(courseLesson, /bulletins=\{course\.masteryBulletins\}/);
 });
 
 test('remediation evidence is linked only from a persisted exercise attempt', () => {
