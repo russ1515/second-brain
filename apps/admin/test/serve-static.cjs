@@ -33,13 +33,20 @@ function rewriteAdminBundle(source) {
     .replaceAll('http://127.0.0.1:8083/api', '/api');
 }
 
+function buildProxyHeaders(requestHeaders) {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(requestHeaders)) {
+    if (value !== undefined && !['host', 'origin'].includes(name.toLowerCase())) {
+      headers.set(name, Array.isArray(value) ? value.join(', ') : value);
+    }
+  }
+  return headers;
+}
+
 async function proxyApi(request, response) {
   const chunks = [];
   for await (const chunk of request) chunks.push(Buffer.from(chunk));
-  const headers = new Headers();
-  for (const [name, value] of Object.entries(request.headers)) {
-    if (value !== undefined && name.toLowerCase() !== 'host') headers.set(name, Array.isArray(value) ? value.join(', ') : value);
-  }
+  const headers = buildProxyHeaders(request.headers);
   try {
     const upstream = await fetch(new URL(request.url ?? '/', apiProxyTarget), {
       method: request.method,
@@ -88,4 +95,4 @@ const server = http.createServer(async (request, response) => {
 
 if (require.main === module) server.listen(8083, '127.0.0.1');
 
-module.exports = { applySecurityHeaders, isSameOrigin, rewriteAdminBundle };
+module.exports = { applySecurityHeaders, buildProxyHeaders, isSameOrigin, rewriteAdminBundle };
