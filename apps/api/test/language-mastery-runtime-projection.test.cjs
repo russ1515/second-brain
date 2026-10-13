@@ -208,12 +208,11 @@ test('native-acoustic target is explicit and eligible only with strict runtime p
   assert.ok(acoustic);
   const formats = [...shared.LANGUAGE_TRAINING_FORMATS];
   const voiceIndex = formats.indexOf('voice-pronunciation');
-  const exerciseAttempts = formats.flatMap((format, index) => format === 'voice-pronunciation'
-    ? []
-    : [{
+  const exerciseAttempts = formats.map((format, index) => ({
         id: `exercise-${index}`, exerciseIndex: index,
         createdAt: new Date(`2026-10-12T10:${String(index).padStart(2, '0')}:00.000Z`),
-      }]);
+        answer: format === 'voice-pronunciation' ? 'editable STT transcript' : 'answer',
+      }));
   const lessons = {
     get: async () => ({
       exercises: formats.map((languageFormat) => ({ languageFormat })),
@@ -238,18 +237,7 @@ test('native-acoustic target is explicit and eligible only with strict runtime p
     status: 'active',
     lastActivityAt: '2026-10-12T10:00:00.000Z',
   };
-  state.milestoneMastery[unit.unitId].trainingEvidence = formats.map((format, index) => ({
-    id: `training-${index}`,
-    format,
-    state: 'completed',
-    helpUsed: false,
-    lessonId: 'lesson-a2',
-    contentVersion: 1,
-    exerciseIndex: index,
-    ...(index === voiceIndex
-      ? { source: 'audio-native-coaching', sourceId: 'voice-coaching-1' }
-      : {}),
-  }));
+  state.milestoneMastery[unit.unitId].trainingEvidence = [];
   let progression = createRlleStrictProgression({
     languageCode: 'en',
     curriculumUnitIds: [unit.unitId],
@@ -294,4 +282,11 @@ test('native-acoustic target is explicit and eligible only with strict runtime p
   assert.equal(blocked.assessmentMode, 'acoustic');
   assert.equal(blocked.eligible, false);
   assert.equal(blocked.blockedReason, 'capability-unavailable');
+  const voiceTraining = await service.trainingEvidenceForLesson(
+    'owner', state.currentLesson, [],
+  );
+  const transcriptEvidence = voiceTraining.find((item) => item.exerciseIndex === voiceIndex);
+  assert.equal(transcriptEvidence.state, 'completed');
+  assert.equal(transcriptEvidence.source, 'exercise-attempt');
+  assert.notEqual(transcriptEvidence.source, 'audio-native-coaching');
 });

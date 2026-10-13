@@ -943,11 +943,20 @@ export class TutorService {
       prompt += agePolicyDirective(agePolicy);
       prompt += adaptiveInstructionPriorityDirective(agePolicy);
     }
-    prompt +=
-      ' When structure helps the learner, use short Markdown sections with clear' +
-      ' headings such as Explanation, Example, Question, Exercise, Summary, or' +
-      ' Next step. Do not force every heading into every response and do not reveal' +
-      ' hidden reasoning or chain-of-thought.';
+    prompt += language
+      ? ` When structure helps the learner, use short Markdown sections with ` +
+        `headings written naturally in ${language.supportLanguage}; do not copy ` +
+        `example labels from a different language. The persisted ` +
+        `${language.supportLanguage} support language remains authoritative for ` +
+        `all learner-facing explanations, corrections and feedback; later ` +
+        `adaptation instructions may change pedagogy but never these language ` +
+        `roles. Do not force headings into every response and do not reveal ` +
+        `hidden reasoning or chain-of-thought.`
+      :
+        ' When structure helps the learner, use short Markdown sections with clear' +
+        ' headings such as Explanation, Example, Question, Exercise, Summary, or' +
+        ' Next step. Do not force every heading into every response and do not reveal' +
+        ' hidden reasoning or chain-of-thought.';
     return prompt;
   }
 

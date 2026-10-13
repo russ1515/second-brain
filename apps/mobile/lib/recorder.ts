@@ -1,5 +1,6 @@
 import { Audio } from 'expo-av';
 import { tr } from './i18n';
+import { speechInputError } from './speech-input-error';
 
 /** Native microphone recording seam (Expo SDK 52 / expo-av). */
 export interface Recording {
@@ -35,29 +36,40 @@ export function createRecorder(): Recorder {
   return {
     async start() {
       const permission = await Audio.requestPermissionsAsync();
-      if (!permission.granted) throw new Error(tr('voice.error.micDenied'));
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-      const created = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY,
-      );
-      recording = created.recording;
-      startedAt = Date.now();
-      pausedAt = 0;
-      pausedMs = 0;
+      if (!permission.granted) {
+        throw speechInputError('MIC_PERMISSION', tr('voice.error.micDenied'));
+      }
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+        });
+        const created = await Audio.Recording.createAsync(
+          Audio.RecordingOptionsPresets.HIGH_QUALITY,
+        );
+        recording = created.recording;
+        startedAt = Date.now();
+        pausedAt = 0;
+        pausedMs = 0;
+      } catch {
+        await restorePlaybackMode();
+        throw speechInputError('AUDIO_RECORDING', tr('learn5.voice.error'));
+      }
     },
 
     async pause() {
-      if (!recording) throw new Error(tr('voice.error.notRecording'));
+      if (!recording) {
+        throw speechInputError('AUDIO_RECORDING', tr('voice.error.notRecording'));
+      }
       if (pausedAt) return;
       await recording.pauseAsync();
       pausedAt = Date.now();
     },
 
     async resume() {
-      if (!recording) throw new Error(tr('voice.error.notRecording'));
+      if (!recording) {
+        throw speechInputError('AUDIO_RECORDING', tr('voice.error.notRecording'));
+      }
       if (!pausedAt) return;
       pausedMs += Date.now() - pausedAt;
       pausedAt = 0;
@@ -66,15 +78,26 @@ export function createRecorder(): Recorder {
 
     async stop() {
       const active = recording;
-      if (!active) throw new Error(tr('voice.error.notRecording'));
+      if (!active) {
+        throw speechInputError('AUDIO_RECORDING', tr('voice.error.notRecording'));
+      }
       recording = null;
-      await active.stopAndUnloadAsync();
-      await restorePlaybackMode();
+      try {
+        await active.stopAndUnloadAsync();
+      } catch {
+        throw speechInputError('AUDIO_RECORDING', tr('learn5.voice.error'));
+      } finally {
+        // Always leave iOS/Android recording mode, including when expo-av
+        // rejects while stopping or unloading the recording.
+        await restorePlaybackMode();
+      }
       const uri = active.getURI();
-      if (!uri) throw new Error(tr('voice.error.empty'));
+      if (!uri) throw speechInputError('AUDIO_RECORDING', tr('voice.error.empty'));
       const response = await fetch(uri);
       const blob = await response.blob();
-      if (blob.size === 0) throw new Error(tr('voice.error.empty'));
+      if (blob.size === 0) {
+        throw speechInputError('AUDIO_RECORDING', tr('voice.error.empty'));
+      }
       const extension = uri.split('?')[0].split('.').pop()?.toLowerCase();
       const mimeType = extension === 'wav' ? 'audio/wav' : 'audio/mp4';
       const pendingPause = pausedAt ? Date.now() - pausedAt : 0;

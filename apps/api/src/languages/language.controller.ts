@@ -9,6 +9,8 @@ import {
   Param,
   Patch,
   Post,
+  UnsupportedMediaTypeException,
+  UnprocessableEntityException,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -37,12 +39,15 @@ import type {
   RlleScopedMasterySubmissionResponse,
   RlleWorldMissionTemplate,
   StartConversationResponse,
+  TranscriptionResult,
 } from '@second-brain/shared';
+import { toSupportedLanguage } from '@second-brain/shared';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { LessonService } from '../lessons/lesson.service';
 import type { UploadedFileLike } from '../documents/extraction/text-extraction.service';
+import { SpeechService } from '../speech/speech.service';
 import { LanguageService } from './language.service';
 import { VocabularyService } from './vocabulary.service';
 import { ConversationService } from './conversation.service';
@@ -76,6 +81,19 @@ import { RecordRlleRemediationExerciseDto } from './dto/record-rlle-remediation-
 import type { LanguageMasteryAttemptProjection } from './language-mastery-attempt.service';
 
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // 10 MB
+const LANGUAGE_STT_MIME_TYPES = new Set([
+  'application/octet-stream',
+  'audio/flac',
+  'audio/m4a',
+  'audio/mp3',
+  'audio/mp4',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/wav',
+  'audio/webm',
+  'audio/x-m4a',
+  'audio/x-wav',
+]);
 
 @UseGuards(JwtAccessGuard)
 @Controller('languages')
@@ -89,6 +107,7 @@ export class LanguageController {
     private readonly skills: LanguageSkillsService,
     private readonly lessons: LessonService,
     private readonly rlle: RealLifeLanguageService,
+    private readonly speech: SpeechService,
   ) {}
 
   @Post()
@@ -221,6 +240,91 @@ export class LanguageController {
       audio,
       this.durationSeconds(durationMs),
     );
+  }
+
+  /** Transcribe one owned language exercise into editable text. This is a
+   * training input only: it never creates acoustic evidence or a mastery
+   * decision, and the server fixes its billable feature attribution. */
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post(':id/course/training/stt')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(
+    FileInterceptor('audio', { limits: { fileSize: MAX_AUDIO_BYTES } }),
+  )
+  async courseTrainingTranscription(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @UploadedFile() audio: UploadedFileLike | undefined,
+    @Body('lessonId') lessonId?: string,
+    @Body('exerciseIndex') exerciseIndex?: string,
+    @Body('durationMs') durationMs?: string,
+  ): Promise<TranscriptionResult> {
+    const profile = await this.languages.requireOwned(user.userId, id);
+    if (!audio) {
+      throw new BadRequestException({
+        code: 'AUDIO_UPLOAD',
+        message: 'No audio was uploaded.',
+        retryable: true,
+      });
+    }
+    if (audio.buffer.length === 0) {
+      throw new UnprocessableEntityException({
+        code: 'STT_ERROR',
+        message: 'The recording is empty.',
+        retryable: true,
+      });
+    }
+
+    const mimeType = (audio.mimetype || 'application/octet-stream')
+      .split(';', 1)[0]
+      .trim()
+      .toLowerCase();
+    if (!LANGUAGE_STT_MIME_TYPES.has(mimeType)) {
+      throw new UnsupportedMediaTypeException({
+        code: 'TRANSCODE',
+        message: 'This recording format cannot be transcribed.',
+        retryable: false,
+      });
+    }
+
+    const parsedIndex = Number(exerciseIndex);
+    if (!lessonId?.trim() || !Number.isInteger(parsedIndex) || parsedIndex < 0) {
+      throw new BadRequestException({
+        code: 'STT_ERROR',
+        message: 'A valid language exercise is required.',
+        retryable: false,
+      });
+    }
+    const lesson = await this.lessons.get(user.userId, lessonId.trim());
+    const exercise = lesson.exercises[parsedIndex];
+    if (
+      lesson.languageProfileId !== profile.id
+      || exercise?.languageFormat !== 'voice-pronunciation'
+    ) {
+      throw new BadRequestException({
+        code: 'STT_ERROR',
+        message: 'This recording does not match the active language exercise.',
+        retryable: false,
+      });
+    }
+
+    const language = toSupportedLanguage(profile.normalizedLanguage)
+      ?? toSupportedLanguage(profile.language);
+    if (!language) {
+      throw new BadRequestException({
+        code: 'STT_ERROR',
+        message: 'The target language is not supported for transcription.',
+        retryable: false,
+      });
+    }
+
+    return this.speech.transcribe(audio.buffer, {
+      mimeType,
+      language,
+      ...(this.durationSeconds(durationMs)
+        ? { durationSeconds: this.durationSeconds(durationMs)! }
+        : {}),
+    }, 'LANGUAGE_VOICE');
   }
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })

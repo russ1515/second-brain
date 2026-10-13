@@ -16,8 +16,8 @@ const capabilityCard = fs.readFileSync(
 );
 const dockerfile = fs.readFileSync(path.join(ROOT, 'Dockerfile.p1-user'), 'utf8');
 
-test('strict language mastery stays disabled in the OVH User image by default', () => {
-  assert.match(dockerfile, /^ARG EXPO_PUBLIC_FEATURE_LANGUAGE_MASTERY_V1=false$/m);
+test('the OVH User image keeps the language mastery UX active by default', () => {
+  assert.match(dockerfile, /^ARG EXPO_PUBLIC_FEATURE_LANGUAGE_MASTERY_V1=true$/m);
   assert.match(
     dockerfile,
     /EXPO_PUBLIC_FEATURE_LANGUAGE_MASTERY_V1=\$\{EXPO_PUBLIC_FEATURE_LANGUAGE_MASTERY_V1\}/,

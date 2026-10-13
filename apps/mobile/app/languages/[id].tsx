@@ -170,9 +170,6 @@ export default function LanguageExperienceScreen() {
           secondaryWidth={320}
           primary={
             <View style={{ gap: spacing.md }}>
-              {featureFlags.languageMasteryV1 && !strictServerEnabled ? (
-                <Alert tone="warning" title={t('rlle.ui.capabilities.strictDisabled')} />
-              ) : null}
               {featureFlags.languageMasteryV1 && strictCapabilities ? (
                 <OralCapabilityCard
                   matrix={strictCapabilities}

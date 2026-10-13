@@ -1,5 +1,6 @@
 import type { Recorder, Recording } from './recorder';
 import { tr } from './i18n';
+import { speechInputError } from './speech-input-error';
 
 export type { Recorder, Recording };
 
@@ -49,30 +50,40 @@ export function createRecorder(): Recorder {
   return {
     async start() {
       if (!RECORDING_SUPPORTED) {
-        throw new Error(tr('voice.error.recordUnsupported'));
+        throw speechInputError(
+          'MEDIARECORDER_UNAVAILABLE',
+          tr('voice.error.recordUnsupported'),
+        );
       }
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (e) {
-        // The browser's own error text is unreadable ("Permission denied");
-        // say what the learner actually has to do.
-        throw new Error(tr('voice.error.micDenied'));
+        const name = (e as { name?: unknown })?.name;
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+          throw speechInputError('MIC_PERMISSION', tr('voice.error.micDenied'));
+        }
+        throw speechInputError('AUDIO_RECORDING', tr('learn5.voice.error'));
       }
-      const mimeType = pickMimeType();
-      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      chunks = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.push(e.data);
-      };
-      startedAt = Date.now();
-      pausedAt = 0;
-      pausedMs = 0;
-      recorder.start();
+      try {
+        const mimeType = pickMimeType();
+        recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        chunks = [];
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) chunks.push(e.data);
+        };
+        startedAt = Date.now();
+        pausedAt = 0;
+        pausedMs = 0;
+        recorder.start();
+      } catch {
+        release();
+        throw speechInputError('AUDIO_RECORDING', tr('learn5.voice.error'));
+      }
     },
 
     async pause() {
       if (!recorder || recorder.state === 'inactive') {
-        throw new Error(tr('voice.error.notRecording'));
+        throw speechInputError('AUDIO_RECORDING', tr('voice.error.notRecording'));
       }
       if (recorder.state === 'paused') return;
       recorder.pause();
@@ -81,7 +92,7 @@ export function createRecorder(): Recorder {
 
     async resume() {
       if (!recorder || recorder.state === 'inactive') {
-        throw new Error(tr('voice.error.notRecording'));
+        throw speechInputError('AUDIO_RECORDING', tr('voice.error.notRecording'));
       }
       if (recorder.state !== 'paused') return;
       pausedMs += Date.now() - pausedAt;
@@ -92,23 +103,41 @@ export function createRecorder(): Recorder {
     stop() {
       return new Promise<Recording>((resolve, reject) => {
         if (!recorder) {
-          reject(new Error(tr('voice.error.notRecording')));
+          reject(speechInputError('AUDIO_RECORDING', tr('voice.error.notRecording')));
           return;
         }
         const active = recorder;
+        let settled = false;
+        const fail = () => {
+          if (settled) return;
+          settled = true;
+          active.onstop = null;
+          active.onerror = null;
+          release();
+          reject(speechInputError('AUDIO_RECORDING', tr('learn5.voice.error')));
+        };
+        active.onerror = fail;
         active.onstop = () => {
+          if (settled) return;
+          settled = true;
+          active.onstop = null;
+          active.onerror = null;
           const mimeType = active.mimeType || 'audio/webm';
           const blob = new Blob(chunks, { type: mimeType });
           const pendingPause = pausedAt ? Date.now() - pausedAt : 0;
           const durationMs = Math.max(0, Date.now() - startedAt - pausedMs - pendingPause);
           release();
           if (blob.size === 0) {
-            reject(new Error(tr('voice.error.empty')));
+            reject(speechInputError('AUDIO_RECORDING', tr('voice.error.empty')));
             return;
           }
           resolve({ blob, mimeType, durationMs });
         };
-        active.stop();
+        try {
+          active.stop();
+        } catch {
+          fail();
+        }
       });
     },
 

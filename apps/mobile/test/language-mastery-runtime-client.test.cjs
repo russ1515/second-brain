@@ -47,13 +47,12 @@ test('mobile uses the canonical scoped mastery API contracts', () => {
   assert.match(examiner, /router\.replace\(destination as never\)/);
 });
 
-test('course and lesson surface the server bulletin capability lock without a client gate', () => {
-  assert.match(
-    courseUi,
-    /bulletin\.notionGateUnlocked && bulletin\.strictCertification\.unlocked === false/,
-  );
-  assert.match(courseUi, /rlle\.ui\.capabilities\.blocked/);
-  assert.match(courseUi, /rlle\.ui\.capabilities\.blockedDetail/);
+test('bulletin stays pedagogical while the active acoustic target surfaces its real capability lock', () => {
+  assert.doesNotMatch(courseUi, /strictCertification/);
+  assert.doesNotMatch(courseUi, /rlle\.ui\.capabilities\.blocked/);
+  assert.match(courseLesson, /nextMasteryTarget\?\.assessmentMode === 'acoustic'/);
+  assert.match(courseLesson, /nextMasteryTarget\.blockedReason === 'capability-unavailable'/);
+  assert.match(courseLesson, /rlle\.ui\.capabilities\.blockedDetail/);
   assert.match(courseLesson, /<LanguageMasteryBulletins/);
   assert.match(courseLesson, /bulletins=\{course\.masteryBulletins\}/);
 });

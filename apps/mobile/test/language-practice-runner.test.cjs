@@ -63,7 +63,8 @@ test('touch choices, reconstruction, listening and voice keep keyboard/text equi
   assert.match(source, /format === 'listening-discrimination'[\s\S]*<SpeakButton/);
   assert.match(source, /text=\{exercise\.audioText\}/);
   assert.match(source, /case 'voice-pronunciation':[\s\S]*onVoice\?\.\(\)/);
-  assert.match(source, /format !== 'voice-pronunciation'[\s\S]*language-submit/);
+  assert.match(source, /case 'voice-pronunciation':[\s\S]*renderTextAnswer\(true\)/);
+  assert.match(source, /testID=\{`language-submit-\$\{index\}`\}/);
   assert.match(source, /language=\{language \?\? undefined\}/);
 });
 
@@ -77,12 +78,17 @@ test('submission is delegated without client transport, answer leakage or pass l
   assert.doesNotMatch(source, /\bmaster(?:y|ed)?\b/i);
 });
 
-test('Lesson persists written and audio-native practice while returning to the RLLE course', () => {
+test('Lesson keeps speech input separate from acoustic assessment and preserves editable text fallback', () => {
   assert.match(lessonScreen, /exercise\.languageFormat\s*\?/);
   assert.match(lessonScreen, /<LanguagePracticeRunner/);
   assert.match(lessonScreen, /\/lessons\/\$\{lesson\.id\}\/exercises\/\$\{index\}\/attempt/);
-  assert.match(lessonScreen, /submitRllePronunciationTraining/);
-  assert.match(lessonScreen, /languageProfileId && experienceSessionId/);
+  assert.match(lessonScreen, /\/languages\/\$\{encodeURIComponent\(lesson\.languageProfileId\)\}\/course\/training\/stt/);
+  assert.match(lessonScreen, /form\.append\('lessonId', lesson\.id\)/);
+  assert.match(lessonScreen, /form\.append\('exerciseIndex', String\(index\)\)/);
+  assert.match(lessonScreen, /voiceTranscript=\{voiceTranscript\}/);
+  assert.match(source, /voiceTranscript !== null/);
+  assert.match(source, /renderTextAnswer\(true\)/);
+  assert.doesNotMatch(lessonScreen, /submitRllePronunciationTraining/);
   assert.doesNotMatch(lessonScreen, /decideLanguageMilestoneMastery/);
 
   assert.match(courseLessonScreen, /returnTo=\$\{encodeURIComponent\(returnTo\)\}/);

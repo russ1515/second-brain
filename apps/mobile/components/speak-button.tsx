@@ -37,9 +37,12 @@ export function SpeakButton({
   const { t } = useI18n();
   const styles = useMemo(() => makeStyles(c), [c]);
   const idleLabel = label ?? t('lesson.readAloud');
-  const [state, setState] = useState<'idle' | 'loading' | 'playing' | 'paused'>('idle');
+  const [state, setState] = useState<
+    'idle' | 'loading' | 'playing' | 'paused' | 'ended' | 'error'
+  >('idle');
   const [error, setError] = useState<string | null>(null);
   const [slowStart, setSlowStart] = useState(false);
+  const startInFlightRef = useRef(false);
   const attemptRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
   const requestIdRef = useRef<string | null>(null);
@@ -52,6 +55,7 @@ export function SpeakButton({
 
   // Leaving the screen must not leave a voice talking to an empty room.
   useEffect(() => () => {
+    startInFlightRef.current = false;
     attemptRef.current += 1;
     controllerRef.current?.abort();
     clearSlowTimer();
@@ -61,6 +65,8 @@ export function SpeakButton({
   if (!PLAYBACK_SUPPORTED) return null;
 
   const start = async () => {
+    if (startInFlightRef.current) return;
+    startInFlightRef.current = true;
     const attempt = attemptRef.current + 1;
     attemptRef.current = attempt;
     const requestId = createClientRequestId('tts');
@@ -88,6 +94,9 @@ export function SpeakButton({
           onFirstAudio?.(latencyMs);
         },
       }); // resolves when playback actually ends
+      if (attemptRef.current === attempt && !controller.signal.aborted) {
+        setState('ended');
+      }
     } catch (e) {
       if (attemptRef.current === attempt && !controller.signal.aborted) {
         const message = (e as Error).message;
@@ -96,14 +105,15 @@ export function SpeakButton({
             ? t('error.validation')
             : message,
         );
+        setState('error');
       }
     } finally {
       if (attemptRef.current === attempt) {
+        startInFlightRef.current = false;
         clearSlowTimer();
         controllerRef.current = null;
         requestIdRef.current = null;
         setSlowStart(false);
-        setState('idle');
       }
     }
   };
@@ -118,11 +128,12 @@ export function SpeakButton({
     } catch (cause) {
       setError((cause as Error).message);
       stopSpeaking();
-      setState('idle');
+      setState('error');
     }
   };
 
   const stop = () => {
+    startInFlightRef.current = false;
     attemptRef.current += 1;
     controllerRef.current?.abort();
     controllerRef.current = null;
@@ -136,7 +147,7 @@ export function SpeakButton({
   return (
     <>
       <View style={styles.controls}>
-        {state === 'idle' || state === 'loading' ? (
+        {state === 'idle' || state === 'loading' || state === 'ended' || state === 'error' ? (
           state === 'loading' ? (
             <>
               <View accessibilityLabel={t('state.loading')} accessibilityRole="progressbar" style={styles.loading}>

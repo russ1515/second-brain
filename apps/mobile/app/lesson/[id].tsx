@@ -7,11 +7,11 @@ import type {
   LessonFlowProgress,
   LessonFlowStepKey,
   LessonView,
-  PronunciationCoaching,
   RecordRlleRemediationExerciseRequest,
   SubmitAttemptResponse,
+  TranscriptionResult,
 } from '@second-brain/shared';
-import { api } from '../../lib/client';
+import { api, apiUpload } from '../../lib/client';
 import { saveLessonAsPdf } from '../../lib/lesson-pdf';
 import { useTokens } from '../../lib/design/theme';
 import type { ColorScale } from '../../lib/design/tokens';
@@ -21,13 +21,16 @@ import { Markdown } from '../../components/markdown';
 import { ExerciseCard } from '../../components/exercise-card';
 import { SpeakButton } from '../../components/speak-button';
 import { LanguagePracticeRunner } from '../../components/language/practice-runner';
-import { createRecorder, type Recorder } from '../../lib/recorder';
-import {
-  recordRlleRemediationExercise,
-  submitRllePronunciationTraining,
-} from '../../lib/language-rll-client';
+import { createRecorder, type Recorder, type Recording } from '../../lib/recorder';
+import { recordRlleRemediationExercise } from '../../lib/language-rll-client';
 import { featureFlags } from '../../lib/feature-flags';
 import { useTeachingSpeechLanguage } from '../../lib/language-teaching';
+import {
+  classifySpeechInputFailure,
+  speechInputError,
+  type SpeechInputFailure,
+  type SpeechInputPhase,
+} from '../../lib/speech-input-error';
 
 /** One step of the pedagogical flow. */
 interface FlowStep {
@@ -74,7 +77,7 @@ export default function LessonScreen() {
   const [step, setStep] = useState(0);
   const [flow, setFlow] = useState<LessonFlowProgress | null>(null);
   const [flowBusy, setFlowBusy] = useState(false);
-  const [confirmNext, setConfirmNext] = useState<LessonFlowStepKey | null>(null);
+  const emptyFlashcardSkip = useRef<string | null>(null);
   const teachingSpeechLanguage = useTeachingSpeechLanguage(
     lesson?.languageProfileId ?? languageProfileId,
   );
@@ -83,13 +86,13 @@ export default function LessonScreen() {
     try {
       const [l, c, f] = await Promise.all([
         api<LessonView>(`/lessons/${id}`),
-        api<CardView[]>(`/lessons/${id}/flashcards`).catch(() => []),
+        api<CardView[]>(`/lessons/${id}/flashcards`),
         api<LessonFlowProgress>(`/lessons/${id}/flow`),
       ]);
       setLesson(l);
       setCards(c);
       setFlow(f);
-      setStep(f.activeIndex);
+      setStep(visibleFlowIndex(f, c.length > 0));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -176,7 +179,6 @@ export default function LessonScreen() {
           <LanguageTrainingExercise
             key={index}
             exercise={exercise}
-            experienceSessionId={session}
             index={index}
             lesson={lesson}
             remediationEvidence={
@@ -243,13 +245,14 @@ export default function LessonScreen() {
       });
     }
 
-    // 9 · Flashcards
-    s.push({
-      key: 'flashcards',
-      title: t('lesson.flashcards'),
-      icon: '🗂️',
-      node:
-        cards.length > 0 ? (
+    // 9 · Flashcards — optional in the visible flow. The persisted server step
+    // is advanced automatically below when there are no cards to show.
+    if (cards.length > 0) {
+      s.push({
+        key: 'flashcards',
+        title: t('lesson.flashcards'),
+        icon: '🗂️',
+        node: (
           <>
             {cards.map((c) => (
               <Flashcard key={c.id} card={c} />
@@ -258,10 +261,9 @@ export default function LessonScreen() {
               {cards.length} {t('lesson.cardsScheduled')}
             </Text>
           </>
-        ) : (
-          <Text style={styles.muted}>{t('lesson.noFlashcards')}</Text>
         ),
-    });
+      });
+    }
 
     // 10 · Revision (scheduling promise + review + PDF)
     s.push({
@@ -307,6 +309,52 @@ export default function LessonScreen() {
     teachingSpeechLanguage,
   ]);
 
+  useEffect(() => {
+    if (
+      !lesson
+      || !flow
+      || cards.length > 0
+      || flow.completed
+      || flow.activeStepKey !== 'flashcards'
+    ) return;
+    const lockKey = `${id}:${flow.updatedAt}`;
+    if (emptyFlashcardSkip.current === lockKey) return;
+    emptyFlashcardSkip.current = lockKey;
+    let cancelled = false;
+
+    const skip = async () => {
+      setFlowBusy(true);
+      setError(null);
+      try {
+        let current = flow;
+        if (!current.validatedStepKeys.includes('flashcards')) {
+          current = await api<LessonFlowProgress>(
+            `/lessons/${id}/flow/flashcards/validate`,
+            { method: 'POST' },
+          );
+        }
+        const nextKey = current.stepKeys[current.activeIndex + 1];
+        if (!current.completed && nextKey) {
+          current = await api<LessonFlowProgress>(
+            `/lessons/${id}/flow/${nextKey}/enter`,
+            { method: 'POST' },
+          );
+        }
+        if (!cancelled) {
+          setFlow(current);
+          setStep(visibleFlowIndex(current, false));
+        }
+      } catch (cause) {
+        emptyFlashcardSkip.current = null;
+        if (!cancelled) setError((cause as Error).message);
+      } finally {
+        if (!cancelled) setFlowBusy(false);
+      }
+    };
+    void skip();
+    return () => { cancelled = true; };
+  }, [cards.length, flow, id, lesson]);
+
   if (error && !lesson) {
     return (
       <ScrollView contentContainerStyle={styles.container}>
@@ -320,12 +368,13 @@ export default function LessonScreen() {
   const clamped = Math.min(step, total - 1);
   const isLast = clamped === total - 1;
   const activeValidated = flow.validatedStepKeys.includes(flow.activeStepKey);
-  const viewingPast = clamped < flow.activeIndex;
+  const activeVisibleIndex = visibleFlowIndex(flow, cards.length > 0);
+  const viewingPast = clamped < activeVisibleIndex;
   const canGoBack = clamped > 0 && (flow.completed || activeValidated);
 
   const continueFlow = async () => {
     if (viewingPast) {
-      setStep((current) => Math.min(current + 1, flow.activeIndex));
+      setStep((current) => Math.min(current + 1, activeVisibleIndex));
       return;
     }
     if (flow.completed) {
@@ -353,26 +402,14 @@ export default function LessonScreen() {
         await load();
         return;
       }
-      setConfirmNext(current.stepKeys[current.activeIndex + 1]);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setFlowBusy(false);
-    }
-  };
-
-  const enterConfirmedStep = async () => {
-    if (!confirmNext) return;
-    setFlowBusy(true);
-    setError(null);
-    try {
+      const nextKey = current.stepKeys[current.activeIndex + 1];
+      if (!nextKey) return;
       const next = await api<LessonFlowProgress>(
-        `/lessons/${id}/flow/${confirmNext}/enter`,
+        `/lessons/${id}/flow/${nextKey}/enter`,
         { method: 'POST' },
       );
       setFlow(next);
-      setStep(next.activeIndex);
-      setConfirmNext(null);
+      setStep(visibleFlowIndex(next, cards.length > 0));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -436,26 +473,7 @@ export default function LessonScreen() {
 
       {/* Guided navigation — advance one step at a time; no jumping ahead. */}
       <View style={styles.nav}>
-        {confirmNext ? (
-          <View style={styles.confirmation} accessibilityRole="alert">
-            <Text style={styles.confirmationTitle}>{t('lesson.flow.confirmTitle')}</Text>
-            <Text style={styles.confirmationText}>{t('lesson.flow.confirmDetail')}</Text>
-            <View style={styles.confirmationActions}>
-              <Button
-                variant="ghost"
-                label={t('learn5.cancel')}
-                onPress={() => setConfirmNext(null)}
-                disabled={flowBusy}
-              />
-              <Button
-                label={t('lesson.flow.confirmAction')}
-                onPress={() => void enterConfirmedStep()}
-                busy={flowBusy}
-              />
-            </View>
-          </View>
-        ) : null}
-        {canGoBack && !confirmNext ? (
+        {canGoBack ? (
           <View style={styles.flex}>
             <Button variant="ghost" label={t('lesson.previous')} onPress={() => setStep(clamped - 1)} />
           </View>
@@ -463,19 +481,26 @@ export default function LessonScreen() {
           <View style={styles.flex} />
         )}
         <View style={styles.flex}>
-          {!confirmNext ? (
-            <Button
-              label={flow.completed
-                ? (session && !returnTo ? t('lesson.finishSession') : t('lesson.finish'))
-                : isLast ? t('lesson.finish') : t('lesson.continue')}
-              onPress={() => void continueFlow()}
-              busy={flowBusy}
-            />
-          ) : null}
+          <Button
+            label={flow.completed
+              ? (session && !returnTo ? t('lesson.finishSession') : t('lesson.finish'))
+              : isLast ? t('lesson.finish') : t('lesson.continue')}
+            onPress={() => void continueFlow()}
+            busy={flowBusy}
+          />
         </View>
       </View>
     </View>
   );
+}
+
+function visibleFlowIndex(flow: LessonFlowProgress, hasCards: boolean): number {
+  const visibleKeys = hasCards
+    ? flow.stepKeys
+    : flow.stepKeys.filter((key) => key !== 'flashcards');
+  const direct = visibleKeys.indexOf(flow.activeStepKey);
+  if (direct >= 0) return direct;
+  return Math.max(0, Math.min(flow.activeIndex, visibleKeys.length - 1));
 }
 
 /**
@@ -485,13 +510,11 @@ export default function LessonScreen() {
  */
 function LanguageTrainingExercise({
   exercise,
-  experienceSessionId,
   index,
   lesson,
   remediationEvidence,
 }: {
   exercise: LessonExercise;
-  experienceSessionId?: string;
   index: number;
   lesson: LessonView;
   remediationEvidence?: {
@@ -508,8 +531,9 @@ function LanguageTrainingExercise({
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [speechFailure, setSpeechFailure] = useState<SpeechInputFailure | null>(null);
+  const [voiceTranscript, setVoiceTranscript] = useState<string | null>(null);
   const [result, setResult] = useState<SubmitAttemptResponse | null>(null);
-  const [coaching, setCoaching] = useState<PronunciationCoaching | null>(null);
   const [pendingEvidence, setPendingEvidence] =
     useState<RecordRlleRemediationExerciseRequest | null>(null);
 
@@ -557,9 +581,8 @@ function LanguageTrainingExercise({
   };
 
   const toggleVoice = async () => {
-    if (!lesson.languageProfileId || !experienceSessionId) return;
     setError(null);
-    setCoaching(null);
+    setSpeechFailure(null);
     if (!recording) {
       try {
         recorder.current = createRecorder();
@@ -568,28 +591,56 @@ function LanguageTrainingExercise({
       } catch (cause) {
         recorder.current?.cancel();
         recorder.current = null;
-        setError((cause as Error).message);
+        setSpeechFailure(speechFailureFor(cause, 'recording', t));
       }
       return;
     }
 
     setRecording(false);
     setBusy(true);
+    let recordingPayload: Recording;
     try {
       const active = recorder.current;
-      if (!active) throw new Error(t('voice.error.notRecording'));
-      const recordingPayload = await active.stop();
-      const response = await submitRllePronunciationTraining(lesson.languageProfileId, {
-        experienceSessionId,
-        lessonId: lesson.id,
-        exerciseIndex: index,
-        recording: recordingPayload,
-      });
-      setCoaching(response.coaching);
+      if (!active) {
+        throw speechInputError('AUDIO_RECORDING', t('voice.error.notRecording'));
+      }
+      recordingPayload = await active.stop();
     } catch (cause) {
-      setError((cause as Error).message);
-    } finally {
       recorder.current = null;
+      setBusy(false);
+      setSpeechFailure(speechFailureFor(cause, 'recording', t));
+      return;
+    }
+    recorder.current = null;
+
+    try {
+      const form = new FormData();
+      const extension = recordingPayload.mimeType.includes('mp4')
+        ? 'mp4'
+        : recordingPayload.mimeType.includes('ogg')
+          ? 'ogg'
+          : recordingPayload.mimeType.includes('wav')
+            ? 'wav'
+            : 'webm';
+      form.append('audio', recordingPayload.blob, `language-answer.${extension}`);
+      if (recordingPayload.durationMs !== undefined) {
+        form.append('durationMs', String(recordingPayload.durationMs));
+      }
+      if (!lesson.languageProfileId) {
+        throw speechInputError('STT_ERROR', t('learn5.voice.error'));
+      }
+      form.append('lessonId', lesson.id);
+      form.append('exerciseIndex', String(index));
+      const transcript = await apiUpload<TranscriptionResult>(
+        `/languages/${encodeURIComponent(lesson.languageProfileId)}/course/training/stt`,
+        form,
+      );
+      const text = transcript.text.trim();
+      if (!text) throw speechInputError('STT_ERROR', t('voice.error.empty'));
+      setVoiceTranscript(text);
+    } catch (cause) {
+      setSpeechFailure(speechFailureFor(cause, 'transcription', t));
+    } finally {
       setBusy(false);
     }
   };
@@ -603,11 +654,15 @@ function LanguageTrainingExercise({
         index={index}
         language={lesson.language}
         onSubmit={(answer) => void submitWritten(answer)}
-        onVoice={lesson.languageProfileId && experienceSessionId
-          ? () => void toggleVoice()
-          : undefined}
+        onVoice={() => void toggleVoice()}
         voiceActive={recording}
+        voiceTranscript={voiceTranscript}
       />
+      {speechFailure ? (
+        <View testID={`language-speech-error-${speechFailure.code.toLowerCase()}`}>
+          <ErrorBanner message={speechFailure.message} />
+        </View>
+      ) : null}
       {error ? <ErrorBanner message={error} /> : null}
       {pendingEvidence ? (
         <Button
@@ -634,28 +689,30 @@ function LanguageTrainingExercise({
           {attempt.how ? <Text style={styles.practiceBody}>{attempt.how}</Text> : null}
         </Card>
       ) : null}
-      {coaching ? (
-        <Card style={styles.practiceFeedback} testID={`language-voice-feedback-${index}`}>
-          <Text style={styles.practiceVerdict}>
-            {t('lang.heard').replace('{text}', coaching.transcript)}
-          </Text>
-          <Text style={styles.practiceBody}>{coaching.summary}</Text>
-          {coaching.why ? (
-            <>
-              <Text style={styles.practiceLabel}>{t('lang.whyMatters')}</Text>
-              <Text style={styles.practiceBody}>{coaching.why}</Text>
-            </>
-          ) : null}
-          {coaching.howToImprove ? (
-            <>
-              <Text style={styles.practiceLabel}>{t('lang.howImprove')}</Text>
-              <Text style={styles.practiceBody}>{coaching.howToImprove}</Text>
-            </>
-          ) : null}
-        </Card>
-      ) : null}
     </View>
   );
+}
+
+function speechFailureFor(
+  cause: unknown,
+  phase: SpeechInputPhase,
+  t: (key: TranslationKey) => string,
+): SpeechInputFailure {
+  const code = classifySpeechInputFailure(cause, phase);
+  const message = code === 'MIC_PERMISSION'
+    ? t('voice.error.micDenied')
+    : code === 'MEDIARECORDER_UNAVAILABLE'
+      ? t('voice.error.recordUnsupported')
+      : code === 'AUDIO_RECORDING'
+        ? t('learn5.voice.error')
+        : code === 'AUDIO_UPLOAD' || code === 'TRANSCODE'
+          ? t('error.upload')
+          : code === 'STT_UNAVAILABLE'
+            ? `${t('rlle.ui.capabilities.transcription')} — ${t('state.partial')}`
+            : code === 'STT_ERROR'
+              ? `${t('rlle.ui.capabilities.transcription')} — ${t('error.detail')}`
+              : t('rlle.ui.capabilities.blockedDetail');
+  return { code, message };
 }
 
 function scheduleMessage(cards: CardView[], t: (k: TranslationKey) => string): string {

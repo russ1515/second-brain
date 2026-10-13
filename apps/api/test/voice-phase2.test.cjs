@@ -9,6 +9,7 @@ const path = require('node:path');
 const { ForbiddenException } = require('@nestjs/common');
 const { OpenAISpeechProvider } = require('../dist/speech/providers/openai-speech.provider.js');
 const { SpeechService } = require('../dist/speech/speech.service.js');
+const { LanguageController } = require('../dist/languages/language.controller.js');
 const { languageSystemPrompt } = require('../dist/languages/language-modes.js');
 const {
   resolveLanguageTeachingRoles,
@@ -48,6 +49,104 @@ function oneSecondWav() {
   result.writeUInt32LE(byteRate, 40);
   return result;
 }
+
+test('owned language STT is scoped to a voice exercise and attributed to LANGUAGE_VOICE', async () => {
+  const calls = [];
+  const profile = {
+    id: 'lp-1', userId: 'u-1', language: 'Spanish', normalizedLanguage: 'es',
+  };
+  const languages = {
+    requireOwned: async (userId, profileId) => {
+      assert.equal(userId, 'u-1');
+      assert.equal(profileId, 'lp-1');
+      return profile;
+    },
+  };
+  const lessons = {
+    get: async (userId, lessonId) => {
+      assert.equal(userId, 'u-1');
+      assert.equal(lessonId, 'lesson-1');
+      return {
+        id: lessonId,
+        languageProfileId: 'lp-1',
+        exercises: [{ languageFormat: 'voice-pronunciation' }],
+      };
+    },
+  };
+  const speech = {
+    transcribe: async (audio, options, feature) => {
+      calls.push({ audio, options, feature });
+      return { text: 'hola', language: 'es', provider: 'test', model: 'stt-test' };
+    },
+  };
+  const controller = new LanguageController(
+    languages, null, null, null, null, null, lessons, null, speech,
+  );
+  const result = await controller.courseTrainingTranscription(
+    { userId: 'u-1' },
+    'lp-1',
+    { buffer: Buffer.from('audio'), mimetype: 'audio/webm; codecs=opus' },
+    'lesson-1',
+    '0',
+    '1250',
+  );
+
+  assert.equal(result.text, 'hola');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].feature, 'LANGUAGE_VOICE');
+  assert.deepEqual(calls[0].options, {
+    mimeType: 'audio/webm',
+    language: 'es',
+    durationSeconds: 2,
+  });
+
+  await assert.rejects(
+    controller.courseTrainingTranscription(
+      { userId: 'u-1' },
+      'lp-1',
+      { buffer: Buffer.from('not audio'), mimetype: 'text/plain' },
+      'lesson-1',
+      '0',
+    ),
+    (error) => error?.getStatus?.() === 415
+      && error.getResponse()?.code === 'TRANSCODE',
+  );
+  assert.equal(calls.length, 1);
+});
+
+test('language STT rejects unrelated exercises before the provider call', async () => {
+  let calls = 0;
+  const controller = new LanguageController(
+    { requireOwned: async () => ({ id: 'lp-1', language: 'English', normalizedLanguage: 'en' }) },
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      get: async () => ({
+        id: 'lesson-1',
+        languageProfileId: 'lp-1',
+        exercises: [{ languageFormat: 'guided-writing' }],
+      }),
+    },
+    null,
+    { transcribe: async () => { calls += 1; } },
+  );
+
+  await assert.rejects(
+    controller.courseTrainingTranscription(
+      { userId: 'u-1' },
+      'lp-1',
+      { buffer: Buffer.from('audio'), mimetype: 'audio/webm' },
+      'lesson-1',
+      '0',
+    ),
+    (error) => error?.getStatus?.() === 400
+      && error.getResponse()?.code === 'STT_ERROR',
+  );
+  assert.equal(calls, 0);
+});
 
 test('OpenAI speech maps STT/TTS through the existing provider contract without exposing credentials', async () => {
   const calls = [];

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { LanguageProfileDetail, RlleCourseView, RlleLessonStageKind } from '@second-brain/shared';
+import type { LanguageProfileDetail, LessonFlowProgress, RlleCourseView } from '@second-brain/shared';
 import { Alert, Badge, Button, Card } from '../../../../components/ds/core';
 import { Page, PageHeader, ResponsiveSplit, Section } from '../../../../components/ds/layout';
 import { SmartErrorState, SmartLoadingState } from '../../../../components/ds/states';
@@ -9,6 +9,8 @@ import { ContextBar } from '../../../../components/context/context-bar';
 import { LanguageMasteryBulletins, LessonStages } from '../../../../components/language/course-ui';
 import { useTokens } from '../../../../lib/design/theme';
 import { useRlleCopy } from '../../../../lib/language-rll-i18n';
+import { useI18n } from '../../../../lib/i18n';
+import { api } from '../../../../lib/client';
 import { featureFlags } from '../../../../lib/feature-flags';
 import {
   advanceRlleLesson,
@@ -36,17 +38,30 @@ type AcousticRecordingSlot = 'scripted' | 'spontaneous';
 type PreparedAcousticPrompt = RlleAcousticMasteryPrompt & { operationKey: string };
 
 export default function StructuredLanguageLessonScreen() {
-  const params = useLocalSearchParams<{ id: string | string[]; unitId?: string | string[] }>();
+  const params = useLocalSearchParams<{
+    id: string | string[];
+    unitId?: string | string[];
+    lessonFlowCompleted?: string | string[];
+    completedLessonId?: string | string[];
+  }>();
   const profileId = Array.isArray(params.id) ? params.id[0] : params.id;
   const unitId = Array.isArray(params.unitId) ? params.unitId[0] : params.unitId;
+  const lessonFlowCompleted = Array.isArray(params.lessonFlowCompleted)
+    ? params.lessonFlowCompleted[0]
+    : params.lessonFlowCompleted;
+  const completedLessonId = Array.isArray(params.completedLessonId)
+    ? params.completedLessonId[0]
+    : params.completedLessonId;
   const router = useRouter();
   const { copy } = useRlleCopy();
+  const { t } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   const [profile, setProfile] = useState<LanguageProfileDetail | null>(null);
   const [courseLoad, setCourseLoad] = useState<RlleCourseLoad | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const reconciledLessonFlow = useRef<string | null>(null);
   const acousticRecorder = useRef<Recorder | null>(null);
   const [acousticPrompt, setAcousticPrompt] = useState<PreparedAcousticPrompt | null>(null);
   const [acousticRecordingSlot, setAcousticRecordingSlot] = useState<AcousticRecordingSlot | null>(null);
@@ -72,6 +87,81 @@ export default function StructuredLanguageLessonScreen() {
   useEffect(() => { void load(); }, [load]);
   useEffect(() => () => acousticRecorder.current?.cancel(), []);
 
+  useEffect(() => {
+    if (lessonFlowCompleted !== '1') {
+      // Removing the return marker ends this reconciliation attempt. A later
+      // explicit return from the same lesson may retry after a transient error.
+      reconciledLessonFlow.current = null;
+      return;
+    }
+    if (
+      !profile
+      || courseLoad?.kind !== 'live'
+      || !courseLoad.course.experienceSession
+    ) return;
+    const currentCourse = courseLoad.course;
+    const courseSession = currentCourse.experienceSession;
+    const currentLesson = currentCourse.currentLesson;
+    if (!courseSession || !currentLesson?.lessonId || (unitId && currentLesson.unitId !== unitId)) return;
+    const cleanRoute = `/languages/${profile.id}/course/lesson?unitId=${encodeURIComponent(currentLesson.unitId)}` as never;
+    // A remediation lesson uses the same guided Lesson UI but must never
+    // advance the canonical course lesson. Its own evidence is persisted by
+    // the remediation endpoint; returning here only refreshes the course view.
+    if (!completedLessonId || completedLessonId !== currentLesson.lessonId) {
+      router.replace(cleanRoute);
+      return;
+    }
+    const lessonId = completedLessonId;
+    const reconciliationKey = `${courseSession.id}:${lessonId}`;
+    if (reconciledLessonFlow.current === reconciliationKey) return;
+    reconciledLessonFlow.current = reconciliationKey;
+
+    const reconcile = async () => {
+      setBusy('lesson-flow');
+      setError(null);
+      let nextCourse = currentCourse;
+      try {
+        const completedFlow = await api<LessonFlowProgress>(
+          `/lessons/${encodeURIComponent(lessonId)}/flow`,
+        );
+        if (!completedFlow.completed) {
+          throw new Error(t('error.detail'));
+        }
+        // The generated lesson flow has already validated its own ordered
+        // activities. Mirror that server-authoritative completion into the
+        // structured course projection. `advanceRlleLesson` remains the gate:
+        // verification refuses missing evidence and no call grants mastery.
+        for (let index = 0; index < currentLesson.stages.length; index += 1) {
+          const activeLesson = nextCourse.currentLesson;
+          const activeStage = activeLesson?.stages.find((stage) => stage.status === 'active');
+          // Reconcile only the lesson whose completed flow was verified above.
+          // Once the server advances to the next lesson, the remaining loop
+          // iterations must not consume any of its stages.
+          if (
+            !activeLesson?.lessonId
+            || activeLesson.lessonId !== lessonId
+            || activeLesson.unitId !== currentLesson.unitId
+            || !activeStage
+          ) break;
+          nextCourse = await advanceRlleLesson(
+            profile.id,
+            courseSession.id,
+            activeLesson.lessonId,
+            activeStage.kind,
+          );
+        }
+        setCourseLoad({ kind: 'live', course: nextCourse });
+      } catch (cause) {
+        setError((cause as Error).message);
+        setCourseLoad({ kind: 'live', course: nextCourse });
+      } finally {
+        setBusy(null);
+        router.replace(cleanRoute);
+      }
+    };
+    void reconcile();
+  }, [completedLessonId, courseLoad, lessonFlowCompleted, profile, router, t, unitId]);
+
   if (!profile || !courseLoad) {
     if (error) return <SmartErrorState detail={error} retryable onRetry={() => void load()} />;
     return <SmartLoadingState title={copy('rlle.ui.course.loading')} />;
@@ -90,7 +180,7 @@ export default function StructuredLanguageLessonScreen() {
     : null;
   const open = (href: string) => router.push(href as never);
   const lessonRoute = (lessonId: string) => {
-    const returnTo = `/languages/${profile.id}/course/lesson?unitId=${encodeURIComponent(outline?.unitId ?? requestedUnit?.id ?? '')}`;
+    const returnTo = `/languages/${profile.id}/course/lesson?unitId=${encodeURIComponent(outline?.unitId ?? requestedUnit?.id ?? '')}&lessonFlowCompleted=1&completedLessonId=${encodeURIComponent(lessonId)}`;
     const query = [
       course?.experienceSession?.id
         ? `session=${encodeURIComponent(course.experienceSession.id)}`
@@ -123,30 +213,6 @@ export default function StructuredLanguageLessonScreen() {
         idempotencyKey: `mobile-lesson:${profile.id}:${requestedUnit.id}`,
       });
       setCourseLoad({ kind: 'live', course: response.course });
-    } catch (cause) {
-      setError((cause as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const completeStage = async () => {
-    if (!outline?.lessonId || !course?.experienceSession) return;
-    const activeStage = outline.stages.find((stage) => stage.status === 'active');
-    if (!activeStage) return;
-    setBusy('complete');
-    setError(null);
-    try {
-      const nextCourse = await advanceRlleLesson(
-        profile.id,
-        course.experienceSession.id,
-        outline.lessonId,
-        activeStage.kind,
-      );
-      setCourseLoad({ kind: 'live', course: nextCourse });
-      if (nextCourse.currentLesson?.status === 'completed') {
-        setNotice(copy('rlle.ui.lesson.completed'));
-      }
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
@@ -393,29 +459,54 @@ export default function StructuredLanguageLessonScreen() {
     }
   };
 
-  const openStage = (kind: RlleLessonStageKind) => {
-    if (!course?.experienceSession) return;
-    const query = `courseSessionId=${encodeURIComponent(course.experienceSession.id)}`;
+  const activeStageIndex = outline?.stages.findIndex((stage) => stage.status === 'active') ?? -1;
+  const acousticAssessmentOwnsAction = nextMasteryTarget?.assessmentMode === 'acoustic'
+    && (nextMasteryTarget.eligible || nextMasteryTarget.blockedReason === 'capability-unavailable');
+  const hasContinueAction = outline?.status === 'active'
+    && !acousticAssessmentOwnsAction
+    && (
+      activeStageIndex >= 0
+      || Boolean(nextMasteryTarget?.activeAttemptId && nextMasteryTarget.assessmentId)
+      || Boolean(nextMasteryTarget?.eligible)
+      || (!featureFlags.languageMasteryV1
+        && ['autonomy-ready', 'autonomy-active', 'autonomy-grading'].includes(mastery?.status ?? ''))
+      || mastery?.status === 'remediation'
+    );
+  const continueLesson = () => {
     if (
-      outline?.lessonId
-      && ['practice', 'oral', 'writing', 'verification', 'review'].includes(kind)
+      nextMasteryTarget?.assessmentMode !== 'acoustic'
+      && nextMasteryTarget?.activeAttemptId
+      && nextMasteryTarget.assessmentId
     ) {
-      open(lessonRoute(outline.lessonId));
+      resumeScopedMasteryAssessment();
       return;
     }
-    const formatByStage: Partial<Record<RlleLessonStageKind, string>> = {
-      vocabulary: 'vocabulary',
-      'grammar-verbs': 'grammar',
-      comprehension: 'comprehension',
-      oral: 'oral',
-      writing: 'writing',
-    };
-    const format = formatByStage[kind] ?? 'conversation';
-    const courseContext = `${query}&unitId=${encodeURIComponent(outline?.unitId ?? requestedUnit?.id ?? '')}&lessonId=${encodeURIComponent(outline?.lessonId ?? '')}&stage=${encodeURIComponent(kind)}`;
-    open(`/languages/${profile.id}?practice=${format}&${courseContext}`);
+    if (nextMasteryTarget?.eligible && nextMasteryTarget.assessmentMode !== 'acoustic') {
+      void startScopedMasteryAssessment();
+      return;
+    }
+    if (!featureFlags.languageMasteryV1 && mastery?.status === 'autonomy-ready') {
+      void startLegacyAutonomyAssessment();
+      return;
+    }
+    if (
+      !featureFlags.languageMasteryV1
+      && ['autonomy-active', 'autonomy-grading'].includes(mastery?.status ?? '')
+      && course?.latestAssessment
+    ) {
+      resumeLegacyAutonomyAssessment();
+      return;
+    }
+    if (mastery?.status === 'remediation' && !mastery.remediation?.lessonId) {
+      void startTargetedRemediation();
+      return;
+    }
+    if (mastery?.status === 'remediation' && mastery.remediation?.lessonId) {
+      open(lessonRoute(mastery.remediation.lessonId));
+      return;
+    }
+    if (outline?.lessonId) open(lessonRoute(outline.lessonId));
   };
-  const activeStageIndex = outline?.stages.findIndex((stage) => stage.status === 'active') ?? -1;
-  const isLastStage = Boolean(outline && activeStageIndex === outline.stages.length - 1);
 
   return (
     <ScrollView contentContainerStyle={{ paddingBottom: spacing.xxl }}>
@@ -460,7 +551,7 @@ export default function StructuredLanguageLessonScreen() {
             secondaryWidth={320}
             primary={
               <Section title={copy('rlle.ui.lesson.path')} description={copy('rlle.ui.lesson.proofNote')}>
-                <LessonStages outline={outline} onStage={openStage} />
+                <LessonStages outline={outline} />
               </Section>
             }
             secondary={
@@ -469,24 +560,15 @@ export default function StructuredLanguageLessonScreen() {
                   <Badge label={copy(`rlle.ui.course.status.${outline.status === 'active' ? 'in-progress' : outline.status}`)} tone={outline.status === 'completed' ? 'success' : 'ai'} />
                   <Text style={[typography.title, { color: c.textPrimary }]}>{outline.title}</Text>
                   <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{outline.communicativeObjective}</Text>
-                  {outline.lessonId ? <Button variant="secondary" label={copy('rlle.ui.lesson.openGenerated')} onPress={() => open(lessonRoute(outline.lessonId!))} /> : null}
                   {outline.status !== 'completed' ? <Button variant="ghost" label={copy(outline.status === 'paused' ? 'rlle.ui.lesson.resume' : 'rlle.ui.course.pause')} loading={busy === 'pause'} onPress={() => void togglePause()} /> : null}
                 </Card>
-                {outline.status === 'active' && activeStageIndex >= 0 ? (
+                {hasContinueAction ? (
                   <Button
-                    label={copy(isLastStage ? 'rlle.ui.lesson.complete' : 'rlle.ui.lesson.completeStage')}
-                    loading={busy === 'complete'}
-                    onPress={() => void completeStage()}
-                  />
-                ) : null}
-                {outline.status === 'active'
-                  && nextMasteryTarget?.eligible
-                  && nextMasteryTarget.assessmentMode !== 'acoustic' ? (
-                  <Button
-                    variant="ai"
-                    label={copy('rlle.ui.autonomy.start')}
-                    loading={busy === 'autonomy'}
-                    onPress={() => void startScopedMasteryAssessment()}
+                    testID="language-lesson-continue"
+                    label={t('lesson.continue')}
+                    loading={Boolean(busy)}
+                    disabled={Boolean(busy)}
+                    onPress={continueLesson}
                   />
                 ) : null}
                 {outline.status === 'active'
@@ -591,46 +673,6 @@ export default function StructuredLanguageLessonScreen() {
                         )}
                     </Card>
                   ) : null}
-                {outline.status === 'active'
-                  && nextMasteryTarget?.assessmentMode !== 'acoustic'
-                  && nextMasteryTarget?.activeAttemptId
-                  && nextMasteryTarget.assessmentId ? (
-                    <Button
-                      variant="ai"
-                      label={copy('rlle.ui.autonomy.resume')}
-                      onPress={resumeScopedMasteryAssessment}
-                    />
-                  ) : null}
-                {outline.status === 'active'
-                  && !featureFlags.languageMasteryV1
-                  && mastery?.status === 'autonomy-ready' ? (
-                    <Button
-                      variant="ai"
-                      label={copy('rlle.ui.autonomy.start')}
-                      loading={busy === 'autonomy'}
-                      onPress={() => void startLegacyAutonomyAssessment()}
-                    />
-                  ) : null}
-                {outline.status === 'active'
-                  && !featureFlags.languageMasteryV1
-                  && ['autonomy-active', 'autonomy-grading'].includes(mastery?.status ?? '')
-                  && course?.latestAssessment ? (
-                    <Button
-                      variant="ai"
-                      label={copy('rlle.ui.autonomy.resume')}
-                      onPress={resumeLegacyAutonomyAssessment}
-                    />
-                  ) : null}
-                {outline.status === 'active'
-                  && mastery?.status === 'remediation'
-                  && !mastery.remediation?.lessonId ? (
-                  <Button
-                    variant="secondary"
-                    label={copy('rlle.ui.remediation.start')}
-                    loading={busy === 'remediation'}
-                    onPress={() => void startTargetedRemediation()}
-                  />
-                ) : null}
                 <Button variant="ghost" label={copy('rlle.ui.common.backCourse')} onPress={() => router.replace(`/languages/${profile.id}/course` as never)} />
               </View>
             }

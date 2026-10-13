@@ -33,6 +33,7 @@ export interface LanguagePracticeRunnerProps {
   language?: string | null;
   busy?: boolean;
   voiceActive?: boolean;
+  voiceTranscript?: string | null;
   onSubmit: (answer: string) => void;
   onVoice?: () => void;
 }
@@ -47,6 +48,7 @@ export function LanguagePracticeRunner({
   language,
   busy = false,
   voiceActive = false,
+  voiceTranscript = null,
   onSubmit,
   onVoice,
 }: LanguagePracticeRunnerProps) {
@@ -65,6 +67,12 @@ export function LanguagePracticeRunner({
     setAnswer('');
     setSelectedTokenIndexes([]);
   }, [index, exercise.question, format]);
+
+  useEffect(() => {
+    if (voiceTranscript === null) return;
+    setAnswer(voiceTranscript);
+    setSelectedTokenIndexes([]);
+  }, [voiceTranscript]);
 
   const changeAnswer = (value: string) => {
     setAnswer(value);
@@ -188,12 +196,18 @@ export function LanguagePracticeRunner({
               />
             ) : null}
             <Button
-              label={voiceActive ? t('lang.stopCoaching') : t('rlle.ui.training.voice')}
+              label={voiceActive ? t('voice11.transcribe') : t('rlle.ui.training.voice')}
               onPress={() => onVoice?.()}
               disabled={busy || !onVoice}
               variant="ghost"
               testID={`language-voice-${index}`}
             />
+            {voiceTranscript !== null ? (
+              <Text style={styles.supportLabel} testID={`language-voice-transcript-hint-${index}`}>
+                {t('voice11.transcript.edit')}
+              </Text>
+            ) : null}
+            {renderTextAnswer(true)}
           </View>
         );
       case 'mini-dialogue':
@@ -223,15 +237,13 @@ export function LanguagePracticeRunner({
 
       {renderActivity()}
 
-      {format !== 'voice-pronunciation' ? (
-        <Button
-          label={t('lesson.submit')}
-          onPress={submit}
-          busy={busy}
-          disabled={busy || !answer.trim()}
-          testID={`language-submit-${index}`}
-        />
-      ) : null}
+      <Button
+        label={t('lesson.submit')}
+        onPress={submit}
+        busy={busy}
+        disabled={busy || !answer.trim()}
+        testID={`language-submit-${index}`}
+      />
     </Card>
   );
 }

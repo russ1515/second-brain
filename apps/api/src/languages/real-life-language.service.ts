@@ -2434,16 +2434,7 @@ export class RealLifeLanguageService {
           && item.exerciseIndex === index
           && item.source === 'audio-native-coaching'
           && item.state === 'completed');
-        return audio ?? {
-          id: `training:${lessonId}:${lessonRecord.contentVersion}:${index}`,
-          format,
-          state: 'incomplete',
-          helpUsed: false,
-          lessonId,
-          contentVersion: lessonRecord.contentVersion,
-          exerciseIndex: index,
-          recordedAt: lesson.lastActivityAt,
-        };
+        if (audio) return audio;
       }
       const attempt = latestByIndex.get(index);
       return {

@@ -72,11 +72,16 @@ test('speaker UI measures first playback honestly and exposes delayed loading pl
   const api = fs.readFileSync(path.join(ROOT, 'apps/mobile/lib/speech-api.ts'), 'utf8');
 
   assert.equal(FIRST_AUDIO_TARGET_MS, 3_000);
+  assert.match(button, /'idle' \| 'loading' \| 'playing' \| 'paused' \| 'ended' \| 'error'/);
   assert.match(button, /onFirstAudio:\s*\(latencyMs\)/);
+  assert.match(button, /setState\('ended'\)/);
+  assert.match(button, /setState\('error'\)/);
   assert.match(button, /setTimeout\([\s\S]*FIRST_AUDIO_TARGET_MS/);
   assert.match(button, /t\('app\.tryAgain'\)/);
   assert.match(button, /slowStart \? <Text[^>]*>\{t\('state\.loading'\)\}<\/Text>/);
   assert.match(button, /createClientRequestId\('tts'\)/);
+  assert.match(button, /if \(startInFlightRef\.current\) return;[\s\S]*startInFlightRef\.current = true;/);
+  assert.match(button, /finally \{[\s\S]*startInFlightRef\.current = false;/);
   assert.doesNotMatch(button, /start\(true\)/);
   assert.match(button, /requestId,/);
   assert.match(button, /pauseSpeaking/);

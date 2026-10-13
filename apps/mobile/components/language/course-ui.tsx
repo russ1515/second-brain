@@ -13,7 +13,7 @@ import type {
   RlleWorldMissionTemplate,
 } from '@second-brain/shared';
 import { LANGUAGE_MASTERY_PILLARS } from '@second-brain/shared';
-import { Alert, Badge, Button, Card, Progress } from '../ds/core';
+import { Badge, Button, Card, Progress } from '../ds/core';
 import { useTokens } from '../../lib/design/theme';
 import { useRlleCopy } from '../../lib/language-rll-i18n';
 import type { RlleCourseLoad, RlleMissionCatalogItem } from '../../lib/language-rll-client';
@@ -150,13 +150,6 @@ export function LanguageMasteryBulletins({
             />
           </View>
           <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{copy('rlle.ui.bulletin.detail')}</Text>
-          {bulletin.notionGateUnlocked && bulletin.strictCertification.unlocked === false ? (
-            <Alert
-              tone="warning"
-              title={copy('rlle.ui.capabilities.blocked')}
-              detail={copy('rlle.ui.capabilities.blockedDetail')}
-            />
-          ) : null}
           <Progress value={bulletin.displayPercent} tone="ai" />
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
             <BulletinMetric value={`${bulletin.displayPercent}%`} label={copy('ai.progress')} />
@@ -305,7 +298,7 @@ export function DimensionProgress({ course }: { course: RlleCourseView }) {
   );
 }
 
-export function LessonStages({ outline, onStage }: { outline: RlleLessonOutline; onStage: (kind: RlleLessonOutline['stages'][number]['kind']) => void }) {
+export function LessonStages({ outline }: { outline: RlleLessonOutline }) {
   const { copy } = useRlleCopy();
   const { colors: c, spacing, typography } = useTokens();
   return (
@@ -318,7 +311,6 @@ export function LessonStages({ outline, onStage }: { outline: RlleLessonOutline;
               <Text style={[typography.title, { color: c.textPrimary }]}>{copy(stage.labelCode || `rlle.ui.stage.${stage.kind}`)}</Text>
               <Text style={[typography.caption, { color: c.textMuted }]}>{copy(`rlle.ui.stage.status.${stage.status}`)}</Text>
             </View>
-            {stage.status === 'active' ? <Button size="sm" variant="ai" label={copy('rlle.ui.lesson.stageAction')} onPress={() => onStage(stage.kind)} /> : null}
           </View>
         </Card>
       ))}

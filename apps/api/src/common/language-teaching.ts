@@ -8,7 +8,7 @@ import {
   toSupportedLanguage,
 } from '@second-brain/shared';
 import type { PrismaService } from '../prisma/prisma.service';
-import { DEFAULT_LOCALE, resolveLocale } from './learning-locale';
+import { DEFAULT_LOCALE } from './learning-locale';
 
 export interface LanguageTeachingRoles {
   interfaceLanguage: string;
@@ -30,8 +30,7 @@ export async function resolveLanguageTeachingRoles(
   userId: string,
   profile: TeachingProfile,
 ): Promise<LanguageTeachingRoles> {
-  const rawInterface = await resolveLocale(prisma, userId);
-  const interfaceCode = toSupportedLanguage(rawInterface) ?? DEFAULT_LOCALE;
+  const interfaceCode = await resolveInterfaceLocale(prisma, userId);
   const nativeCode = toSupportedLanguage(profile.nativeLanguage);
   const source: LanguageTeachingSource = profile.teachingLanguageSource === 'native'
     ? 'native'
@@ -51,4 +50,39 @@ export async function resolveLanguageTeachingRoles(
       : profile.language,
     teachingLanguageSource: source,
   };
+}
+
+/** Resolve the account UI locale from the same persisted fields exposed by the
+ * Learner Passport. `Profile.preferredLanguage` is a legacy/general learning
+ * locale and may legitimately differ after the learner changes the interface;
+ * it is therefore only a compatibility fallback. */
+async function resolveInterfaceLocale(
+  prisma: PrismaService,
+  userId: string,
+): Promise<SupportedLanguageCode> {
+  // Some isolated unit stores predate OnboardingProfile. Detect that shape
+  // explicitly; do not swallow a real database failure and silently switch the
+  // learner to English.
+  if ('onboardingProfile' in prisma && prisma.onboardingProfile) {
+    const onboarding = await prisma.onboardingProfile.findUnique({
+      where: { userId },
+      select: { extra: true, languages: true },
+    });
+    const persisted = jsonString(onboarding?.extra, 'interfaceLanguage')
+      ?? jsonString(onboarding?.languages, 'interface');
+    const code = toSupportedLanguage(persisted);
+    if (code) return code;
+  }
+
+  const legacy = await prisma.profile.findUnique({
+    where: { userId },
+    select: { preferredLanguage: true },
+  });
+  return toSupportedLanguage(legacy?.preferredLanguage) ?? DEFAULT_LOCALE;
+}
+
+function jsonString(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = (value as Record<string, unknown>)[key];
+  return typeof candidate === 'string' ? candidate : undefined;
 }

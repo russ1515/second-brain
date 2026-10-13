@@ -2,7 +2,11 @@ FROM node:22-alpine AS build
 
 ARG EXPO_PUBLIC_FEATURE_NEW_APP_SHELL=false
 ARG EXPO_PUBLIC_FEATURE_NEW_LANDING=false
-ARG EXPO_PUBLIC_FEATURE_LANGUAGE_MASTERY_V1=false
+# P1 beta ships the canonical language-mastery UX. Keep this default aligned
+# with the deployed runtime so a routine rebuild cannot silently restore the
+# legacy, non-creditable lesson path. It may still be overridden explicitly
+# for a rollback image.
+ARG EXPO_PUBLIC_FEATURE_LANGUAGE_MASTERY_V1=true
 
 RUN corepack enable && corepack prepare pnpm@11.13.1 --activate
 WORKDIR /workspace

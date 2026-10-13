@@ -84,3 +84,14 @@ test('TTS cache is cleared at every authenticated account boundary', () => {
   assert.match(auth, /function clearAccountSpeech\(\)[\s\S]*stopSpeaking\(\);[\s\S]*clearSpeechCache\(\);/);
   assert.ok((auth.match(/clearAccountSpeech\(\)/g) || []).length >= 4);
 });
+
+test('language overview does not expose internal strict/acoustic runtime wording', () => {
+  const screen = read('app/languages/[id].tsx');
+  const catalog = read('lib/i18n.tsx');
+  assert.doesNotMatch(screen, /capabilities\.strictDisabled/);
+  assert.match(catalog, /'rlle\.ui\.capabilities\.blocked': 'Pronunciation check unavailable'/);
+  assert.match(catalog, /'rlle\.ui\.capabilities\.blocked': 'Évaluation de la prononciation indisponible'/);
+  assert.doesNotMatch(catalog, /'rlle\.ui\.capabilities\.providerReady': 'Provider path available'/);
+  assert.doesNotMatch(catalog, /'rlle\.ui\.capabilities\.blocked': 'Blocked capability'/);
+  assert.doesNotMatch(catalog, /Required oral capabilities|Acoustic pronunciation evaluation|Capacités orales requises|Évaluation acoustique de la prononciation/);
+});
