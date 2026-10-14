@@ -497,6 +497,7 @@ export class AcademicWorkspaceService {
     const completed = plan.filter((item) => item.completed).length;
     const next = plan.find((item) => !item.completed);
     const mappedStatus = requestedStatus === 'archived' ? 'abandoned' : requestedStatus;
+    const sources = fromJson<WorkspaceSourceReference[]>(row.sources, []);
     const data: Prisma.ExperienceSessionUncheckedUpdateManyInput = {
       title: row.title,
       intent: row.objective || null,
@@ -505,6 +506,15 @@ export class AcademicWorkspaceService {
       status: mappedStatus,
       pausedAt: mappedStatus === 'paused' ? session.pausedAt ?? new Date() : null,
       completedAt: mappedStatus === 'completed' ? session.completedAt ?? new Date() : null,
+      sourceReferences: asJson(sources.map((source) => ({
+        kind: source.kind === 'collection'
+          ? 'document-collection'
+          : source.kind === 'research-source'
+            ? 'external-source'
+            : 'document',
+        id: source.id,
+        title: source.title,
+      }))),
       ...(session.workspaceRef === null ? { workspaceRef: row.id } : {}),
       version: { increment: 1 },
     };

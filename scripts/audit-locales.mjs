@@ -35,6 +35,7 @@ const LEARNING_DATA_CONTROL_AFRICA_FILE = path.join(LOCALES_DIR, 'learning-data-
 const GLOBAL_PATH_V1_FILE = path.join(LOCALES_DIR, 'global-path-v1.ts');
 const LANGUAGE_MASTERY_V1_FILE = path.join(LOCALES_DIR, 'language-mastery-v1.ts');
 const TEACHING_LANGUAGE_V1_FILE = path.join(LOCALES_DIR, 'teaching-language-v1.ts');
+const WORKSPACE_CAPTURE_V1_FILE = path.join(LOCALES_DIR, 'workspace-capture-v1.ts');
 
 export const ALL_LOCALE_CODES = Object.freeze(['en', 'fr', ...SUPPORTED_CODES]);
 export const PROTECTED_BRANDS = Object.freeze([
@@ -351,6 +352,7 @@ export function auditRepository() {
     'teachingLanguageTranslations',
     teachingLanguageKeys,
   );
+  const workspaceCaptureV1 = readNestedCatalog(WORKSPACE_CAPTURE_V1_FILE, 'workspaceCaptureV1');
   const catalogs = new Map([
     ['en', english],
     ['fr', french],
@@ -383,6 +385,7 @@ export function auditRepository() {
     ]);
     const languageBulletin = languageBulletinTranslations.get(code) ?? new Map();
     const teachingLanguage = teachingLanguageTranslations.get(code) ?? new Map();
+    const workspaceCapture = workspaceCaptureV1.get(code) ?? new Map();
     const beforeAliases = new Map([
       ...base,
       ...essential,
@@ -397,6 +400,7 @@ export function auditRepository() {
       ...researchWeb,
       ...learningDataControl,
       ...teachingLanguage,
+      ...workspaceCapture,
     ]);
     const globalPath = new Map(
       [...globalPathAliases].flatMap(([target, source]) => {
@@ -430,6 +434,7 @@ export function auditRepository() {
       { name: 'research-web-v1.ts', entries: researchWeb },
       { name: 'learning-data-control-v1', entries: learningDataControl },
       { name: 'teaching-language-v1.ts', entries: teachingLanguage },
+      { name: 'workspace-capture-v1.ts', entries: workspaceCapture },
       { name: 'global-path-v1.ts', entries: globalPath },
       { name: 'language-mastery-v1.ts', entries: languageMastery },
       { name: 'language-mastery-v1.ts:languageBulletinTranslations', entries: languageBulletin },

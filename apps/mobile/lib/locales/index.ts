@@ -58,3 +58,4 @@ import './learning-data-control-africa-v1';
 import './global-path-v1';
 import './language-mastery-v1';
 import './teaching-language-v1';
+import './workspace-capture-v1';

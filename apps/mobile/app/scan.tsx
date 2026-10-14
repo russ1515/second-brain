@@ -50,9 +50,11 @@ export default function ScanScreen() {
     mode?: string | string[];
     source?: string | string[];
     captureType?: string | string[];
+    workspaceId?: string | string[];
   }>();
   const mode = first(params.mode) === 'qr' ? 'qr' : 'document';
   const source = first(params.source);
+  const workspaceId = first(params.workspaceId);
   const requestedContentType = first(params.captureType) === 'photo' ? 'PHOTO' : 'SCAN';
   const [pages, setPages] = useState<ScanPage[]>([]);
   const [selected, setSelected] = useState(0);
@@ -417,6 +419,18 @@ export default function ScanScreen() {
         </Card>
         {done.content ? <Text style={{ color: c.textSecondary }} numberOfLines={12}>{done.content}</Text> : null}
         {source === 'learn' ? <Button label={t('scan.returnToLearn')} onPress={() => router.replace({ pathname: '/learn', params: { documentId: done.id, documentTitle: done.title } })} /> : null}
+        {source === 'workspace' ? <Button
+          testID="scan-return-to-workspace"
+          label={t('workspace10.addSource')}
+          onPress={() => router.replace({
+            pathname: workspaceId ? `/library/workspace/${workspaceId}` : '/library/workspace',
+            params: {
+              documentId: done.id,
+              title: done.title,
+              captureStatus: done.status,
+            },
+          })}
+        /> : null}
         <Button variant="secondary" label={t('scan.openDocument')} onPress={() => router.replace(`/library/${done.id}`)} />
         <Button variant="ghost" label={t('scan.scanAnother')} onPress={resetScan} />
       </ScrollView>

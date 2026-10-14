@@ -40,6 +40,14 @@ function createHarness() {
   const state = {
     workspaces: [],
     sessions: [],
+    documents: [
+      { id: 'document-owner', userId: 'owner', deletedAt: null },
+      { id: 'document-intruder', userId: 'intruder', deletedAt: null },
+    ],
+    collections: [
+      { id: 'collection-owner', userId: 'owner' },
+      { id: 'collection-intruder', userId: 'intruder' },
+    ],
     llmCalls: 0,
   };
   let transactionTail = Promise.resolve();
@@ -128,8 +136,8 @@ function createHarness() {
   const tx = {
     academicWorkspace,
     experienceSession,
-    document: { count: async () => 0 },
-    collection: { count: async () => 0 },
+    document: { count: async ({ where }) => state.documents.filter((row) => matchesWhere(row, where)).length },
+    collection: { count: async ({ where }) => state.collections.filter((row) => matchesWhere(row, where)).length },
     $executeRaw: async () => 1,
   };
   const prisma = {
@@ -199,6 +207,39 @@ test('reusing a creation idempotency key for a different payload is a conflict',
   await assert.rejects(
     service.create('owner', request({ title: 'Different academic work' })),
     (error) => httpStatus(error) === 409,
+  );
+  assert.equal(state.workspaces.length, 1);
+  assert.equal(state.sessions.length, 1);
+});
+
+test('creation persists initial capture content and owned sources while rejecting foreign sources atomically', async () => {
+  const { service, state } = createHarness();
+  const initialContent = 'Captured notes ready for the academic workspace.';
+  const ownedSources = [
+    { kind: 'document', id: 'document-owner', title: 'Owned PDF' },
+    { kind: 'collection', id: 'collection-owner', title: 'Owned collection' },
+  ];
+
+  const workspace = await service.create('owner', request({
+    requestId: 'workspace-create-owned-capture-1',
+    initialContent,
+    sources: ownedSources,
+  }));
+
+  assert.equal(workspace.draft.content, initialContent);
+  assert.deepEqual(workspace.sources, ownedSources);
+  assert.equal(state.workspaces[0].draftContent, initialContent);
+  assert.deepEqual(state.sessions[0].sourceReferences, [
+    { kind: 'document', id: 'document-owner', title: 'Owned PDF' },
+    { kind: 'document-collection', id: 'collection-owner', title: 'Owned collection' },
+  ]);
+
+  await assert.rejects(
+    service.create('owner', request({
+      requestId: 'workspace-create-foreign-capture-1',
+      sources: [{ kind: 'document', id: 'document-intruder', title: 'Foreign PDF' }],
+    })),
+    (error) => httpStatus(error) === 400,
   );
   assert.equal(state.workspaces.length, 1);
   assert.equal(state.sessions.length, 1);
@@ -498,6 +539,34 @@ test('workspace reads and mutations remain owner-scoped', async () => {
   assert.equal(state.llmCalls, 0);
   assert.equal(state.workspaces[0].title, 'Technical workspace');
   assert.equal(state.workspaces[0].draftContent, '');
+});
+
+test('attaching owned capture sources synchronizes the resumable session and rejects foreign sources atomically', async () => {
+  const { service, state } = createHarness();
+  const workspace = await service.create('owner', request());
+
+  const updated = await service.update('owner', workspace.id, {
+    expectedRevision: workspace.autosaveRevision,
+    sources: [
+      { kind: 'document', id: 'document-owner', title: 'Owned PDF' },
+      { kind: 'collection', id: 'collection-owner', title: 'Owned collection' },
+    ],
+  });
+  assert.equal(updated.sources.length, 2);
+  assert.deepEqual(state.sessions[0].sourceReferences, [
+    { kind: 'document', id: 'document-owner', title: 'Owned PDF' },
+    { kind: 'document-collection', id: 'collection-owner', title: 'Owned collection' },
+  ]);
+
+  await assert.rejects(
+    service.update('owner', workspace.id, {
+      expectedRevision: updated.autosaveRevision,
+      sources: [{ kind: 'document', id: 'document-intruder', title: 'Foreign PDF' }],
+    }),
+    (error) => httpStatus(error) === 400,
+  );
+  assert.equal(state.workspaces[0].sources.length, 2);
+  assert.equal(state.sessions[0].sourceReferences.length, 2);
 });
 
 test('all eight existing templates keep distinct persisted plans and resumable sessions', async () => {

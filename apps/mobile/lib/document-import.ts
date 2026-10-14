@@ -14,9 +14,11 @@ export interface PickedDocument {
 
 /** One capture seam shared by Learn and Library. Images are sent through the
  * scan endpoint; supported document files use the ordinary upload endpoint. */
-export async function pickDocuments(multiple = false): Promise<PickedDocument[]> {
+export async function pickDocuments(multiple = false, includeImages = true): Promise<PickedDocument[]> {
   const result = await DocumentPicker.getDocumentAsync({
-    type: ['application/pdf', 'text/plain', 'text/markdown', 'image/*'],
+    type: includeImages
+      ? ['application/pdf', 'text/plain', 'text/markdown', 'image/*']
+      : ['application/pdf', 'text/plain', 'text/markdown'],
     copyToCacheDirectory: true,
     multiple,
   });
@@ -55,7 +57,7 @@ export function isImageDocument(document: PickedDocument): boolean {
   return document.mimeType.startsWith('image/');
 }
 
-export async function uploadPickedDocument(document: PickedDocument): Promise<DocumentDetail> {
+export async function uploadPickedDocument(document: PickedDocument, requestId?: string): Promise<DocumentDetail> {
   const image = isImageDocument(document);
   const form = new FormData();
   // The API's 100 MB / 50-page safety envelope intentionally caps each scan
@@ -76,5 +78,5 @@ export async function uploadPickedDocument(document: PickedDocument): Promise<Do
     : document;
   await appendPickedDocument(form, image ? 'images' : 'file', upload);
   if (image) form.append('contentType', 'PHOTO');
-  return apiUpload<DocumentDetail>(image ? '/documents/scan' : '/documents/upload', form);
+  return apiUpload<DocumentDetail>(image ? '/documents/scan' : '/documents/upload', form, requestId ? { requestId } : undefined);
 }

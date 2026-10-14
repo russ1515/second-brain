@@ -14,6 +14,7 @@ import {
   type WorkspaceTemplate,
 } from '@second-brain/shared';
 import { api } from '../../../lib/client';
+import { useAuth } from '../../../lib/auth-context';
 import { createClientRequestId } from '../../../lib/request-id';
 import { useI18n, type TranslationKey } from '../../../lib/i18n';
 import { useTokens } from '../../../lib/design/theme';
@@ -22,12 +23,14 @@ import { localizedWorkspacePlan, workspaceFieldLabel } from '../../../lib/worksp
 import { Alert, Badge, Button, Card, EmptyState, Input, Progress, SegmentedControl } from '../../../components/ds/core';
 import { Page, Section } from '../../../components/ds/layout';
 import { SmartLoadingState } from '../../../components/ds/states';
+import { WorkspaceUniversalCapture } from '../../../components/workspace/universal-capture';
 
 type SourceMode = 'documents' | 'collections';
 
 export default function WorkspaceHomeScreen() {
-  const params = useLocalSearchParams<{ documentId?: string; title?: string; objective?: string; type?: string }>();
+  const params = useLocalSearchParams<{ documentId?: string; title?: string; objective?: string; type?: string; captureStatus?: string }>();
   const router = useRouter();
+  const { user } = useAuth();
   const { t } = useI18n();
   const { colors: c, spacing, typography, radius } = useTokens();
   const { width } = useResponsive();
@@ -44,8 +47,23 @@ export default function WorkspaceHomeScreen() {
   const [sources, setSources] = useState<WorkspaceSourceReference[]>(params.documentId ? [{ kind: 'document', id: params.documentId, title: params.title }] : []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [loadingMoreWorkspaces, setLoadingMoreWorkspaces] = useState(false);
+  const [documentSearch, setDocumentSearch] = useState('');
+  const [documentNextCursor, setDocumentNextCursor] = useState<string | null>(null);
+  const [loadingMoreDocuments, setLoadingMoreDocuments] = useState(false);
   const creatingRef = useRef(false);
   const createRequestRef = useRef<{ signature: string; requestId: string } | null>(null);
+  const listOwnerRef = useRef<string | undefined>(user?.id);
+  const documentSearchRef = useRef(documentSearch);
+  const workspaceCursorRef = useRef<string | null>(page?.nextCursor ?? null);
+  const documentCursorRef = useRef<string | null>(documentNextCursor);
+  const workspaceListEpoch = useRef(0);
+  const documentListEpoch = useRef(0);
+  listOwnerRef.current = user?.id;
+  documentSearchRef.current = documentSearch;
+  workspaceCursorRef.current = page?.nextCursor ?? null;
+  documentCursorRef.current = documentNextCursor;
   const templateDefinition = WORKSPACE_TEMPLATE_DEFINITIONS[template];
   const localizedPlan = useMemo(
     () => localizedWorkspacePlan(template, t),
@@ -54,16 +72,50 @@ export default function WorkspaceHomeScreen() {
   const requiredBriefReady = templateDefinition.requiredFields.every((field) => Boolean(briefFields[field]?.trim()));
 
   useEffect(() => {
+    let active = true;
+    const ownerId = user?.id;
+    const epoch = ++workspaceListEpoch.current;
+    setPage(null);
+    setCollections([]);
+    setLoadingMoreWorkspaces(false);
+    setSources(params.documentId ? [{ kind: 'document', id: params.documentId, title: params.title }] : []);
+    if (!ownerId) return () => { active = false; };
     void Promise.all([
-      api<WorkspacePage>('/workspaces?limit=20'),
-      api<LibraryPage>('/library/paged?filter=all&sort=newest&limit=50'),
+      api<WorkspacePage>('/workspaces?limit=50'),
       api<Collection[]>('/library/collections'),
-    ]).then(([workspaces, library, nextCollections]) => {
+    ]).then(([workspaces, nextCollections]) => {
+      if (!active || workspaceListEpoch.current !== epoch || listOwnerRef.current !== ownerId) return;
       setPage(workspaces);
-      setDocuments(library.items.filter((item) => item.status === 'ready'));
       setCollections(nextCollections);
-    }).catch((caught) => setError((caught as Error).message));
-  }, []);
+    }).catch((caught) => {
+      if (active && workspaceListEpoch.current === epoch && listOwnerRef.current === ownerId) setError((caught as Error).message);
+    });
+    return () => { active = false; };
+  }, [user?.id]);
+
+  useEffect(() => {
+    let active = true;
+    const ownerId = user?.id;
+    const search = documentSearch;
+    const epoch = ++documentListEpoch.current;
+    setDocuments([]);
+    setDocumentNextCursor(null);
+    setLoadingMoreDocuments(false);
+    if (!ownerId) return () => { active = false; };
+    const timer = setTimeout(() => {
+      void api<LibraryPage>(libraryPageUrl(search)).then((library) => {
+        if (!active || documentListEpoch.current !== epoch || listOwnerRef.current !== ownerId || documentSearchRef.current !== search) return;
+        setDocuments(library.items.filter(selectableWorkspaceDocument));
+        setDocumentNextCursor(library.nextCursor);
+      }).catch((caught) => {
+        if (active && documentListEpoch.current === epoch && listOwnerRef.current === ownerId && documentSearchRef.current === search) setError((caught as Error).message);
+      });
+    }, 250);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [documentSearch, user?.id]);
 
   const create = async () => {
     if (creatingRef.current || !title.trim() || !requiredBriefReady) return;
@@ -117,6 +169,52 @@ export default function WorkspaceHomeScreen() {
 
   const selected = (kind: WorkspaceSourceReference['kind'], id: string) => sources.some((source) => source.kind === kind && source.id === id);
 
+  const loadMoreWorkspaces = async () => {
+    if (!page?.nextCursor || loadingMoreWorkspaces) return;
+    const ownerId = user?.id;
+    const cursor = page.nextCursor;
+    const epoch = workspaceListEpoch.current;
+    if (!ownerId) return;
+    setLoadingMoreWorkspaces(true);
+    setError(null);
+    try {
+      const next = await api<WorkspacePage>(`/workspaces?limit=50&cursor=${encodeURIComponent(cursor)}`);
+      if (workspaceListEpoch.current !== epoch || listOwnerRef.current !== ownerId || workspaceCursorRef.current !== cursor) return;
+      setPage((current) => current?.nextCursor === cursor ? {
+        items: [...current.items, ...next.items.filter((item) => !current.items.some((existing) => existing.id === item.id))],
+        nextCursor: next.nextCursor,
+      } : current);
+    } catch (caught) {
+      if (workspaceListEpoch.current === epoch && listOwnerRef.current === ownerId && workspaceCursorRef.current === cursor) setError((caught as Error).message);
+    } finally {
+      if (workspaceListEpoch.current === epoch && listOwnerRef.current === ownerId) setLoadingMoreWorkspaces(false);
+    }
+  };
+
+  const loadMoreDocuments = async () => {
+    if (!documentNextCursor || loadingMoreDocuments) return;
+    const ownerId = user?.id;
+    const search = documentSearch;
+    const cursor = documentNextCursor;
+    const epoch = documentListEpoch.current;
+    if (!ownerId) return;
+    setLoadingMoreDocuments(true);
+    setError(null);
+    try {
+      const next = await api<LibraryPage>(libraryPageUrl(search, cursor));
+      if (documentListEpoch.current !== epoch || listOwnerRef.current !== ownerId || documentSearchRef.current !== search || documentCursorRef.current !== cursor) return;
+      setDocuments((current) => [
+        ...current,
+        ...next.items.filter(selectableWorkspaceDocument).filter((item) => !current.some((existing) => existing.id === item.id)),
+      ]);
+      setDocumentNextCursor(next.nextCursor);
+    } catch (caught) {
+      if (documentListEpoch.current === epoch && listOwnerRef.current === ownerId && documentSearchRef.current === search && documentCursorRef.current === cursor) setError((caught as Error).message);
+    } finally {
+      if (documentListEpoch.current === epoch && listOwnerRef.current === ownerId && documentSearchRef.current === search) setLoadingMoreDocuments(false);
+    }
+  };
+
   return <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1, backgroundColor: c.background }}>
     <Page width="wide" style={{ gap: spacing.xl, paddingBottom: spacing.huge }} testID="workspace-home">
       <View style={{ gap: spacing.xs, maxWidth: 820 }}>
@@ -126,8 +224,31 @@ export default function WorkspaceHomeScreen() {
       </View>
       {error ? <Alert tone="error" title={t('state.error')} detail={error} /> : null}
 
+      {user ? <WorkspaceUniversalCapture
+        ownerUserId={user.id}
+        documents={documents}
+        collections={collections}
+        workspaces={page?.items ?? []}
+        hasMoreWorkspaces={Boolean(page?.nextCursor)}
+        loadingMoreWorkspaces={loadingMoreWorkspaces}
+        onLoadMoreWorkspaces={() => void loadMoreWorkspaces()}
+        documentSearch={documentSearch}
+        onDocumentSearchChange={setDocumentSearch}
+        hasMoreDocuments={Boolean(documentNextCursor)}
+        loadingMoreDocuments={loadingMoreDocuments}
+        onLoadMoreDocuments={() => void loadMoreDocuments()}
+        initialDocument={params.documentId ? { id: params.documentId, title: params.title, status: params.captureStatus } : undefined}
+      /> : null}
+
+      <Button
+        testID="workspace-manual-toggle"
+        variant="ghost"
+        label={manualOpen ? t('app.dismiss') : t('workspaceCapture.manual')}
+        onPress={() => setManualOpen((value) => !value)}
+      />
+
       <View style={{ flexDirection: desktop ? 'row' : 'column', alignItems: 'flex-start', gap: spacing.xl }}>
-        <Card style={{ flex: 1, width: '100%', gap: spacing.md }} testID="workspace-create">
+        {manualOpen ? <Card style={{ flex: 1, width: '100%', gap: spacing.md }} testID="workspace-create">
           <Text accessibilityRole="header" style={[typography.h2, { color: c.textPrimary }]}>{t('workspace10.create')}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
             {WORKSPACE_TEMPLATES.map((value) => <Pressable key={value} testID={`workspace-template-${value}`} accessibilityRole="radio" accessibilityState={{ selected: template === value }} onPress={() => setTemplate(value)} style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 12, borderRadius: radius.full, borderWidth: 1, borderColor: template === value ? c.primary : c.border, backgroundColor: template === value ? c.primary : c.surfaceSunken }}><Text style={[typography.bodySmall, { color: template === value ? c.onPrimary : c.textPrimary, fontWeight: '700' }]}>{t(`workspace10.template.${value}` as TranslationKey)}</Text></Pressable>)}
@@ -153,16 +274,18 @@ export default function WorkspaceHomeScreen() {
           <View style={{ gap: spacing.sm }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm }}><Text style={[typography.label, { color: c.textPrimary }]}>{t('workspace10.sources')}</Text><Badge label={t('workspace10.sourceCount').replace('{n}', String(sources.length))} tone={sources.length ? 'primary' : 'neutral'} /></View>
             <SegmentedControl options={['documents', 'collections'] as const} value={sourceMode} onChange={setSourceMode} labelFor={(value) => t(`workspace10.sourceMode.${value}`)} />
+            {sourceMode === 'documents' ? <Input value={documentSearch} onChangeText={setDocumentSearch} placeholder={t('library7.search')} /> : null}
             <View style={{ maxHeight: 250, gap: spacing.xs }}>
               {sourceMode === 'documents' ? documents.map((document) => <SourceChoice key={document.id} title={document.title} detail={document.subject ?? document.source.toUpperCase()} checked={selected('document', document.id)} onPress={() => toggleSource({ kind: 'document', id: document.id, title: document.title })} />) : collections.map((collection) => <SourceChoice key={collection.id} title={collection.name} detail={t('library7.documentsCount').replace('{n}', String(collection.documentCount))} checked={selected('collection', collection.id)} onPress={() => toggleSource({ kind: 'collection', id: collection.id, title: collection.name })} />)}
             </View>
+            {sourceMode === 'documents' && documentNextCursor ? <Button size="sm" variant="ghost" label={t('brain8.loadMore')} loading={loadingMoreDocuments} disabled={loadingMoreDocuments} onPress={() => void loadMoreDocuments()} /> : null}
           </View>
           <Card style={{ gap: spacing.xs, backgroundColor: c.surfaceSunken }} testID="workspace-adaptive-plan"><Text style={[typography.label, { color: c.textPrimary }]}>{t('workspace10.structure')}</Text>{localizedPlan.map((item, index) => <Text key={item.id} style={[typography.bodySmall, { color: c.textSecondary }]}>{index + 1}. {item.title}</Text>)}</Card>
           <Alert tone="info" title={t('workspace10.integrity')} detail={t('workspace10.integrityDetail')} />
           <Button testID="workspace-create-action" label={t('workspace10.createAction')} variant="ai" loading={busy} disabled={!title.trim() || !requiredBriefReady} onPress={() => void create()} />
-        </Card>
+        </Card> : null}
 
-        <View style={{ width: desktop ? 420 : '100%', gap: spacing.md }}>
+        <View style={{ width: manualOpen && desktop ? 420 : '100%', gap: spacing.md }}>
           <Section title={t('workspace10.resume')} description={t('workspace10.resumeDetail')}>
             {page === null && !error ? <SmartLoadingState title={t('workspace10.loading')} /> : page?.items.length ? page.items.map((workspace) => {
               const determinate = workspace.totalSteps > 0;
@@ -185,6 +308,15 @@ function workspaceTemplateFromParam(value?: string): WorkspaceTemplate {
   if (value === 'memoire' || value === 'dissertation') return value;
   if (value === 'rapport') return 'report';
   return 'assignment';
+}
+
+function libraryPageUrl(search: string, cursor?: string): string {
+  const query = search.trim();
+  return `/library/paged?filter=all&sort=newest&limit=50${query ? `&q=${encodeURIComponent(query)}` : ''}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+}
+
+function selectableWorkspaceDocument(document: LibraryDocument): boolean {
+  return document.status === 'ready' || document.status === 'partial';
 }
 
 function SourceChoice({ title, detail, checked, onPress }: { title: string; detail: string; checked: boolean; onPress: () => void }) {
