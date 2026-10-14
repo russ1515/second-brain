@@ -37,6 +37,7 @@ const LANGUAGE_MASTERY_V1_FILE = path.join(LOCALES_DIR, 'language-mastery-v1.ts'
 const TEACHING_LANGUAGE_V1_FILE = path.join(LOCALES_DIR, 'teaching-language-v1.ts');
 const WORKSPACE_CAPTURE_V1_FILE = path.join(LOCALES_DIR, 'workspace-capture-v1.ts');
 const WORKSPACE_ORCHESTRATOR_V1_FILE = path.join(LOCALES_DIR, 'workspace-orchestrator-v1.ts');
+const WORKSPACE_SHELLS_V1_FILE = path.join(LOCALES_DIR, 'workspace-shells-v1.ts');
 
 export const ALL_LOCALE_CODES = Object.freeze(['en', 'fr', ...SUPPORTED_CODES]);
 export const PROTECTED_BRANDS = Object.freeze([
@@ -355,6 +356,7 @@ export function auditRepository() {
   );
   const workspaceCaptureV1 = readNestedCatalog(WORKSPACE_CAPTURE_V1_FILE, 'workspaceCaptureV1');
   const workspaceOrchestratorV1 = readNestedCatalog(WORKSPACE_ORCHESTRATOR_V1_FILE, 'workspaceOrchestratorV1');
+  const workspaceShellsV1 = readNestedCatalog(WORKSPACE_SHELLS_V1_FILE, 'workspaceShellsV1');
   const catalogs = new Map([
     ['en', english],
     ['fr', french],
@@ -389,6 +391,7 @@ export function auditRepository() {
     const teachingLanguage = teachingLanguageTranslations.get(code) ?? new Map();
     const workspaceCapture = workspaceCaptureV1.get(code) ?? new Map();
     const workspaceOrchestrator = workspaceOrchestratorV1.get(code) ?? new Map();
+    const workspaceShells = workspaceShellsV1.get(code) ?? new Map();
     const beforeAliases = new Map([
       ...base,
       ...essential,
@@ -405,6 +408,7 @@ export function auditRepository() {
       ...teachingLanguage,
       ...workspaceCapture,
       ...workspaceOrchestrator,
+      ...workspaceShells,
     ]);
     const globalPath = new Map(
       [...globalPathAliases].flatMap(([target, source]) => {
@@ -440,6 +444,7 @@ export function auditRepository() {
       { name: 'teaching-language-v1.ts', entries: teachingLanguage },
       { name: 'workspace-capture-v1.ts', entries: workspaceCapture },
       { name: 'workspace-orchestrator-v1.ts', entries: workspaceOrchestrator },
+      { name: 'workspace-shells-v1.ts', entries: workspaceShells },
       { name: 'global-path-v1.ts', entries: globalPath },
       { name: 'language-mastery-v1.ts', entries: languageMastery },
       { name: 'language-mastery-v1.ts:languageBulletinTranslations', entries: languageBulletin },

@@ -4,6 +4,7 @@ import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import {
   WORKSPACE_TEMPLATE_DEFINITIONS,
   workspaceCompletionChecks,
+  workspaceShellFromTemplate,
   type LibraryDocument,
   type LibraryPage,
   type PersistentWorkspace,
@@ -17,14 +18,12 @@ import { useI18n, type TranslationKey } from '../../../lib/i18n';
 import { useTokens } from '../../../lib/design/theme';
 import { useResponsive } from '../../../lib/responsive';
 import { workspaceCompletionLabel, workspaceFieldLabel } from '../../../lib/workspace-paths';
-import { Alert, Badge, Button, Card, Input, Progress, SegmentedControl } from '../../../components/ds/core';
+import { Alert, Badge, Button, Card, Input, Progress } from '../../../components/ds/core';
 import { Page } from '../../../components/ds/layout';
 import { SourceCitation, SourcePreview } from '../../../components/ds/sources';
 import { SmartErrorState, SmartLoadingState } from '../../../components/ds/states';
 import { WorkspaceAssistant } from '../../../components/workspace/assistant';
-
-type WorkspaceArea = 'plan' | 'work' | 'sources';
-const AREAS: readonly WorkspaceArea[] = ['plan', 'work', 'sources'];
+import { WorkspaceShell, type WorkspaceShellArea } from '../../../components/workspace/shell';
 
 interface WorkspaceConflictDraft {
   content: string;
@@ -39,12 +38,14 @@ export default function AcademicWorkspaceScreen() {
   const { t } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   const { width, isLandscape } = useResponsive();
-  const desktop = width >= 1100;
+  // The AppShell sidebar remains visible on Web. Reserve enough real content
+  // width before enabling the three-column Thesis/Report compositions.
+  const desktop = width >= 1_400;
   const tabletSplit = width >= 760 && isLandscape;
   const [workspace, setWorkspace] = useState<PersistentWorkspace | null>(null);
   const [content, setContent] = useState('');
   const [selection, setSelection] = useState({ start: 0, end: 0 });
-  const [activeArea, setActiveArea] = useState<WorkspaceArea>('work');
+  const [activeArea, setActiveArea] = useState<WorkspaceShellArea>('work');
   const [saveState, setSaveState] = useState<WorkspaceSaveState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
@@ -211,8 +212,8 @@ export default function AcademicWorkspaceScreen() {
     setConflictDraft((current) => current ? { ...current, copyState: copied ? 'copied' : 'selectable' } : null);
   };
 
-  const patchWorkspace = async (patch: Record<string, unknown>) => {
-    if (!workspace) return;
+  const patchWorkspace = async (patch: Record<string, unknown>): Promise<boolean> => {
+    if (!workspace) return false;
     setError(null);
     try {
       const next = await api<PersistentWorkspace>(`/workspaces/${workspace.id}`, {
@@ -222,9 +223,11 @@ export default function AcademicWorkspaceScreen() {
       revisionRef.current = next.autosaveRevision;
       setWorkspace(next);
       setError(null);
+      return true;
     } catch (caught) {
       const apiError = caught as ApiError;
       setError(apiError.status === 409 ? t('workspace10.conflict') : (caught as Error).message);
+      return false;
     }
   };
 
@@ -300,6 +303,7 @@ export default function AcademicWorkspaceScreen() {
   if (!workspace) return <SmartErrorState title={t('workspace10.unavailable')} detail={error ?? undefined} onRetry={() => void load()} />;
 
   const selectedText = content.slice(selection.start, selection.end).trim();
+  const shellKind = workspaceShellFromTemplate(workspace.template);
   const total = workspace.plan.length;
   const done = workspace.plan.filter((item) => item.completed).length;
   const progress = total ? Math.round((done / total) * 100) : null;
@@ -316,6 +320,7 @@ export default function AcademicWorkspaceScreen() {
   const sourcesPanel = <SourcesPanel workspace={workspace} showPicker={showSourcePicker} library={library} onOpenPicker={() => void openSourcePicker()} onToggleDocument={(document) => void toggleDocumentSource(document)} onOpenDocument={(documentId) => router.push(`/library/${documentId}`)} />;
   const assistantPanel = (
     <WorkspaceAssistant
+      key={workspace.id}
       workspaceId={workspace.id}
       initialHistory={workspace.assistantHistory}
       selectedText={selectedText}
@@ -351,25 +356,21 @@ export default function AcademicWorkspaceScreen() {
         {showConflictDraft ? <TextInput testID="workspace-conflict-local-draft" value={conflictDraft.content} editable={false} multiline selectTextOnFocus accessibilityLabel={t('workspace10.editor.label')} style={[typography.bodySmall, { minHeight: 120, borderWidth: 1, borderColor: c.border, color: c.textPrimary, padding: spacing.sm }]} /> : null}
       </Card> : null}
       {error ? <Alert tone="error" title={t('state.error')} detail={error} /> : null}
-      {!desktop ? <SegmentedControl options={AREAS} value={activeArea} onChange={setActiveArea} labelFor={(value) => t(`workspace10.area.${value}`)} /> : null}
-
-      {desktop ? (
-        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md }}>
-          <View style={{ width: 320, gap: spacing.md }}>{briefPanel}{planPanel}{completionPanel}{sourcesPanel}</View>
-          <View style={{ flex: 1, minWidth: 0, gap: spacing.md }}>{editor}{assistantPanel}</View>
-        </View>
-      ) : tabletSplit ? (
-        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md }}>
-          <View style={{ width: 310, gap: spacing.md }}>{activeArea === 'sources' ? sourcesPanel : <>{briefPanel}{planPanel}{completionPanel}</>}</View>
-          <View style={{ flex: 1, minWidth: 0, gap: spacing.md }}>{editor}{assistantPanel}</View>
-        </View>
-      ) : (
-        <View style={{ gap: spacing.md }}>
-          {activeArea === 'plan' ? <>{briefPanel}{planPanel}{completionPanel}</> : activeArea === 'sources' ? sourcesPanel : null}
-          {editor}
-          {assistantPanel}
-        </View>
-      )}
+      <WorkspaceShell
+        shellKind={shellKind}
+        templateLabel={t(`workspace10.template.${workspace.template}` as TranslationKey)}
+        plan={workspace.plan}
+        activeArea={activeArea}
+        onAreaChange={setActiveArea}
+        desktop={desktop}
+        tabletSplit={tabletSplit}
+        briefPanel={briefPanel}
+        planPanel={planPanel}
+        completionPanel={completionPanel}
+        sourcesPanel={sourcesPanel}
+        editorPanel={editor}
+        assistantPanel={assistantPanel}
+      />
     </Page>
   </ScrollView>;
 }
@@ -379,13 +380,14 @@ function BriefPanel({
   onUpdate,
 }: {
   workspace: PersistentWorkspace;
-  onUpdate: (brief: WorkspaceBrief) => Promise<void>;
+  onUpdate: (brief: WorkspaceBrief) => Promise<boolean>;
 }) {
   const { t } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   const definition = WORKSPACE_TEMPLATE_DEFINITIONS[workspace.template];
   const [fields, setFields] = useState<WorkspaceBrief['fields']>(workspace.brief.fields);
   const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     setFields(workspace.brief.fields);
@@ -394,7 +396,7 @@ function BriefPanel({
   const save = async () => {
     setSaving(true);
     try {
-      await onUpdate({
+      const saved = await onUpdate({
         version: 1,
         fields: Object.fromEntries(
           Object.entries(fields)
@@ -402,17 +404,25 @@ function BriefPanel({
             .filter(([, value]) => Boolean(value)),
         ),
       });
+      if (saved) setEditing(false);
     } finally {
       setSaving(false);
     }
   };
 
   const dirty = JSON.stringify(fields) !== JSON.stringify(workspace.brief.fields);
+  const visibleFields = definition.fields.filter((field) => Boolean(workspace.brief.fields[field]?.trim()));
   return <Card style={{ gap: spacing.sm }} testID="workspace-adaptive-brief">
     <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>
       {t(`workspace10.template.${workspace.template}` as TranslationKey)} · {t('workspace10.assistantQuestion')}
     </Text>
-    {definition.fields.map((field) => {
+    {!editing ? <>
+      {visibleFields.length ? visibleFields.map((field) => <View key={field} style={{ gap: spacing.xs }}>
+        <Text style={[typography.caption, { color: c.textMuted }]}>{workspaceFieldLabel(field, t)}</Text>
+        <Text style={[typography.bodySmall, { color: c.textPrimary }]}>{workspace.brief.fields[field]}</Text>
+      </View>) : <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('workspace10.noObjective')}</Text>}
+      <Button size="sm" variant="secondary" label={t('onb.edit')} onPress={() => setEditing(true)} />
+    </> : definition.fields.map((field) => {
       const required = definition.requiredFields.includes(field);
       const label = workspaceFieldLabel(field, t);
       return <Input
@@ -425,7 +435,10 @@ function BriefPanel({
         multiline
       />;
     })}
-    <Button size="sm" variant="secondary" label={t('workspace10.saveNow')} loading={saving} disabled={!dirty || saving} onPress={() => void save()} />
+    {editing ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+      <Button size="sm" variant="secondary" label={t('workspace10.saveNow')} loading={saving} disabled={!dirty || saving} onPress={() => void save()} />
+      <Button size="sm" variant="ghost" label={t('app.dismiss')} disabled={saving} onPress={() => { setFields(workspace.brief.fields); setEditing(false); }} />
+    </View> : null}
   </Card>;
 }
 

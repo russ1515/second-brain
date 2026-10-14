@@ -18,14 +18,14 @@ assert.ok(password.length > 0, 'P1_BROWSER_PASSWORD_REQUIRED');
 assert.ok(path.isAbsolute(evidenceDir), 'ABSOLUTE_EVIDENCE_DIR_REQUIRED');
 
 const paths = [
-  ['memoire', ['subject', 'researchQuestion']],
-  ['tfc', ['subject', 'deliverable']],
-  ['dissertation', ['subject', 'researchQuestion']],
-  ['report', ['context', 'deliverable']],
-  ['article', ['subject', 'researchQuestion']],
-  ['assignment', ['subject', 'requirements']],
-  ['academic-research', ['subject', 'researchQuestion']],
-  ['other', ['deliverable']],
+  ['memoire', 'thesis', ['subject', 'researchQuestion']],
+  ['tfc', 'thesis', ['subject', 'deliverable']],
+  ['dissertation', 'dissertation', ['subject', 'researchQuestion']],
+  ['report', 'report', ['context', 'deliverable']],
+  ['article', 'article', ['subject', 'researchQuestion']],
+  ['assignment', 'assignment', ['subject', 'requirements']],
+  ['academic-research', 'general', ['subject', 'researchQuestion']],
+  ['other', 'general', ['deliverable']],
 ];
 
 fs.mkdirSync(evidenceDir, { recursive: true });
@@ -38,6 +38,7 @@ const context = await browser.newContext({
 const page = await context.newPage();
 const results = [];
 const createdIds = [];
+let localeRestored = true;
 
 async function archiveTechnicalWorkspace(id) {
   return page.evaluate(async (workspaceId) => {
@@ -75,19 +76,25 @@ async function archiveStaleTechnicalWorkspaces() {
   });
 }
 
+async function assertNoHorizontalOverflow(label) {
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  assert.ok(overflow <= 1, `${label}: horizontal overflow`);
+}
+
 try {
   await page.goto(`${baseUrl}/sign-in?mode=login&returnTo=%2Flibrary%2Fworkspace`, { waitUntil: 'networkidle' });
   await page.locator('input[autocomplete="email"]').fill(email);
   await page.locator('input[type="password"]').fill(password);
   await page.getByRole('button', { name: /sign in/iu }).first().click();
   await page.waitForURL(/\/library\/workspace(?:\?|$)/u, { timeout: 30_000 });
-  await page.getByTestId('workspace-create').waitFor({ state: 'visible' });
   const staleCleanup = await archiveStaleTechnicalWorkspaces();
   assert.equal(staleCleanup.archived, staleCleanup.listed, 'STALE_TECHNICAL_CLEANUP');
 
   const planSignatures = new Set();
-  for (const [template, requiredFields] of paths) {
+  for (const [template, expectedShell, requiredFields] of paths) {
     await page.goto(`${baseUrl}/library/workspace`, { waitUntil: 'networkidle' });
+    await page.getByTestId('workspace-manual-toggle').click();
+    await page.getByTestId('workspace-create').waitFor({ state: 'visible' });
     await page.getByTestId(`workspace-template-${template}`).click();
     await page.getByTestId('workspace-adaptive-fields').waitFor({ state: 'visible' });
     const fieldCount = await page.locator('[data-testid^="workspace-field-"]').count();
@@ -111,6 +118,7 @@ try {
     assert.ok(workspaceId, `${template}: workspace id`);
     createdIds.push(workspaceId);
 
+    await page.getByTestId(`workspace-shell-${expectedShell}`).waitFor({ state: 'visible' });
     await page.getByTestId('workspace-adaptive-brief').waitFor({ state: 'visible' });
     await page.getByTestId('workspace-completion-controls').waitFor({ state: 'visible' });
     const persistedPlan = (await page.getByTestId('workspace-plan').innerText()).replace(/\s+/gu, ' ').trim();
@@ -127,6 +135,74 @@ try {
 
     await page.reload({ waitUntil: 'networkidle' });
     assert.equal(await page.getByTestId('workspace-draft-input').inputValue(), marker, `${template}: reload`);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByTestId('workspace-shell-mobile').waitFor({ state: 'visible' });
+    const mobileTabs = page.getByTestId('workspace-shell-navigation').getByRole('tab');
+    assert.equal(await mobileTabs.count(), 3, `${template}: mobile tabs`);
+    const assistantDraft = `Unsaved assistant draft for ${template} (${runId}).`;
+    const assistantInput = page.getByTestId('workspace-assistant').locator('textarea, input').last();
+    await assistantInput.fill(assistantDraft);
+    await mobileTabs.nth(0).click();
+    await page.getByTestId('workspace-plan').waitFor({ state: 'visible' });
+    await page.getByTestId('workspace-draft-input').waitFor({ state: 'hidden' });
+    await mobileTabs.nth(2).click();
+    await page.getByTestId('workspace-sources').waitFor({ state: 'visible' });
+    await page.getByTestId('workspace-plan').waitFor({ state: 'hidden' });
+    await mobileTabs.nth(1).click();
+    await page.getByTestId('workspace-draft-input').waitFor({ state: 'visible' });
+    await page.getByTestId('workspace-sources').waitFor({ state: 'hidden' });
+    assert.equal(await assistantInput.inputValue(), assistantDraft, `${template}: assistant draft survives mobile tabs`);
+    await assistantInput.fill('');
+    await assertNoHorizontalOverflow(`${template}: mobile`);
+
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.getByTestId('workspace-shell-tablet').waitFor({ state: 'visible' });
+    assert.equal(await page.getByTestId('workspace-shell-navigation').count(), 0, `${template}: tablet has no misleading tabs`);
+    await page.getByTestId('workspace-plan').waitFor({ state: 'visible' });
+    await page.getByTestId('workspace-sources').waitFor({ state: 'visible' });
+    await page.getByTestId('workspace-draft-input').waitFor({ state: 'visible' });
+    await assertNoHorizontalOverflow(`${template}: tablet`);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+
+    if (template === 'memoire') {
+      const rtlSwitch = await page.evaluate(async () => {
+        const token = window.localStorage.getItem('sb.accessToken');
+        const response = await window.fetch('/api/auth/locale', {
+          method: 'PATCH',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ locale: 'he' }),
+        });
+        return response.status;
+      });
+      assert.equal(rtlSwitch, 200, 'RTL_LOCALE_SWITCH');
+      localeRestored = false;
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.reload({ waitUntil: 'networkidle' });
+      assert.equal(await page.locator('html').getAttribute('dir'), 'rtl', 'RTL_DOCUMENT_DIRECTION');
+      await page.getByTestId('workspace-shell-thesis').waitFor({ state: 'visible' });
+      await page.getByTestId('workspace-shell-mobile').waitFor({ state: 'visible' });
+      assert.match(await page.getByTestId('workspace-shell-identity').innerText(), /[\u0590-\u05FF]/u, 'RTL_TRANSLATED_SHELL_CONTENT');
+      const rtlTabs = page.getByTestId('workspace-shell-navigation').getByRole('tab');
+      await rtlTabs.nth(0).click();
+      await page.getByTestId('workspace-plan').waitFor({ state: 'visible' });
+      await assertNoHorizontalOverflow('RTL mobile');
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      const ltrRestore = await page.evaluate(async () => {
+        const token = window.localStorage.getItem('sb.accessToken');
+        const response = await window.fetch('/api/auth/locale', {
+          method: 'PATCH',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ locale: 'en' }),
+        });
+        return response.status;
+      });
+      assert.equal(ltrRestore, 200, 'LTR_LOCALE_RESTORE');
+      localeRestored = true;
+      await page.reload({ waitUntil: 'networkidle' });
+      assert.equal(await page.locator('html').getAttribute('dir'), 'ltr', 'LTR_DOCUMENT_DIRECTION');
+    }
+
     await page.goto(`${baseUrl}/library/workspace`, { waitUntil: 'networkidle' });
     await page.getByTestId(`workspace-resume-${workspaceId}`).waitFor({ state: 'visible' });
     await page.getByTestId(`workspace-open-${workspaceId}`).click();
@@ -139,7 +215,7 @@ try {
     });
     const archived = await archiveTechnicalWorkspace(workspaceId);
     assert.equal(archived.status, 200, `${template}: technical cleanup`);
-    results.push({ template, adaptiveFields: fieldCount, created: true, saved: true, resumed: true, archived: true });
+    results.push({ template, shell: expectedShell, adaptiveFields: fieldCount, created: true, saved: true, resumed: true, mobile: true, tablet: true, archived: true });
   }
 
   assert.equal(planSignatures.size, paths.length, 'ALL_PLAN_PREVIEWS_MUST_BE_DISTINCT');
@@ -158,6 +234,17 @@ try {
   fs.writeFileSync(path.join(evidenceDir, `${runId}.json`), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
   process.stdout.write(`WORKSPACE_PATHS_BROWSER=PASS TEMPLATES=${results.length} DISTINCT_PLANS=${planSignatures.size} CLEANUP=${evidence.archivedTechnicalCount}\n`);
 } finally {
+  if (!localeRestored && !page.isClosed()) {
+    await page.evaluate(async () => {
+      const token = window.localStorage.getItem('sb.accessToken');
+      if (!token) return;
+      await window.fetch('/api/auth/locale', {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ locale: 'en' }),
+      });
+    }).catch(() => undefined);
+  }
   for (const id of createdIds.slice(results.length)) {
     await archiveTechnicalWorkspace(id).catch(() => undefined);
   }

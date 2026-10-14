@@ -123,6 +123,7 @@ async function ensureUserAForCleanup() {
 
 async function createTechnicalWorkspace(page) {
   await page.goto(`${baseUrl}/library/workspace`, { waitUntil: 'networkidle' });
+  await page.getByTestId('workspace-manual-toggle').click();
   await page.getByTestId('workspace-create').waitFor({ state: 'visible' });
   await page.getByTestId('workspace-template-other').click();
   await page.getByTestId('workspace-adaptive-fields').waitFor({ state: 'visible' });

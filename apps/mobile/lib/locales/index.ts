@@ -60,3 +60,4 @@ import './language-mastery-v1';
 import './teaching-language-v1';
 import './workspace-capture-v1';
 import './workspace-orchestrator-v1';
+import './workspace-shells-v1';

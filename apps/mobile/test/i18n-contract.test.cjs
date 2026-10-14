@@ -216,6 +216,16 @@ const languageBulletinCatalogs = tupleCatalog(
   'languageBulletinTranslations',
   languageBulletinKeys,
 );
+const teachingLanguageFile = path.join(LOCALES_DIR, 'teaching-language-v1.ts');
+const teachingLanguageKeys = stringArray(teachingLanguageFile, 'teachingLanguageKeys');
+const teachingLanguageCatalogs = tupleCatalog(
+  teachingLanguageFile,
+  'teachingLanguageTranslations',
+  teachingLanguageKeys,
+);
+const workspaceCaptureCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'workspace-capture-v1.ts'), 'workspaceCaptureV1');
+const workspaceOrchestratorCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'workspace-orchestrator-v1.ts'), 'workspaceOrchestratorV1');
+const workspaceShellCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'workspace-shells-v1.ts'), 'workspaceShellsV1');
 const overlayFiles = new Set([
   'auth-errors.ts',
   'essential.ts',
@@ -229,7 +239,11 @@ const overlayFiles = new Set([
   'library-v1.ts',
   'research-web-v1.ts',
   'review.ts',
+  'teaching-language-v1.ts',
   'voice-phase2.ts',
+  'workspace-capture-v1.ts',
+  'workspace-orchestrator-v1.ts',
+  'workspace-shells-v1.ts',
 ]);
 
 function registeredLocale(file) {
@@ -277,6 +291,10 @@ function effectiveCatalog(resource) {
     ...(researchWebV1.get(code) ?? new Map()),
     ...(learningDataControlCatalogs.get(code) ?? new Map()),
     ...(languageBulletinCatalogs.get(code) ?? new Map()),
+    ...(teachingLanguageCatalogs.get(code) ?? new Map()),
+    ...(workspaceCaptureCatalogs.get(code) ?? new Map()),
+    ...(workspaceOrchestratorCatalogs.get(code) ?? new Map()),
+    ...(workspaceShellCatalogs.get(code) ?? new Map()),
   ]);
   for (const [key, sourceKey] of globalPathAliases) {
     const value = translations.get(sourceKey);

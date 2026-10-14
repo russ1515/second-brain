@@ -114,6 +114,7 @@ test('brain research keeps caller isolation and brain provenance', async () => {
 test('Lot 10 screens keep research, production, citations, autosave and transitions distinct', () => {
   const research = read('apps/mobile/app/research.tsx');
   const workspace = read('apps/mobile/app/library/workspace/[id].tsx');
+  const workspaceShell = read('apps/mobile/components/workspace/shell.tsx');
   const home = read('apps/mobile/app/library/workspace/index.tsx');
   const assistant = read('apps/mobile/components/workspace/assistant.tsx');
   const tutor = read('apps/api/src/tutor/tutor.service.ts');
@@ -127,7 +128,8 @@ test('Lot 10 screens keep research, production, citations, autosave and transiti
   assert.match(workspace, /expectedRevision/);
   assert.match(workspace, /1_200/);
   assert.match(workspace, /workspace-editor/);
-  assert.ok(workspace.indexOf('{editor}{assistantPanel}') >= 0);
+  assert.match(workspace, /editorPanel=\{editor\}[\s\S]*assistantPanel=\{assistantPanel\}/);
+  assert.match(workspaceShell, /\{editorPanel\}\{assistantPanel\}/);
   assert.doesNotMatch(workspace, /workspace10\.next|width: 340|activeArea === 'assistant'/);
   assert.match(home, /WORKSPACE_TEMPLATES/);
   assert.match(assistant, /selectedText/);
@@ -157,6 +159,7 @@ test('workspace path selection persists the brief and drives the contextual assi
   const dto = read('apps/api/src/workspaces/dto/workspace.dto.ts');
   const home = read('apps/mobile/app/library/workspace/index.tsx');
   const workspace = read('apps/mobile/app/library/workspace/[id].tsx');
+  const workspaceShell = read('apps/mobile/components/workspace/shell.tsx');
 
   assert.match(service, /localizedDefaultWorkspacePlan\(request\.template, locale\)/);
   assert.match(service, /workspaceDefaultPlan\(template\)/);
@@ -176,5 +179,6 @@ test('workspace path selection persists the brief and drives the contextual assi
   assert.match(home, /brief:/);
   assert.match(workspace, /workspace-adaptive-brief/);
   assert.match(workspace, /workspace-completion-controls/);
-  assert.ok(workspace.indexOf('{editor}{assistantPanel}') >= 0);
+  assert.match(workspace, /editorPanel=\{editor\}[\s\S]*assistantPanel=\{assistantPanel\}/);
+  assert.match(workspaceShell, /\{editorPanel\}\{assistantPanel\}/);
 });
