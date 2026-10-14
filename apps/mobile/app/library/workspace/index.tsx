@@ -25,7 +25,7 @@ import { Page, Section } from '../../../components/ds/layout';
 import { SmartLoadingState } from '../../../components/ds/states';
 import { WorkspaceUniversalCapture } from '../../../components/workspace/universal-capture';
 
-type SourceMode = 'documents' | 'collections';
+type SourceMode = 'documents' | 'collections' | 'brain';
 
 export default function WorkspaceHomeScreen() {
   const params = useLocalSearchParams<{ documentId?: string; title?: string; objective?: string; type?: string; captureStatus?: string }>();
@@ -44,7 +44,7 @@ export default function WorkspaceHomeScreen() {
   const [briefFields, setBriefFields] = useState<WorkspaceBrief['fields']>({});
   const [dueAt, setDueAt] = useState('');
   const [sourceMode, setSourceMode] = useState<SourceMode>('documents');
-  const [sources, setSources] = useState<WorkspaceSourceReference[]>(params.documentId ? [{ kind: 'document', id: params.documentId, title: params.title }] : []);
+  const [sources, setSources] = useState<WorkspaceSourceReference[]>(params.documentId ? [{ kind: 'document', id: params.documentId }] : []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
@@ -79,7 +79,7 @@ export default function WorkspaceHomeScreen() {
     setPage(null);
     setCollections([]);
     setLoadingMoreWorkspaces(false);
-    setSources(params.documentId ? [{ kind: 'document', id: params.documentId, title: params.title }] : []);
+    setSources(params.documentId ? [{ kind: 'document', id: params.documentId }] : []);
     if (!ownerId) return () => { active = false; };
     void Promise.all([
       api<WorkspacePage>('/workspaces?limit=50'),
@@ -128,7 +128,7 @@ export default function WorkspaceHomeScreen() {
         title: title.trim(),
         template,
         objective: objective.trim(),
-        sources,
+        sources: sources.map(canonicalWorkspaceSource),
         plan: localizedPlan,
         brief: {
           version: 1 as const,
@@ -275,10 +275,12 @@ export default function WorkspaceHomeScreen() {
           <Input label={t('workspace10.field.due')} value={dueAt} onChangeText={setDueAt} placeholder="YYYY-MM-DD" inputMode="numeric" />
           <View style={{ gap: spacing.sm }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm }}><Text style={[typography.label, { color: c.textPrimary }]}>{t('workspace10.sources')}</Text><Badge label={t('workspace10.sourceCount').replace('{n}', String(sources.length))} tone={sources.length ? 'primary' : 'neutral'} /></View>
-            <SegmentedControl options={['documents', 'collections'] as const} value={sourceMode} onChange={setSourceMode} labelFor={(value) => t(`workspace10.sourceMode.${value}`)} />
+            <SegmentedControl options={['documents', 'collections', 'brain'] as const} value={sourceMode} onChange={setSourceMode} labelFor={(value) => value === 'brain' ? t('research10.scope.brain') : t(`workspace10.sourceMode.${value}`)} />
             {sourceMode === 'documents' ? <Input value={documentSearch} onChangeText={setDocumentSearch} placeholder={t('library7.search')} /> : null}
             <View style={{ maxHeight: 250, gap: spacing.xs }}>
-              {sourceMode === 'documents' ? documents.map((document) => <SourceChoice key={document.id} title={document.title} detail={document.subject ?? document.source.toUpperCase()} checked={selected('document', document.id)} onPress={() => toggleSource({ kind: 'document', id: document.id, title: document.title })} />) : collections.map((collection) => <SourceChoice key={collection.id} title={collection.name} detail={t('library7.documentsCount').replace('{n}', String(collection.documentCount))} checked={selected('collection', collection.id)} onPress={() => toggleSource({ kind: 'collection', id: collection.id, title: collection.name })} />)}
+              {sourceMode === 'documents' ? documents.map((document) => <SourceChoice key={document.id} title={document.title} detail={document.subject ?? document.source.toUpperCase()} checked={selected('document', document.id)} onPress={() => toggleSource({ kind: 'document', id: document.id })} />) : null}
+              {sourceMode === 'collections' ? collections.map((collection) => <SourceChoice key={collection.id} title={collection.name} detail={t('library7.documentsCount').replace('{n}', String(collection.documentCount))} checked={selected('collection', collection.id)} onPress={() => toggleSource({ kind: 'collection', id: collection.id })} />) : null}
+              {sourceMode === 'brain' ? <SourceChoice title={t('research10.scope.brain')} detail={t('brain8.ask.detail')} checked={selected('brain', 'brain')} onPress={() => toggleSource({ kind: 'brain', id: 'brain' })} /> : null}
             </View>
             {sourceMode === 'documents' && documentNextCursor ? <Button size="sm" variant="ghost" label={t('brain8.loadMore')} loading={loadingMoreDocuments} disabled={loadingMoreDocuments} onPress={() => void loadMoreDocuments()} /> : null}
           </View>
@@ -322,6 +324,10 @@ function libraryPageUrl(search: string, cursor?: string): string {
 
 function selectableWorkspaceDocument(document: LibraryDocument): boolean {
   return document.status === 'ready' || document.status === 'partial';
+}
+
+function canonicalWorkspaceSource(source: WorkspaceSourceReference): WorkspaceSourceReference {
+  return { kind: source.kind, id: source.id };
 }
 
 function SourceChoice({ title, detail, checked, onPress }: { title: string; detail: string; checked: boolean; onPress: () => void }) {

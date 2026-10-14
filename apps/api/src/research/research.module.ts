@@ -37,5 +37,6 @@ const webResearchProviderFactory: Provider = {
     webResearchProviderFactory,
     { provide: EXTERNAL_RESEARCH_PROVIDER, useExisting: DisabledResearchProvider },
   ],
+  exports: [ResearchService],
 })
 export class ResearchModule {}

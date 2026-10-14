@@ -190,14 +190,60 @@ export interface WorkspaceCitationReference {
   excerpt?: string | null;
 }
 
+export type WorkspaceSourceKind = 'document' | 'collection' | 'research-source' | 'brain';
+
 export interface WorkspaceSourceReference {
-  kind: 'document' | 'collection' | 'research-source';
+  kind: WorkspaceSourceKind;
   id: string;
   title?: string;
-  /** Research transfer snapshot. Provenance remains usable if the source changes. */
+  /** @deprecated AW-6 resolves Research content on the server from `id`. */
   question?: string;
+  /** @deprecated AW-6 never trusts or consumes this client-provided snapshot. */
   synthesis?: string;
+  /** @deprecated AW-6 never trusts or consumes these client-provided citations. */
   citations?: WorkspaceCitationReference[];
+}
+
+export type WorkspaceSourceAvailability = 'available' | 'processing' | 'unavailable';
+
+export interface WorkspaceSourceState {
+  kind: WorkspaceSourceKind;
+  id: string;
+  title: string;
+  availability: WorkspaceSourceAvailability;
+  reason?: 'deleted' | 'foreign' | 'processing' | 'empty' | 'legacy-unverified' | 'invalid';
+}
+
+/** Server-resolved provenance for one bounded Workspace evidence passage. */
+export interface WorkspaceSourceCitation {
+  sourceType: 'document' | 'brain' | 'research' | 'external' | 'web';
+  sourceId: string;
+  documentId?: string;
+  conceptId?: string;
+  title: string;
+  page?: number;
+  chunkIndex?: number;
+  url?: string;
+  retrievedAt?: string;
+  snippet: string;
+  citationLabel: string;
+  relevance?: number | null;
+}
+
+export interface WorkspaceSourceQueryRequest {
+  query: string;
+  limit?: number;
+}
+
+export interface WorkspaceSourceQueryResponse {
+  query: string;
+  usedContext: boolean;
+  citations: WorkspaceSourceCitation[];
+  sources: WorkspaceSourceState[];
+}
+
+export interface WorkspaceSourceStatesResponse {
+  sources: WorkspaceSourceState[];
 }
 
 export interface WorkspacePlanItem {
@@ -234,6 +280,10 @@ export interface WorkspaceCompletionCheck {
 export interface WorkspaceAssistantHistoryEntry extends WorkspaceMessage {
   id: string;
   createdAt: string;
+  /** Machine-readable grounding state so clients can localize honest no-evidence copy. */
+  evidenceStatus?: 'grounded' | 'none' | 'not-requested';
+  /** Citations are stored in the existing JSON history; no schema migration. */
+  citations?: WorkspaceSourceCitation[];
 }
 
 export interface PersistentWorkspace {
@@ -336,6 +386,8 @@ export interface PersistentWorkspaceAssistRequest {
 
 export interface PersistentWorkspaceAssistResponse {
   reply: WorkspaceAssistantHistoryEntry;
+  citations: WorkspaceSourceCitation[];
+  sources: WorkspaceSourceState[];
 }
 
 export type WorkspaceSaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error' | 'offline';

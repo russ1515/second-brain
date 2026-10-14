@@ -5,12 +5,20 @@ import type {
   PersistentWorkspaceAssistResponse,
   WorkspaceAutosaveResult,
   WorkspacePage,
+  WorkspaceSourceQueryResponse,
+  WorkspaceSourceStatesResponse,
 } from '@second-brain/shared';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { AcademicWorkspaceService } from './academic-workspace.service';
-import { CreateWorkspaceDto, UpdateWorkspaceDto, WorkspaceAssistDto, WorkspaceAutosaveDto } from './dto/workspace.dto';
+import {
+  CreateWorkspaceDto,
+  UpdateWorkspaceDto,
+  WorkspaceAssistDto,
+  WorkspaceAutosaveDto,
+  WorkspaceSourceQueryDto,
+} from './dto/workspace.dto';
 
 @UseGuards(JwtAccessGuard)
 @Controller('workspaces')
@@ -52,6 +60,24 @@ export class AcademicWorkspaceController {
     @Body() dto: WorkspaceAutosaveDto,
   ): Promise<WorkspaceAutosaveResult> {
     return this.workspaces.autosave(user.userId, id, dto);
+  }
+
+  @Get(':id/sources')
+  sourceStates(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<WorkspaceSourceStatesResponse> {
+    return this.workspaces.sourceStates(user.userId, id);
+  }
+
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Post(':id/sources/query')
+  querySources(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: WorkspaceSourceQueryDto,
+  ): Promise<WorkspaceSourceQueryResponse> {
+    return this.workspaces.querySources(user.userId, id, dto);
   }
 
   @Throttle({ default: { limit: 20, ttl: 60_000 } })

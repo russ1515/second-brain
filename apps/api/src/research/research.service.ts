@@ -1,5 +1,6 @@
-import { BadRequestException, Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import type {
   BrainSearchResult,
   ResearchAvailabilityResponse,
@@ -14,6 +15,7 @@ import {
   isExternalResearchScope,
   RESEARCH_SCOPE_KINDS,
   researchExecutionLimits,
+  RESEARCH_DEPTHS,
   researchScopeToRag,
   researchSourceLimit,
 } from '@second-brain/shared';
@@ -29,6 +31,7 @@ import { ResearchProviderError } from './providers/openai-web-research.provider'
 
 const MAX_SOURCE_EXCERPT = 1_200;
 const EXTERNAL_QUERY_LIMIT = 16;
+const RESEARCH_RESULT_AUTHORITY = 'server:research-result:v1';
 const QUALITY_WEIGHT = { primary: 5, institutional: 4, academic: 3, reputable: 2, other: 1 } as const;
 
 @Injectable()
@@ -54,7 +57,44 @@ export class ResearchService {
     };
   }
 
+  /** Read only a result that this service itself persisted. Generic clients
+   * cannot create or replace Research productions, so Workspace never trusts
+   * a client-supplied synthesis or citation envelope. */
+  async loadWorkspaceSource(userId: string, sessionId: string): Promise<ResearchResult | null> {
+    const session = await this.prisma.experienceSession.findFirst({
+      where: {
+        id: sessionId,
+        userId,
+        type: 'research',
+        status: { in: ['active', 'paused', 'completed'] },
+      },
+      select: { productions: true },
+    });
+    if (!session) return null;
+    const production = jsonArray(session.productions).find((value) => {
+      const record = jsonRecord(value);
+      return record?.kind === 'research-result' &&
+        jsonRecord(record.metadata)?.sourceAuthority === RESEARCH_RESULT_AUTHORITY;
+    });
+    const metadata = jsonRecord(jsonRecord(production)?.metadata);
+    if (!metadata) return null;
+    const { sourceAuthority: _sourceAuthority, ...candidate } = metadata;
+    return isResearchResult(candidate) ? candidate : null;
+  }
+
   async run(userId: string, request: ResearchRunRequest): Promise<ResearchResult> {
+    if (request.experienceSessionId) {
+      const session = await this.prisma.experienceSession.findFirst({
+        where: {
+          id: request.experienceSessionId,
+          userId,
+          type: 'research',
+          status: { in: ['active', 'paused', 'completed'] },
+        },
+        select: { id: true },
+      });
+      if (!session) throw new BadRequestException('Research session is unavailable.');
+    }
     const question = request.question.trim();
     const scopes = this.normalizeScopes(request.scopes);
     const execution = researchExecutionLimits(request.depth);
@@ -147,7 +187,7 @@ export class ResearchService {
 
     const bounded = rankAndBalanceCitations(deduplicateCitations(citations), sourceLimit);
     if (bounded.length === 0) {
-      return {
+      return this.persistWorkspaceSource(userId, request.experienceSessionId, {
         question,
         depth: request.depth,
         scopes,
@@ -164,7 +204,7 @@ export class ResearchService {
         plan,
         queries,
         generatedAt: new Date().toISOString(),
-      };
+      });
     }
 
     const generated = await this.synthesize(userId, question, request.depth, bounded, locale);
@@ -175,7 +215,7 @@ export class ResearchService {
       ...(comparison ? [{ kind: 'compared' as const, completed: true as const, itemCount: bounded.length }] : []),
       { kind: 'synthesized', completed: true },
     ];
-    return {
+    return this.persistWorkspaceSource(userId, request.experienceSessionId, {
       question,
       depth: request.depth,
       scopes,
@@ -192,7 +232,62 @@ export class ResearchService {
       plan,
       queries,
       generatedAt: new Date().toISOString(),
+    });
+  }
+
+  private async persistWorkspaceSource(
+    userId: string,
+    sessionId: string | undefined,
+    result: ResearchResult,
+  ): Promise<ResearchResult> {
+    if (!sessionId) return result;
+    const session = await this.prisma.experienceSession.findFirst({
+      where: {
+        id: sessionId,
+        userId,
+        type: 'research',
+        status: { in: ['active', 'paused', 'completed'] },
+      },
+    });
+    if (!session) throw new BadRequestException('Research session is unavailable.');
+
+    const retained = jsonArray(session.productions).filter((value) =>
+      jsonRecord(value)?.kind !== 'research-result',
+    );
+    const production = {
+      id: `research-result:${session.id}`,
+      kind: 'research-result',
+      title: result.question.slice(0, 120),
+      createdAt: result.generatedAt,
+      metadata: { ...result, sourceAuthority: RESEARCH_RESULT_AUTHORITY },
     };
+    const sourceReferences = result.citations.slice(0, 100).map((citation) => ({
+      kind: citation.kind === 'document'
+        ? 'document'
+        : citation.kind === 'brain' && citation.conceptId
+          ? 'concept'
+          : 'external-source',
+      id: citation.documentId ?? citation.conceptId ?? citation.url ?? citation.id,
+      title: citation.title,
+    }));
+    const update = await this.prisma.experienceSession.updateMany({
+      where: {
+        id: session.id,
+        userId,
+        type: 'research',
+        status: session.status,
+        version: session.version,
+      },
+      data: {
+        productions: asJson([...retained, production]),
+        sourceReferences: asJson(sourceReferences),
+        version: { increment: 1 },
+      },
+    });
+    if (update.count !== 1) {
+      throw new ConflictException('Research session changed concurrently. Reload it and retry.');
+    }
+    return result;
   }
 
   private async buildResearchPlan(
@@ -467,4 +562,42 @@ function parseObject(raw: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function asJson(value: unknown): Prisma.InputJsonValue {
+  return value as Prisma.InputJsonValue;
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function jsonArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function isResearchResult(value: unknown): value is ResearchResult {
+  const record = jsonRecord(value);
+  if (!record) return false;
+  return typeof record.question === 'string'
+    && RESEARCH_DEPTHS.includes(record.depth as ResearchResult['depth'])
+    && Array.isArray(record.scopes)
+    && typeof record.synthesis === 'string'
+    && Array.isArray(record.sections)
+    && Array.isArray(record.keyPoints)
+    && Array.isArray(record.claims)
+    && Array.isArray(record.citations)
+    && record.citations.every((citation) => {
+      const item = jsonRecord(citation);
+      return Boolean(item)
+        && typeof item!.id === 'string'
+        && typeof item!.title === 'string'
+        && ['document', 'brain', 'external', 'web'].includes(String(item!.kind));
+    })
+    && Array.isArray(record.limits)
+    && Array.isArray(record.stages)
+    && typeof record.partial === 'boolean'
+    && typeof record.generatedAt === 'string';
 }

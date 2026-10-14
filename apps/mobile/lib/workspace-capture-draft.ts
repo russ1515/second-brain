@@ -110,7 +110,7 @@ export function mergeWorkspaceSources(
 ): WorkspaceSourceReference[] {
   const seen = new Set<string>();
   return [...current, ...additions].slice(0, 100).flatMap((source) => {
-    if (!source || !['document', 'collection', 'research-source'].includes(source.kind) || !source.id?.trim()) return [];
+    if (!source || !['document', 'collection', 'research-source', 'brain'].includes(source.kind) || !source.id?.trim()) return [];
     const key = `${source.kind}:${source.id.trim()}`;
     if (seen.has(key) || seen.size >= MAX_WORKSPACE_CAPTURE_SOURCES) return [];
     seen.add(key);

@@ -49,6 +49,9 @@ function createHarness() {
       { id: 'collection-intruder', userId: 'intruder' },
     ],
     llmCalls: 0,
+    llmMessages: [],
+    llmResponse: 'Technical assistant response.',
+    sourceResolution: null,
   };
   let transactionTail = Promise.resolve();
 
@@ -160,12 +163,44 @@ function createHarness() {
     },
   };
   const llm = {
-    generate: async () => {
+    generate: async (messages) => {
       state.llmCalls += 1;
-      return { text: 'Technical assistant response.' };
+      state.llmMessages.push(structuredClone(messages));
+      return { text: state.llmResponse };
     },
   };
-  return { service: new AcademicWorkspaceService(prisma, llm), state, prisma, llm };
+  const sourceEngine = {
+    resolve: async (_userId, sources, request) => state.sourceResolution ?? ({
+      query: request.query,
+      usedContext: false,
+      citations: [],
+      sources: sources.map((source) => ({
+        kind: source.kind,
+        id: source.id,
+        title: source.id,
+        availability: 'available',
+      })),
+      context: '',
+    }),
+    query: async () => ({ query: '', usedContext: false, citations: [], sources: [], context: '' }),
+    validateReply: (content, citations) => {
+      const available = new Map(citations.map((citation) => [citation.citationLabel, citation]));
+      const used = new Set();
+      const validated = content.replace(/\[(W\d+)\]/g, (_match, label) => {
+        if (!available.has(label)) return '';
+        used.add(label);
+        return `[${label}]`;
+      }).trim();
+      return { content: validated, citations: citations.filter((citation) => used.has(citation.citationLabel)) };
+    },
+  };
+  return {
+    service: new AcademicWorkspaceService(prisma, llm, sourceEngine),
+    state,
+    prisma,
+    llm,
+    sourceEngine,
+  };
 }
 
 function request(overrides = {}) {
@@ -227,11 +262,11 @@ test('creation persists initial capture content and owned sources while rejectin
   }));
 
   assert.equal(workspace.draft.content, initialContent);
-  assert.deepEqual(workspace.sources, ownedSources);
+  assert.deepEqual(workspace.sources, ownedSources.map(({ kind, id }) => ({ kind, id })));
   assert.equal(state.workspaces[0].draftContent, initialContent);
   assert.deepEqual(state.sessions[0].sourceReferences, [
-    { kind: 'document', id: 'document-owner', title: 'Owned PDF' },
-    { kind: 'document-collection', id: 'collection-owner', title: 'Owned collection' },
+    { kind: 'document', id: 'document-owner' },
+    { kind: 'document-collection', id: 'collection-owner' },
   ]);
 
   await assert.rejects(
@@ -262,6 +297,26 @@ test('a legacy plan without item ids remains idempotent across an identical retr
   assert.equal(first.id, retry.id);
   assert.equal(first.plan[0].id, retry.plan[0].id);
   assert.match(first.plan[0].id, /^legacy-0-[a-f0-9]{16}$/u);
+  assert.equal(state.workspaces.length, 1);
+  assert.equal(state.sessions.length, 1);
+});
+
+test('legacy source display metadata does not break an otherwise identical creation retry', async () => {
+  const { service, state } = createHarness();
+  const payload = request({
+    requestId: 'workspace-create-legacy-source-metadata-1',
+    sources: [{ kind: 'document', id: 'document-owner' }],
+  });
+
+  const first = await service.create('owner', payload);
+  state.workspaces[0].sources = [{
+    kind: 'document',
+    id: 'document-owner',
+    title: 'Legacy client-owned title',
+  }];
+  const retry = await service.create('owner', payload);
+
+  assert.equal(retry.id, first.id);
   assert.equal(state.workspaces.length, 1);
   assert.equal(state.sessions.length, 1);
 });
@@ -325,7 +380,7 @@ test('two metadata editors use the same revision token and cannot overwrite each
 });
 
 test('a confirmed draft and resume target survive a new authenticated service instance', async () => {
-  const { service, prisma, llm } = createHarness();
+  const { service, prisma, llm, sourceEngine } = createHarness();
   const workspace = await service.create('owner', request());
   await service.autosave('owner', workspace.id, {
     workspaceId: workspace.id,
@@ -333,7 +388,7 @@ test('a confirmed draft and resume target survive a new authenticated service in
     draft: { format: 'markdown', content: 'Confirmed before logout.' },
   });
 
-  const afterLogin = new AcademicWorkspaceService(prisma, llm);
+  const afterLogin = new AcademicWorkspaceService(prisma, llm, sourceEngine);
   const restored = await afterLogin.get('owner', workspace.id);
   assert.equal(restored.draft.content, 'Confirmed before logout.');
   assert.equal(restored.draft.revision, 1);
@@ -541,6 +596,86 @@ test('workspace reads and mutations remain owner-scoped', async () => {
   assert.equal(state.workspaces[0].draftContent, '');
 });
 
+test('assistant refuses absent attached evidence without an LLM call and persists the honest exchange', async () => {
+  const { service, state } = createHarness();
+  const workspace = await service.create('owner', request({
+    requestId: 'workspace-create-no-evidence-1',
+    sources: [{ kind: 'document', id: 'document-owner' }],
+  }));
+
+  const response = await service.assist('owner', workspace.id, {
+    action: 'compare-sources',
+    message: 'What do my sources prove?',
+  });
+
+  assert.equal(state.llmCalls, 0);
+  assert.equal(response.reply.content, '');
+  assert.equal(response.reply.evidenceStatus, 'none');
+  assert.deepEqual(response.citations, []);
+  assert.equal(response.sources.length, 1);
+  assert.deepEqual(state.workspaces[0].assistantHistory.map((entry) => entry.role), ['user', 'assistant']);
+  assert.equal(state.workspaces[0].assistantHistory.at(-1).evidenceStatus, 'none');
+  assert.deepEqual(state.workspaces[0].assistantHistory.at(-1).citations, []);
+});
+
+test('assistant persists only server-resolved citations that its answer actually references', async () => {
+  const { service, state } = createHarness();
+  const workspace = await service.create('owner', request({
+    requestId: 'workspace-create-cited-answer-1',
+    sources: [{ kind: 'document', id: 'document-owner' }],
+  }));
+  const citation = {
+    sourceType: 'document', sourceId: 'document-owner', documentId: 'document-owner',
+    title: 'Owned PDF', chunkIndex: 2, snippet: 'Verified evidence.', citationLabel: 'W1', relevance: 0.9,
+  };
+  state.sourceResolution = {
+    query: 'verified claim', usedContext: true, citations: [citation],
+    sources: [{ kind: 'document', id: 'document-owner', title: 'Owned PDF', availability: 'available' }],
+    context: '<workspace-evidence label="W1">Verified evidence.</workspace-evidence>',
+  };
+  state.llmResponse = 'Verified claim [W1]. Invented claim [W99].';
+
+  const response = await service.assist('owner', workspace.id, {
+    action: 'suggest', message: 'verified claim',
+  });
+
+  assert.equal(state.llmCalls, 1);
+  assert.equal(response.reply.content, 'Verified claim [W1]. Invented claim .');
+  assert.equal(response.reply.evidenceStatus, 'grounded');
+  assert.deepEqual(response.citations, [citation]);
+  assert.deepEqual(state.workspaces[0].assistantHistory.at(-1).citations, [citation]);
+});
+
+test('assistant strips request-scoped workspace citation labels from restored history', async () => {
+  const { service, state } = createHarness();
+  const workspace = await service.create('owner', request({
+    requestId: 'workspace-create-history-citation-1',
+    sources: [{ kind: 'document', id: 'document-owner' }],
+  }));
+  const citation = {
+    sourceType: 'document', sourceId: 'document-owner', documentId: 'document-owner',
+    title: 'Owned PDF', chunkIndex: 2, snippet: 'Verified evidence.', citationLabel: 'W1', relevance: 0.9,
+  };
+  state.sourceResolution = {
+    query: 'verified claim', usedContext: true, citations: [citation],
+    sources: [{ kind: 'document', id: 'document-owner', title: 'Owned PDF', availability: 'available' }],
+    context: '<workspace-evidence label="W1">Verified evidence.</workspace-evidence>',
+  };
+  state.llmResponse = 'First verified claim [W1].';
+  await service.assist('owner', workspace.id, { action: 'suggest', message: 'first request' });
+
+  state.llmResponse = 'Second verified claim [W1].';
+  await service.assist('owner', workspace.id, { action: 'suggest', message: 'second request' });
+
+  const secondCall = state.llmMessages.at(-1);
+  const restoredAssistant = secondCall.slice(1, -1).find((message) => (
+    message.role === 'assistant' && message.content.includes('First verified claim')
+  ));
+  assert.ok(restoredAssistant);
+  assert.equal(restoredAssistant.content, 'First verified claim.');
+  assert.equal(restoredAssistant.content.includes('[W1]'), false);
+});
+
 test('attaching owned capture sources synchronizes the resumable session and rejects foreign sources atomically', async () => {
   const { service, state } = createHarness();
   const workspace = await service.create('owner', request());
@@ -554,8 +689,8 @@ test('attaching owned capture sources synchronizes the resumable session and rej
   });
   assert.equal(updated.sources.length, 2);
   assert.deepEqual(state.sessions[0].sourceReferences, [
-    { kind: 'document', id: 'document-owner', title: 'Owned PDF' },
-    { kind: 'document-collection', id: 'collection-owner', title: 'Owned collection' },
+    { kind: 'document', id: 'document-owner' },
+    { kind: 'document-collection', id: 'collection-owner' },
   ]);
 
   await assert.rejects(

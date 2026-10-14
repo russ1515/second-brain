@@ -116,7 +116,7 @@ test('AW-3 qualification exposes six families while the legacy manual flow keeps
 
 test('a durable document can attach to an existing dossier with revision protection', () => {
   assert.match(component, /api<PersistentWorkspace>\(`\/workspaces\/\$\{encodeURIComponent\(workspaceId\)\}`\)/);
-  assert.match(component, /body: \{ sources: next, expectedRevision: current\.autosaveRevision \}/);
+  assert.match(component, /body: \{ sources: next\.map\(canonicalWorkspaceSource\), expectedRevision: current\.autosaveRevision \}/);
   assert.match(component, /mergeWorkspaceSources\(current\.sources, sources\)/);
 });
 

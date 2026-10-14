@@ -3,7 +3,9 @@ import {
   ArrayMinSize,
   IsArray,
   IsIn,
+  IsOptional,
   IsString,
+  Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
@@ -14,6 +16,12 @@ import {
 } from '@second-brain/shared';
 
 export class RunResearchDto implements ResearchRunRequest {
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  @Matches(/^[A-Za-z0-9_-]+$/)
+  experienceSessionId?: string;
+
   @IsString()
   @MinLength(2)
   @MaxLength(1_000)

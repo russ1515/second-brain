@@ -5,6 +5,7 @@ import {
   WORKSPACE_TEMPLATE_DEFINITIONS,
   workspaceCompletionChecks,
   workspaceShellFromTemplate,
+  type Collection,
   type LibraryDocument,
   type LibraryPage,
   type PersistentWorkspace,
@@ -12,6 +13,8 @@ import {
   type WorkspacePlanItem,
   type WorkspaceSaveState,
   type WorkspaceSourceReference,
+  type WorkspaceSourceState,
+  type WorkspaceSourceStatesResponse,
 } from '@second-brain/shared';
 import { api, ApiError } from '../../../lib/client';
 import { useI18n, type TranslationKey } from '../../../lib/i18n';
@@ -50,6 +53,9 @@ export default function AcademicWorkspaceScreen() {
   const [error, setError] = useState<string | null>(null);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [library, setLibrary] = useState<LibraryDocument[]>([]);
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [sourceStates, setSourceStates] = useState<WorkspaceSourceState[]>([]);
+  const [sourcePickerLoaded, setSourcePickerLoaded] = useState(false);
   const [assistantUndo, setAssistantUndo] = useState<string | null>(null);
   const [conflictDraft, setConflictDraft] = useState<WorkspaceConflictDraft | null>(null);
   const [showConflictDraft, setShowConflictDraft] = useState(false);
@@ -63,11 +69,23 @@ export default function AcademicWorkspaceScreen() {
   const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const saveRef = useRef<(nextContent: string) => Promise<boolean>>(async () => true);
 
+  const refreshSourceStates = async (workspaceId: string) => {
+    try {
+      const result = await api<WorkspaceSourceStatesResponse>(`/workspaces/${workspaceId}/sources`);
+      setSourceStates(result.sources);
+    } catch {
+      // Source status is complementary. A temporary status endpoint failure
+      // must not hide the persisted Workspace or invent an availability state.
+      setSourceStates([]);
+    }
+  };
+
   const load = async (preserveConflictDraft = false): Promise<boolean> => {
     setError(null);
     try {
       const next = await api<PersistentWorkspace>(`/workspaces/${id}`);
       setWorkspace(next);
+      void refreshSourceStates(next.id);
       setContent(next.draft.content);
       lastSavedRef.current = next.draft.content;
       revisionRef.current = next.autosaveRevision;
@@ -222,6 +240,7 @@ export default function AcademicWorkspaceScreen() {
       });
       revisionRef.current = next.autosaveRevision;
       setWorkspace(next);
+      if (Object.prototype.hasOwnProperty.call(patch, 'sources')) void refreshSourceStates(next.id);
       setError(null);
       return true;
     } catch (caught) {
@@ -281,21 +300,27 @@ export default function AcademicWorkspaceScreen() {
 
   const openSourcePicker = async () => {
     setShowSourcePicker(true);
-    if (library.length) return;
+    if (sourcePickerLoaded) return;
     try {
-      const page = await api<LibraryPage>('/library/paged?filter=all&sort=newest&limit=50');
-      setLibrary(page.items.filter((item) => item.status === 'ready'));
+      const [page, nextCollections] = await Promise.all([
+        api<LibraryPage>('/library/paged?filter=all&sort=newest&limit=50'),
+        api<Collection[]>('/library/collections'),
+      ]);
+      setLibrary(page.items.filter((item) => item.status === 'ready' || item.status === 'partial'));
+      setCollections(nextCollections);
+      setSourcePickerLoaded(true);
     } catch (caught) {
       setError((caught as Error).message);
     }
   };
 
-  const toggleDocumentSource = async (document: LibraryDocument) => {
+  const toggleSource = async (source: WorkspaceSourceReference) => {
     if (!workspace) return;
-    const exists = workspace.sources.some((source) => source.kind === 'document' && source.id === document.id);
+    const canonical = { kind: source.kind, id: source.id } satisfies WorkspaceSourceReference;
+    const exists = workspace.sources.some((current) => current.kind === canonical.kind && current.id === canonical.id);
     const sources = exists
-      ? workspace.sources.filter((source) => source.kind !== 'document' || source.id !== document.id)
-      : [...workspace.sources, { kind: 'document' as const, id: document.id, title: document.title }];
+      ? workspace.sources.filter((current) => current.kind !== canonical.kind || current.id !== canonical.id).map(canonicalWorkspaceSource)
+      : [...workspace.sources.map(canonicalWorkspaceSource), canonical];
     await patchWorkspace({ sources });
   };
 
@@ -317,7 +342,20 @@ export default function AcademicWorkspaceScreen() {
   const briefPanel = <BriefPanel workspace={workspace} onUpdate={(brief) => patchWorkspace({ brief })} />;
   const planPanel = <PlanPanel workspace={workspace} onUpdate={updatePlan} onMove={movePlan} onRemove={removePlanItem} onAdd={addPlanItem} />;
   const completionPanel = <CompletionPanel checks={completionChecks} />;
-  const sourcesPanel = <SourcesPanel workspace={workspace} showPicker={showSourcePicker} library={library} onOpenPicker={() => void openSourcePicker()} onToggleDocument={(document) => void toggleDocumentSource(document)} onOpenDocument={(documentId) => router.push(`/library/${documentId}`)} />;
+  const sourcesPanel = <SourcesPanel
+    workspace={workspace}
+    sourceStates={sourceStates}
+    showPicker={showSourcePicker}
+    library={library}
+    collections={collections}
+    onOpenPicker={() => void openSourcePicker()}
+    onToggleSource={(source) => void toggleSource(source)}
+    onOpenSource={(source) => {
+      if (source.kind === 'document') router.push(`/library/${source.id}`);
+      if (source.kind === 'brain') router.push('/brain');
+      if (source.kind === 'research-source') router.push({ pathname: '/research', params: { experienceSessionId: source.id } });
+    }}
+  />;
   const assistantPanel = (
     <WorkspaceAssistant
       key={workspace.id}
@@ -466,9 +504,87 @@ function EditorPanel({ content, saveState, onChange, onSelection, onInsert, onSa
   return <Card style={{ gap: spacing.sm, minHeight: 620 }} testID="workspace-editor"><View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}><Button size="sm" variant="ghost" label={t('workspace10.editor.heading')} onPress={() => onInsert('## ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.list')} onPress={() => onInsert('- ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.quote')} onPress={() => onInsert('> ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.reference')} onPress={() => onInsert('[', ']')} /></View><TextInput testID="workspace-draft-input" value={content} onChangeText={onChange} onSelectionChange={(event) => onSelection(event.nativeEvent.selection)} multiline textAlignVertical="top" placeholder={t('workspace10.editor.placeholder')} placeholderTextColor={c.textMuted} accessibilityLabel={t('workspace10.editor.label')} style={[typography.body, { flex: 1, minHeight: 520, borderWidth: 1, borderColor: c.border, borderRadius: radius.sm, backgroundColor: c.surfaceElevated, color: c.textPrimary, padding: spacing.md }]} /><View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }}><Text accessibilityLiveRegion="polite" style={[typography.caption, { color: saveState === 'error' || saveState === 'offline' ? c.warning : c.textMuted }]}>{t(`workspace10.save.${saveState}` as TranslationKey)}</Text><Button testID="workspace-save-draft" size="sm" variant="secondary" label={t('workspace10.saveNow')} disabled={saveState === 'saving' || saveState === 'saved'} onPress={onSave} /></View></Card>;
 }
 
-function SourcesPanel({ workspace, showPicker, library, onOpenPicker, onToggleDocument, onOpenDocument }: { workspace: PersistentWorkspace; showPicker: boolean; library: LibraryDocument[]; onOpenPicker: () => void; onToggleDocument: (document: LibraryDocument) => void; onOpenDocument: (id: string) => void }) {
+function canonicalWorkspaceSource(source: WorkspaceSourceReference): WorkspaceSourceReference {
+  return { kind: source.kind, id: source.id };
+}
+
+function SourcesPanel({
+  workspace,
+  sourceStates,
+  showPicker,
+  library,
+  collections,
+  onOpenPicker,
+  onToggleSource,
+  onOpenSource,
+}: {
+  workspace: PersistentWorkspace;
+  sourceStates: WorkspaceSourceState[];
+  showPicker: boolean;
+  library: LibraryDocument[];
+  collections: Collection[];
+  onOpenPicker: () => void;
+  onToggleSource: (source: WorkspaceSourceReference) => void;
+  onOpenSource: (source: WorkspaceSourceReference) => void;
+}) {
   const { t } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   const [preview, setPreview] = useState<WorkspaceSourceReference | null>(null);
-  return <Card style={{ gap: spacing.sm }} testID="workspace-sources"><Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('workspace10.sources')}</Text>{workspace.sources.length ? workspace.sources.map((source, index) => <SourceCitation key={`${source.kind}:${source.id}`} title={source.title ?? source.id} kind={source.kind === 'research-source' ? 'external' : 'document'} index={index + 1} compact={false} onPress={() => setPreview(source)} />) : <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('workspace10.sourcesEmpty')}</Text>}<Button size="sm" variant="secondary" label={t('workspace10.addSource')} onPress={onOpenPicker} />{showPicker ? <View style={{ gap: spacing.xs }}>{library.map((document) => { const checked = workspace.sources.some((source) => source.kind === 'document' && source.id === document.id); return <Pressable key={document.id} accessibilityRole="checkbox" accessibilityState={{ checked }} onPress={() => onToggleDocument(document)} style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}><Text style={{ color: c.primary }}>{checked ? '✓' : '○'}</Text><Text numberOfLines={1} style={[typography.bodySmall, { color: c.textPrimary, flex: 1 }]}>{document.title}</Text></Pressable>; })}</View> : null}{preview ? <SourcePreview title={preview.title ?? preview.id} snippet={preview.synthesis ?? preview.question ?? null} kind={preview.kind === 'research-source' ? 'external' : 'document'} onOpen={preview.kind === 'document' ? () => onOpenDocument(preview.id) : undefined} onClose={() => setPreview(null)} /> : null}</Card>;
+  const states = new Map(sourceStates.map((state) => [`${state.kind}:${state.id}`, state]));
+  const previewState = preview ? states.get(`${preview.kind}:${preview.id}`) : undefined;
+  const brainSelected = workspace.sources.some((source) => source.kind === 'brain' && source.id === 'brain');
+  return <Card style={{ gap: spacing.sm }} testID="workspace-sources">
+    <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('workspace10.sources')}</Text>
+    {workspace.sources.length ? workspace.sources.map((source, index) => {
+      const state = states.get(`${source.kind}:${source.id}`);
+      const title = source.kind === 'brain' ? t('research10.scope.brain') : state?.title ?? source.id;
+      const kind = source.kind === 'brain' ? 'brain' : source.kind === 'research-source' ? 'external' : 'document';
+      return <View key={`${source.kind}:${source.id}`} style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs }}>
+        <SourceCitation title={title} kind={kind} index={index + 1} compact={false} onPress={() => setPreview(source)} />
+        {state ? <Badge
+          label={sourceAvailabilityLabel(state, t)}
+          tone={state.availability === 'available' ? 'success' : state.availability === 'processing' ? 'info' : 'warning'}
+        /> : null}
+      </View>;
+    }) : <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('workspace10.sourcesEmpty')}</Text>}
+    <Button size="sm" variant="secondary" label={t('workspace10.addSource')} onPress={onOpenPicker} />
+    {showPicker ? <View style={{ gap: spacing.md }} testID="workspace-source-picker">
+      <View style={{ gap: spacing.xs }}>
+        <Text style={[typography.label, { color: c.textPrimary }]}>{t('workspace10.sourceMode.documents')}</Text>
+        {library.map((document) => {
+          const checked = workspace.sources.some((source) => source.kind === 'document' && source.id === document.id);
+          return <SourcePickerChoice key={document.id} title={document.title} checked={checked} onPress={() => onToggleSource({ kind: 'document', id: document.id })} />;
+        })}
+      </View>
+      <View style={{ gap: spacing.xs }}>
+        <Text style={[typography.label, { color: c.textPrimary }]}>{t('workspace10.sourceMode.collections')}</Text>
+        {collections.map((collection) => {
+          const checked = workspace.sources.some((source) => source.kind === 'collection' && source.id === collection.id);
+          return <SourcePickerChoice key={collection.id} title={collection.name} checked={checked} onPress={() => onToggleSource({ kind: 'collection', id: collection.id })} />;
+        })}
+      </View>
+      <SourcePickerChoice title={t('research10.scope.brain')} checked={brainSelected} onPress={() => onToggleSource({ kind: 'brain', id: 'brain' })} />
+    </View> : null}
+    {preview ? <SourcePreview
+      title={preview.kind === 'brain' ? t('research10.scope.brain') : previewState?.title ?? preview.id}
+      snippet={previewState ? sourceAvailabilityLabel(previewState, t) : null}
+      kind={preview.kind === 'brain' ? 'brain' : preview.kind === 'research-source' ? 'external' : 'document'}
+      onOpen={preview.kind === 'collection' ? undefined : () => onOpenSource(preview)}
+      onClose={() => setPreview(null)}
+    /> : null}
+  </Card>;
+}
+
+function SourcePickerChoice({ title, checked, onPress }: { title: string; checked: boolean; onPress: () => void }) {
+  const { colors: c, spacing, typography } = useTokens();
+  return <Pressable accessibilityRole="checkbox" accessibilityState={{ checked }} onPress={onPress} style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
+    <Text style={{ color: c.primary }}>{checked ? '✓' : '○'}</Text>
+    <Text numberOfLines={1} style={[typography.bodySmall, { color: c.textPrimary, flex: 1 }]}>{title}</Text>
+  </Pressable>;
+}
+
+function sourceAvailabilityLabel(state: WorkspaceSourceState, t: (key: TranslationKey) => string): string {
+  if (state.availability === 'available') return t('lib.status.ready');
+  if (state.availability === 'processing') return t('lib.status.processing');
+  return t('workspace10.unavailable');
 }

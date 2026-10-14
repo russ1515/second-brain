@@ -617,7 +617,7 @@ export function WorkspaceUniversalCapture({
         title: title.trim(),
         template: selectedTemplate,
         objective: objective.trim(),
-        sources,
+        sources: sources.map(canonicalWorkspaceSource),
         ...(initialContent.trim() ? { initialContent: initialContent.trim() } : {}),
       };
       const signature = workspaceCaptureSignature(JSON.stringify(body));
@@ -687,7 +687,7 @@ export function WorkspaceUniversalCapture({
       if (attachment.sourcesChanged) {
         current = await api<PersistentWorkspace>(`/workspaces/${encodeURIComponent(workspaceId)}`, {
           method: 'PATCH',
-          body: { sources: next, expectedRevision: current.autosaveRevision },
+          body: { sources: next.map(canonicalWorkspaceSource), expectedRevision: current.autosaveRevision },
         });
       }
       if (attachment.contentChanged) {
@@ -880,6 +880,10 @@ function duplicateDocumentId(error: unknown): string | null {
     if (typeof id === 'string') return id;
   }
   return null;
+}
+
+function canonicalWorkspaceSource(source: WorkspaceSourceReference): WorkspaceSourceReference {
+  return { kind: source.kind, id: source.id };
 }
 
 function isDefinitiveWorkspaceCreateFailure(error: unknown): boolean {

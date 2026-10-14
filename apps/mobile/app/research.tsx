@@ -7,9 +7,7 @@ import {
   isQuotaError,
   type Collection,
   type CreateExperienceSessionRequest,
-  type ExperienceProduction,
   type ExperienceSession,
-  type ExperienceSourceReference,
   type LibraryDocument,
   type LibraryPage,
   type PersistentWorkspace,
@@ -173,31 +171,17 @@ export default function ResearchScreen() {
         });
       }
       const nextResult = await api<ResearchResult>('/research/run', {
-        method: 'POST', body: { question: cleanQuestion, depth, scopes },
+        method: 'POST', body: { question: cleanQuestion, depth, scopes, experienceSessionId: activeSessionId },
         timeoutMs: depth === 'deep' ? 60_000 : 45_000,
         signal: controller.signal,
       });
       setResult(nextResult);
       setShowPlan(false);
-      const sourceReferences: ExperienceSourceReference[] = nextResult.citations.slice(0, 100).map((citation) => ({
-        kind: citation.kind === 'document' ? 'document' : citation.kind === 'brain' && citation.conceptId ? 'concept' : 'external-source',
-        id: citation.documentId ?? citation.conceptId ?? citation.url ?? citation.id,
-        title: citation.title,
-      }));
-      const production: ExperienceProduction = {
-        id: `research-result:${activeSessionId}`,
-        kind: 'research-result',
-        title: cleanQuestion.slice(0, 120),
-        createdAt: nextResult.generatedAt,
-        metadata: JSON.parse(JSON.stringify(nextResult)) as Record<string, unknown>,
-      };
       await api(`/experience-sessions/${activeSessionId}`, {
         method: 'PATCH',
         body: {
           currentStep: { id: 'result', state: 'completed', metadata: { question: cleanQuestion, depth, scopes } },
           progress: { completed: nextResult.stages.length, total: nextResult.stages.length, ...(nextResult.stages.length ? { percent: 100 } : {}) },
-          sourceReferences,
-          productions: [production],
           nextBestAction: researchNextBestAction(cleanQuestion, t),
         },
       });
@@ -221,21 +205,7 @@ export default function ResearchScreen() {
     setTransferBusy(true);
     setError(null);
     try {
-      const researchSource = {
-        kind: 'research-source' as const, id: sessionId, title: result.question,
-        question: result.question, synthesis: result.synthesis,
-        citations: result.citations.map((citation) => ({
-              id: citation.id, title: citation.title, kind: citation.kind,
-              ...(citation.documentId ? { documentId: citation.documentId } : {}),
-              ...(citation.url ? { url: citation.url } : {}),
-              ...(citation.domain ? { domain: citation.domain } : {}),
-              ...(citation.provider ? { provider: citation.provider } : {}),
-              ...(citation.publishedAt !== undefined ? { publishedAt: citation.publishedAt } : {}),
-              ...(citation.retrievedAt ? { retrievedAt: citation.retrievedAt } : {}),
-              ...(citation.quality ? { quality: citation.quality } : {}),
-              excerpt: citation.excerpt,
-        })),
-      };
+      const researchSource = { kind: 'research-source' as const, id: sessionId };
       const workspace = params.workspaceId
         ? await (async () => {
           const current = await api<PersistentWorkspace>(`/workspaces/${params.workspaceId}`);

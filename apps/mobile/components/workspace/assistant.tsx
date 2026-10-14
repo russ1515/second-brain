@@ -1,16 +1,19 @@
 import { useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Linking, ScrollView, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import {
   WORKSPACE_ASSIST_ACTIONS,
   type PersistentWorkspaceAssistRequest,
   type PersistentWorkspaceAssistResponse,
   type WorkspaceAssistAction,
   type WorkspaceAssistantHistoryEntry,
+  type WorkspaceSourceCitation,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
 import { Alert, Button, Card, Input } from '../ds/core';
+import { SourceCitation, SourcePreview, type SourceKind } from '../ds/sources';
 
 export function WorkspaceAssistant({
   workspaceId,
@@ -27,6 +30,7 @@ export function WorkspaceAssistant({
   onUndo: () => void;
   canUndo: boolean;
 }) {
+  const router = useRouter();
   const { t } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   const [history, setHistory] = useState(initialHistory);
@@ -35,6 +39,7 @@ export function WorkspaceAssistant({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRequest, setLastRequest] = useState<PersistentWorkspaceAssistRequest | null>(null);
+  const [preview, setPreview] = useState<WorkspaceSourceCitation | null>(null);
   const latestProposal = [...history].reverse().find((entry) => entry.role === 'assistant')?.content ?? null;
 
   const send = async (requestOverride?: PersistentWorkspaceAssistRequest) => {
@@ -77,8 +82,27 @@ export function WorkspaceAssistant({
       keyboardShouldPersistTaps="handled"
       testID="workspace-assistant-history"
     >
-      {history.slice(-10).map((entry) => <View key={entry.id} style={{ alignSelf: entry.role === 'user' ? 'flex-end' : 'stretch', maxWidth: entry.role === 'user' ? '85%' : '100%', backgroundColor: entry.role === 'user' ? c.primary : c.surfaceSunken, padding: spacing.sm, borderRadius: 10 }}><Text style={[typography.bodySmall, { color: entry.role === 'user' ? c.onPrimary : c.textPrimary }]}>{entry.content}</Text></View>)}
+      {history.slice(-10).map((entry) => <View key={entry.id} style={{ alignSelf: entry.role === 'user' ? 'flex-end' : 'stretch', maxWidth: entry.role === 'user' ? '85%' : '100%', backgroundColor: entry.role === 'user' ? c.primary : c.surfaceSunken, padding: spacing.sm, borderRadius: 10, gap: spacing.xs }}>
+        {entry.content ? <Text style={[typography.bodySmall, { color: entry.role === 'user' ? c.onPrimary : c.textPrimary }]}>{entry.content}</Text> : null}
+        {entry.role === 'assistant' && entry.evidenceStatus === 'none' ? <Alert tone="info" title={t('research10.noSources')} detail={t('research10.noSourcesDetail')} /> : null}
+        {entry.role === 'assistant' && entry.citations?.length ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+          {entry.citations.map((citation) => <SourceCitation
+            key={`${entry.id}:${citation.citationLabel}`}
+            title={`${citation.citationLabel} · ${citation.title}`}
+            kind={citationKind(citation)}
+            onPress={() => setPreview(citation)}
+          />)}
+        </View> : null}
+      </View>)}
     </ScrollView>
+    {preview ? <SourcePreview
+      title={`${preview.citationLabel} · ${preview.title}`}
+      snippet={preview.snippet}
+      location={preview.page ? `${preview.citationLabel} · p. ${preview.page}` : preview.citationLabel}
+      kind={citationKind(preview)}
+      onOpen={citationCanOpen(preview) ? () => void openCitation(preview, router) : undefined}
+      onClose={() => setPreview(null)}
+    /> : null}
     {latestProposal ? (
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
         <Button size="sm" variant="secondary" label={t('globalPath.insertProposal')} onPress={() => onApplyProposal(latestProposal, 'insert')} />
@@ -91,4 +115,31 @@ export function WorkspaceAssistant({
     <Input label={t('workspace10.assistantQuestion')} value={message} onChangeText={setMessage} placeholder={t('workspace10.assistantPlaceholder')} multiline />
     <Button label={t('workspace10.assistantSend')} variant="ai" loading={busy} disabled={!message.trim() && !selectedText.trim()} onPress={() => void send()} />
   </Card>;
+}
+
+function citationKind(citation: WorkspaceSourceCitation): SourceKind {
+  if (citation.sourceType === 'brain') return 'brain';
+  if (citation.sourceType === 'web') return 'web';
+  if (citation.sourceType === 'external' || citation.sourceType === 'research') return 'external';
+  return 'document';
+}
+
+function citationCanOpen(citation: WorkspaceSourceCitation): boolean {
+  return Boolean(
+    citation.documentId
+    || citation.sourceType === 'brain'
+    || (citation.url && /^https:\/\//i.test(citation.url)),
+  );
+}
+
+async function openCitation(citation: WorkspaceSourceCitation, router: ReturnType<typeof useRouter>) {
+  if (citation.documentId) {
+    router.push(`/library/${citation.documentId}`);
+    return;
+  }
+  if (citation.sourceType === 'brain') {
+    router.push('/brain');
+    return;
+  }
+  if (citation.url && /^https:\/\//i.test(citation.url)) await Linking.openURL(citation.url);
 }

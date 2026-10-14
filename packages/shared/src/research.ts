@@ -26,6 +26,8 @@ export interface ResearchRunRequest {
   question: string;
   depth: ResearchDepth;
   scopes: ResearchScope[];
+  /** Existing caller-owned Research session receiving the canonical server result. */
+  experienceSessionId?: string;
 }
 
 export type ResearchCitationKind = 'document' | 'brain' | 'external' | 'web';

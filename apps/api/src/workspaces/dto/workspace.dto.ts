@@ -8,6 +8,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
   MinLength,
@@ -20,6 +21,7 @@ import type {
   WorkspacePlanItem,
   WorkspaceProgress,
   WorkspaceSourceReference,
+  WorkspaceSourceQueryRequest,
 } from '@second-brain/shared';
 import {
   WORKSPACE_ASSIST_ACTIONS,
@@ -107,4 +109,12 @@ export class WorkspaceAssistDto implements PersistentWorkspaceAssistRequest {
 
   @IsOptional() @IsString() @MaxLength(8_000)
   selectedText?: string;
+}
+
+export class WorkspaceSourceQueryDto implements WorkspaceSourceQueryRequest {
+  @IsString() @MinLength(2) @MaxLength(2_000)
+  query!: string;
+
+  @IsOptional() @IsInt() @Min(1) @Max(20)
+  limit?: number;
 }

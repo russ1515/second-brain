@@ -103,6 +103,15 @@ export class ExperienceSessionService {
         'Teaching experience sessions must be created by the teaching service.',
       );
     }
+    if (
+      request.type === 'research' &&
+      ((request.productions?.length ?? 0) > 0 ||
+        (request.sourceReferences?.length ?? 0) > 0)
+    ) {
+      throw new BadRequestException(
+        'Research results and provenance must be recorded by the research service.',
+      );
+    }
     return this.create(userId, {
       ...request,
       ...(request.currentStep === undefined
@@ -122,6 +131,14 @@ export class ExperienceSessionService {
     if (existing.type === 'workspace' || existing.workspaceRef) {
       throw new BadRequestException(
         'Workspace experience sessions must be updated by the workspace service.',
+      );
+    }
+    if (
+      existing.type === 'research' &&
+      (request.productions !== undefined || request.sourceReferences !== undefined)
+    ) {
+      throw new BadRequestException(
+        'Research results and provenance must be recorded by the research service.',
       );
     }
     if (
