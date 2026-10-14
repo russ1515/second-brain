@@ -122,6 +122,8 @@ test('Lot 10 screens keep research, production, citations, autosave and transiti
   assert.match(research, /SourcePreview/);
   assert.match(research, /experience-sessions/);
   assert.match(research, /research-source/);
+  assert.match(research, /expectedRevision: current\.autosaveRevision/);
+  assert.match(research, /createClientRequestId\('workspace'\)/);
   assert.match(workspace, /expectedRevision/);
   assert.match(workspace, /1_200/);
   assert.match(workspace, /workspace-editor/);
@@ -160,7 +162,8 @@ test('workspace path selection persists the brief and drives the contextual assi
   assert.match(service, /workspaceDefaultPlan\(template\)/);
   assert.match(service, /workspaceProgressFromPlan\(plan, \{ version: 1, brief \}\)/);
   assert.match(service, /request\.brief === undefined \? existingBrief/);
-  assert.match(service, /data\.progress = asJson\(\{ \.\.\.request\.progress, workflow \}\)/);
+  assert.match(service, /progress: asJson\(workspaceProgressFromPlan\(plan, workflow\)\)/);
+  assert.doesNotMatch(service, /\.\.\.request\.progress/);
   assert.match(service, /WORKSPACE_TEMPLATE_DEFINITIONS\[template\]/);
   assert.match(service, /learner instructions and their institution requirements are authoritative/);
   assert.match(service, /Never erase or silently weaken explicit requirements/);

@@ -170,6 +170,104 @@ test('experience sessions: foreign domain links are rejected', async () => {
   assert.equal(prisma.rows.length, 0);
 });
 
+test('experience sessions: workspace wrappers are domain-owned and workspace contexts are owner-scoped', async () => {
+  const prisma = inMemoryPrisma();
+  const service = new ExperienceSessionService(prisma);
+
+  await assert.rejects(
+    async () => service.createFromClient('u1', { type: 'workspace' }),
+    (error) => error instanceof BadRequestException,
+  );
+  await assert.rejects(
+    async () => service.createFromClient('u1', {
+      type: 'learning',
+      links: { workspaceRef: 'workspace-1' },
+    }),
+    (error) => error instanceof BadRequestException,
+  );
+
+  const wrapper = await service.create('u1', {
+    type: 'workspace',
+    links: { workspaceRef: 'workspace-1' },
+  });
+  assert.equal((await service.resumable('u1', 20)).items.length, 0);
+  await assert.rejects(
+    service.updateFromClient('u1', wrapper.id, { title: 'Client override' }),
+    (error) => error instanceof BadRequestException,
+  );
+  await assert.rejects(
+    service.pause('u1', wrapper.id),
+    (error) => error instanceof BadRequestException,
+  );
+
+  const legacyWrapper = await service.create('u1', { type: 'workspace' });
+  const wrongTypeWrapper = await service.create('u1', {
+    type: 'learning',
+    links: { workspaceRef: 'workspace-2' },
+  });
+  assert.equal(
+    (await service.resumable('u1', 20)).items.some((item) => item.id === legacyWrapper.id),
+    false,
+  );
+  prisma.academicWorkspace.findMany = async ({ where }) => {
+    if (where.id?.in?.includes('workspace-1')) {
+      return [{ id: 'workspace-1', experienceSessionId: legacyWrapper.id, userId: 'u1', status: 'active' }];
+    }
+    if (where.id?.in?.includes('workspace-2')) {
+      return [{ id: 'workspace-2', experienceSessionId: wrongTypeWrapper.id, userId: 'u1', status: 'active' }];
+    }
+    return where.experienceSessionId?.in?.includes(legacyWrapper.id)
+      ? [{ experienceSessionId: legacyWrapper.id, userId: 'u1', status: 'active' }]
+      : [];
+  };
+  const resumable = await service.resumable('u1', 20);
+  assert.equal(resumable.items.some((item) => item.id === legacyWrapper.id), true);
+  assert.equal(resumable.items.some((item) => item.id === wrapper.id), false);
+  assert.equal(resumable.items.some((item) => item.id === wrongTypeWrapper.id), false);
+
+  prisma.academicWorkspace.findMany = async ({ where }) => {
+    if (where.id?.in?.includes('workspace-1')) return [];
+    return where.experienceSessionId?.in?.includes(legacyWrapper.id)
+      ? [
+        { experienceSessionId: legacyWrapper.id, userId: 'u1', status: 'active' },
+        { experienceSessionId: legacyWrapper.id, userId: 'u2', status: 'active' },
+      ]
+      : [];
+  };
+  assert.equal(
+    (await service.resumable('u1', 20)).items.some((item) => item.id === legacyWrapper.id),
+    false,
+  );
+
+  prisma.academicWorkspace.count = async ({ where }) => where.userId === 'u1' ? 1 : 0;
+  await assert.rejects(
+    service.create('u2', {
+      type: 'learning',
+      activeContexts: [{
+        id: 'foreign-workspace',
+        kind: 'workspace',
+        scope: 'active-object',
+        referenceId: 'workspace-1',
+        priority: 50,
+        visibility: 'visible',
+      }],
+    }),
+    (error) => error instanceof BadRequestException,
+  );
+});
+
+test('experience sessions: resume scans beyond one stale legacy page within its bounded budget', async () => {
+  const prisma = inMemoryPrisma();
+  const service = new ExperienceSessionService(prisma);
+  const valid = await service.create('u1', { type: 'learning', title: 'Valid older session' });
+  for (let index = 0; index < 51; index += 1) {
+    await service.create('u1', { type: 'workspace', title: `Stale wrapper ${index}` });
+  }
+
+  const page = await service.resumable('u1', 1);
+  assert.deepEqual(page.items.map((item) => item.id), [valid.id]);
+});
+
 test('experience sessions: source updates lock, revalidate, and cannot race a purge', async () => {
   const prisma = inMemoryPrisma();
   const service = new ExperienceSessionService(prisma);
@@ -712,7 +810,7 @@ function inMemoryPrisma() {
         // service-level conflict is enough to exercise the reload/CAS path.
         throw new ConflictException('unique idempotency key');
       }
-      const now = new Date(`2026-09-05T10:00:0${sequence}.000Z`);
+      const now = new Date(Date.UTC(2026, 8, 5, 10, 0, sequence));
       const row = {
         id: `xs${++sequence}`, status: 'active', version: 1,
         startedAt: now, updatedAt: now, pausedAt: null, completedAt: null,
@@ -777,6 +875,10 @@ function inMemoryPrisma() {
     lesson: ownedDelegate,
     goal: ownedDelegate,
     languageProfile: ownedDelegate,
+    academicWorkspace: {
+      ...ownedDelegate,
+      findMany: async () => [],
+    },
     async $executeRaw() { return 1; },
   };
   prisma.$transaction = async (operation) => operation(prisma);

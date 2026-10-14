@@ -4,6 +4,7 @@ import {
   IsDateString,
   IsIn,
   IsInt,
+  Matches,
   IsObject,
   IsOptional,
   IsString,
@@ -26,6 +27,9 @@ import {
 } from '@second-brain/shared';
 
 export class CreateWorkspaceDto implements CreateWorkspaceRequest {
+  @IsOptional() @IsString() @MinLength(8) @MaxLength(128) @Matches(/^[A-Za-z0-9_-]+$/)
+  requestId?: string;
+
   @IsString() @MinLength(1) @MaxLength(200)
   title!: string;
 
@@ -52,6 +56,9 @@ export class CreateWorkspaceDto implements CreateWorkspaceRequest {
 }
 
 export class UpdateWorkspaceDto implements UpdateWorkspaceRequest {
+  @IsOptional() @IsInt() @Min(0)
+  expectedRevision?: number;
+
   @IsOptional() @IsString() @MinLength(1) @MaxLength(200)
   title?: string;
 

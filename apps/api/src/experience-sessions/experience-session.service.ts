@@ -42,6 +42,7 @@ const LEGACY_TUTOR_IDEMPOTENCY_PREFIXES = [
   'language-conversation:',
 ] as const;
 const TUTOR_RECONCILIATION_ATTEMPTS = 4;
+const MAX_RESUME_SCAN_PAGES = 4;
 const RESERVED_CLIENT_IDEMPOTENCY_PREFIXES = [
   'server:',
   'tutor:',
@@ -80,6 +81,15 @@ export class ExperienceSessionService {
         'This experience-session idempotency namespace is reserved.',
       );
     }
+    // Workspace continuity is owned by AcademicWorkspaceService so the
+    // dossier and its resumable wrapper are created and updated atomically.
+    // A generic client must not create a second wrapper or claim another
+    // user's workspace by supplying a guessed reference.
+    if (request.type === 'workspace' || request.links?.workspaceRef) {
+      throw new BadRequestException(
+        'Workspace experience sessions must be created by the workspace service.',
+      );
+    }
     // Tutor and language wrappers carry server-owned pedagogical policy. They
     // may only be created by their domain services, never through the generic
     // session endpoint where a client controls intent/currentStep.
@@ -109,6 +119,11 @@ export class ExperienceSessionService {
     request: UpdateExperienceSessionRequest,
   ): Promise<ExperienceSession> {
     const existing = await this.requireOwned(userId, id);
+    if (existing.type === 'workspace' || existing.workspaceRef) {
+      throw new BadRequestException(
+        'Workspace experience sessions must be updated by the workspace service.',
+      );
+    }
     if (
       (existing.tutorSessionId || existing.lessonId) &&
       (request.intent !== undefined || request.currentStep !== undefined)
@@ -311,8 +326,91 @@ export class ExperienceSessionService {
     return this.list(userId, limit, cursor);
   }
 
-  resumable(userId: string, limit: number, cursor?: string): Promise<ExperienceSessionPage> {
-    return this.list(userId, limit, cursor, ['active', 'paused']);
+  async resumable(userId: string, limit: number, cursor?: string): Promise<ExperienceSessionPage> {
+    const safeLimit = Math.max(1, Math.min(limit, PERFORMANCE_BUDGETS.maxListPageSize));
+    const eligible: ExperienceSession[] = [];
+    let scanCursor = cursor;
+    for (let pageIndex = 0; pageIndex < MAX_RESUME_SCAN_PAGES; pageIndex += 1) {
+      const page = await this.list(
+        userId,
+        PERFORMANCE_BUDGETS.maxListPageSize,
+        scanCursor,
+        ['active', 'paused'],
+      );
+      const filtered = await this.filterResumableWorkspaceSessions(userId, page.items);
+      eligible.push(...filtered);
+      if (eligible.length >= safeLimit) {
+        const items = eligible.slice(0, safeLimit);
+        const last = items.at(-1);
+        const lastIndex = last ? page.items.findIndex((item) => item.id === last.id) : -1;
+        const hasMore = eligible.length > safeLimit
+          || page.nextCursor !== null
+          || (lastIndex >= 0 && lastIndex < page.items.length - 1);
+        return { items, nextCursor: hasMore ? last?.id ?? null : null };
+      }
+      if (!page.nextCursor) return { items: eligible, nextCursor: null };
+      scanCursor = page.nextCursor;
+    }
+    // Bound legacy cleanup work per request. The continuation cursor lets an
+    // explicit paginating client continue after the last inspected raw page.
+    return { items: eligible, nextCursor: scanCursor ?? null };
+  }
+
+  private async filterResumableWorkspaceSessions(
+    userId: string,
+    sessions: ExperienceSession[],
+  ): Promise<ExperienceSession[]> {
+    const workspaceIds = [...new Set(sessions.flatMap((session) =>
+      session.links.workspaceRef ? [session.links.workspaceRef] : [],
+    ))];
+    const legacyWorkspaceSessionIds = [...new Set(sessions.flatMap((session) =>
+      session.type === 'workspace' && !session.links.workspaceRef ? [session.id] : [],
+    ))];
+    if (workspaceIds.length === 0 && legacyWorkspaceSessionIds.length === 0) {
+      return sessions;
+    }
+    const [activeWorkspaces, legacyWorkspaceClaimRows] = await Promise.all([
+      workspaceIds.length
+        ? this.prisma.academicWorkspace.findMany({
+          where: { userId, id: { in: workspaceIds }, status: { not: 'archived' } },
+          select: { id: true, experienceSessionId: true },
+        })
+        : [],
+      legacyWorkspaceSessionIds.length
+        ? this.prisma.academicWorkspace.findMany({
+          where: {
+            experienceSessionId: { in: legacyWorkspaceSessionIds },
+          },
+          select: { experienceSessionId: true, userId: true, status: true },
+        })
+        : [],
+    ]);
+    const activeSessionByWorkspaceId = new Map(activeWorkspaces.map((workspace) => [
+      workspace.id,
+      workspace.experienceSessionId,
+    ]));
+    const legacyClaims = new Map<string, typeof legacyWorkspaceClaimRows>();
+    for (const workspace of legacyWorkspaceClaimRows) {
+      if (!workspace.experienceSessionId) continue;
+      const claims = legacyClaims.get(workspace.experienceSessionId) ?? [];
+      claims.push(workspace);
+      legacyClaims.set(workspace.experienceSessionId, claims);
+    }
+    const activeLegacySessionIds = new Set([...legacyClaims.entries()].flatMap(([sessionId, claims]) => (
+      claims.length === 1 && claims[0]!.userId === userId && claims[0]!.status !== 'archived'
+        ? [sessionId]
+        : []
+    )));
+    // Historical rows predate atomic archive synchronization. Keep those
+    // stale wrappers out of Resume without deleting either record.
+    return sessions.filter((session) => {
+      if (session.links.workspaceRef) {
+        return session.type === 'workspace'
+          && activeSessionByWorkspaceId.get(session.links.workspaceRef) === session.id;
+      }
+      if (session.type === 'workspace') return activeLegacySessionIds.has(session.id);
+      return true;
+    });
   }
 
   /** Resolve the continuity wrapper of one Tutor session without exposing
@@ -725,6 +823,11 @@ export class ExperienceSessionService {
     target: 'active' | 'paused' | 'completed',
   ): Promise<ExperienceSession> {
     const existing = await this.requireOwned(userId, id);
+    if (existing.type === 'workspace' || existing.workspaceRef) {
+      throw new BadRequestException(
+        'Workspace experience sessions must be transitioned by the workspace service.',
+      );
+    }
     if (existing.status === target) return this.toView(existing);
     if (TERMINAL_STATUSES.includes(existing.status)) {
       throw new BadRequestException('A terminal experience session cannot transition.');
@@ -874,6 +977,7 @@ export class ExperienceSessionService {
     if (links.lessonId) checks.push(db.lesson.findFirst({ where: { id: links.lessonId, userId }, select: { id: true } }));
     if (links.goalId) checks.push(db.goal.findFirst({ where: { id: links.goalId, userId }, select: { id: true } }));
     if (links.languageProfileId) checks.push(db.languageProfile.findFirst({ where: { id: links.languageProfileId, userId }, select: { id: true } }));
+    if (links.workspaceRef) checks.push(db.academicWorkspace.findFirst({ where: { id: links.workspaceRef, userId }, select: { id: true } }));
     const results = await Promise.all(checks);
     if (results.some((result) => result === null)) {
       throw new BadRequestException('An experience link is invalid for this user.');
@@ -911,15 +1015,25 @@ export class ExperienceSessionService {
     const lessonIds = [...new Set(contexts
       .filter((context) => context.kind === 'lesson' && context.referenceId)
       .map((context) => context.referenceId as string))];
-    const [documents, lessons] = await Promise.all([
+    const workspaceIds = [...new Set(contexts
+      .filter((context) => context.kind === 'workspace' && context.referenceId)
+      .map((context) => context.referenceId as string))];
+    const [documents, lessons, workspaces] = await Promise.all([
       documentIds.length
         ? db.document.count({ where: { userId, id: { in: documentIds }, deletedAt: null } })
         : 0,
       lessonIds.length
         ? db.lesson.count({ where: { userId, id: { in: lessonIds } } })
         : 0,
+      workspaceIds.length
+        ? db.academicWorkspace.count({ where: { userId, id: { in: workspaceIds } } })
+        : 0,
     ]);
-    if (documents !== documentIds.length || lessons !== lessonIds.length) {
+    if (
+      documents !== documentIds.length ||
+      lessons !== lessonIds.length ||
+      workspaces !== workspaceIds.length
+    ) {
       throw new BadRequestException('An experience context is unavailable for this user.');
     }
   }

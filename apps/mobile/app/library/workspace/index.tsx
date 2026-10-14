@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
@@ -14,6 +14,7 @@ import {
   type WorkspaceTemplate,
 } from '@second-brain/shared';
 import { api } from '../../../lib/client';
+import { createClientRequestId } from '../../../lib/request-id';
 import { useI18n, type TranslationKey } from '../../../lib/i18n';
 import { useTokens } from '../../../lib/design/theme';
 import { useResponsive } from '../../../lib/responsive';
@@ -43,6 +44,8 @@ export default function WorkspaceHomeScreen() {
   const [sources, setSources] = useState<WorkspaceSourceReference[]>(params.documentId ? [{ kind: 'document', id: params.documentId, title: params.title }] : []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const creatingRef = useRef(false);
+  const createRequestRef = useRef<{ signature: string; requestId: string } | null>(null);
   const templateDefinition = WORKSPACE_TEMPLATE_DEFINITIONS[template];
   const localizedPlan = useMemo(
     () => localizedWorkspacePlan(template, t),
@@ -63,33 +66,46 @@ export default function WorkspaceHomeScreen() {
   }, []);
 
   const create = async () => {
-    if (!title.trim() || !requiredBriefReady) return;
+    if (creatingRef.current || !title.trim() || !requiredBriefReady) return;
+    creatingRef.current = true;
     setBusy(true);
     setError(null);
     try {
+      const body = {
+        title: title.trim(),
+        template,
+        objective: objective.trim(),
+        sources,
+        plan: localizedPlan,
+        brief: {
+          version: 1 as const,
+          fields: Object.fromEntries(
+            templateDefinition.fields
+              .map((field) => [field, briefFields[field]?.trim()])
+              .filter(([, value]) => Boolean(value)),
+          ),
+        },
+        ...(dueAt.trim() ? { dueAt: new Date(`${dueAt.trim()}T12:00:00`).toISOString() } : {}),
+      };
+      const signature = JSON.stringify(body);
+      if (createRequestRef.current?.signature !== signature) {
+        createRequestRef.current = {
+          signature,
+          requestId: createClientRequestId('workspace'),
+        };
+      }
+      const requestId = createRequestRef.current.requestId;
       const workspace = await api<PersistentWorkspace>('/workspaces', {
         method: 'POST',
-        body: {
-          title: title.trim(),
-          template,
-          objective: objective.trim(),
-          sources,
-          plan: localizedPlan,
-          brief: {
-            version: 1,
-            fields: Object.fromEntries(
-              templateDefinition.fields
-                .map((field) => [field, briefFields[field]?.trim()])
-                .filter(([, value]) => Boolean(value)),
-            ),
-          },
-          ...(dueAt.trim() ? { dueAt: new Date(`${dueAt.trim()}T12:00:00`).toISOString() } : {}),
-        },
+        body: { ...body, requestId },
+        requestId,
       });
+      createRequestRef.current = null;
       router.push(`/library/workspace/${workspace.id}`);
     } catch (caught) {
       setError((caught as Error).message);
     } finally {
+      creatingRef.current = false;
       setBusy(false);
     }
   };

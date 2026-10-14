@@ -278,6 +278,8 @@ export interface WorkspacePage {
 }
 
 export interface CreateWorkspaceRequest {
+  /** Stable for retries of one logical creation; never an auth/session token. */
+  requestId?: string;
   title: string;
   template: WorkspaceTemplate;
   objective: string;
@@ -289,6 +291,8 @@ export interface CreateWorkspaceRequest {
 }
 
 export interface UpdateWorkspaceRequest {
+  /** Optional for legacy clients; current clients use it for optimistic concurrency. */
+  expectedRevision?: number;
   title?: string;
   objective?: string;
   dueAt?: string | null;

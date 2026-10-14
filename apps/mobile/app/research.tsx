@@ -21,6 +21,7 @@ import {
   type UnifiedResearchCitation,
 } from '@second-brain/shared';
 import { api, ApiError } from '../lib/client';
+import { createClientRequestId } from '../lib/request-id';
 import { useAuth } from '../lib/auth-context';
 import { useI18n, type TranslationKey } from '../lib/i18n';
 import { useTokens } from '../lib/design/theme';
@@ -63,6 +64,8 @@ export default function ResearchScreen() {
   const [error, setError] = useState<string | null>(null);
   const [quota, setQuota] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const transferInFlightRef = useRef(false);
+  const workspaceTransferRequestRef = useRef<{ signature: string; requestId: string } | null>(null);
 
   useEffect(() => {
     void Promise.all([
@@ -213,7 +216,8 @@ export default function ResearchScreen() {
   };
 
   const addToWorkspace = async () => {
-    if (!result || !sessionId) return;
+    if (!result || !sessionId || transferInFlightRef.current) return;
+    transferInFlightRef.current = true;
     setTransferBusy(true);
     setError(null);
     try {
@@ -237,23 +241,39 @@ export default function ResearchScreen() {
           const current = await api<PersistentWorkspace>(`/workspaces/${params.workspaceId}`);
           return api<PersistentWorkspace>(`/workspaces/${params.workspaceId}`, {
             method: 'PATCH',
-            body: { sources: [...current.sources.filter((source) => !(source.kind === 'research-source' && source.id === sessionId)), researchSource] },
+            body: {
+              expectedRevision: current.autosaveRevision,
+              sources: [...current.sources.filter((source) => !(source.kind === 'research-source' && source.id === sessionId)), researchSource],
+            },
           });
         })()
-        : await api<PersistentWorkspace>('/workspaces', {
-          method: 'POST',
-          body: {
+        : await (async () => {
+          const body = {
             title: result.question.slice(0, 120),
             template: 'academic-research',
             objective: result.question,
             sources: [researchSource],
-          initialContent: `# ${result.question}\n\n${result.synthesis}`,
-          },
-        });
+            initialContent: `# ${result.question}\n\n${result.synthesis}`,
+          } as const;
+          const signature = JSON.stringify(body);
+          if (workspaceTransferRequestRef.current?.signature !== signature) {
+            workspaceTransferRequestRef.current = {
+              signature,
+              requestId: createClientRequestId('workspace'),
+            };
+          }
+          const requestId = workspaceTransferRequestRef.current.requestId;
+          return api<PersistentWorkspace>('/workspaces', {
+            method: 'POST',
+            body: { ...body, requestId },
+            requestId,
+          });
+        })();
       router.push(`/library/workspace/${workspace.id}`);
     } catch (caught) {
       setError((caught as Error).message);
     } finally {
+      transferInFlightRef.current = false;
       setTransferBusy(false);
     }
   };

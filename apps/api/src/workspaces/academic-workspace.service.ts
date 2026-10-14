@@ -4,8 +4,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
-import { Prisma, type AcademicWorkspace } from '@prisma/client';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  Prisma,
+  type AcademicWorkspace,
+  type ExperienceSession as ExperienceSessionRow,
+} from '@prisma/client';
 import type {
   CreateWorkspaceRequest,
   PersistentWorkspace,
@@ -41,6 +45,7 @@ import { accountDataLockKey } from '../common/account-data-lock';
 
 const MAX_ASSISTANT_HISTORY = 30;
 const MAX_SOURCE_CONTEXT_CHARS = 6_000;
+const WORKSPACE_CREATION_IDEMPOTENCY_PREFIX = 'server:v2:workspace:';
 
 @Injectable()
 export class AcademicWorkspaceService {
@@ -60,6 +65,11 @@ export class AcademicWorkspaceService {
       request.plan?.length ? request.plan : localizedDefaultWorkspacePlan(request.template, locale),
     );
     const progress = workspaceProgressFromPlan(plan, { version: 1, brief });
+    const dueAt = request.dueAt ? new Date(request.dueAt) : null;
+    const requestId = request.requestId?.trim();
+    const idempotencyKey = requestId
+      ? `${WORKSPACE_CREATION_IDEMPOTENCY_PREFIX}${requestId}`
+      : null;
     const workspaceId = randomUUID();
     const experienceSessionId = randomUUID();
     const now = new Date();
@@ -77,6 +87,37 @@ export class AcademicWorkspaceService {
     const row = await this.prisma.$transaction(async (tx) => {
       const lockKey = accountDataLockKey(userId);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      if (idempotencyKey) {
+        const existingSession = await tx.experienceSession.findUnique({
+          where: { userId_idempotencyKey: { userId, idempotencyKey } },
+        });
+        if (existingSession) {
+          if (existingSession.type !== 'workspace' || !existingSession.workspaceRef) {
+            throw new ConflictException('Workspace creation key is already bound to another operation.');
+          }
+          const existingWorkspace = await tx.academicWorkspace.findFirst({
+            where: {
+              id: existingSession.workspaceRef,
+              userId,
+              experienceSessionId: existingSession.id,
+            },
+          });
+          if (!existingWorkspace) {
+            throw new ConflictException('Workspace creation key points to an inconsistent session.');
+          }
+          this.assertIdempotentCreateMatch(existingWorkspace, {
+            title,
+            template: request.template,
+            objective: request.objective.trim(),
+            dueAt,
+            sources,
+            plan: request.plan?.length ? plan : undefined,
+            brief,
+            initialContent: request.initialContent?.slice(0, 200_000) ?? '',
+          });
+          return existingWorkspace;
+        }
+      }
       await this.assertOwnedSources(userId, sources, tx);
       await tx.experienceSession.create({ data: {
         id: experienceSessionId,
@@ -97,6 +138,7 @@ export class AcademicWorkspaceService {
         }))),
         resumeTarget: asJson(resumeTarget),
         workspaceRef: workspaceId,
+        idempotencyKey,
       } });
       return tx.academicWorkspace.create({ data: {
         id: workspaceId,
@@ -104,7 +146,7 @@ export class AcademicWorkspaceService {
         title,
         template: request.template,
         objective: request.objective.trim(),
-        dueAt: request.dueAt ? new Date(request.dueAt) : null,
+        dueAt,
         plan: asJson(plan),
         sources: asJson(sources),
         draftFormat: 'markdown',
@@ -121,6 +163,7 @@ export class AcademicWorkspaceService {
 
   async list(userId: string, requestedLimit = 20, cursor?: string): Promise<WorkspacePage> {
     const limit = Math.min(Math.max(Math.trunc(requestedLimit) || 20, 1), 50);
+    if (cursor) await this.requireOwned(userId, cursor);
     const rows = await this.prisma.academicWorkspace.findMany({
       where: { userId, status: { not: 'archived' } },
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
@@ -153,44 +196,78 @@ export class AcademicWorkspaceService {
   }
 
   async update(userId: string, id: string, request: UpdateWorkspaceRequest): Promise<PersistentWorkspace> {
-    const existing = await this.requireOwned(userId, id);
-    const existingProgress = fromJson<WorkspaceProgress>(existing.progress, { completedSteps: [] });
-    const existingBrief = existingProgress.workflow?.brief ?? emptyWorkspaceBrief();
-    const brief = request.brief === undefined ? existingBrief : this.normalizeBrief(request.brief);
-    const workflow = { version: 1 as const, brief };
-    const data: Prisma.AcademicWorkspaceUncheckedUpdateInput = {};
-    if (request.title !== undefined) data.title = request.title.trim();
-    if (request.objective !== undefined) data.objective = request.objective.trim();
-    if (request.dueAt !== undefined) data.dueAt = request.dueAt ? new Date(request.dueAt) : null;
-    if (request.status !== undefined) data.status = request.status;
-    if (request.mode !== undefined) data.mode = request.mode;
-    let normalizedSources: WorkspaceSourceReference[] | null = null;
-    if (request.sources !== undefined) {
-      const sources = this.normalizeSources(request.sources);
-      normalizedSources = sources;
-      data.sources = asJson(sources);
-    }
-    if (request.plan !== undefined) {
-      const plan = this.normalizePlan(request.plan);
-      data.plan = asJson(plan);
-      data.progress = asJson(workspaceProgressFromPlan(plan, workflow));
-    } else if (request.brief !== undefined) {
-      data.progress = asJson({ ...existingProgress, workflow });
-    } else if (request.progress !== undefined) {
-      data.progress = asJson({ ...request.progress, workflow });
-    }
-    const row = normalizedSources
-      ? await this.prisma.$transaction(async (tx) => {
-          const lockKey = accountDataLockKey(userId);
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
-          await this.assertOwnedSources(userId, normalizedSources!, tx);
-          const owned = await tx.academicWorkspace.findFirst({ where: { id, userId }, select: { id: true } });
-          if (!owned) throw new NotFoundException('Workspace not found.');
-          return tx.academicWorkspace.update({ where: { id }, data });
-        })
-      : await this.prisma.academicWorkspace.update({ where: { id }, data });
-    await this.syncExperience(row, request.status);
-    return this.toView(row);
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const existing = await tx.academicWorkspace.findFirst({ where: { id, userId } });
+      if (!existing) throw new NotFoundException('Workspace not found.');
+
+      const existingProgress = fromJson<WorkspaceProgress>(existing.progress, { completedSteps: [] });
+      const existingBrief = existingProgress.workflow?.brief ?? emptyWorkspaceBrief();
+      const brief = request.brief === undefined ? existingBrief : this.normalizeBrief(request.brief);
+      const workflow = { version: 1 as const, brief };
+      const plan = request.plan === undefined
+        ? fromJson<WorkspacePlanItem[]>(existing.plan, [])
+        : this.normalizePlan(request.plan);
+      const sources = request.sources === undefined
+        ? fromJson<WorkspaceSourceReference[]>(existing.sources, [])
+        : this.normalizeSources(request.sources);
+      if (request.sources !== undefined) await this.assertOwnedSources(userId, sources, tx);
+
+      const resultingStatus = request.status ?? existing.status;
+      const completionRelevantUpdate = request.status === 'completed'
+        || (resultingStatus === 'completed' && (
+          request.plan !== undefined
+          || request.brief !== undefined
+        ));
+      if (completionRelevantUpdate) {
+        const checks = workspaceCompletionChecks({
+          template: existing.template as WorkspaceTemplate,
+          brief,
+          plan,
+          sources,
+          draftContent: existing.draftContent,
+        });
+        if (checks.some((check) => check.required && !check.passed)) {
+          throw new BadRequestException('Workspace completion requirements are not satisfied.');
+        }
+      }
+
+      const data: Prisma.AcademicWorkspaceUncheckedUpdateInput = {
+        // Progress is server-derived. A legacy client may still send the field,
+        // but it can never manufacture completed steps or a completion state.
+        progress: asJson(workspaceProgressFromPlan(plan, workflow)),
+      };
+      if (request.title !== undefined) data.title = request.title.trim();
+      if (request.objective !== undefined) data.objective = request.objective.trim();
+      if (request.dueAt !== undefined) data.dueAt = request.dueAt ? new Date(request.dueAt) : null;
+      if (request.status !== undefined) data.status = request.status;
+      if (request.mode !== undefined) data.mode = request.mode;
+      if (request.sources !== undefined) data.sources = asJson(sources);
+      if (request.plan !== undefined) data.plan = asJson(plan);
+      if (request.expectedRevision !== undefined) data.autosaveRevision = { increment: 1 };
+
+      const result = await tx.academicWorkspace.updateMany({
+        where: {
+          id,
+          userId,
+          ...(request.expectedRevision === undefined
+            ? {}
+            : { autosaveRevision: request.expectedRevision }),
+        },
+        data,
+      });
+      if (result.count !== 1) {
+        throw new ConflictException({
+          code: 'workspace_revision_conflict',
+          message: 'This workspace changed elsewhere. Reload before saving again.',
+        });
+      }
+      const row = await tx.academicWorkspace.findFirst({ where: { id, userId } });
+      if (!row) throw new NotFoundException('Workspace not found.');
+      await this.syncExperience(row, row.status as WorkspaceProjectStatus, tx);
+      return this.toView(row);
+    });
   }
 
   async autosave(userId: string, id: string, request: WorkspaceAutosaveRequest): Promise<WorkspaceAutosaveResult> {
@@ -199,26 +276,59 @@ export class AcademicWorkspaceService {
       throw new BadRequestException('Unsupported draft format.');
     }
     if (request.draft.content.length > 200_000) throw new BadRequestException('Workspace content is too large.');
-    const result = await this.prisma.academicWorkspace.updateMany({
-      where: { id, userId, autosaveRevision: request.expectedRevision },
-      data: {
-        draftFormat: request.draft.format,
-        draftContent: request.draft.content,
-        autosaveRevision: { increment: 1 },
-      },
-    });
-    if (result.count === 0) {
-      await this.requireOwned(userId, id);
-      throw new ConflictException({ code: 'workspace_revision_conflict', message: 'This workspace changed elsewhere. Reload before saving again.' });
-    }
-    const row = await this.requireOwned(userId, id);
-    if (row.experienceSessionId) {
-      await this.prisma.experienceSession.updateMany({
-        where: { id: row.experienceSessionId, userId },
-        data: { version: { increment: 1 } },
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const existing = await tx.academicWorkspace.findFirst({ where: { id, userId } });
+      if (!existing) throw new NotFoundException('Workspace not found.');
+      if (existing.status === 'completed') {
+        const progress = fromJson<WorkspaceProgress>(existing.progress, { completedSteps: [] });
+        const checks = workspaceCompletionChecks({
+          template: existing.template as WorkspaceTemplate,
+          brief: progress.workflow?.brief ?? emptyWorkspaceBrief(),
+          plan: fromJson<WorkspacePlanItem[]>(existing.plan, []),
+          sources: fromJson<WorkspaceSourceReference[]>(existing.sources, []),
+          draftContent: request.draft.content,
+        });
+        if (checks.some((check) => check.required && !check.passed)) {
+          throw new BadRequestException('A completed workspace cannot discard required completion evidence.');
+        }
+      }
+      const result = await tx.academicWorkspace.updateMany({
+        where: { id, userId, autosaveRevision: request.expectedRevision },
+        data: {
+          draftFormat: request.draft.format,
+          draftContent: request.draft.content,
+          autosaveRevision: { increment: 1 },
+        },
       });
-    }
-    return { saved: true, revision: row.autosaveRevision, updatedAt: row.updatedAt.toISOString() };
+      if (result.count !== 1) {
+        throw new ConflictException({
+          code: 'workspace_revision_conflict',
+          message: 'This workspace changed elsewhere. Reload before saving again.',
+        });
+      }
+      const row = await tx.academicWorkspace.findFirst({ where: { id, userId } });
+      if (!row) throw new NotFoundException('Workspace not found.');
+      const session = await this.resolveWorkspaceSession(row, tx);
+      if (session) {
+        const synchronized = await tx.experienceSession.updateMany({
+          where: {
+            id: session.id,
+            userId: session.userId,
+            type: 'workspace',
+            workspaceRef: session.workspaceRef,
+            version: session.version,
+          },
+          data: {
+            ...(session.workspaceRef === null ? { workspaceRef: row.id } : {}),
+            version: { increment: 1 },
+          },
+        });
+        if (synchronized.count !== 1) this.throwSessionConflict();
+      }
+      return { saved: true, revision: row.autosaveRevision, updatedAt: row.updatedAt.toISOString() };
+    });
   }
 
   async assist(
@@ -319,10 +429,13 @@ export class AcademicWorkspaceService {
     const seen = new Set<string>();
     return plan.slice(0, 100).flatMap((item, index) => {
       const title = item?.title?.trim();
-      const id = item?.id?.trim() || randomUUID();
+      const candidateStepId = item?.stepId;
+      const stepId = candidateStepId && WORKSPACE_STEP_IDS.includes(candidateStepId)
+        ? candidateStepId
+        : undefined;
+      const id = item?.id?.trim() || legacyPlanItemId(index, title ?? '', stepId);
       if (!title || seen.has(id)) return [];
       seen.add(id);
-      const stepId = item.stepId && WORKSPACE_STEP_IDS.includes(item.stepId) ? item.stepId : undefined;
       return [{
         id,
         title: title.slice(0, 200),
@@ -373,29 +486,101 @@ export class AcademicWorkspaceService {
     }
   }
 
-  private async syncExperience(row: AcademicWorkspace, requestedStatus?: WorkspaceProjectStatus): Promise<void> {
-    if (!row.experienceSessionId) return;
+  private async syncExperience(
+    row: AcademicWorkspace,
+    requestedStatus: WorkspaceProjectStatus,
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
+  ): Promise<void> {
+    const session = await this.resolveWorkspaceSession(row, db);
+    if (!session) return;
     const plan = fromJson<WorkspacePlanItem[]>(row.plan, []);
     const completed = plan.filter((item) => item.completed).length;
     const next = plan.find((item) => !item.completed);
-    const mappedStatus = requestedStatus === 'paused' ? 'paused'
-      : requestedStatus === 'completed' ? 'completed'
-        : requestedStatus === 'active' ? 'active' : undefined;
-    await this.prisma.experienceSession.updateMany({
-      where: { id: row.experienceSessionId, userId: row.userId },
-      data: {
-        title: row.title,
-        intent: row.objective || null,
-        currentStep: optionalJson(next ? { id: next.id, label: next.title, state: 'active' } : null),
-        progress: asJson({ completed, total: plan.length, ...(plan.length ? { percent: Math.round((completed / plan.length) * 100) } : {}) }),
-        ...(mappedStatus ? {
-          status: mappedStatus,
-          pausedAt: mappedStatus === 'paused' ? new Date() : null,
-          completedAt: mappedStatus === 'completed' ? new Date() : null,
-        } : {}),
-        version: { increment: 1 },
+    const mappedStatus = requestedStatus === 'archived' ? 'abandoned' : requestedStatus;
+    const data: Prisma.ExperienceSessionUncheckedUpdateManyInput = {
+      title: row.title,
+      intent: row.objective || null,
+      currentStep: optionalJson(next ? { id: next.id, label: next.title, state: 'active' } : null),
+      progress: asJson({ completed, total: plan.length, ...(plan.length ? { percent: Math.round((completed / plan.length) * 100) } : {}) }),
+      status: mappedStatus,
+      pausedAt: mappedStatus === 'paused' ? session.pausedAt ?? new Date() : null,
+      completedAt: mappedStatus === 'completed' ? session.completedAt ?? new Date() : null,
+      ...(session.workspaceRef === null ? { workspaceRef: row.id } : {}),
+      version: { increment: 1 },
+    };
+    const result = await db.experienceSession.updateMany({
+      where: {
+        id: session.id,
+        userId: session.userId,
+        type: 'workspace',
+        workspaceRef: session.workspaceRef,
+        version: session.version,
       },
+      data,
     });
+    if (result.count !== 1) this.throwSessionConflict();
+  }
+
+  private async resolveWorkspaceSession(
+    row: AcademicWorkspace,
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
+  ): Promise<ExperienceSessionRow | null> {
+    if (!row.experienceSessionId) return null;
+    const session = await db.experienceSession.findUnique({
+      where: { id: row.experienceSessionId },
+    });
+    // A few pre-session dossiers legitimately outlived their optional wrapper.
+    // Keep them editable; no stale session can then appear in Resume.
+    if (!session) return null;
+    if (
+      session.userId !== row.userId
+      || session.type !== 'workspace'
+      || (session.workspaceRef !== null && session.workspaceRef !== row.id)
+    ) {
+      this.throwSessionConflict();
+    }
+    if (session.workspaceRef === null) {
+      const claims = await db.academicWorkspace.count({
+        where: { experienceSessionId: session.id },
+      });
+      if (claims !== 1) this.throwSessionConflict();
+    }
+    return session;
+  }
+
+  private throwSessionConflict(): never {
+    throw new ConflictException({
+      code: 'workspace_session_conflict',
+      message: 'This workspace session is inconsistent. Reload before saving again.',
+    });
+  }
+
+  private assertIdempotentCreateMatch(
+    row: AcademicWorkspace,
+    expected: {
+      title: string;
+      template: WorkspaceTemplate;
+      objective: string;
+      dueAt: Date | null;
+      sources: WorkspaceSourceReference[];
+      plan?: WorkspacePlanItem[];
+      brief: WorkspaceBrief;
+      initialContent: string;
+    },
+  ): void {
+    const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
+    const brief = progress.workflow?.brief ?? emptyWorkspaceBrief();
+    const matches = row.title === expected.title
+      && row.template === expected.template
+      && row.objective === expected.objective
+      && (row.dueAt?.toISOString() ?? null) === (expected.dueAt?.toISOString() ?? null)
+      && row.draftContent === expected.initialContent
+      && sameJson(fromJson(row.sources, []), expected.sources)
+      && (expected.plan === undefined || sameJson(fromJson(row.plan, []), expected.plan))
+      && sameJson(brief, expected.brief);
+    if (!matches) {
+      throw new ConflictException('Workspace creation key is already bound to another request.');
+    }
   }
 
   private async requireOwned(userId: string, id: string): Promise<AcademicWorkspace> {
@@ -457,6 +642,18 @@ function optionalJson(value: unknown): Prisma.InputJsonValue | typeof Prisma.DbN
 
 function fromJson<T>(value: Prisma.JsonValue, fallback: T): T {
   return value === null || value === undefined ? fallback : value as unknown as T;
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function legacyPlanItemId(index: number, title: string, stepId?: string): string {
+  const digest = createHash('sha256')
+    .update(`${index}\u0000${stepId ?? ''}\u0000${title}`)
+    .digest('hex')
+    .slice(0, 16);
+  return `legacy-${index}-${digest}`;
 }
 
 function localizedDefaultWorkspacePlan(template: WorkspaceTemplate, locale: string): WorkspacePlanItem[] {

@@ -18,6 +18,13 @@ import { QdrantService } from '../qdrant/qdrant.service';
 import { PrivateMediaService } from '../media/private-media.service';
 import { accountDataLockKey } from '../common/account-data-lock';
 
+function workspaceBrief(progress: unknown): unknown {
+  if (!progress || typeof progress !== 'object' || Array.isArray(progress)) return null;
+  const workflow = (progress as Record<string, unknown>).workflow;
+  if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) return null;
+  return (workflow as Record<string, unknown>).brief ?? null;
+}
+
 /**
  * Privacy & GDPR (Sprint 8.7). The three user rights: portability (export),
  * erasure (delete) and consent. Deletion is guarded by password re-entry, then
@@ -214,6 +221,8 @@ export class PrivacyService {
       learningDna,
       submittedReports,
       auditActivity,
+      academicWorkspaces,
+      experienceSessions,
     ] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
@@ -376,12 +385,72 @@ export class PrivacyService {
       this.prisma.learningDna.findUnique({ where: { userId } }),
       this.prisma.report.findMany({ where: { reporterId: userId } }),
       this.prisma.auditLog.findMany({ where: { actorId: userId } }),
+      this.prisma.academicWorkspace.findMany({
+        where: { userId },
+        select: {
+          id: true,
+          userId: true,
+          title: true,
+          template: true,
+          objective: true,
+          dueAt: true,
+          status: true,
+          mode: true,
+          plan: true,
+          sources: true,
+          draftFormat: true,
+          draftContent: true,
+          assistantHistory: true,
+          progress: true,
+          autosaveRevision: true,
+          experienceSessionId: true,
+          resumeTarget: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      }),
+      this.prisma.experienceSession.findMany({
+        where: { userId },
+        // Export learner-visible context and productions, but not the internal
+        // idempotency key used to fence retries.
+        select: {
+          id: true,
+          userId: true,
+          type: true,
+          status: true,
+          title: true,
+          intent: true,
+          inputModality: true,
+          activeContexts: true,
+          currentStep: true,
+          progress: true,
+          productions: true,
+          sourceReferences: true,
+          twinImpact: true,
+          resumeTarget: true,
+          nextBestAction: true,
+          tutorSessionId: true,
+          studySessionId: true,
+          documentId: true,
+          lessonId: true,
+          goalId: true,
+          languageProfileId: true,
+          workspaceRef: true,
+          version: true,
+          startedAt: true,
+          updatedAt: true,
+          pausedAt: true,
+          completedAt: true,
+        },
+      }),
     ]);
 
     const privateMedia = await this.privateMedia.exportUserMedia(
       userId,
       documents.map((document) => document.id),
     );
+    const ownedWorkspaceIds = new Set(academicWorkspaces.map((workspace) => workspace.id));
+    const ownedExperienceSessionIds = new Set(experienceSessions.map((session) => session.id));
 
     return {
       generatedAt: new Date().toISOString(),
@@ -433,6 +502,25 @@ export class PrivacyService {
         learningDna,
         submittedReports,
         auditActivity,
+        academicWorkspaces: academicWorkspaces.map((workspace) => ({
+          ...workspace,
+          // The canonical brief is stored inside the versioned progress
+          // workflow. Surface it explicitly in the portable representation.
+          brief: workspaceBrief(workspace.progress),
+          // The schema intentionally has no FK yet. A stale or corrupt legacy
+          // pointer must not disclose the identifier of another user's session.
+          experienceSessionId: workspace.experienceSessionId
+            && ownedExperienceSessionIds.has(workspace.experienceSessionId)
+            ? workspace.experienceSessionId
+            : null,
+        })),
+        experienceSessions: experienceSessions.map((session) => ({
+          ...session,
+          // Apply the same fail-closed rule to the reverse legacy pointer.
+          workspaceRef: session.workspaceRef && ownedWorkspaceIds.has(session.workspaceRef)
+            ? session.workspaceRef
+            : null,
+        })),
         privateMedia,
       },
     };

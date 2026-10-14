@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { AppState, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import {
   WORKSPACE_TEMPLATE_DEFINITIONS,
   workspaceCompletionChecks,
-  workspaceProgressFromPlan,
   type LibraryDocument,
   type LibraryPage,
   type PersistentWorkspace,
@@ -27,9 +26,16 @@ import { WorkspaceAssistant } from '../../../components/workspace/assistant';
 type WorkspaceArea = 'plan' | 'work' | 'sources';
 const AREAS: readonly WorkspaceArea[] = ['plan', 'work', 'sources'];
 
+interface WorkspaceConflictDraft {
+  content: string;
+  serverReloaded: boolean;
+  copyState: 'idle' | 'copied' | 'selectable';
+}
+
 export default function AcademicWorkspaceScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const navigation = useNavigation();
   const { t } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
   const { width, isLandscape } = useResponsive();
@@ -44,12 +50,19 @@ export default function AcademicWorkspaceScreen() {
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [library, setLibrary] = useState<LibraryDocument[]>([]);
   const [assistantUndo, setAssistantUndo] = useState<string | null>(null);
+  const [conflictDraft, setConflictDraft] = useState<WorkspaceConflictDraft | null>(null);
+  const [showConflictDraft, setShowConflictDraft] = useState(false);
   const revisionRef = useRef(0);
   const lastSavedRef = useRef('');
   const loadedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const contentRef = useRef('');
+  const conflictActiveRef = useRef(false);
+  const leavingRef = useRef(false);
+  const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
+  const saveRef = useRef<(nextContent: string) => Promise<boolean>>(async () => true);
 
-  const load = async () => {
+  const load = async (preserveConflictDraft = false): Promise<boolean> => {
     setError(null);
     try {
       const next = await api<PersistentWorkspace>(`/workspaces/${id}`);
@@ -58,24 +71,34 @@ export default function AcademicWorkspaceScreen() {
       lastSavedRef.current = next.draft.content;
       revisionRef.current = next.autosaveRevision;
       loadedRef.current = true;
+      conflictActiveRef.current = false;
+      if (preserveConflictDraft) {
+        setConflictDraft((current) => current ? { ...current, serverReloaded: true } : null);
+      } else {
+        setConflictDraft(null);
+        setShowConflictDraft(false);
+      }
       setSaveState('saved');
+      return true;
     } catch (caught) {
       setError((caught as Error).message);
+      return false;
     }
   };
 
   useEffect(() => { void load(); }, [id]);
 
-  useEffect(() => {
-    if (!loadedRef.current || content === lastSavedRef.current) return;
-    setSaveState('dirty');
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => { void save(content); }, 1_200);
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [content]);
-
-  const save = async (nextContent: string) => {
-    if (!workspace || nextContent === lastSavedRef.current) return;
+  const persist = async (nextContent: string): Promise<boolean> => {
+    if (!workspace) return false;
+    if (nextContent === lastSavedRef.current) return true;
+    if (conflictActiveRef.current) {
+      const latestContent = contentRef.current;
+      setConflictDraft((current) => current
+        ? { ...current, content: latestContent, copyState: 'idle' }
+        : { content: latestContent, serverReloaded: false, copyState: 'idle' });
+      return false;
+    }
+    setError(null);
     setSaveState('saving');
     try {
       const result = await api<{ saved: boolean; revision: number; updatedAt: string }>(`/workspaces/${workspace.id}/autosave`, {
@@ -85,26 +108,127 @@ export default function AcademicWorkspaceScreen() {
       revisionRef.current = result.revision;
       lastSavedRef.current = nextContent;
       setWorkspace((current) => current ? { ...current, autosaveRevision: result.revision, draft: { ...current.draft, content: nextContent, revision: result.revision, updatedAt: result.updatedAt }, updatedAt: result.updatedAt } : current);
+      setError(null);
       setSaveState('saved');
+      return true;
     } catch (caught) {
       const apiError = caught as ApiError;
       setSaveState(apiError.status === 0 ? 'offline' : 'error');
-      setError(apiError.status === 409 ? t('workspace10.conflict') : (caught as Error).message);
+      if (apiError.status === 409) {
+        const latestContent = contentRef.current;
+        conflictActiveRef.current = true;
+        setConflictDraft({ content: latestContent, serverReloaded: false, copyState: 'idle' });
+        setShowConflictDraft(false);
+        setError(null);
+      } else {
+        setError((caught as Error).message);
+      }
+      return false;
     }
+  };
+
+  const save = (nextContent: string): Promise<boolean> => {
+    const queued = saveQueueRef.current.then(
+      () => persist(nextContent),
+      () => persist(nextContent),
+    );
+    saveQueueRef.current = queued;
+    return queued;
+  };
+
+  saveRef.current = save;
+  contentRef.current = content;
+
+  useEffect(() => {
+    if (!loadedRef.current || content === lastSavedRef.current || conflictActiveRef.current) return;
+    setSaveState('dirty');
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => { void saveRef.current(content); }, 1_200);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [content]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      const pending = contentRef.current;
+      if (state === 'active' || !loadedRef.current || pending === lastSavedRef.current || conflictActiveRef.current) return;
+      if (timerRef.current) clearTimeout(timerRef.current);
+      void saveRef.current(pending);
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      const pending = contentRef.current;
+      if (!loadedRef.current || pending === lastSavedRef.current) return;
+      event.preventDefault();
+      event.returnValue = '';
+      if (!conflictActiveRef.current) void saveRef.current(pending);
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
+
+  useEffect(() => navigation.addListener('beforeRemove', (event) => {
+    const pending = contentRef.current;
+    if (leavingRef.current) {
+      leavingRef.current = false;
+      return;
+    }
+    if (!loadedRef.current || pending === lastSavedRef.current) return;
+    event.preventDefault();
+    if (conflictActiveRef.current) return;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    void saveRef.current(pending).then((saved) => {
+      if (!saved || contentRef.current !== lastSavedRef.current) return;
+      leavingRef.current = true;
+      navigation.dispatch(event.data.action);
+      setTimeout(() => { leavingRef.current = false; }, 0);
+    });
+  }), [navigation]);
+
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    const pending = contentRef.current;
+    if (loadedRef.current && pending !== lastSavedRef.current && !conflictActiveRef.current) {
+      void saveRef.current(pending);
+    }
+  }, []);
+
+  const copyConflictContent = async () => {
+    if (!conflictDraft) return;
+    let copied = false;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(conflictDraft.content);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+    setShowConflictDraft(true);
+    setConflictDraft((current) => current ? { ...current, copyState: copied ? 'copied' : 'selectable' } : null);
   };
 
   const patchWorkspace = async (patch: Record<string, unknown>) => {
     if (!workspace) return;
+    setError(null);
     try {
-      const next = await api<PersistentWorkspace>(`/workspaces/${workspace.id}`, { method: 'PATCH', body: patch });
+      const next = await api<PersistentWorkspace>(`/workspaces/${workspace.id}`, {
+        method: 'PATCH',
+        body: { ...patch, expectedRevision: revisionRef.current },
+      });
+      revisionRef.current = next.autosaveRevision;
       setWorkspace(next);
+      setError(null);
     } catch (caught) {
-      setError((caught as Error).message);
+      const apiError = caught as ApiError;
+      setError(apiError.status === 409 ? t('workspace10.conflict') : (caught as Error).message);
     }
   };
 
   const updatePlan = async (plan: WorkspacePlanItem[]) => {
-    setWorkspace((current) => current ? { ...current, plan, progress: workspaceProgressFromPlan(plan) } : current);
     await patchWorkspace({ plan });
   };
 
@@ -200,7 +324,13 @@ export default function AcademicWorkspaceScreen() {
       canUndo={assistantUndo !== null}
     />
   );
-  const editor = <EditorPanel content={content} saveState={saveState} onChange={(value) => { setAssistantUndo(null); setContent(value); }} onSelection={setSelection} onInsert={insertMarkup} onSave={() => void save(content)} />;
+  const editor = <EditorPanel content={content} saveState={saveState} onChange={(value) => {
+    setAssistantUndo(null);
+    setContent(value);
+    if (conflictActiveRef.current) {
+      setConflictDraft((current) => current ? { ...current, content: value, copyState: 'idle' } : current);
+    }
+  }} onSelection={setSelection} onInsert={insertMarkup} onSave={() => void save(content)} />;
 
   return <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1, backgroundColor: c.background }}>
     <Page width="fluid" style={{ gap: spacing.lg, paddingBottom: spacing.huge }} testID="academic-workspace">
@@ -211,6 +341,15 @@ export default function AcademicWorkspaceScreen() {
         </View>
         {progress !== null ? <View style={{ gap: spacing.xs }}><Progress value={progress} /><Text style={[typography.caption, { color: c.textMuted }]}>{t('workspace10.steps').replace('{done}', String(done)).replace('{total}', String(total))}</Text></View> : null}
       </View>
+      {conflictDraft ? <Card style={{ gap: spacing.sm }} testID="workspace-conflict-recovery">
+        <Alert tone="warning" title={t('error.conflict')} detail={t('workspace10.conflict')} />
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+          {!conflictDraft.serverReloaded ? <Button testID="workspace-conflict-reload" size="sm" variant="secondary" label={t('health.refresh')} onPress={() => void load(true)} /> : null}
+          <Button testID="workspace-conflict-copy" size="sm" variant="secondary" label={t(conflictDraft.copyState === 'copied' ? 'globalPath.copyDone' : 'globalPath.copy')} onPress={() => void copyConflictContent()} />
+          {conflictDraft.serverReloaded ? <Button testID="workspace-conflict-dismiss" size="sm" variant="ghost" label={t('app.dismiss')} onPress={() => { setConflictDraft(null); setShowConflictDraft(false); }} /> : null}
+        </View>
+        {showConflictDraft ? <TextInput testID="workspace-conflict-local-draft" value={conflictDraft.content} editable={false} multiline selectTextOnFocus accessibilityLabel={t('workspace10.editor.label')} style={[typography.bodySmall, { minHeight: 120, borderWidth: 1, borderColor: c.border, color: c.textPrimary, padding: spacing.sm }]} /> : null}
+      </Card> : null}
       {error ? <Alert tone="error" title={t('state.error')} detail={error} /> : null}
       {!desktop ? <SegmentedControl options={AREAS} value={activeArea} onChange={setActiveArea} labelFor={(value) => t(`workspace10.area.${value}`)} /> : null}
 
