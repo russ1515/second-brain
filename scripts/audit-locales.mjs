@@ -36,6 +36,7 @@ const GLOBAL_PATH_V1_FILE = path.join(LOCALES_DIR, 'global-path-v1.ts');
 const LANGUAGE_MASTERY_V1_FILE = path.join(LOCALES_DIR, 'language-mastery-v1.ts');
 const TEACHING_LANGUAGE_V1_FILE = path.join(LOCALES_DIR, 'teaching-language-v1.ts');
 const WORKSPACE_CAPTURE_V1_FILE = path.join(LOCALES_DIR, 'workspace-capture-v1.ts');
+const WORKSPACE_ORCHESTRATOR_V1_FILE = path.join(LOCALES_DIR, 'workspace-orchestrator-v1.ts');
 
 export const ALL_LOCALE_CODES = Object.freeze(['en', 'fr', ...SUPPORTED_CODES]);
 export const PROTECTED_BRANDS = Object.freeze([
@@ -353,6 +354,7 @@ export function auditRepository() {
     teachingLanguageKeys,
   );
   const workspaceCaptureV1 = readNestedCatalog(WORKSPACE_CAPTURE_V1_FILE, 'workspaceCaptureV1');
+  const workspaceOrchestratorV1 = readNestedCatalog(WORKSPACE_ORCHESTRATOR_V1_FILE, 'workspaceOrchestratorV1');
   const catalogs = new Map([
     ['en', english],
     ['fr', french],
@@ -386,6 +388,7 @@ export function auditRepository() {
     const languageBulletin = languageBulletinTranslations.get(code) ?? new Map();
     const teachingLanguage = teachingLanguageTranslations.get(code) ?? new Map();
     const workspaceCapture = workspaceCaptureV1.get(code) ?? new Map();
+    const workspaceOrchestrator = workspaceOrchestratorV1.get(code) ?? new Map();
     const beforeAliases = new Map([
       ...base,
       ...essential,
@@ -401,6 +404,7 @@ export function auditRepository() {
       ...learningDataControl,
       ...teachingLanguage,
       ...workspaceCapture,
+      ...workspaceOrchestrator,
     ]);
     const globalPath = new Map(
       [...globalPathAliases].flatMap(([target, source]) => {
@@ -435,6 +439,7 @@ export function auditRepository() {
       { name: 'learning-data-control-v1', entries: learningDataControl },
       { name: 'teaching-language-v1.ts', entries: teachingLanguage },
       { name: 'workspace-capture-v1.ts', entries: workspaceCapture },
+      { name: 'workspace-orchestrator-v1.ts', entries: workspaceOrchestrator },
       { name: 'global-path-v1.ts', entries: globalPath },
       { name: 'language-mastery-v1.ts', entries: languageMastery },
       { name: 'language-mastery-v1.ts:languageBulletinTranslations', entries: languageBulletin },

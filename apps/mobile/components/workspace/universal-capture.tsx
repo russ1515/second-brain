@@ -2,13 +2,19 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import {
-  WORKSPACE_TEMPLATES,
+  WORKSPACE_SHELL_KINDS,
+  classifyWorkspace,
+  workspaceShellFromTemplate,
+  workspaceTemplateForShell,
   type Collection,
   type DocumentDetail,
   type LibraryDocument,
   type LibraryDocumentDetail,
   type PersistentWorkspace,
+  type TrustedWorkspaceDocumentEvidence,
   type TranscriptionResult,
+  type WorkspaceClassificationReason,
+  type WorkspaceShellKind,
   type WorkspaceSourceReference,
   type WorkspaceSummary,
   type WorkspaceTemplate,
@@ -65,6 +71,7 @@ export function WorkspaceUniversalCapture({
   loadingMoreDocuments,
   onLoadMoreDocuments,
   initialDocument,
+  initialTemplateHint,
 }: {
   ownerUserId: string;
   documents: readonly LibraryDocument[];
@@ -79,6 +86,9 @@ export function WorkspaceUniversalCapture({
   loadingMoreDocuments?: boolean;
   onLoadMoreDocuments?: () => void;
   initialDocument?: { id: string; title?: string; status?: string };
+  /** Explicit learner choice received from an existing route. Absence must not
+   * be interpreted as the historical assignment default. */
+  initialTemplateHint?: WorkspaceTemplate;
 }) {
   const router = useRouter();
   const { t } = useI18n();
@@ -87,8 +97,11 @@ export function WorkspaceUniversalCapture({
   const [phase, setPhase] = useState<CapturePhase>(documentCapturePhase(initialDocument?.status));
   const [documentPipelineKey, setDocumentPipelineKey] = useState<TranslationKey | null>(documentStatusKey(initialDocument?.status));
   const [title, setTitle] = useState(initialDocument?.title ?? '');
+  const [titleEdited, setTitleEdited] = useState(false);
   const [objective, setObjective] = useState('');
-  const [template, setTemplate] = useState<WorkspaceTemplate>('assignment');
+  const [template, setTemplate] = useState<WorkspaceTemplate>(initialTemplateHint ?? 'assignment');
+  const [templateOverridden, setTemplateOverridden] = useState(Boolean(initialTemplateHint));
+  const [changingClassification, setChangingClassification] = useState(false);
   const [initialContent, setInitialContent] = useState('');
   const [sources, setSources] = useState<WorkspaceSourceReference[]>(initialDocument ? [{ kind: 'document', id: initialDocument.id, title: initialDocument.title }] : []);
   const [sourceMode, setSourceMode] = useState<'documents' | 'collections'>('documents');
@@ -102,6 +115,7 @@ export function WorkspaceUniversalCapture({
   const [pollGeneration, setPollGeneration] = useState(0);
   const [pendingCreate, setPendingCreate] = useState<{ signature: string; requestId: string } | null>(null);
   const [attachmentId, setAttachmentId] = useState(() => createClientRequestId('workspace-capture'));
+  const [verifiedDocumentEvidence, setVerifiedDocumentEvidence] = useState<TrustedWorkspaceDocumentEvidence[]>([]);
   const recorder = useRef<Recorder | null>(null);
   const pickedFile = useRef<PickedDocument | null>(null);
   const uploadRequestId = useRef<string | null>(null);
@@ -133,14 +147,18 @@ export function WorkspaceUniversalCapture({
     setPhase(documentCapturePhase(initialDocument?.status));
     setDocumentPipelineKey(documentStatusKey(initialDocument?.status));
     setTitle(initialDocument?.title ?? '');
+    setTitleEdited(false);
     setObjective('');
-    setTemplate('assignment');
+    setTemplate(initialTemplateHint ?? 'assignment');
+    setTemplateOverridden(Boolean(initialTemplateHint));
+    setChangingClassification(false);
     setInitialContent('');
     setSources(routeSource);
     setTrackedDocumentId(initialDocument?.id ?? null);
     setFailedDocumentId(initialDocument?.status === 'failed' ? initialDocument.id : null);
     setDocumentUnsettled(Boolean(initialDocument && !documentStatusSettled(initialDocument.status)));
     setPendingCreate(null);
+    setVerifiedDocumentEvidence([]);
     setAttachmentId(createClientRequestId('workspace-capture'));
     setError(null);
     void loadWorkspaceCaptureDraft(ownerUserId).then((draft) => {
@@ -148,8 +166,10 @@ export function WorkspaceUniversalCapture({
       if (draft) {
         setMode(initialDocument ? 'photo' : draft.mode);
         setTitle(initialDocument?.title || draft.title);
+        setTitleEdited(initialDocument ? false : Boolean(draft.title.trim()));
         setObjective(draft.objective);
-        setTemplate(draft.template);
+        setTemplate(draft.templateOverridden ? draft.template : initialTemplateHint ?? draft.template);
+        setTemplateOverridden(draft.templateOverridden || Boolean(initialTemplateHint));
         setInitialContent(draft.initialContent);
         const restoredSources = mergeWorkspaceSources(draft.sources, routeSource);
         setSources(restoredSources);
@@ -175,7 +195,7 @@ export function WorkspaceUniversalCapture({
       setHydrated(true);
     });
     return () => { active = false; };
-  }, [initialDocument?.id, initialDocument?.status, initialDocument?.title, ownerUserId, routeSource]);
+  }, [initialDocument?.id, initialDocument?.status, initialDocument?.title, initialTemplateHint, ownerUserId, routeSource]);
 
   useEffect(() => {
     if (!hydrated || hydratedOwner.current !== ownerUserId || persistenceSuspended.current || captureCompleted.current) return;
@@ -186,6 +206,7 @@ export function WorkspaceUniversalCapture({
         title,
         objective,
         template,
+        templateOverridden,
         initialContent,
         sources,
         trackedDocumentId,
@@ -195,9 +216,70 @@ export function WorkspaceUniversalCapture({
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [attachmentId, hydrated, initialContent, mode, objective, ownerUserId, pendingCreate, sources, template, title, trackedDocumentId]);
+  }, [attachmentId, hydrated, initialContent, mode, objective, ownerUserId, pendingCreate, sources, template, templateOverridden, title, trackedDocumentId]);
 
   useEffect(() => () => recorder.current?.cancel(), []);
+
+  const trustedClassificationDocuments = useMemo<TrustedWorkspaceDocumentEvidence[]>(() => {
+    const selectedIds = new Set(sources.filter((source) => source.kind === 'document').map((source) => source.id));
+    const evidence: TrustedWorkspaceDocumentEvidence[] = documents
+      .filter((document) => selectedIds.has(document.id))
+      .map((document) => ({
+        id: document.id,
+        title: document.title,
+        subject: document.subject,
+        summary: document.summary,
+        preview: document.preview,
+      }));
+    for (const document of verifiedDocumentEvidence) {
+      if (!selectedIds.has(document.id)) continue;
+      const index = evidence.findIndex((candidate) => candidate.id === document.id);
+      if (index >= 0) evidence[index] = { ...evidence[index], ...document };
+      else evidence.push(document);
+    }
+    return evidence;
+  }, [documents, sources, verifiedDocumentEvidence]);
+
+  const trustedCollectionNames = useMemo(() => {
+    const selectedIds = new Set(sources.filter((source) => source.kind === 'collection').map((source) => source.id));
+    return collections.filter((collection) => selectedIds.has(collection.id)).map((collection) => collection.name);
+  }, [collections, sources]);
+
+  const trustedInitialDocument = initialDocument
+    ? trustedClassificationDocuments.find((document) => document.id === initialDocument.id)
+    : undefined;
+  const classification = useMemo(() => classifyWorkspace({
+    explicitTemplate: templateOverridden ? template : initialTemplateHint,
+    // Never promote query-string display metadata into classification input.
+    // A routed document contributes only its canonical owner-scoped title.
+    title: initialDocument ? trustedInitialDocument?.title ?? '' : title,
+    objective,
+    capturedText: initialContent,
+    trustedDocuments: trustedClassificationDocuments,
+    trustedCollectionNames,
+  }), [
+    initialContent,
+    initialDocument,
+    initialTemplateHint,
+    objective,
+    template,
+    templateOverridden,
+    title,
+    trustedInitialDocument?.title,
+    trustedClassificationDocuments,
+    trustedCollectionNames,
+  ]);
+
+  useEffect(() => {
+    if (!hydrated || templateOverridden || pendingCreate) return;
+    setTemplate(classification.internalTemplate);
+  }, [classification.internalTemplate, hydrated, pendingCreate, templateOverridden]);
+
+  useEffect(() => {
+    if (!hydrated || phase !== 'READY' || titleEdited || pendingCreate) return;
+    const suggestion = suggestedWorkspaceTitle(initialContent, trustedClassificationDocuments, trustedCollectionNames);
+    if (suggestion && suggestion !== title) setTitle(suggestion);
+  }, [hydrated, initialContent, pendingCreate, phase, title, titleEdited, trustedClassificationDocuments, trustedCollectionNames]);
 
   useEffect(() => {
     if (!hydrated || (mode !== 'file' && mode !== 'photo')) return;
@@ -276,8 +358,11 @@ export function WorkspaceUniversalCapture({
       setPhase('IDLE');
       setDocumentPipelineKey(null);
       setTitle('');
+      setTitleEdited(false);
       setObjective('');
-      setTemplate('assignment');
+      setTemplate(initialTemplateHint ?? 'assignment');
+      setTemplateOverridden(Boolean(initialTemplateHint));
+      setChangingClassification(false);
       setInitialContent('');
       setSources([]);
       setTrackedDocumentId(null);
@@ -285,6 +370,7 @@ export function WorkspaceUniversalCapture({
       setPollingExhausted(false);
       setDocumentUnsettled(false);
       setPendingCreate(null);
+      setVerifiedDocumentEvidence([]);
       setAttachmentId(createClientRequestId('workspace-capture'));
       setError(null);
     } finally {
@@ -297,9 +383,10 @@ export function WorkspaceUniversalCapture({
     && (mode === 'file' || mode === 'photo')
     && (documentUnsettled || phase === 'UPLOADING' || phase === 'PROCESSING'),
   );
+  const creationFrozen = Boolean(pendingCreate);
 
   const selectMode = (next: WorkspaceCaptureMode) => {
-    if (!hydrated || busy || documentPipelineBusy) return;
+    if (!hydrated || busy || creationFrozen || documentPipelineBusy) return;
     beginNewCaptureIfCompleted();
     if (next === 'voice' && recorder.current) return;
     if (next !== 'voice') cancelActiveRecording();
@@ -318,7 +405,7 @@ export function WorkspaceUniversalCapture({
   };
 
   const openPhoto = async () => {
-    if (!hydrated || busy || actionInFlight.current) return;
+    if (!hydrated || busy || creationFrozen || actionInFlight.current) return;
     beginNewCaptureIfCompleted();
     if (sources.length >= MAX_WORKSPACE_CAPTURE_SOURCES) {
       rejectSourceLimit();
@@ -333,6 +420,7 @@ export function WorkspaceUniversalCapture({
       title,
       objective,
       template,
+      templateOverridden,
       initialContent,
       sources,
       trackedDocumentId,
@@ -343,7 +431,7 @@ export function WorkspaceUniversalCapture({
     router.push({ pathname: '/scan', params: { source: 'workspace', captureType: 'photo' } });
   };
 
-  const rememberDocument = (document: DocumentDetail) => {
+  const rememberDocument = (document: DocumentDetail | LibraryDocumentDetail) => {
     const alreadySelected = sources.some((source) => source.kind === 'document' && source.id === document.id);
     if (!alreadySelected && sources.length >= MAX_WORKSPACE_CAPTURE_SOURCES) {
       setTrackedDocumentId(document.id);
@@ -354,6 +442,19 @@ export function WorkspaceUniversalCapture({
       return;
     }
     setTrackedDocumentId(document.id);
+    setVerifiedDocumentEvidence((current) => [
+      ...current.filter((item) => item.id !== document.id),
+      {
+        id: document.id,
+        title: document.title,
+        content: document.content.slice(0, 30_000),
+        ...('subject' in document ? {
+          subject: document.subject,
+          summary: document.summary,
+          preview: document.preview,
+        } : {}),
+      },
+    ]);
     setDocumentUnsettled(!documentStatusSettled(document.status));
     setFailedDocumentId(document.status === 'failed' ? document.id : null);
     setSources((current) => mergeWorkspaceSources(current, [{ kind: 'document', id: document.id, title: document.title }]));
@@ -391,7 +492,7 @@ export function WorkspaceUniversalCapture({
   };
 
   const chooseFile = async () => {
-    if (!hydrated || filePickerInFlight.current || actionInFlight.current || busy) return;
+    if (!hydrated || filePickerInFlight.current || actionInFlight.current || busy || creationFrozen) return;
     beginNewCaptureIfCompleted();
     if (sources.length >= MAX_WORKSPACE_CAPTURE_SOURCES) {
       rejectSourceLimit();
@@ -452,7 +553,7 @@ export function WorkspaceUniversalCapture({
   };
 
   const toggleVoice = async () => {
-    if (!hydrated || !RECORDING_SUPPORTED || busy || voiceTransitionInFlight.current) return;
+    if (!hydrated || !RECORDING_SUPPORTED || busy || creationFrozen || voiceTransitionInFlight.current) return;
     beginNewCaptureIfCompleted();
     voiceTransitionInFlight.current = true;
     setBusy(true);
@@ -489,6 +590,7 @@ export function WorkspaceUniversalCapture({
   };
 
   const toggleSource = (source: WorkspaceSourceReference) => {
+    if (creationFrozen) return;
     beginNewCaptureIfCompleted();
     setSources((current) => {
       const exists = current.some((item) => item.kind === source.kind && item.id === source.id);
@@ -505,7 +607,7 @@ export function WorkspaceUniversalCapture({
     });
   };
 
-  const createWorkspace = async () => {
+  const createWorkspace = async (selectedTemplate: WorkspaceTemplate = template) => {
     if (!hydrated || actionInFlight.current || phase !== 'READY' || !title.trim() || (!initialContent.trim() && !sources.length)) return;
     actionInFlight.current = true;
     setBusy(true);
@@ -513,7 +615,7 @@ export function WorkspaceUniversalCapture({
     try {
       const body = {
         title: title.trim(),
-        template,
+        template: selectedTemplate,
         objective: objective.trim(),
         sources,
         ...(initialContent.trim() ? { initialContent: initialContent.trim() } : {}),
@@ -527,7 +629,8 @@ export function WorkspaceUniversalCapture({
         mode,
         title,
         objective,
-        template,
+        template: selectedTemplate,
+        templateOverridden,
         initialContent,
         sources,
         trackedDocumentId,
@@ -544,6 +647,22 @@ export function WorkspaceUniversalCapture({
       await resetCaptureAfterSuccess();
       router.push(`/library/workspace/${workspace.id}`);
     } catch (caught) {
+      if (isDefinitiveWorkspaceCreateFailure(caught)) {
+        setPendingCreate(null);
+        await saveWorkspaceCaptureDraft(ownerUserId, {
+          mode,
+          title,
+          objective,
+          template: selectedTemplate,
+          templateOverridden,
+          initialContent,
+          sources,
+          trackedDocumentId,
+          attachmentId,
+          createRequestId: null,
+          createSignature: null,
+        }).catch(() => undefined);
+      }
       setError((caught as Error).message);
     } finally {
       actionInFlight.current = false;
@@ -552,7 +671,7 @@ export function WorkspaceUniversalCapture({
   };
 
   const attachToWorkspace = async (workspaceId: string) => {
-    if (!hydrated || actionInFlight.current || phase !== 'READY' || !hasCapture) return;
+    if (!hydrated || actionInFlight.current || creationFrozen || phase !== 'READY' || !hasCapture) return;
     actionInFlight.current = true;
     setBusy(true);
     setError(null);
@@ -616,7 +735,7 @@ export function WorkspaceUniversalCapture({
         size="sm"
         variant={mode === value ? 'primary' : 'secondary'}
         label={t(MODE_LABELS[value])}
-        disabled={!hydrated || busy || phase === 'CAPTURING' || documentPipelineBusy}
+        disabled={!hydrated || busy || creationFrozen || phase === 'CAPTURING' || documentPipelineBusy}
         onPress={() => value === 'file' ? void chooseFile() : value === 'photo' ? void openPhoto() : selectMode(value)}
       />)}
     </View>
@@ -642,7 +761,7 @@ export function WorkspaceUniversalCapture({
         <Button
           testID="workspace-capture-voice-toggle"
           label={phase === 'CAPTURING' ? t('voice11.transcribe') : t('h.capture.speak')}
-          disabled={!RECORDING_SUPPORTED || busy}
+          disabled={!RECORDING_SUPPORTED || busy || creationFrozen}
           loading={busy}
           onPress={() => void toggleVoice()}
         />
@@ -653,7 +772,7 @@ export function WorkspaceUniversalCapture({
         testID="workspace-capture-text"
         value={initialContent}
         onChangeText={(value) => { setInitialContent(value); setPhase(value.trim() ? 'READY' : 'IDLE'); }}
-        editable={hydrated && !busy && phase !== 'CAPTURING'}
+        editable={hydrated && !busy && !creationFrozen && phase !== 'CAPTURING'}
         multiline
         textAlignVertical="top"
         placeholder={t('workspace10.editor.placeholder')}
@@ -664,7 +783,7 @@ export function WorkspaceUniversalCapture({
     </View> : null}
 
     {mode === 'file' ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
-      <Button label={t('learn5.capture.file')} variant="secondary" disabled={busy} onPress={() => void chooseFile()} />
+      <Button label={t('learn5.capture.file')} variant="secondary" disabled={busy || creationFrozen} onPress={() => void chooseFile()} />
       {phase === 'ERROR' && (failedDocumentId || (pickedFile.current && !trackedDocumentId)) ? <Button testID="workspace-capture-file-retry" label={t('document.pipeline.retry')} loading={busy} onPress={() => void retryFile()} /> : null}
     </View> : null}
 
@@ -676,13 +795,13 @@ export function WorkspaceUniversalCapture({
         onChangeText={onDocumentSearchChange}
         placeholder={t('library7.search')}
         accessibilityLabel={t('library7.search')}
-        editable={hydrated && !busy}
+        editable={hydrated && !busy && !creationFrozen}
       /> : null}
       {(sourceMode === 'documents' ? documents : collections).map((item) => {
         const kind = sourceMode === 'documents' ? 'document' as const : 'collection' as const;
         const checked = sources.some((source) => source.kind === kind && source.id === item.id);
         const label = 'title' in item ? item.title : item.name;
-        return <Pressable key={item.id} disabled={!hydrated || busy} accessibilityRole="checkbox" accessibilityState={{ checked, disabled: !hydrated || busy }} onPress={() => toggleSource({ kind, id: item.id, title: label })} style={{ minHeight: 48, borderWidth: 1, borderColor: checked ? c.primary : c.border, borderRadius: radius.sm, padding: spacing.sm, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, opacity: !hydrated || busy ? 0.6 : 1 }}><Text style={{ color: c.primary }}>{checked ? '✓' : '○'}</Text><Text numberOfLines={1} style={[typography.bodySmall, { color: c.textPrimary, flex: 1 }]}>{label}</Text></Pressable>;
+        return <Pressable key={item.id} disabled={!hydrated || busy || creationFrozen} accessibilityRole="checkbox" accessibilityState={{ checked, disabled: !hydrated || busy || creationFrozen }} onPress={() => toggleSource({ kind, id: item.id, title: label })} style={{ minHeight: 48, borderWidth: 1, borderColor: checked ? c.primary : c.border, borderRadius: radius.sm, padding: spacing.sm, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, opacity: !hydrated || busy || creationFrozen ? 0.6 : 1 }}><Text style={{ color: c.primary }}>{checked ? '✓' : '○'}</Text><Text numberOfLines={1} style={[typography.bodySmall, { color: c.textPrimary, flex: 1 }]}>{label}</Text></Pressable>;
       })}
       {sourceMode === 'documents' && hasMoreDocuments && onLoadMoreDocuments ? <Button
         testID="workspace-capture-load-more-documents"
@@ -690,7 +809,7 @@ export function WorkspaceUniversalCapture({
         variant="ghost"
         label={t('brain8.loadMore')}
         loading={loadingMoreDocuments}
-        disabled={busy || loadingMoreDocuments}
+        disabled={busy || creationFrozen || loadingMoreDocuments}
         onPress={onLoadMoreDocuments}
       /> : null}
     </View> : null}
@@ -700,18 +819,52 @@ export function WorkspaceUniversalCapture({
       {sources.map((source) => <Text key={`${source.kind}:${source.id}`} numberOfLines={1} style={[typography.caption, { color: c.textSecondary }]}>• {source.title ?? source.id}</Text>)}
     </Card> : null}
 
-    {hasCapture ? <View style={{ gap: spacing.sm }} testID="workspace-capture-qualification">
-      <Text style={[typography.label, { color: c.textPrimary }]}>{t('workspace10.create')}</Text>
+    {hasCapture && captureReady ? <View style={{ gap: spacing.sm }} testID="workspace-capture-qualification">
+      <Card style={{ gap: spacing.sm, backgroundColor: c.surfaceSunken }} testID="workspace-orchestrator-proposal">
+        <Badge tone="ai" label={t(workspaceShellLabelKey(workspaceShellFromTemplate(template)))} />
+        <Text accessibilityRole="header" style={[typography.title, { color: c.textPrimary }]}>{
+          t(classification.confidence === 'insufficient' && !templateOverridden
+            ? 'workspaceOrchestrator.generalProposal'
+            : 'workspaceOrchestrator.proposal')
+            .replace('{type}', t(workspaceShellLabelKey(workspaceShellFromTemplate(template))))
+        }</Text>
+        <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t(
+          templateOverridden
+            ? 'workspaceOrchestrator.overrideKept'
+            : workspaceReasonKey(classification.reasons[0] ?? 'insufficient-signals'),
+        )}</Text>
+      </Card>
+      <Input testID="workspace-capture-title" label={t('workspace10.field.title')} value={title} onChangeText={(value) => { setTitle(value); setTitleEdited(true); }} placeholder={t('workspace10.field.titlePlaceholder')} editable={hydrated && !busy && !creationFrozen} />
+      <Input testID="workspace-capture-objective" label={t('workspace10.field.objective')} value={objective} onChangeText={setObjective} placeholder={t('workspace10.field.objectivePlaceholder')} editable={hydrated && !busy && !creationFrozen} multiline />
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
-        {WORKSPACE_TEMPLATES.map((value) => <Pressable key={value} disabled={!hydrated || busy} testID={`workspace-capture-template-${value}`} accessibilityRole="radio" accessibilityState={{ selected: template === value, disabled: !hydrated || busy }} onPress={() => setTemplate(value)} style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 12, borderRadius: radius.full, borderWidth: 1, borderColor: template === value ? c.primary : c.border, backgroundColor: template === value ? c.primary : c.surfaceSunken, opacity: !hydrated || busy ? 0.6 : 1 }}><Text style={[typography.bodySmall, { color: template === value ? c.onPrimary : c.textPrimary, fontWeight: '700' }]}>{t(`workspace10.template.${value}` as TranslationKey)}</Text></Pressable>)}
+        <Button testID="workspace-orchestrator-continue" label={t('onb.continue')} variant="ai" loading={busy} disabled={!hydrated || !title.trim() || busy} onPress={() => void createWorkspace(template)} />
+        <Button testID="workspace-orchestrator-modify" label={t('onb.edit')} variant="secondary" disabled={busy || creationFrozen} onPress={() => setChangingClassification((value) => !value)} />
       </View>
-      <Input testID="workspace-capture-title" label={t('workspace10.field.title')} value={title} onChangeText={setTitle} placeholder={t('workspace10.field.titlePlaceholder')} editable={hydrated && !busy} />
-      <Input testID="workspace-capture-objective" label={t('workspace10.field.objective')} value={objective} onChangeText={setObjective} placeholder={t('workspace10.field.objectivePlaceholder')} editable={hydrated && !busy} multiline />
-      <Button testID="workspace-capture-create" label={t('workspace10.createAction')} variant="ai" loading={busy} disabled={!hydrated || !title.trim() || busy || !captureReady} onPress={() => void createWorkspace()} />
+      {changingClassification ? <View accessibilityRole="radiogroup" style={{ gap: spacing.xs }} testID="workspace-orchestrator-families">
+        <Text style={[typography.label, { color: c.textPrimary }]}>{t('workspaceOrchestrator.modifyTitle')}</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+          {WORKSPACE_SHELL_KINDS.map((shellKind) => {
+            const selected = workspaceShellFromTemplate(template) === shellKind;
+            return <Pressable
+              key={shellKind}
+              disabled={busy || creationFrozen}
+              testID={`workspace-orchestrator-family-${shellKind}`}
+              accessibilityRole="radio"
+              accessibilityState={{ selected, disabled: busy || creationFrozen }}
+              onPress={() => {
+                setTemplate(workspaceTemplateForShell(shellKind, classification.internalTemplate));
+                setTemplateOverridden(true);
+                setChangingClassification(false);
+              }}
+              style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 12, borderRadius: radius.full, borderWidth: 1, borderColor: selected ? c.primary : c.border, backgroundColor: selected ? c.primary : c.surface, opacity: busy || creationFrozen ? 0.6 : 1 }}
+            ><Text style={[typography.bodySmall, { color: selected ? c.onPrimary : c.textPrimary, fontWeight: '700' }]}>{t(workspaceShellLabelKey(shellKind))}</Text></Pressable>;
+          })}
+        </View>
+      </View> : null}
       {workspaces.length ? <View style={{ gap: spacing.xs }} testID="workspace-capture-existing-targets">
         <Text style={[typography.label, { color: c.textSecondary }]}>{t('workspace10.resume')}</Text>
-        {workspaces.map((workspace) => <Button key={workspace.id} testID={`workspace-capture-attach-${workspace.id}`} size="sm" variant="secondary" label={`${t('workspace10.resume')} · ${workspace.title}`} disabled={busy || !captureReady} onPress={() => void attachToWorkspace(workspace.id)} />)}
-        {hasMoreWorkspaces && onLoadMoreWorkspaces ? <Button testID="workspace-capture-load-more-workspaces" size="sm" variant="ghost" label={t('brain8.loadMore')} loading={loadingMoreWorkspaces} disabled={busy || loadingMoreWorkspaces} onPress={onLoadMoreWorkspaces} /> : null}
+        {workspaces.map((workspace) => <Button key={workspace.id} testID={`workspace-capture-attach-${workspace.id}`} size="sm" variant="secondary" label={`${t('workspace10.resume')} · ${workspace.title}`} disabled={busy || creationFrozen || !captureReady} onPress={() => void attachToWorkspace(workspace.id)} />)}
+        {hasMoreWorkspaces && onLoadMoreWorkspaces ? <Button testID="workspace-capture-load-more-workspaces" size="sm" variant="ghost" label={t('brain8.loadMore')} loading={loadingMoreWorkspaces} disabled={busy || creationFrozen || loadingMoreWorkspaces} onPress={onLoadMoreWorkspaces} /> : null}
       </View> : null}
     </View> : null}
   </Card>;
@@ -727,6 +880,13 @@ function duplicateDocumentId(error: unknown): string | null {
     if (typeof id === 'string') return id;
   }
   return null;
+}
+
+function isDefinitiveWorkspaceCreateFailure(error: unknown): boolean {
+  return error instanceof ApiError
+    && error.status >= 400
+    && error.status < 500
+    && error.status !== 408;
 }
 
 function documentCapturePhase(status?: string): CapturePhase {
@@ -747,4 +907,25 @@ function documentStatusKey(status?: string): TranslationKey | null {
 
 function documentStatusSettled(status?: string): boolean {
   return status === 'ready' || status === 'partial' || status === 'failed';
+}
+
+function workspaceShellLabelKey(shellKind: WorkspaceShellKind): TranslationKey {
+  return `workspaceOrchestrator.family.${shellKind}` as TranslationKey;
+}
+
+function workspaceReasonKey(reason: WorkspaceClassificationReason): TranslationKey {
+  return `workspaceOrchestrator.reason.${reason}` as TranslationKey;
+}
+
+function suggestedWorkspaceTitle(
+  capturedText: string,
+  documents: readonly TrustedWorkspaceDocumentEvidence[],
+  collectionNames: readonly string[],
+): string {
+  const documentTitle = documents.find((document) => document.title?.trim())?.title?.trim();
+  if (documentTitle) return documentTitle.slice(0, 200);
+  const collectionName = collectionNames.find((name) => name.trim())?.trim();
+  if (collectionName) return collectionName.slice(0, 200);
+  const firstLine = capturedText.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  return firstLine?.slice(0, 200) ?? '';
 }

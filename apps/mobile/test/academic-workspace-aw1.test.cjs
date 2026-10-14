@@ -44,7 +44,7 @@ test('voice capture reuses Recorder and STT then leaves an editable transcript',
   assert.match(component, /createRecorder\(\)/);
   assert.match(component, /apiUpload<TranscriptionResult>\('\/speech\/stt'/);
   assert.match(component, /setInitialContent\(transcript\.text\)/);
-  assert.match(component, /testID="workspace-capture-text"[\s\S]*editable=\{hydrated && !busy && phase !== 'CAPTURING'\}/);
+  assert.match(component, /testID="workspace-capture-text"[\s\S]*editable=\{hydrated && !busy && !creationFrozen && phase !== 'CAPTURING'\}/);
 });
 
 test('Library capture reuses owner-scoped documents and collections already loaded by the screen', () => {
@@ -66,7 +66,7 @@ test('single-flight guards prevent duplicate upload, attach and create actions',
   assert.match(component, /voiceTransitionInFlight\.current/);
   assert.ok((component.match(/actionInFlight\.current = true/g) ?? []).length >= 3);
   assert.ok((component.match(/actionInFlight\.current = false/g) ?? []).length >= 3);
-  assert.match(component, /disabled=\{!hydrated \|\| busy \|\| phase === 'CAPTURING' \|\| documentPipelineBusy\}/);
+  assert.match(component, /disabled=\{!hydrated \|\| busy \|\| creationFrozen \|\| phase === 'CAPTURING' \|\| documentPipelineBusy\}/);
 });
 
 test('file retry retains one logical request id and recovers an owned duplicate', () => {
@@ -92,6 +92,8 @@ test('capture intent, transcript and durable source ids resume per authenticated
   assert.match(draft, /attachmentId/);
   assert.match(draft, /createRequestId/);
   assert.match(draft, /createSignature/);
+  assert.match(draft, /templateOverridden: boolean/);
+  assert.match(draft, /templateOverridden: Boolean\(draft\.templateOverridden\)/);
   assert.match(component, /loadWorkspaceCaptureDraft\(ownerUserId\)/);
   assert.match(component, /saveWorkspaceCaptureDraft\(ownerUserId/);
   assert.match(component, /clearWorkspaceCaptureDraft\(ownerUserId\)/);
@@ -103,11 +105,13 @@ test('the legacy administrative creation flow remains available but is not prima
   assert.match(screen, /testID="workspace-adaptive-fields"/);
 });
 
-test('minimal qualification keeps every one of the eight existing templates', () => {
-  assert.match(component, /WORKSPACE_TEMPLATES\.map/);
-  assert.match(component, /workspace-capture-template-\$\{value\}/);
-  assert.match(component, /useState<WorkspaceTemplate>\('assignment'\)/);
-  assert.doesNotMatch(component, /classif|orchestrat/i);
+test('AW-3 qualification exposes six families while the legacy manual flow keeps all eight templates', () => {
+  assert.match(component, /WORKSPACE_SHELL_KINDS\.map/);
+  assert.match(component, /workspace-orchestrator-family-\$\{shellKind\}/);
+  assert.match(component, /workspace-orchestrator-continue/);
+  assert.match(component, /workspace-orchestrator-modify/);
+  assert.match(screen, /WORKSPACE_TEMPLATES\.map/);
+  assert.match(screen, /workspace-template-\$\{value\}/);
 });
 
 test('a durable document can attach to an existing dossier with revision protection', () => {
@@ -149,7 +153,7 @@ test('capture uses honest named states without simulated progress percentages', 
   assert.match(component, /testID="workspace-capture-refresh-document"/);
   assert.match(component, /hydratedOwner\.current !== ownerUserId/);
   assert.match(component, /await saveWorkspaceCaptureDraft\(ownerUserId,[\s\S]*createRequestId: request\.requestId/);
-  assert.match(component, /disabled=\{!hydrated \|\| !title\.trim\(\) \|\| busy \|\| !captureReady\}/);
+  assert.match(component, /testID="workspace-orchestrator-continue"[\s\S]*disabled=\{!hydrated \|\| !title\.trim\(\) \|\| busy\}/);
 });
 
 test('existing workspace targets remain pageable instead of being truncated', () => {

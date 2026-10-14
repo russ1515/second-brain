@@ -58,6 +58,7 @@ export default function WorkspaceHomeScreen() {
   const documentSearchRef = useRef(documentSearch);
   const workspaceCursorRef = useRef<string | null>(page?.nextCursor ?? null);
   const documentCursorRef = useRef<string | null>(documentNextCursor);
+  const initialTemplateHint = explicitWorkspaceTemplateFromParam(params.type);
   const workspaceListEpoch = useRef(0);
   const documentListEpoch = useRef(0);
   listOwnerRef.current = user?.id;
@@ -238,6 +239,7 @@ export default function WorkspaceHomeScreen() {
         loadingMoreDocuments={loadingMoreDocuments}
         onLoadMoreDocuments={() => void loadMoreDocuments()}
         initialDocument={params.documentId ? { id: params.documentId, title: params.title, status: params.captureStatus } : undefined}
+        initialTemplateHint={initialTemplateHint}
       /> : null}
 
       <Button
@@ -304,10 +306,13 @@ export default function WorkspaceHomeScreen() {
 }
 
 function workspaceTemplateFromParam(value?: string): WorkspaceTemplate {
+  return explicitWorkspaceTemplateFromParam(value) ?? 'assignment';
+}
+
+function explicitWorkspaceTemplateFromParam(value?: string): WorkspaceTemplate | undefined {
   if (WORKSPACE_TEMPLATES.includes(value as WorkspaceTemplate)) return value as WorkspaceTemplate;
-  if (value === 'memoire' || value === 'dissertation') return value;
   if (value === 'rapport') return 'report';
-  return 'assignment';
+  return undefined;
 }
 
 function libraryPageUrl(search: string, cursor?: string): string {

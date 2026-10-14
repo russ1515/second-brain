@@ -18,6 +18,10 @@ export interface WorkspaceCaptureDraft {
   title: string;
   objective: string;
   template: WorkspaceTemplate;
+  /** True only after an explicit learner choice (or when preserving an
+   * ambiguous AW-1 create retry). The historical assignment default is not a
+   * classification signal. */
+  templateOverridden: boolean;
   initialContent: string;
   sources: WorkspaceSourceReference[];
   trackedDocumentId: string | null;
@@ -37,6 +41,10 @@ export async function loadWorkspaceCaptureDraft(userId: string): Promise<Workspa
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<WorkspaceCaptureDraft>;
     if (value.version !== VERSION) return null;
+    const createRequestId = typeof value.createRequestId === 'string' && value.createRequestId.trim()
+      ? value.createRequestId.trim().slice(0, 200)
+      : null;
+    const createSignature = normalizeCreateSignature(value.createSignature);
     return {
       version: VERSION,
       mode: isCaptureMode(value.mode) ? value.mode : null,
@@ -45,6 +53,14 @@ export async function loadWorkspaceCaptureDraft(userId: string): Promise<Workspa
       template: WORKSPACE_TEMPLATES.includes(value.template as WorkspaceTemplate)
         ? value.template as WorkspaceTemplate
         : 'assignment',
+      // A pre-AW-3 draft with an in-flight create must keep its exact template
+      // and request id. Reclassifying that uncertain retry could create a
+      // second dossier after a lost response.
+      templateOverridden: value.templateOverridden === true
+        || (!Object.prototype.hasOwnProperty.call(value, 'templateOverridden')
+          && WORKSPACE_TEMPLATES.includes(value.template as WorkspaceTemplate)
+          && value.template !== 'assignment')
+        || Boolean(createRequestId && createSignature),
       initialContent: typeof value.initialContent === 'string' ? value.initialContent.slice(0, 200_000) : '',
       sources: normalizeSources(value.sources),
       trackedDocumentId: typeof value.trackedDocumentId === 'string' && value.trackedDocumentId.trim()
@@ -53,10 +69,8 @@ export async function loadWorkspaceCaptureDraft(userId: string): Promise<Workspa
       attachmentId: typeof value.attachmentId === 'string' && value.attachmentId.trim()
         ? value.attachmentId.trim().slice(0, 200)
         : null,
-      createRequestId: typeof value.createRequestId === 'string' && value.createRequestId.trim()
-        ? value.createRequestId.trim().slice(0, 200)
-        : null,
-      createSignature: normalizeCreateSignature(value.createSignature),
+      createRequestId,
+      createSignature,
       updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : new Date(0).toISOString(),
     };
   } catch {
@@ -74,6 +88,7 @@ export async function saveWorkspaceCaptureDraft(
     title: draft.title.slice(0, 200),
     objective: draft.objective.slice(0, 2_000),
     template: draft.template,
+    templateOverridden: Boolean(draft.templateOverridden),
     initialContent: draft.initialContent.slice(0, 200_000),
     sources: normalizeSources(draft.sources),
     trackedDocumentId: draft.trackedDocumentId?.trim() || null,

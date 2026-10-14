@@ -76,5 +76,6 @@ export * from './teacher-policy';
 export * from './usage';
 export * from './ux-state';
 export * from './workspace-persistence';
+export * from './workspace-orchestrator';
 export * from './design-system';
 export * from './writing';
