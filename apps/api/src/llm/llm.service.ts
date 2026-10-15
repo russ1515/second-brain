@@ -189,7 +189,13 @@ export class LlmService {
     if (operation === 'tutor') {
       return { timeoutMs: 30_000, retries: 1, backoffMs: 500, maxOutputTokens: 1_500 };
     }
-    if (operation === 'research' || operation === 'workspace-assistant') {
+    if (operation === 'workspace-assistant') {
+      // AW-5 owns retry at the durable request-id boundary. A provider retry
+      // here could create a second billable attempt while the first request is
+      // still completing, so the learner must explicitly retry with a new id.
+      return { timeoutMs: 30_000, retries: 0, backoffMs: 0, maxOutputTokens: 2_000 };
+    }
+    if (operation === 'research') {
       return { timeoutMs: 30_000, retries: 1, backoffMs: 500, maxOutputTokens: 2_000 };
     }
     if (operation === 'deep-research') {

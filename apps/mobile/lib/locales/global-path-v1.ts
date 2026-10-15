@@ -50,6 +50,11 @@ const aliases: Record<string, string> = {
   'goals.setPrimary': 'home4.mainGoal',
   'goals.edit': 'profile.edit',
   'goals.save': 'workspace10.saveNow',
+  'workspaceProfessor.phase.CAPTURE': 'learn5.modality.capture',
+  'workspaceProfessor.phase.COMPREHENSION': 'onb.skill.comprehension',
+  'workspaceProfessor.phase.METHOD': 'coachp.method',
+  'workspaceProfessor.phase.WORK': 'workspace10.area.work',
+  'workspaceProfessor.phase.COACHING': 'coach.title',
 };
 
 for (const code of localeCodes) extendLocaleAliases(code, aliases);

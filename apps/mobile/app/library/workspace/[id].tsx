@@ -11,6 +11,10 @@ import {
   type PersistentWorkspace,
   type WorkspaceBrief,
   type WorkspacePlanItem,
+  type WorkspaceProfessorPhase,
+  type WorkspaceProfessorState,
+  type WorkspaceProfessorTransitionRequest,
+  type WorkspaceProfessorTransitionResponse,
   type WorkspaceSaveState,
   type WorkspaceSourceReference,
   type WorkspaceSourceState,
@@ -20,6 +24,7 @@ import { api, ApiError } from '../../../lib/client';
 import { useI18n, type TranslationKey } from '../../../lib/i18n';
 import { useTokens } from '../../../lib/design/theme';
 import { useResponsive } from '../../../lib/responsive';
+import { createClientRequestId } from '../../../lib/request-id';
 import { workspaceCompletionLabel, workspaceFieldLabel } from '../../../lib/workspace-paths';
 import { Alert, Badge, Button, Card, Input, Progress } from '../../../components/ds/core';
 import { Page } from '../../../components/ds/layout';
@@ -68,6 +73,7 @@ export default function AcademicWorkspaceScreen() {
   const leavingRef = useRef(false);
   const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const saveRef = useRef<(nextContent: string) => Promise<boolean>>(async () => true);
+  const transitionRequestRef = useRef<WorkspaceProfessorTransitionRequest | null>(null);
 
   const refreshSourceStates = async (workspaceId: string) => {
     try {
@@ -90,6 +96,7 @@ export default function AcademicWorkspaceScreen() {
       lastSavedRef.current = next.draft.content;
       revisionRef.current = next.autosaveRevision;
       loadedRef.current = true;
+      transitionRequestRef.current = null;
       conflictActiveRef.current = false;
       if (preserveConflictDraft) {
         setConflictDraft((current) => current ? { ...current, serverReloaded: true } : null);
@@ -298,6 +305,105 @@ export default function AcademicWorkspaceScreen() {
     setAssistantUndo(null);
   };
 
+  const applyProfessorState = (professor: WorkspaceProfessorState, _revision: number) => {
+    // Professor-only mutations do not own the draft revision. Keeping the
+    // editor token unchanged makes a draft changed in another tab surface as
+    // the existing 409 conflict instead of letting stale local text overwrite
+    // the canonical draft.
+    setWorkspace((current) => current ? {
+      ...current,
+      professor,
+      progress: {
+        ...current.progress,
+        workflow: {
+          version: 1,
+          brief: current.brief,
+          professor,
+        },
+      },
+    } : current);
+  };
+
+  const prepareProfessorAssist = async (): Promise<number | null> => {
+    const pendingDraft = contentRef.current;
+    if (pendingDraft !== lastSavedRef.current && !await save(pendingDraft)) return null;
+    return revisionRef.current;
+  };
+
+  const refreshProfessorState = async () => {
+    if (!workspace) return;
+    const next = await api<PersistentWorkspace>(`/workspaces/${workspace.id}`);
+    const draftStillCanonical = next.draft.content === lastSavedRef.current;
+    if (draftStillCanonical) {
+      revisionRef.current = next.autosaveRevision;
+    } else {
+      const localContent = contentRef.current;
+      conflictActiveRef.current = true;
+      setConflictDraft((current) => current
+        ? { ...current, content: localContent, copyState: 'idle' }
+        : { content: localContent, serverReloaded: false, copyState: 'idle' });
+      setShowConflictDraft(false);
+      setSaveState('error');
+    }
+    setWorkspace((current) => current ? {
+      ...current,
+      assistantHistory: next.assistantHistory,
+      professor: next.professor,
+      progress: {
+        ...current.progress,
+        workflow: {
+          version: 1,
+          brief: current.brief,
+          professor: next.professor,
+        },
+      },
+      ...(draftStillCanonical
+        ? { autosaveRevision: next.autosaveRevision, updatedAt: next.updatedAt }
+        : {}),
+    } : current);
+  };
+
+  const handleProfessorAssistFailure = async () => {
+    await refreshProfessorState();
+  };
+
+  const transitionProfessor = async (requestedPhase: WorkspaceProfessorPhase) => {
+    if (!workspace) return;
+    const pendingDraft = contentRef.current;
+    if (pendingDraft !== lastSavedRef.current && !await save(pendingDraft)) {
+      throw new Error(t('workspace10.save.error'));
+    }
+    const expectedPhase = workspace.professor.currentPhase;
+    const expectedRevision = revisionRef.current;
+    let request = transitionRequestRef.current;
+    if (
+      !request
+      || request.expectedPhase !== expectedPhase
+      || request.requestedPhase !== requestedPhase
+      || request.expectedRevision !== expectedRevision
+    ) {
+      request = {
+        requestId: createClientRequestId('workspace-transition'),
+        expectedPhase,
+        requestedPhase,
+        expectedRevision,
+      };
+      transitionRequestRef.current = request;
+    }
+    try {
+      const response = await api<WorkspaceProfessorTransitionResponse>(`/workspaces/${workspace.id}/transitions`, {
+        method: 'POST',
+        body: request,
+        requestId: request.requestId,
+      });
+      transitionRequestRef.current = null;
+      applyProfessorState(response.professor, response.revision);
+    } catch (caught) {
+      await refreshProfessorState().catch(() => undefined);
+      throw caught;
+    }
+  };
+
   const openSourcePicker = async () => {
     setShowSourcePicker(true);
     if (sourcePickerLoaded) return;
@@ -361,7 +467,13 @@ export default function AcademicWorkspaceScreen() {
       key={workspace.id}
       workspaceId={workspace.id}
       initialHistory={workspace.assistantHistory}
+      professor={workspace.professor}
+      completionChecks={completionChecks}
       selectedText={selectedText}
+      onBeforeAssist={prepareProfessorAssist}
+      onAssistFailure={handleProfessorAssistFailure}
+      onProfessorChange={applyProfessorState}
+      onRequestTransition={transitionProfessor}
       onApplyProposal={applyAssistantProposal}
       onUndo={undoAssistantInsertion}
       canUndo={assistantUndo !== null}

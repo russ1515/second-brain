@@ -268,7 +268,87 @@ export interface WorkspaceProgress {
   workflow?: {
     version: 1;
     brief: WorkspaceBrief;
+    /** AW-5 Professor cycle. Optional so pre-AW-5 dossiers remain readable
+     * without a data migration or a write during GET/resume. */
+    professor?: WorkspaceProfessorState;
   };
+}
+
+export const WORKSPACE_PROFESSOR_PHASES = [
+  'CAPTURE',
+  'COMPREHENSION',
+  'METHOD',
+  'WORK',
+  'COACHING',
+  'VERIFICATION',
+  'FINALIZATION',
+  'DECONSTRUCTION',
+] as const;
+export type WorkspaceProfessorPhase = (typeof WORKSPACE_PROFESSOR_PHASES)[number];
+
+export interface WorkspaceProfessorTransitionRecord {
+  id: string;
+  requestId: string;
+  from: WorkspaceProfessorPhase;
+  to: WorkspaceProfessorPhase;
+  createdAt: string;
+  /** Workspace optimistic revision produced by this transition. */
+  revision: number;
+}
+
+export interface WorkspaceProfessorEvidence {
+  id: string;
+  phase: WorkspaceProfessorPhase;
+  /** Prevents evidence from an earlier visit satisfying a later visit. */
+  phaseSequence: number;
+  assistantReplyId: string;
+  action: WorkspaceAssistAction;
+  createdAt: string;
+  draftRevision: number;
+}
+
+export type WorkspaceProfessorAssistOperationStatus = 'pending' | 'completed' | 'failed';
+
+/** Bounded durable journal for paid Professor turns. A retained pending/failed
+ * request never silently re-calls the provider with the same id. */
+export interface WorkspaceProfessorAssistOperation {
+  requestId: string;
+  requestFingerprint: string;
+  phase: WorkspaceProfessorPhase;
+  phaseSequence: number;
+  status: WorkspaceProfessorAssistOperationStatus;
+  createdAt: string;
+  updatedAt: string;
+  reservedRevision: number;
+  replyId?: string;
+  failureCode?: 'provider' | 'persistence';
+}
+
+export interface WorkspaceProfessorState {
+  version: 1;
+  currentPhase: WorkspaceProfessorPhase;
+  phaseSequence: number;
+  phaseEnteredRevision: number;
+  /** Server-computed SHA-256 of the draft at phase entry. */
+  phaseEnteredDraftFingerprint: string;
+  transitions: WorkspaceProfessorTransitionRecord[];
+  evidence: WorkspaceProfessorEvidence[];
+  assistOperations: WorkspaceProfessorAssistOperation[];
+  /** Read-time legacy fallback only; persisted AW-5 states omit this flag. */
+  legacyFallback?: boolean;
+}
+
+export interface WorkspaceProfessorTransitionRequest {
+  /** Stable id for one logical transition; never an auth/session token. */
+  requestId: string;
+  expectedPhase: WorkspaceProfessorPhase;
+  requestedPhase: WorkspaceProfessorPhase;
+  expectedRevision: number;
+}
+
+export interface WorkspaceProfessorTransitionResponse {
+  professor: WorkspaceProfessorState;
+  revision: number;
 }
 
 export interface WorkspaceCompletionCheck {
@@ -284,6 +364,11 @@ export interface WorkspaceAssistantHistoryEntry extends WorkspaceMessage {
   evidenceStatus?: 'grounded' | 'none' | 'not-requested';
   /** Citations are stored in the existing JSON history; no schema migration. */
   citations?: WorkspaceSourceCitation[];
+  /** AW-5 retry identity and state context; safe metadata, not credentials. */
+  requestId?: string;
+  requestFingerprint?: string;
+  professorPhase?: WorkspaceProfessorPhase;
+  professorPhaseSequence?: number;
 }
 
 export interface PersistentWorkspace {
@@ -302,6 +387,7 @@ export interface PersistentWorkspace {
   assistantHistory: WorkspaceAssistantHistoryEntry[];
   brief: WorkspaceBrief;
   completionChecks: WorkspaceCompletionCheck[];
+  professor: WorkspaceProfessorState;
   progress: WorkspaceProgress;
   autosaveRevision: number;
   experienceSessionId: string | null;
@@ -379,6 +465,11 @@ export const WORKSPACE_ASSIST_ACTIONS = [
 export type WorkspaceAssistAction = (typeof WORKSPACE_ASSIST_ACTIONS)[number];
 
 export interface PersistentWorkspaceAssistRequest {
+  /** Stable id for one logical paid turn. Current clients must provide it. */
+  requestId?: string;
+  /** Optimistic guards used by AW-5 clients. Optional for legacy clients. */
+  expectedPhase?: WorkspaceProfessorPhase;
+  expectedRevision?: number;
   action: WorkspaceAssistAction;
   message?: string;
   selectedText?: string;
@@ -388,6 +479,44 @@ export interface PersistentWorkspaceAssistResponse {
   reply: WorkspaceAssistantHistoryEntry;
   citations: WorkspaceSourceCitation[];
   sources: WorkspaceSourceState[];
+  professor: WorkspaceProfessorState;
+  revision: number;
+}
+
+export function initialWorkspaceProfessorState(
+  revision = 0,
+  draftFingerprint = '',
+): WorkspaceProfessorState {
+  return {
+    version: 1,
+    currentPhase: 'CAPTURE',
+    phaseSequence: 0,
+    phaseEnteredRevision: revision,
+    phaseEnteredDraftFingerprint: draftFingerprint,
+    transitions: [],
+    evidence: [],
+    assistOperations: [],
+  };
+}
+
+/** Deterministic, read-only fallback for pre-AW-5 dossiers. Existing authored
+ * content resumes in WORK; an empty dossier resumes in CAPTURE. */
+export function legacyWorkspaceProfessorState(input: {
+  draftContent: string;
+  revision: number;
+  draftFingerprint?: string;
+}): WorkspaceProfessorState {
+  return {
+    version: 1,
+    currentPhase: input.draftContent.trim() ? 'WORK' : 'CAPTURE',
+    phaseSequence: 0,
+    phaseEnteredRevision: input.revision,
+    phaseEnteredDraftFingerprint: input.draftFingerprint ?? '',
+    transitions: [],
+    evidence: [],
+    assistOperations: [],
+    legacyFallback: true,
+  };
 }
 
 export type WorkspaceSaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error' | 'offline';

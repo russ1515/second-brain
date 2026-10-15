@@ -5,6 +5,7 @@ import type {
   PersistentWorkspaceAssistResponse,
   WorkspaceAutosaveResult,
   WorkspacePage,
+  WorkspaceProfessorTransitionResponse,
   WorkspaceSourceQueryResponse,
   WorkspaceSourceStatesResponse,
 } from '@second-brain/shared';
@@ -17,6 +18,7 @@ import {
   UpdateWorkspaceDto,
   WorkspaceAssistDto,
   WorkspaceAutosaveDto,
+  WorkspaceProfessorTransitionDto,
   WorkspaceSourceQueryDto,
 } from './dto/workspace.dto';
 
@@ -88,5 +90,15 @@ export class AcademicWorkspaceController {
     @Body() dto: WorkspaceAssistDto,
   ): Promise<PersistentWorkspaceAssistResponse> {
     return this.workspaces.assist(user.userId, id, dto);
+  }
+
+  @Throttle({ default: { limit: 40, ttl: 60_000 } })
+  @Post(':id/transitions')
+  transition(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: WorkspaceProfessorTransitionDto,
+  ): Promise<WorkspaceProfessorTransitionResponse> {
+    return this.workspaces.transition(user.userId, id, dto);
   }
 }

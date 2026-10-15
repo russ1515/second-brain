@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Linking, ScrollView, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import {
@@ -7,25 +7,41 @@ import {
   type PersistentWorkspaceAssistResponse,
   type WorkspaceAssistAction,
   type WorkspaceAssistantHistoryEntry,
+  type WorkspaceCompletionCheck,
+  type WorkspaceProfessorPhase,
+  type WorkspaceProfessorState,
   type WorkspaceSourceCitation,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
-import { Alert, Button, Card, Input } from '../ds/core';
+import { createClientRequestId } from '../../lib/request-id';
+import { Alert, Badge, Button, Card, Input } from '../ds/core';
 import { SourceCitation, SourcePreview, type SourceKind } from '../ds/sources';
 
 export function WorkspaceAssistant({
   workspaceId,
   initialHistory,
+  professor,
+  completionChecks,
   selectedText,
+  onBeforeAssist,
+  onAssistFailure,
+  onProfessorChange,
+  onRequestTransition,
   onApplyProposal,
   onUndo,
   canUndo,
 }: {
   workspaceId: string;
   initialHistory: WorkspaceAssistantHistoryEntry[];
+  professor: WorkspaceProfessorState;
+  completionChecks: WorkspaceCompletionCheck[];
   selectedText: string;
+  onBeforeAssist: () => Promise<number | null>;
+  onAssistFailure: () => Promise<void>;
+  onProfessorChange: (professor: WorkspaceProfessorState, revision: number) => void;
+  onRequestTransition: (requestedPhase: WorkspaceProfessorPhase) => Promise<void>;
   onApplyProposal: (proposal: string, mode: 'insert' | 'replace') => void;
   onUndo: () => void;
   canUndo: boolean;
@@ -39,40 +55,137 @@ export function WorkspaceAssistant({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRequest, setLastRequest] = useState<PersistentWorkspaceAssistRequest | null>(null);
+  const [failedRequest, setFailedRequest] = useState<PersistentWorkspaceAssistRequest | null>(null);
+  const [transitioningTo, setTransitioningTo] = useState<WorkspaceProfessorPhase | null>(null);
   const [preview, setPreview] = useState<WorkspaceSourceCitation | null>(null);
   const latestProposal = [...history].reverse().find((entry) => entry.role === 'assistant')?.content ?? null;
+  const canApplyProposal = professor.currentPhase === 'WORK' || professor.currentPhase === 'COACHING';
+  const requiredChecksReady = completionChecks.filter((check) => check.required).every((check) => check.passed);
+  const mainTransition = nextProfessorPhase(professor.currentPhase, requiredChecksReady);
+
+  useEffect(() => {
+    setHistory(initialHistory);
+  }, [initialHistory]);
+
+  useEffect(() => {
+    setError(null);
+  }, [professor.currentPhase, professor.phaseSequence]);
 
   const send = async (requestOverride?: PersistentWorkspaceAssistRequest) => {
-    const request: PersistentWorkspaceAssistRequest = requestOverride ?? {
+    if (busy) return;
+    const baseRequest: PersistentWorkspaceAssistRequest = requestOverride ?? {
       action,
       ...(message.trim() ? { message: message.trim() } : {}),
       ...(selectedText.trim() ? { selectedText: selectedText.trim() } : {}),
     };
-    if (!request.message?.trim() && !request.selectedText?.trim()) return;
-    const userEntry: WorkspaceAssistantHistoryEntry = {
-      id: `local-${Date.now()}`,
-      role: 'user',
-      content: request.message?.trim() || request.selectedText?.trim() || '',
-      createdAt: new Date().toISOString(),
-    };
-    setHistory((current) => [...current, userEntry]);
+    if (!baseRequest.message?.trim() && !baseRequest.selectedText?.trim()) return;
     setBusy(true);
     setError(null);
+    setFailedRequest(null);
+    let request: PersistentWorkspaceAssistRequest | null = null;
+    let userEntry: WorkspaceAssistantHistoryEntry | null = null;
     try {
-      const response = await api<PersistentWorkspaceAssistResponse>(`/workspaces/${workspaceId}/assistant`, { method: 'POST', body: request });
-      setHistory((current) => [...current, response.reply].slice(-30));
+      const preparedRevision = requestOverride?.expectedRevision ?? await onBeforeAssist();
+      if (preparedRevision === null) throw new Error(t('workspace10.save.error'));
+      request = {
+        ...baseRequest,
+        requestId: baseRequest.requestId ?? createClientRequestId('workspace-assist'),
+        expectedPhase: baseRequest.expectedPhase ?? professor.currentPhase,
+        expectedRevision: preparedRevision,
+      };
+      const logicalRequestId = request.requestId!;
+      userEntry = {
+        id: `local-${logicalRequestId}`,
+        role: 'user',
+        content: request.message?.trim() || request.selectedText?.trim() || '',
+        createdAt: new Date().toISOString(),
+        requestId: logicalRequestId,
+        professorPhase: request.expectedPhase,
+      };
+      setHistory((current) => current.some((entry) => (
+        entry.role === 'user'
+        && (entry.id === userEntry!.id || entry.requestId === logicalRequestId)
+      ))
+        ? current
+        : [...current, userEntry!]);
+      const response = await api<PersistentWorkspaceAssistResponse>(`/workspaces/${workspaceId}/assistant`, {
+        method: 'POST',
+        body: request,
+        requestId: request.requestId,
+      });
+      setHistory((current) => (
+        current.some((entry) => (
+          entry.role === 'assistant'
+          && (
+            entry.id === response.reply.id
+            || Boolean(response.reply.requestId && entry.requestId === response.reply.requestId)
+          )
+        ))
+          ? current
+          : [...current, response.reply].slice(-30)
+      ));
+      onProfessorChange(response.professor, response.revision);
       setLastRequest(request);
+      setFailedRequest(null);
       setMessage('');
     } catch (caught) {
-      setHistory((current) => current.filter((entry) => entry.id !== userEntry.id));
+      if (userEntry) setHistory((current) => current.filter((entry) => entry.id !== userEntry!.id));
+      if (request) setFailedRequest(request);
       setError((caught as Error).message);
+      await onAssistFailure().catch(() => undefined);
     } finally {
       setBusy(false);
     }
   };
 
+  const transition = async (requestedPhase: WorkspaceProfessorPhase) => {
+    if (transitioningTo) return;
+    setTransitioningTo(requestedPhase);
+    setError(null);
+    try {
+      await onRequestTransition(requestedPhase);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setTransitioningTo(null);
+    }
+  };
+
   return <Card style={{ gap: spacing.md }} testID="workspace-assistant">
-    <View style={{ gap: spacing.xs }}><Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('workspace10.assistant')}</Text><Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('workspace10.assistantDetail')}</Text></View>
+    <View style={{ gap: spacing.xs }}>
+      <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('ai.professor')}</Text>
+      <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('workspace10.assistantDetail')}</Text>
+      <View testID="workspace-professor-phase" style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs }}>
+        <Badge tone="primary" label={t(`workspaceProfessor.phase.${professor.currentPhase}` as TranslationKey)} />
+        {mainTransition ? <Button
+          testID="workspace-professor-advance"
+          size="sm"
+          variant="secondary"
+          label={`${t('onb.continue')} · ${t(`workspaceProfessor.phase.${mainTransition}` as TranslationKey)}`}
+          loading={transitioningTo === mainTransition}
+          disabled={Boolean(transitioningTo)}
+          onPress={() => void transition(mainTransition)}
+        /> : null}
+        {professor.currentPhase === 'WORK' ? <Button
+          testID="workspace-professor-coaching"
+          size="sm"
+          variant="ghost"
+          label={t('coach.title')}
+          loading={transitioningTo === 'COACHING'}
+          disabled={Boolean(transitioningTo)}
+          onPress={() => void transition('COACHING')}
+        /> : null}
+        {professor.currentPhase === 'FINALIZATION' ? <Button
+          testID="workspace-professor-back-to-work"
+          size="sm"
+          variant="ghost"
+          label={t('workspace10.area.work')}
+          loading={transitioningTo === 'WORK'}
+          disabled={Boolean(transitioningTo)}
+          onPress={() => void transition('WORK')}
+        /> : null}
+      </View>
+    </View>
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.xs }}>{WORKSPACE_ASSIST_ACTIONS.map((value) => <Button key={value} size="sm" variant={action === value ? 'ai' : 'secondary'} label={t(`workspace10.assist.${value}` as TranslationKey)} onPress={() => setAction(value)} />)}</ScrollView>
     {selectedText ? <Alert tone="info" title={t('workspace10.selection')} detail={selectedText.slice(0, 180)} /> : null}
     <ScrollView
@@ -103,18 +216,71 @@ export function WorkspaceAssistant({
       onOpen={citationCanOpen(preview) ? () => void openCitation(preview, router) : undefined}
       onClose={() => setPreview(null)}
     /> : null}
-    {latestProposal ? (
+    {latestProposal && canApplyProposal ? (
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
         <Button size="sm" variant="secondary" label={t('globalPath.insertProposal')} onPress={() => onApplyProposal(latestProposal, 'insert')} />
         {selectedText ? <Button size="sm" variant="secondary" label={t('globalPath.replaceSelection')} onPress={() => onApplyProposal(latestProposal, 'replace')} /> : null}
-        {lastRequest ? <Button size="sm" variant="ghost" label={t('globalPath.anotherProposal')} loading={busy} onPress={() => void send(lastRequest)} /> : null}
+        {lastRequest ? <Button size="sm" variant="ghost" label={t('globalPath.anotherProposal')} loading={busy} onPress={() => void send({
+          action: lastRequest.action,
+          ...(lastRequest.message ? { message: lastRequest.message } : {}),
+          ...(lastRequest.selectedText ? { selectedText: lastRequest.selectedText } : {}),
+        })} /> : null}
         {canUndo ? <Button size="sm" variant="ghost" label={t('globalPath.undoInsertion')} onPress={onUndo} /> : null}
       </View>
     ) : null}
     {error ? <Alert tone="error" title={t('state.error')} detail={error} /> : null}
+    {failedRequest ? <Button
+      testID="workspace-professor-retry"
+      size="sm"
+      variant="secondary"
+      label={t('auth.retry')}
+      loading={busy}
+      onPress={() => {
+        const operation = professor.assistOperations.find((item) => item.requestId === failedRequest.requestId);
+        if (operation?.status === 'completed') {
+          setFailedRequest(null);
+          setError(null);
+          return;
+        }
+        if (operation?.status === 'pending') {
+          void onAssistFailure();
+          return;
+        }
+        if (operation?.status === 'failed') {
+          void send({
+            action: failedRequest.action,
+            ...(failedRequest.message ? { message: failedRequest.message } : {}),
+            ...(failedRequest.selectedText ? { selectedText: failedRequest.selectedText } : {}),
+          });
+          return;
+        }
+        void send({
+          requestId: failedRequest.requestId,
+          action: failedRequest.action,
+          ...(failedRequest.message ? { message: failedRequest.message } : {}),
+          ...(failedRequest.selectedText ? { selectedText: failedRequest.selectedText } : {}),
+        });
+      }}
+    /> : null}
     <Input label={t('workspace10.assistantQuestion')} value={message} onChangeText={setMessage} placeholder={t('workspace10.assistantPlaceholder')} multiline />
     <Button label={t('workspace10.assistantSend')} variant="ai" loading={busy} disabled={!message.trim() && !selectedText.trim()} onPress={() => void send()} />
   </Card>;
+}
+
+function nextProfessorPhase(
+  current: WorkspaceProfessorPhase,
+  requiredChecksReady: boolean,
+): WorkspaceProfessorPhase | null {
+  switch (current) {
+    case 'CAPTURE': return 'COMPREHENSION';
+    case 'COMPREHENSION': return 'METHOD';
+    case 'METHOD': return 'WORK';
+    case 'WORK': return 'VERIFICATION';
+    case 'COACHING': return 'WORK';
+    case 'VERIFICATION': return requiredChecksReady ? 'FINALIZATION' : 'WORK';
+    case 'FINALIZATION': return 'DECONSTRUCTION';
+    case 'DECONSTRUCTION': return null;
+  }
 }
 
 function citationKind(citation: WorkspaceSourceCitation): SourceKind {

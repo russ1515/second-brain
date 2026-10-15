@@ -16,6 +16,7 @@ import {
 import type {
   CreateWorkspaceRequest,
   PersistentWorkspaceAssistRequest,
+  WorkspaceProfessorTransitionRequest,
   UpdateWorkspaceRequest,
   WorkspaceAutosaveRequest,
   WorkspacePlanItem,
@@ -25,6 +26,7 @@ import type {
 } from '@second-brain/shared';
 import {
   WORKSPACE_ASSIST_ACTIONS,
+  WORKSPACE_PROFESSOR_PHASES,
   WORKSPACE_TEMPLATES,
 } from '@second-brain/shared';
 
@@ -101,6 +103,15 @@ export class WorkspaceAutosaveDto implements WorkspaceAutosaveRequest {
 }
 
 export class WorkspaceAssistDto implements PersistentWorkspaceAssistRequest {
+  @IsOptional() @IsString() @MinLength(8) @MaxLength(128) @Matches(/^[A-Za-z0-9_-]+$/)
+  requestId?: string;
+
+  @IsOptional() @IsIn(WORKSPACE_PROFESSOR_PHASES)
+  expectedPhase?: PersistentWorkspaceAssistRequest['expectedPhase'];
+
+  @IsOptional() @IsInt() @Min(0)
+  expectedRevision?: number;
+
   @IsIn(WORKSPACE_ASSIST_ACTIONS)
   action!: PersistentWorkspaceAssistRequest['action'];
 
@@ -109,6 +120,20 @@ export class WorkspaceAssistDto implements PersistentWorkspaceAssistRequest {
 
   @IsOptional() @IsString() @MaxLength(8_000)
   selectedText?: string;
+}
+
+export class WorkspaceProfessorTransitionDto implements WorkspaceProfessorTransitionRequest {
+  @IsString() @MinLength(8) @MaxLength(128) @Matches(/^[A-Za-z0-9_-]+$/)
+  requestId!: string;
+
+  @IsIn(WORKSPACE_PROFESSOR_PHASES)
+  expectedPhase!: WorkspaceProfessorTransitionRequest['expectedPhase'];
+
+  @IsIn(WORKSPACE_PROFESSOR_PHASES)
+  requestedPhase!: WorkspaceProfessorTransitionRequest['requestedPhase'];
+
+  @IsInt() @Min(0)
+  expectedRevision!: number;
 }
 
 export class WorkspaceSourceQueryDto implements WorkspaceSourceQueryRequest {

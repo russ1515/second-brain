@@ -5,6 +5,7 @@ require('reflect-metadata');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { AcademicWorkspaceService } = require('../dist/workspaces/academic-workspace.service.js');
+const { LlmService } = require('../dist/llm/llm.service.js');
 const {
   WORKSPACE_TEMPLATES,
 } = require('@second-brain/shared');
@@ -51,6 +52,10 @@ function createHarness() {
     llmCalls: 0,
     llmMessages: [],
     llmResponse: 'Technical assistant response.',
+    llmError: null,
+    llmBarrier: null,
+    sourceCalls: 0,
+    sourceError: null,
     sourceResolution: null,
   };
   let transactionTail = Promise.resolve();
@@ -166,22 +171,28 @@ function createHarness() {
     generate: async (messages) => {
       state.llmCalls += 1;
       state.llmMessages.push(structuredClone(messages));
+      if (state.llmBarrier) await state.llmBarrier;
+      if (state.llmError) throw state.llmError;
       return { text: state.llmResponse };
     },
   };
   const sourceEngine = {
-    resolve: async (_userId, sources, request) => state.sourceResolution ?? ({
-      query: request.query,
-      usedContext: false,
-      citations: [],
-      sources: sources.map((source) => ({
-        kind: source.kind,
-        id: source.id,
-        title: source.id,
-        availability: 'available',
-      })),
-      context: '',
-    }),
+    resolve: async (_userId, sources, request) => {
+      state.sourceCalls += 1;
+      if (state.sourceError) throw state.sourceError;
+      return state.sourceResolution ?? ({
+        query: request.query,
+        usedContext: false,
+        citations: [],
+        sources: sources.map((source) => ({
+          kind: source.kind,
+          id: source.id,
+          title: source.id,
+          availability: 'available',
+        })),
+        context: '',
+      });
+    },
     query: async () => ({ query: '', usedContext: false, citations: [], sources: [], context: '' }),
     validateReply: (content, citations) => {
       const available = new Map(citations.map((citation) => [citation.citationLabel, citation]));
@@ -723,4 +734,443 @@ test('all eight existing templates keep distinct persisted plans and resumable s
   assert.equal(signatures.size, WORKSPACE_TEMPLATES.length);
   assert.equal(state.workspaces.length, WORKSPACE_TEMPLATES.length);
   assert.equal(state.sessions.length, WORKSPACE_TEMPLATES.length);
+});
+
+test('AW-5 server owns the complete Professor cycle and rejects skipped phases', async () => {
+  const { service } = createHarness();
+  let workspace = await service.create('owner', request({
+    requestId: 'workspace-aw5-cycle-create',
+  }));
+  let revision = workspace.autosaveRevision;
+  assert.equal(workspace.professor.currentPhase, 'CAPTURE');
+
+  await assert.rejects(
+    service.transition('owner', workspace.id, {
+      requestId: 'transition-skip-capture',
+      expectedPhase: 'CAPTURE',
+      requestedPhase: 'WORK',
+      expectedRevision: revision,
+    }),
+    (error) => httpStatus(error) === 400,
+  );
+  await assert.rejects(
+    service.transition('owner', workspace.id, {
+      requestId: 'transition-capture-finalization-forbidden',
+      expectedPhase: 'CAPTURE',
+      requestedPhase: 'FINALIZATION',
+      expectedRevision: revision,
+    }),
+    (error) => httpStatus(error) === 400,
+  );
+  await assert.rejects(
+    service.transition('owner', workspace.id, {
+      requestId: 'transition-capture-completed-forbidden',
+      expectedPhase: 'CAPTURE',
+      requestedPhase: 'COMPLETED',
+      expectedRevision: revision,
+    }),
+    (error) => httpStatus(error) === 400,
+  );
+
+  let moved = await service.transition('owner', workspace.id, {
+    requestId: 'transition-capture-comprehension',
+    expectedPhase: 'CAPTURE', requestedPhase: 'COMPREHENSION', expectedRevision: revision,
+  });
+  revision = moved.revision;
+  let turn = await service.assist('owner', workspace.id, {
+    requestId: 'aw5-comprehension-turn', expectedPhase: 'COMPREHENSION', expectedRevision: revision,
+    action: 'explain', message: 'Reformulate the assignment and confirm the constraints.',
+  });
+  revision = turn.revision;
+  moved = await service.transition('owner', workspace.id, {
+    requestId: 'transition-comprehension-method',
+    expectedPhase: 'COMPREHENSION', requestedPhase: 'METHOD', expectedRevision: revision,
+  });
+  revision = moved.revision;
+  await assert.rejects(
+    service.transition('owner', workspace.id, {
+      requestId: 'transition-method-deconstruction-forbidden',
+      expectedPhase: 'METHOD', requestedPhase: 'DECONSTRUCTION', expectedRevision: revision,
+    }),
+    (error) => httpStatus(error) === 400,
+  );
+  turn = await service.assist('owner', workspace.id, {
+    requestId: 'aw5-method-turn', expectedPhase: 'METHOD', expectedRevision: revision,
+    action: 'structure', message: 'Help me choose the method for this assignment.',
+  });
+  revision = turn.revision;
+  moved = await service.transition('owner', workspace.id, {
+    requestId: 'transition-method-work',
+    expectedPhase: 'METHOD', requestedPhase: 'WORK', expectedRevision: revision,
+  });
+  revision = moved.revision;
+  moved = await service.transition('owner', workspace.id, {
+    requestId: 'transition-work-coaching',
+    expectedPhase: 'WORK', requestedPhase: 'COACHING', expectedRevision: revision,
+  });
+  revision = moved.revision;
+  turn = await service.assist('owner', workspace.id, {
+    requestId: 'aw5-coaching-turn', expectedPhase: 'COACHING', expectedRevision: revision,
+    action: 'challenge', message: 'I am blocked on the opening argument.',
+  });
+  revision = turn.revision;
+  moved = await service.transition('owner', workspace.id, {
+    requestId: 'transition-coaching-work',
+    expectedPhase: 'COACHING', requestedPhase: 'WORK', expectedRevision: revision,
+  });
+  revision = moved.revision;
+  const saved = await service.autosave('owner', workspace.id, {
+    workspaceId: workspace.id,
+    expectedRevision: revision,
+    draft: { format: 'markdown', content: 'Learner-authored draft for verification.' },
+  });
+  revision = saved.revision;
+  moved = await service.transition('owner', workspace.id, {
+    requestId: 'transition-work-verification',
+    expectedPhase: 'WORK', requestedPhase: 'VERIFICATION', expectedRevision: revision,
+  });
+  revision = moved.revision;
+  turn = await service.assist('owner', workspace.id, {
+    requestId: 'aw5-verification-turn', expectedPhase: 'VERIFICATION', expectedRevision: revision,
+    action: 'check-coherence', message: 'Verify my draft against the real brief.',
+  });
+  revision = turn.revision;
+
+  workspace = await service.get('owner', workspace.id);
+  workspace = await service.update('owner', workspace.id, {
+    expectedRevision: revision,
+    plan: workspace.plan.map((item) => ({ ...item, completed: true })),
+  });
+  revision = workspace.autosaveRevision;
+  moved = await service.transition('owner', workspace.id, {
+    requestId: 'transition-verification-finalization',
+    expectedPhase: 'VERIFICATION', requestedPhase: 'FINALIZATION', expectedRevision: revision,
+  });
+  revision = moved.revision;
+  turn = await service.assist('owner', workspace.id, {
+    requestId: 'aw5-finalization-turn', expectedPhase: 'FINALIZATION', expectedRevision: revision,
+    action: 'suggest', message: 'Identify only the remaining real final-review points.',
+  });
+  revision = turn.revision;
+
+  await assert.rejects(
+    service.transition('owner', workspace.id, {
+      requestId: 'transition-finalization-work-without-edit',
+      expectedPhase: 'FINALIZATION', requestedPhase: 'WORK', expectedRevision: revision,
+    }),
+    (error) => httpStatus(error) === 400,
+  );
+  const edited = await service.autosave('owner', workspace.id, {
+    workspaceId: workspace.id,
+    expectedRevision: revision,
+    draft: { format: 'markdown', content: 'Learner-authored draft with a real final edit.' },
+  });
+  revision = edited.revision;
+  moved = await service.transition('owner', workspace.id, {
+    requestId: 'transition-finalization-work-after-edit',
+    expectedPhase: 'FINALIZATION', requestedPhase: 'WORK', expectedRevision: revision,
+  });
+  revision = moved.revision;
+  moved = await service.transition('owner', workspace.id, {
+    requestId: 'transition-work-verification-second',
+    expectedPhase: 'WORK', requestedPhase: 'VERIFICATION', expectedRevision: revision,
+  });
+  revision = moved.revision;
+  turn = await service.assist('owner', workspace.id, {
+    requestId: 'aw5-verification-second-turn', expectedPhase: 'VERIFICATION', expectedRevision: revision,
+    action: 'check-coherence', message: 'Verify the edited version.',
+  });
+  revision = turn.revision;
+  moved = await service.transition('owner', workspace.id, {
+    requestId: 'transition-verification-finalization-second',
+    expectedPhase: 'VERIFICATION', requestedPhase: 'FINALIZATION', expectedRevision: revision,
+  });
+  revision = moved.revision;
+  turn = await service.assist('owner', workspace.id, {
+    requestId: 'aw5-finalization-second-turn', expectedPhase: 'FINALIZATION', expectedRevision: revision,
+    action: 'suggest', message: 'Confirm the remaining final-review points.',
+  });
+  revision = turn.revision;
+  moved = await service.transition('owner', workspace.id, {
+    requestId: 'transition-finalization-deconstruction',
+    expectedPhase: 'FINALIZATION', requestedPhase: 'DECONSTRUCTION', expectedRevision: revision,
+  });
+  assert.equal(moved.professor.currentPhase, 'DECONSTRUCTION');
+  assert.equal(moved.professor.transitions.length, 11);
+  assert.equal((await service.get('owner', workspace.id)).professor.currentPhase, 'DECONSTRUCTION');
+  await assert.rejects(
+    service.transition('intruder', workspace.id, {
+      requestId: 'transition-intruder-rejected',
+      expectedPhase: 'DECONSTRUCTION', requestedPhase: 'WORK', expectedRevision: moved.revision,
+    }),
+    (error) => httpStatus(error) === 404,
+  );
+});
+
+test('AW-5 transition retries converge once while competing request ids conflict', async () => {
+  const { service } = createHarness();
+  const idempotentWorkspace = await service.create('owner', request({
+    requestId: 'workspace-aw5-transition-idempotency',
+  }));
+  const transition = {
+    requestId: 'aw5-transition-same-logical-request',
+    expectedPhase: 'CAPTURE', requestedPhase: 'COMPREHENSION', expectedRevision: 0,
+  };
+  const [first, retry] = await Promise.all([
+    service.transition('owner', idempotentWorkspace.id, transition),
+    service.transition('owner', idempotentWorkspace.id, transition),
+  ]);
+  assert.equal(first.professor.currentPhase, 'COMPREHENSION');
+  assert.equal(retry.professor.currentPhase, 'COMPREHENSION');
+  assert.equal((await service.get('owner', idempotentWorkspace.id)).professor.transitions.length, 1);
+  await assert.rejects(
+    service.transition('owner', idempotentWorkspace.id, { ...transition, expectedRevision: 1 }),
+    (error) => httpStatus(error) === 409,
+  );
+
+  const competingWorkspace = await service.create('owner', request({
+    requestId: 'workspace-aw5-transition-competing',
+  }));
+  const outcomes = await Promise.allSettled([
+    service.transition('owner', competingWorkspace.id, {
+      requestId: 'aw5-transition-winner-a',
+      expectedPhase: 'CAPTURE', requestedPhase: 'COMPREHENSION', expectedRevision: 0,
+    }),
+    service.transition('owner', competingWorkspace.id, {
+      requestId: 'aw5-transition-winner-b',
+      expectedPhase: 'CAPTURE', requestedPhase: 'COMPREHENSION', expectedRevision: 0,
+    }),
+  ]);
+  assert.equal(outcomes.filter((item) => item.status === 'fulfilled').length, 1);
+  assert.equal(outcomes.filter((item) => item.status === 'rejected' && httpStatus(item.reason) === 409).length, 1);
+  assert.equal((await service.get('owner', competingWorkspace.id)).professor.transitions.length, 1);
+});
+
+test('AW-5 assist reservation is merge-safe with autosave and replays without retrieval or double billing', async () => {
+  const { service, state } = createHarness();
+  const workspace = await service.create('owner', request({ requestId: 'workspace-aw5-race-create' }));
+  let release;
+  state.llmBarrier = new Promise((resolve) => { release = resolve; });
+  const first = service.assist('owner', workspace.id, {
+    requestId: 'aw5-race-professor-turn', expectedPhase: 'CAPTURE', expectedRevision: 0,
+    action: 'explain', message: 'Clarify the task while I keep editing.',
+  });
+  while (state.llmCalls === 0) await new Promise((resolve) => setImmediate(resolve));
+
+  await assert.rejects(
+    service.assist('owner', workspace.id, {
+      requestId: 'aw5-race-professor-turn', expectedPhase: 'CAPTURE', expectedRevision: 0,
+      action: 'explain', message: 'Clarify the task while I keep editing.',
+    }),
+    (error) => httpStatus(error) === 409,
+  );
+  assert.equal(state.llmCalls, 1);
+
+  const saved = await service.autosave('owner', workspace.id, {
+    workspaceId: workspace.id,
+    expectedRevision: 0,
+    draft: { format: 'markdown', content: 'A newer learner edit made during the Professor turn.' },
+  });
+  assert.equal(saved.revision, 1);
+  release();
+  const response = await first;
+  state.llmBarrier = null;
+  // Professor state/history is merge-only metadata and must not consume the
+  // draft autosave revision. This preserves the editor conflict token while
+  // still synchronizing the ExperienceSession below.
+  assert.equal(response.revision, 1);
+  assert.equal(state.llmCalls, 1);
+  const persisted = await service.get('owner', workspace.id);
+  assert.equal(persisted.draft.content, 'A newer learner edit made during the Professor turn.');
+  assert.deepEqual(persisted.assistantHistory.map((entry) => entry.role), ['user', 'assistant']);
+  assert.equal(persisted.professor.evidence.at(-1).draftRevision, 0);
+  assert.equal(state.sessions[0].version, 3);
+
+  const sourceCalls = state.sourceCalls;
+  state.sourceError = new Error('source deleted after completed turn');
+  const replay = await service.assist('owner', workspace.id, {
+    requestId: 'aw5-race-professor-turn', expectedPhase: 'CAPTURE', expectedRevision: 0,
+    action: 'explain', message: 'Clarify the task while I keep editing.',
+  });
+  assert.equal(replay.reply.id, response.reply.id);
+  assert.deepEqual(replay.sources, []);
+  assert.equal(state.sourceCalls, sourceCalls);
+  assert.equal(state.llmCalls, 1);
+});
+
+test('AW-5 provider failure leaves phase and history untouched and the same key never calls twice', async () => {
+  const { service, state } = createHarness();
+  const workspace = await service.create('owner', request({ requestId: 'workspace-aw5-failure-create' }));
+  state.llmError = new Error('provider unavailable');
+  const turn = {
+    requestId: 'aw5-failed-professor-turn', expectedPhase: 'CAPTURE', expectedRevision: 0,
+    action: 'explain', message: 'This provider call must fail safely.',
+  };
+  await assert.rejects(service.assist('owner', workspace.id, turn));
+  assert.equal(state.llmCalls, 1);
+  let persisted = await service.get('owner', workspace.id);
+  assert.equal(persisted.professor.currentPhase, 'CAPTURE');
+  assert.equal(persisted.professor.assistOperations.at(-1).status, 'failed');
+  assert.deepEqual(persisted.assistantHistory, []);
+  assert.equal(persisted.autosaveRevision, 0);
+  assert.equal(state.sessions[0].version, 1);
+
+  state.llmError = null;
+  await assert.rejects(
+    service.assist('owner', workspace.id, turn),
+    (error) => httpStatus(error) === 409,
+  );
+  persisted = await service.get('owner', workspace.id);
+  assert.equal(state.llmCalls, 1);
+  assert.deepEqual(persisted.assistantHistory, []);
+});
+
+test('AW-5 rejects a corrupt resumable session before retrieval or a billable provider call', async () => {
+  const { service, state } = createHarness();
+  const workspace = await service.create('owner', request({ requestId: 'workspace-aw5-session-preflight' }));
+  state.sessions[0].type = 'research';
+
+  await assert.rejects(
+    service.assist('owner', workspace.id, {
+      requestId: 'aw5-session-preflight-turn', expectedPhase: 'CAPTURE', expectedRevision: 0,
+      action: 'explain', message: 'This request must stop before provider use.',
+    }),
+    (error) => httpStatus(error) === 409,
+  );
+  assert.equal(state.sourceCalls, 0);
+  assert.equal(state.llmCalls, 0);
+  assert.deepEqual(state.workspaces[0].progress.workflow.professor.assistOperations, []);
+});
+
+test('AW-5 stale pending reservation becomes failed without automatic provider replay', async () => {
+  const { service, state } = createHarness();
+  const workspace = await service.create('owner', request({ requestId: 'workspace-aw5-stale-create' }));
+  const staleTurn = {
+    requestId: 'aw5-stale-professor-turn', expectedPhase: 'CAPTURE', expectedRevision: 0,
+    action: 'explain', message: 'A process died after reserving this turn.',
+  };
+  state.workspaces[0].progress.workflow.professor.assistOperations = [{
+    requestId: staleTurn.requestId,
+    requestFingerprint: service.assistRequestFingerprint(staleTurn),
+    phase: 'CAPTURE',
+    phaseSequence: 0,
+    status: 'pending',
+    createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    reservedRevision: 0,
+  }];
+
+  assert.equal((await service.get('owner', workspace.id)).professor.assistOperations[0].status, 'failed');
+  await assert.rejects(
+    service.assist('owner', workspace.id, staleTurn),
+    (error) => httpStatus(error) === 409,
+  );
+  assert.equal(state.llmCalls, 0);
+  assert.equal(state.workspaces[0].progress.workflow.professor.assistOperations[0].status, 'failed');
+
+  const retry = await service.assist('owner', workspace.id, {
+    ...staleTurn,
+    requestId: 'aw5-stale-professor-turn-retry',
+  });
+  assert.equal(retry.reply.role, 'assistant');
+  assert.equal(state.llmCalls, 1);
+});
+
+test('AW-5 legacy phase fallback is deterministic and read-only', async () => {
+  const { service, state } = createHarness();
+  const workspace = await service.create('owner', request({ requestId: 'workspace-aw5-legacy-create' }));
+  delete state.workspaces[0].progress.workflow.professor;
+
+  const empty = await service.get('owner', workspace.id);
+  assert.equal(empty.professor.currentPhase, 'CAPTURE');
+  assert.equal(empty.progress.workflow.professor.currentPhase, 'CAPTURE');
+  assert.equal(empty.professor.legacyFallback, true);
+  assert.equal(state.workspaces[0].progress.workflow.professor, undefined);
+
+  state.workspaces[0].draftContent = 'Existing legacy learner draft.';
+  const authored = await service.get('owner', workspace.id);
+  assert.equal(authored.professor.currentPhase, 'WORK');
+  assert.equal(authored.progress.workflow.professor.currentPhase, 'WORK');
+  assert.equal(authored.professor.legacyFallback, true);
+  assert.equal(state.workspaces[0].progress.workflow.professor, undefined);
+});
+
+test('AW-5 reuses one state machine while giving the six shells distinct Professor context', async () => {
+  const { service, state } = createHarness();
+  const representatives = [
+    ['assignment', 'assignment workflow'],
+    ['memoire', 'long-form thesis workflow'],
+    ['dissertation', 'dissertation workflow'],
+    ['article', 'academic article workflow'],
+    ['report', 'report workflow'],
+    ['other', 'learner-defined deliverable'],
+  ];
+
+  for (const [template, expectedDirective] of representatives) {
+    const workspace = await service.create('owner', request({
+      template,
+      requestId: `workspace-aw5-six-shell-${template}`,
+    }));
+    await service.assist('owner', workspace.id, {
+      requestId: `aw5-six-shell-turn-${template}`,
+      expectedPhase: 'CAPTURE',
+      expectedRevision: 0,
+      action: 'explain',
+      message: `Clarify the ${template} brief.`,
+    });
+    const messages = state.llmMessages.at(-1);
+    assert.match(messages[0].content, new RegExp(expectedDirective, 'i'));
+    assert.match(messages.at(-1).content, /Professor phase: CAPTURE/);
+  }
+
+  assert.equal(state.llmCalls, representatives.length);
+  assert.equal(new Set(state.llmMessages.map((messages) => messages[0].content)).size, representatives.length);
+});
+
+test('AW-5 Deconstruction is a bounded transferable retrospective, never export or grading', () => {
+  const { service } = createHarness();
+  const deconstruction = service.professorPhaseDirective('DECONSTRUCTION');
+  assert.match(deconstruction, /transferable retrospective/i);
+  assert.match(deconstruction, /method, choices, errors and corrections, source roles and concepts/i);
+  assert.match(deconstruction, /Do not copy the document/i);
+  assert.match(deconstruction, /invent sources/i);
+  assert.match(deconstruction, /invent a grade/i);
+
+  const finalization = service.professorPhaseDirective('FINALIZATION');
+  assert.match(finalization, /not export/i);
+  assert.match(finalization, /institutional approval/i);
+});
+
+test('AW-5 bounded journal retains exactly the replayable conversation window', async () => {
+  const { service, state } = createHarness();
+  const workspace = await service.create('owner', request({ requestId: 'workspace-aw5-bounded-create' }));
+  let revision = 0;
+  const replies = new Map();
+  for (let index = 1; index <= 16; index += 1) {
+    const requestId = `aw5-bounded-turn-${String(index).padStart(2, '0')}`;
+    const response = await service.assist('owner', workspace.id, {
+      requestId, expectedPhase: 'CAPTURE', expectedRevision: revision,
+      action: 'explain', message: `Bounded context turn ${index}.`,
+    });
+    revision = response.revision;
+    replies.set(requestId, response.reply.id);
+  }
+  const persisted = await service.get('owner', workspace.id);
+  assert.equal(persisted.assistantHistory.length, 30);
+  assert.equal(persisted.professor.assistOperations.length, 15);
+  assert.equal(persisted.professor.assistOperations[0].requestId, 'aw5-bounded-turn-02');
+  const calls = state.llmCalls;
+  const replay = await service.assist('owner', workspace.id, {
+    requestId: 'aw5-bounded-turn-02', expectedPhase: 'CAPTURE', expectedRevision: 0,
+    action: 'explain', message: 'Bounded context turn 2.',
+  });
+  assert.equal(replay.reply.id, replies.get('aw5-bounded-turn-02'));
+  assert.equal(state.llmCalls, calls);
+});
+
+test('AW-5 Workspace Professor never performs an automatic paid provider retry', () => {
+  const service = Object.create(LlmService.prototype);
+  const policy = service.policy('workspace-assistant', 'openai');
+  assert.equal(policy.retries, 0);
+  assert.equal(policy.backoffMs, 0);
 });
