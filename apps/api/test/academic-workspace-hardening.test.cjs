@@ -8,6 +8,7 @@ const { AcademicWorkspaceService } = require('../dist/workspaces/academic-worksp
 const { LlmService } = require('../dist/llm/llm.service.js');
 const {
   WORKSPACE_TEMPLATES,
+  workspaceProgressFromPlan,
 } = require('@second-brain/shared');
 
 function httpStatus(error) {
@@ -230,6 +231,20 @@ function request(overrides = {}) {
     requestId: 'workspace-create-test-operation-1',
     ...overrides,
   };
+}
+
+function prepareForAuthoritativeFinalization(state, workspaceId) {
+  const row = state.workspaces.find((item) => item.id === workspaceId);
+  row.draftContent ||= 'A complete learner-authored academic draft.';
+  row.plan = row.plan.map((item) => ({ ...item, completed: true }));
+  row.progress = workspaceProgressFromPlan(row.plan, {
+    ...row.progress.workflow,
+    professor: {
+      ...row.progress.workflow.professor,
+      currentPhase: 'FINALIZATION',
+    },
+  });
+  return row;
 }
 
 test('same owner, idempotency key and payload create one workspace/session under a concurrent retry', async () => {
@@ -499,16 +514,19 @@ test('status timestamps keep their original transition time across ordinary edit
 
   const active = await service.update('owner', workspace.id, { status: 'active' });
   assert.equal(state.sessions[0].pausedAt, null);
-  const completed = await service.update('owner', workspace.id, {
+  prepareForAuthoritativeFinalization(state, workspace.id);
+  const completed = await service.finalize('owner', workspace.id, {
+    requestId: 'aw8-hardening-finalize-timestamps',
     expectedRevision: active.autosaveRevision,
-    status: 'completed',
-    plan: active.plan.map((item) => ({ ...item, completed: true })),
-    brief: active.progress.workflow.brief,
   });
   const completedAt = state.sessions[0].completedAt.getTime();
-  await service.update('owner', workspace.id, {
-    expectedRevision: completed.autosaveRevision,
+  await assert.rejects(service.update('owner', workspace.id, {
+    expectedRevision: completed.revision,
     title: 'Edited after completion',
+  }), (error) => httpStatus(error) === 409);
+  await service.finalize('owner', workspace.id, {
+    requestId: 'aw8-hardening-finalize-timestamps-no-change',
+    expectedRevision: completed.revision,
   });
   assert.equal(state.sessions[0].completedAt.getTime(), completedAt);
 });
@@ -541,29 +559,29 @@ test('completion succeeds only after the existing required controls are actually
   const workspace = await service.create('owner', request({
     initialContent: 'A reviewed academic draft.',
   }));
-  const completed = await service.update('owner', workspace.id, {
+  prepareForAuthoritativeFinalization(state, workspace.id);
+  const completed = await service.finalize('owner', workspace.id, {
+    requestId: 'aw8-hardening-finalize-controls',
     expectedRevision: 0,
-    status: 'completed',
-    plan: workspace.plan.map((item) => ({ ...item, completed: true })),
   });
   assert.equal(completed.status, 'completed');
-  assert.equal(completed.progress.completedSteps.length, completed.plan.length);
+  assert.equal(completed.snapshot.plan.filter((item) => item.completed).length, completed.snapshot.plan.length);
   assert.equal(state.sessions[0].status, 'completed');
 
   await assert.rejects(
     service.update('owner', workspace.id, {
-      expectedRevision: completed.autosaveRevision,
-      plan: completed.plan.map((item, index) => index === 0 ? { ...item, completed: false } : item),
+      expectedRevision: completed.revision,
+      plan: completed.snapshot.plan.map((item, index) => index === 0 ? { ...item, completed: false } : item),
     }),
-    (error) => httpStatus(error) === 400,
+    (error) => httpStatus(error) === 409,
   );
   await assert.rejects(
     service.autosave('owner', workspace.id, {
       workspaceId: workspace.id,
-      expectedRevision: completed.autosaveRevision,
+      expectedRevision: completed.revision,
       draft: { format: 'markdown', content: '' },
     }),
-    (error) => httpStatus(error) === 400,
+    (error) => httpStatus(error) === 409,
   );
   assert.equal((await service.get('owner', workspace.id)).status, 'completed');
 });
@@ -571,14 +589,24 @@ test('completion succeeds only after the existing required controls are actually
 test('archiving removes the dossier and its session from resumable work, while restoration remains possible', async () => {
   const { service, state } = createHarness();
   const workspace = await service.create('owner', request());
-
-  await service.update('owner', workspace.id, { status: 'archived' });
+  prepareForAuthoritativeFinalization(state, workspace.id);
+  const finalized = await service.finalize('owner', workspace.id, {
+    requestId: 'aw8-hardening-finalize-archive',
+    expectedRevision: workspace.autosaveRevision,
+  });
+  const archived = await service.archive('owner', workspace.id, {
+    requestId: 'aw8-hardening-archive',
+    expectedRevision: finalized.revision,
+  });
   assert.equal((await service.list('owner')).items.some((item) => item.id === workspace.id), false);
   assert.equal(state.sessions[0].status, 'abandoned');
 
-  await service.update('owner', workspace.id, { status: 'active' });
+  await service.restore('owner', workspace.id, {
+    requestId: 'aw8-hardening-restore',
+    expectedRevision: archived.revision,
+  });
   assert.equal((await service.list('owner')).items.some((item) => item.id === workspace.id), true);
-  assert.equal(state.sessions[0].status, 'active');
+  assert.equal(state.sessions.some((item) => item.workspaceRef === workspace.id && item.status === 'active'), true);
 });
 
 test('workspace reads and mutations remain owner-scoped', async () => {

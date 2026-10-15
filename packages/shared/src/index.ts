@@ -78,5 +78,6 @@ export * from './ux-state';
 export * from './workspace-persistence';
 export * from './workspace-orchestrator';
 export * from './workspace-tools';
+export * from './workspace-completion';
 export * from './design-system';
 export * from './writing';

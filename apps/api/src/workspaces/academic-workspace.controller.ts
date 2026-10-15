@@ -12,6 +12,11 @@ import type {
   WorkspaceToolExecuteResponse,
   WorkspaceToolListResponse,
   WorkspaceToolRejectResponse,
+  WorkspaceArchiveResponse,
+  WorkspaceCompletionStateResponse,
+  WorkspaceExportResponse,
+  WorkspaceFinalizeResponse,
+  WorkspaceRestoreResponse,
 } from '@second-brain/shared';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
@@ -27,6 +32,10 @@ import {
   WorkspaceToolApplyDto,
   WorkspaceToolExecuteDto,
   WorkspaceToolRejectDto,
+  WorkspaceArchiveDto,
+  WorkspaceExportDto,
+  WorkspaceFinalizeDto,
+  WorkspaceRestoreDto,
 } from './dto/workspace.dto';
 
 @UseGuards(JwtAccessGuard)
@@ -148,5 +157,53 @@ export class AcademicWorkspaceController {
     @Body() dto: WorkspaceProfessorTransitionDto,
   ): Promise<WorkspaceProfessorTransitionResponse> {
     return this.workspaces.transition(user.userId, id, dto);
+  }
+
+  @Get(':id/completion')
+  completion(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<WorkspaceCompletionStateResponse> {
+    return this.workspaces.completion(user.userId, id);
+  }
+
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post(':id/finalize')
+  finalize(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: WorkspaceFinalizeDto,
+  ): Promise<WorkspaceFinalizeResponse> {
+    return this.workspaces.finalize(user.userId, id, dto);
+  }
+
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Post(':id/exports')
+  export(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: WorkspaceExportDto,
+  ): Promise<WorkspaceExportResponse> {
+    return this.workspaces.export(user.userId, id, dto);
+  }
+
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post(':id/archive')
+  archive(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: WorkspaceArchiveDto,
+  ): Promise<WorkspaceArchiveResponse> {
+    return this.workspaces.archive(user.userId, id, dto);
+  }
+
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post(':id/restore')
+  restore(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: WorkspaceRestoreDto,
+  ): Promise<WorkspaceRestoreResponse> {
+    return this.workspaces.restore(user.userId, id, dto);
   }
 }

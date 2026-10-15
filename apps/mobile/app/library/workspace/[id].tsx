@@ -28,12 +28,13 @@ import { useI18n, type TranslationKey } from '../../../lib/i18n';
 import { useTokens } from '../../../lib/design/theme';
 import { useResponsive } from '../../../lib/responsive';
 import { createClientRequestId } from '../../../lib/request-id';
-import { workspaceCompletionLabel, workspaceFieldLabel } from '../../../lib/workspace-paths';
+import { workspaceFieldLabel } from '../../../lib/workspace-paths';
 import { Alert, Badge, Button, Card, Input, Progress } from '../../../components/ds/core';
 import { Page } from '../../../components/ds/layout';
 import { SourceCitation, SourcePreview } from '../../../components/ds/sources';
 import { SmartErrorState, SmartLoadingState } from '../../../components/ds/states';
 import { WorkspaceAssistant } from '../../../components/workspace/assistant';
+import { WorkspaceCompletion } from '../../../components/workspace/completion';
 import { WorkspaceShell, type WorkspaceShellArea } from '../../../components/workspace/shell';
 import type {
   WorkspaceToolApplicationMode,
@@ -71,6 +72,7 @@ export default function AcademicWorkspaceScreen() {
   const [assistantUndo, setAssistantUndo] = useState<string | null>(null);
   const [conflictDraft, setConflictDraft] = useState<WorkspaceConflictDraft | null>(null);
   const [showConflictDraft, setShowConflictDraft] = useState(false);
+  const [completionLocked, setCompletionLocked] = useState(false);
   const revisionRef = useRef(0);
   const lastSavedRef = useRef('');
   const loadedRef = useRef(false);
@@ -82,6 +84,7 @@ export default function AcademicWorkspaceScreen() {
   const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const saveRef = useRef<(nextContent: string) => Promise<boolean>>(async () => true);
   const transitionRequestRef = useRef<WorkspaceProfessorTransitionRequest | null>(null);
+  const completionLockRef = useRef(false);
 
   const refreshSourceStates = async (workspaceId: string) => {
     try {
@@ -408,6 +411,7 @@ export default function AcademicWorkspaceScreen() {
       progress: {
         ...current.progress,
         workflow: {
+          ...current.progress.workflow,
           version: 1,
           brief: current.brief,
           professor,
@@ -444,6 +448,7 @@ export default function AcademicWorkspaceScreen() {
       progress: {
         ...current.progress,
         workflow: {
+          ...current.progress.workflow,
           version: 1,
           brief: current.brief,
           professor: next.professor,
@@ -496,6 +501,32 @@ export default function AcademicWorkspaceScreen() {
     }
   };
 
+  const prepareCompletionMutation = async (): Promise<number | null> => {
+    if (completionLockRef.current) return null;
+    completionLockRef.current = true;
+    setCompletionLocked(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    const pendingDraft = contentRef.current;
+    if (pendingDraft !== lastSavedRef.current && !await save(pendingDraft)) {
+      completionLockRef.current = false;
+      setCompletionLocked(false);
+      return null;
+    }
+    // A finalization/archive always targets the exact draft confirmed by the
+    // server. A late input event must not be silently presented as finalized.
+    if (contentRef.current !== lastSavedRef.current) {
+      completionLockRef.current = false;
+      setCompletionLocked(false);
+      return null;
+    }
+    return revisionRef.current;
+  };
+
+  const releaseCompletionMutation = () => {
+    completionLockRef.current = false;
+    setCompletionLocked(false);
+  };
+
   const openSourcePicker = async () => {
     setShowSourcePicker(true);
     if (sourcePickerLoaded) return;
@@ -537,11 +568,28 @@ export default function AcademicWorkspaceScreen() {
     sources: workspace.sources,
     draftContent: content,
   });
-  const briefPanel = <BriefPanel workspace={workspace} onUpdate={(brief) => patchWorkspace({ brief })} />;
-  const planPanel = <PlanPanel workspace={workspace} onUpdate={updatePlan} onMove={movePlan} onRemove={removePlanItem} onAdd={addPlanItem} />;
-  const completionPanel = <CompletionPanel checks={completionChecks} />;
+  const workspaceReadOnly = completionLocked || workspace.status === 'archived' || workspace.status === 'completed';
+  const briefPanel = <BriefPanel workspace={workspace} readOnly={workspaceReadOnly} onUpdate={(brief) => patchWorkspace({ brief })} />;
+  const planPanel = <PlanPanel workspace={workspace} readOnly={workspaceReadOnly} onUpdate={updatePlan} onMove={movePlan} onRemove={removePlanItem} onAdd={addPlanItem} />;
+  const completionPanel = <WorkspaceCompletion
+    workspaceId={workspace.id}
+    status={workspace.status}
+    phase={workspace.professor.currentPhase}
+    currentRevision={workspace.autosaveRevision}
+    saveState={saveState}
+    localChecks={completionChecks}
+    onPrepareMutation={prepareCompletionMutation}
+    onMutationSettled={releaseCompletionMutation}
+    onWorkspaceRefresh={() => load()}
+    onContinueWorking={async () => {
+      const resumed = await patchWorkspace({ status: 'active' });
+      if (resumed) setActiveArea('work');
+      return resumed;
+    }}
+  />;
   const sourcesPanel = <SourcesPanel
     workspace={workspace}
+    readOnly={workspaceReadOnly}
     sourceStates={sourceStates}
     showPicker={showSourcePicker}
     library={library}
@@ -554,7 +602,17 @@ export default function AcademicWorkspaceScreen() {
       if (source.kind === 'research-source') router.push({ pathname: '/research', params: { experienceSessionId: source.id } });
     }}
   />;
-  const assistantPanel = (
+  const assistantPanel = workspaceReadOnly ? (
+    <Card testID="workspace-assistant-read-only">
+      <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t(
+        workspace.status === 'archived'
+          ? 'workspace10.status.archived'
+          : workspace.status === 'completed'
+            ? 'workspace10.status.completed'
+            : 'workspace10.save.saving',
+      )}</Text>
+    </Card>
+  ) : (
     <WorkspaceAssistant
       key={workspace.id}
       workspaceId={workspace.id}
@@ -576,7 +634,8 @@ export default function AcademicWorkspaceScreen() {
       canUndo={assistantUndo !== null}
     />
   );
-  const editor = <EditorPanel content={content} saveState={saveState} onChange={(value) => {
+  const editor = <EditorPanel content={content} saveState={saveState} readOnly={workspaceReadOnly} onChange={(value) => {
+    if (completionLockRef.current || workspace.status === 'archived' || workspace.status === 'completed') return;
     setAssistantUndo(null);
     // Make in-flight proposal guards observe the keystroke immediately, before
     // React schedules the render that mirrors `content` into the ref.
@@ -630,9 +689,11 @@ export default function AcademicWorkspaceScreen() {
 
 function BriefPanel({
   workspace,
+  readOnly,
   onUpdate,
 }: {
   workspace: PersistentWorkspace;
+  readOnly: boolean;
   onUpdate: (brief: WorkspaceBrief) => Promise<boolean>;
 }) {
   const { t } = useI18n();
@@ -645,6 +706,10 @@ function BriefPanel({
   useEffect(() => {
     setFields(workspace.brief.fields);
   }, [workspace.id, workspace.brief]);
+
+  useEffect(() => {
+    if (readOnly) setEditing(false);
+  }, [readOnly]);
 
   const save = async () => {
     setSaving(true);
@@ -674,7 +739,7 @@ function BriefPanel({
         <Text style={[typography.caption, { color: c.textMuted }]}>{workspaceFieldLabel(field, t)}</Text>
         <Text style={[typography.bodySmall, { color: c.textPrimary }]}>{workspace.brief.fields[field]}</Text>
       </View>) : <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('workspace10.noObjective')}</Text>}
-      <Button size="sm" variant="secondary" label={t('onb.edit')} onPress={() => setEditing(true)} />
+      {!readOnly ? <Button size="sm" variant="secondary" label={t('onb.edit')} onPress={() => setEditing(true)} /> : null}
     </> : definition.fields.map((field) => {
       const required = definition.requiredFields.includes(field);
       const label = workspaceFieldLabel(field, t);
@@ -695,28 +760,59 @@ function BriefPanel({
   </Card>;
 }
 
-function CompletionPanel({ checks }: { checks: PersistentWorkspace['completionChecks'] }) {
+function PlanPanel({ workspace, readOnly, onUpdate, onMove, onRemove, onAdd }: {
+  workspace: PersistentWorkspace;
+  readOnly: boolean;
+  onUpdate: (plan: WorkspacePlanItem[]) => Promise<void>;
+  onMove: (index: number, delta: number) => void;
+  onRemove: (id: string) => void;
+  onAdd: () => void;
+}) {
   const { t } = useI18n();
   const { colors: c, spacing, typography } = useTokens();
-  return <Card style={{ gap: spacing.sm }} testID="workspace-completion-controls">
-    <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('workspace10.integrity')}</Text>
-    {checks.map((check) => <View key={check.id} style={{ minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
-      <Text accessibilityLabel={check.passed ? t('workspace10.save.saved') : t('workspace10.save.dirty')} style={{ color: check.passed ? c.success : c.textMuted, fontWeight: '800' }}>{check.passed ? '✓' : '○'}</Text>
-      <Text style={[typography.bodySmall, { flex: 1, color: c.textSecondary }]}>{workspaceCompletionLabel(check.id, t)}{check.required ? ' *' : ''}</Text>
+  return <Card style={{ gap: spacing.sm }} testID="workspace-plan">
+    <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('workspace10.plan')}</Text>
+    {workspace.plan.map((item, index) => <View
+      key={item.id}
+      style={{ gap: spacing.xs, borderBottomWidth: index === workspace.plan.length - 1 ? 0 : 1, borderBottomColor: c.borderSubtle, paddingBottom: spacing.sm }}
+    >
+      <View style={{ flexDirection: 'row', gap: spacing.xs, alignItems: 'center' }}>
+        <Pressable
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: item.completed, disabled: readOnly }}
+          disabled={readOnly}
+          onPress={() => void onUpdate(workspace.plan.map((row) => row.id === item.id ? { ...row, completed: !row.completed } : row))}
+          style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
+        >
+          <Text style={{ color: item.completed ? c.success : c.textMuted, fontSize: 18 }}>{item.completed ? '✓' : '○'}</Text>
+        </Pressable>
+        <TextInput
+          defaultValue={item.title}
+          editable={!readOnly}
+          onEndEditing={(event) => {
+            const title = event.nativeEvent.text.trim();
+            if (!readOnly && title && title !== item.title) {
+              void onUpdate(workspace.plan.map((row) => row.id === item.id ? { ...row, title, stepId: undefined } : row));
+            }
+          }}
+          style={[typography.bodySmall, { flex: 1, color: c.textPrimary, minHeight: 44 }]}
+          accessibilityLabel={t('workspace10.plan.rename')}
+        />
+      </View>
+      {!readOnly ? <View style={{ flexDirection: 'row', gap: spacing.xs }}>
+        <Button size="sm" variant="ghost" label="↑" disabled={index === 0} onPress={() => onMove(index, -1)} />
+        <Button size="sm" variant="ghost" label="↓" disabled={index === workspace.plan.length - 1} onPress={() => onMove(index, 1)} />
+        <Button size="sm" variant="ghost" label={t('workspace10.plan.remove')} onPress={() => onRemove(item.id)} />
+      </View> : null}
     </View>)}
+    {!readOnly ? <Button size="sm" variant="secondary" label={t('workspace10.plan.add')} onPress={onAdd} /> : null}
   </Card>;
 }
 
-function PlanPanel({ workspace, onUpdate, onMove, onRemove, onAdd }: { workspace: PersistentWorkspace; onUpdate: (plan: WorkspacePlanItem[]) => Promise<void>; onMove: (index: number, delta: number) => void; onRemove: (id: string) => void; onAdd: () => void }) {
-  const { t } = useI18n();
-  const { colors: c, spacing, typography } = useTokens();
-  return <Card style={{ gap: spacing.sm }} testID="workspace-plan"><Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('workspace10.plan')}</Text>{workspace.plan.map((item, index) => <View key={item.id} style={{ gap: spacing.xs, borderBottomWidth: index === workspace.plan.length - 1 ? 0 : 1, borderBottomColor: c.borderSubtle, paddingBottom: spacing.sm }}><View style={{ flexDirection: 'row', gap: spacing.xs, alignItems: 'center' }}><Pressable accessibilityRole="checkbox" accessibilityState={{ checked: item.completed }} onPress={() => void onUpdate(workspace.plan.map((row) => row.id === item.id ? { ...row, completed: !row.completed } : row))} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: item.completed ? c.success : c.textMuted, fontSize: 18 }}>{item.completed ? '✓' : '○'}</Text></Pressable><TextInput defaultValue={item.title} onEndEditing={(event) => { const title = event.nativeEvent.text.trim(); if (title && title !== item.title) void onUpdate(workspace.plan.map((row) => row.id === item.id ? { ...row, title, stepId: undefined } : row)); }} style={[typography.bodySmall, { flex: 1, color: c.textPrimary, minHeight: 44 }]} accessibilityLabel={t('workspace10.plan.rename')} /></View><View style={{ flexDirection: 'row', gap: spacing.xs }}><Button size="sm" variant="ghost" label="↑" disabled={index === 0} onPress={() => onMove(index, -1)} /><Button size="sm" variant="ghost" label="↓" disabled={index === workspace.plan.length - 1} onPress={() => onMove(index, 1)} /><Button size="sm" variant="ghost" label={t('workspace10.plan.remove')} onPress={() => onRemove(item.id)} /></View></View>)}<Button size="sm" variant="secondary" label={t('workspace10.plan.add')} onPress={onAdd} /></Card>;
-}
-
-function EditorPanel({ content, saveState, onChange, onSelection, onInsert, onSave }: { content: string; saveState: WorkspaceSaveState; onChange: (value: string) => void; onSelection: (selection: { start: number; end: number }) => void; onInsert: (prefix: string, suffix?: string) => void; onSave: () => void }) {
+function EditorPanel({ content, saveState, readOnly, onChange, onSelection, onInsert, onSave }: { content: string; saveState: WorkspaceSaveState; readOnly: boolean; onChange: (value: string) => void; onSelection: (selection: { start: number; end: number }) => void; onInsert: (prefix: string, suffix?: string) => void; onSave: () => void }) {
   const { t } = useI18n();
   const { colors: c, radius, spacing, typography } = useTokens();
-  return <Card style={{ gap: spacing.sm, minHeight: 620 }} testID="workspace-editor"><View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}><Button size="sm" variant="ghost" label={t('workspace10.editor.heading')} onPress={() => onInsert('## ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.list')} onPress={() => onInsert('- ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.quote')} onPress={() => onInsert('> ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.reference')} onPress={() => onInsert('[', ']')} /></View><TextInput testID="workspace-draft-input" value={content} onChangeText={onChange} onSelectionChange={(event) => onSelection(event.nativeEvent.selection)} multiline textAlignVertical="top" placeholder={t('workspace10.editor.placeholder')} placeholderTextColor={c.textMuted} accessibilityLabel={t('workspace10.editor.label')} style={[typography.body, { flex: 1, minHeight: 520, borderWidth: 1, borderColor: c.border, borderRadius: radius.sm, backgroundColor: c.surfaceElevated, color: c.textPrimary, padding: spacing.md }]} /><View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }}><Text accessibilityLiveRegion="polite" style={[typography.caption, { color: saveState === 'error' || saveState === 'offline' ? c.warning : c.textMuted }]}>{t(`workspace10.save.${saveState}` as TranslationKey)}</Text><Button testID="workspace-save-draft" size="sm" variant="secondary" label={t('workspace10.saveNow')} disabled={saveState === 'saving' || saveState === 'saved'} onPress={onSave} /></View></Card>;
+  return <Card style={{ gap: spacing.sm, minHeight: 620 }} testID="workspace-editor"><View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}><Button size="sm" variant="ghost" label={t('workspace10.editor.heading')} disabled={readOnly} onPress={() => onInsert('## ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.list')} disabled={readOnly} onPress={() => onInsert('- ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.quote')} disabled={readOnly} onPress={() => onInsert('> ')} /><Button size="sm" variant="ghost" label={t('workspace10.editor.reference')} disabled={readOnly} onPress={() => onInsert('[', ']')} /></View><TextInput testID="workspace-draft-input" value={content} editable={!readOnly} onChangeText={onChange} onSelectionChange={(event) => onSelection(event.nativeEvent.selection)} multiline textAlignVertical="top" placeholder={t('workspace10.editor.placeholder')} placeholderTextColor={c.textMuted} accessibilityLabel={t('workspace10.editor.label')} style={[typography.body, { flex: 1, minHeight: 520, borderWidth: 1, borderColor: c.border, borderRadius: radius.sm, backgroundColor: c.surfaceElevated, color: c.textPrimary, padding: spacing.md }]} /><View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }}><Text accessibilityLiveRegion="polite" style={[typography.caption, { color: saveState === 'error' || saveState === 'offline' ? c.warning : c.textMuted }]}>{t(`workspace10.save.${saveState}` as TranslationKey)}</Text><Button testID="workspace-save-draft" size="sm" variant="secondary" label={t('workspace10.saveNow')} disabled={readOnly || saveState === 'saving' || saveState === 'saved'} onPress={onSave} /></View></Card>;
 }
 
 function canonicalWorkspaceSource(source: WorkspaceSourceReference): WorkspaceSourceReference {
@@ -725,6 +821,7 @@ function canonicalWorkspaceSource(source: WorkspaceSourceReference): WorkspaceSo
 
 function SourcesPanel({
   workspace,
+  readOnly,
   sourceStates,
   showPicker,
   library,
@@ -734,6 +831,7 @@ function SourcesPanel({
   onOpenSource,
 }: {
   workspace: PersistentWorkspace;
+  readOnly: boolean;
   sourceStates: WorkspaceSourceState[];
   showPicker: boolean;
   library: LibraryDocument[];
@@ -762,8 +860,8 @@ function SourcesPanel({
         /> : null}
       </View>;
     }) : <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t('workspace10.sourcesEmpty')}</Text>}
-    <Button size="sm" variant="secondary" label={t('workspace10.addSource')} onPress={onOpenPicker} />
-    {showPicker ? <View style={{ gap: spacing.md }} testID="workspace-source-picker">
+    {!readOnly ? <Button size="sm" variant="secondary" label={t('workspace10.addSource')} onPress={onOpenPicker} /> : null}
+    {showPicker && !readOnly ? <View style={{ gap: spacing.md }} testID="workspace-source-picker">
       <View style={{ gap: spacing.xs }}>
         <Text style={[typography.label, { color: c.textPrimary }]}>{t('workspace10.sourceMode.documents')}</Text>
         {library.map((document) => {

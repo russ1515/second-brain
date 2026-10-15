@@ -26,8 +26,13 @@ import type {
   WorkspaceToolApplyRequest,
   WorkspaceToolExecuteRequest,
   WorkspaceToolRejectRequest,
+  WorkspaceArchiveRequest,
+  WorkspaceExportRequest,
+  WorkspaceFinalizeRequest,
+  WorkspaceRestoreRequest,
 } from '@second-brain/shared';
 import {
+  WORKSPACE_EXPORT_FORMATS,
   WORKSPACE_ASSIST_ACTIONS,
   WORKSPACE_PROFESSOR_PHASES,
   WORKSPACE_TEMPLATES,
@@ -175,4 +180,45 @@ export class WorkspaceToolApplyDto implements WorkspaceToolApplyRequest {
 export class WorkspaceToolRejectDto implements WorkspaceToolRejectRequest {
   @IsString() @MinLength(8) @MaxLength(128) @Matches(/^[A-Za-z0-9_-]+$/)
   requestId!: string;
+}
+
+export class WorkspaceFinalizeDto implements WorkspaceFinalizeRequest {
+  @IsString() @MinLength(8) @MaxLength(128) @Matches(/^[A-Za-z0-9_-]+$/)
+  requestId!: string;
+
+  @IsInt() @Min(0)
+  expectedRevision!: number;
+
+  @IsOptional() @IsObject()
+  draft?: WorkspaceFinalizeRequest['draft'];
+}
+
+export class WorkspaceExportDto implements WorkspaceExportRequest {
+  @IsString() @MinLength(8) @MaxLength(128) @Matches(/^[A-Za-z0-9_-]+$/)
+  requestId!: string;
+
+  @IsString() @MinLength(1) @MaxLength(128)
+  snapshotId!: string;
+
+  @IsIn(WORKSPACE_EXPORT_FORMATS)
+  format!: WorkspaceExportRequest['format'];
+
+  @IsOptional() @IsString() @MaxLength(64)
+  locale?: string;
+}
+
+export class WorkspaceArchiveDto implements WorkspaceArchiveRequest {
+  @IsString() @MinLength(8) @MaxLength(128) @Matches(/^[A-Za-z0-9_-]+$/)
+  requestId!: string;
+
+  @IsInt() @Min(0)
+  expectedRevision!: number;
+}
+
+export class WorkspaceRestoreDto implements WorkspaceRestoreRequest {
+  @IsString() @MinLength(8) @MaxLength(128) @Matches(/^[A-Za-z0-9_-]+$/)
+  requestId!: string;
+
+  @IsInt() @Min(0)
+  expectedRevision!: number;
 }

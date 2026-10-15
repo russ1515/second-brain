@@ -2,6 +2,7 @@ import type { ActionDestination } from './next-best-action';
 import type { WorkspaceMessage, WorkspaceMode } from './document';
 import type { ExperienceContext } from './context';
 import type { WorkspaceToolState } from './workspace-tools';
+import type { WorkspaceCompletionState } from './workspace-completion';
 
 /** Target persistence contract. Lot 0 does not add a workspace database model. */
 export type WorkspaceProjectStatus = 'active' | 'paused' | 'completed' | 'archived';
@@ -274,6 +275,8 @@ export interface WorkspaceProgress {
     professor?: WorkspaceProfessorState;
     /** AW-7 bounded idempotency/proposal journal stored in the existing JSON. */
     tools?: WorkspaceToolState;
+    /** AW-8 snapshots and bounded idempotency metadata stored in existing JSON. */
+    completion?: WorkspaceCompletionState;
   };
 }
 
@@ -390,6 +393,7 @@ export interface PersistentWorkspace {
   assistantHistory: WorkspaceAssistantHistoryEntry[];
   brief: WorkspaceBrief;
   completionChecks: WorkspaceCompletionCheck[];
+  completion: WorkspaceCompletionState;
   professor: WorkspaceProfessorState;
   progress: WorkspaceProgress;
   autosaveRevision: number;

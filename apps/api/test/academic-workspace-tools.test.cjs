@@ -494,7 +494,7 @@ test('AW-7 applies explicitly once and rejects stale proposals without overwriti
   assert.equal(stale.draftContent, 'A newer tab saved this text.');
 });
 
-test('AW-7 apply preserves the existing completion evidence invariant', async () => {
+test('AW-7 cannot mutate a completed Workspace before explicit resume', async () => {
   const { service, state } = createHarness();
   const row = seedWorkspace(state);
   await service.executeTool('owner', row.id, 'assignment-check-answer', executeRequest());
@@ -510,7 +510,7 @@ test('AW-7 apply preserves the existing completion evidence invariant', async ()
       expectedRevision: 0,
       draft: { format: 'markdown', content: '' },
     }),
-    (error) => status(error) === 400,
+    (error) => status(error) === 409 && responseCode(error) === 'workspace_completed_read_only',
   );
   assert.equal(row.status, 'completed');
   assert.equal(row.autosaveRevision, 0);

@@ -6,6 +6,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import {
   Prisma,
   type AcademicWorkspace,
@@ -49,10 +50,28 @@ import type {
   WorkspaceToolRejectRequest,
   WorkspaceToolRejectResponse,
   WorkspaceToolState,
+  WorkspaceArchiveRequest,
+  WorkspaceArchiveResponse,
+  WorkspaceCompletionOperation,
+  WorkspaceCompletionRequestReceipt,
+  WorkspaceCompletionState,
+  WorkspaceCompletionStateResponse,
+  WorkspaceExportRequest,
+  WorkspaceExportResponse,
+  WorkspaceFinalSnapshot,
+  WorkspaceFinalizeRequest,
+  WorkspaceFinalizeResponse,
+  WorkspaceRestoreRequest,
+  WorkspaceRestoreResponse,
+  WorkspaceSourceCitation,
+  WorkspaceSourceState,
 } from '@second-brain/shared';
 import {
+  createWorkspaceFinalSnapshot,
   createContext,
   emptyWorkspaceBrief,
+  inferWorkspaceTextDirection,
+  initialWorkspaceCompletionState,
   initialWorkspaceProfessorState,
   initialWorkspaceToolState,
   legacyWorkspaceProfessorState,
@@ -66,7 +85,11 @@ import {
   workspaceToolsFor,
   workspaceCompletionChecks,
   workspaceDefaultPlan,
+  workspaceExportFileName,
+  workspaceFinalizationBlockers,
   workspaceProgressFromPlan,
+  renderWorkspaceExportHtml,
+  renderWorkspaceMarkdown,
 } from '@second-brain/shared';
 import { localeDirective, resolveLocale } from '../common/learning-locale';
 import { LlmService } from '../llm/llm.service';
@@ -88,6 +111,9 @@ const MAX_WORKSPACE_TOOL_RECEIPTS = 256;
 const WORKSPACE_TOOL_RECEIPT_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const WORKSPACE_TOOL_PENDING_LEASE_MS = 120_000;
 const WORKSPACE_CREATION_IDEMPOTENCY_PREFIX = 'server:v2:workspace:';
+const MAX_WORKSPACE_COMPLETION_OPERATIONS = 40;
+const MAX_WORKSPACE_COMPLETION_RECEIPTS = 256;
+const WORKSPACE_COMPLETION_RECEIPT_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 
 type ProfessorAssistReservation = {
   kind: 'reserved';
@@ -300,11 +326,36 @@ export class AcademicWorkspaceService {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const existing = await tx.academicWorkspace.findFirst({ where: { id, userId } });
       if (!existing) throw new NotFoundException('Workspace not found.');
+      this.assertWorkspaceNotArchived(existing);
+      if (request.status === 'completed' || request.status === 'archived') {
+        throw new BadRequestException({
+          code: 'workspace_authoritative_completion_required',
+          message: 'Use the Workspace finalization or archive action for this status.',
+        });
+      }
+      const resumingCompleted = existing.status === 'completed' && request.status === 'active';
+      if (existing.status === 'completed' && !resumingCompleted) {
+        this.throwCompletedWorkspaceReadOnly();
+      }
+      if (resumingCompleted && request.expectedRevision === undefined) {
+        throw new BadRequestException({
+          code: 'workspace_resume_revision_required',
+          message: 'Reload this finalized Workspace before continuing to work.',
+        });
+      }
 
       const existingProgress = fromJson<WorkspaceProgress>(existing.progress, { completedSteps: [] });
       const existingBrief = existingProgress.workflow?.brief ?? emptyWorkspaceBrief();
       const brief = request.brief === undefined ? existingBrief : this.normalizeBrief(request.brief);
-      const workflow = this.workspaceWorkflow(existingProgress, brief);
+      const workflow = resumingCompleted
+        ? this.workspaceWorkflow(existingProgress, brief, {
+            professor: this.continuedProfessorState(
+              existing,
+              existingProgress,
+              existing.autosaveRevision + 1,
+            ),
+          })
+        : this.workspaceWorkflow(existingProgress, brief);
       const plan = request.plan === undefined
         ? fromJson<WorkspacePlanItem[]>(existing.plan, [])
         : this.normalizePlan(request.plan);
@@ -313,12 +364,10 @@ export class AcademicWorkspaceService {
         : this.normalizeSources(request.sources);
       if (request.sources !== undefined) await this.assertOwnedSources(userId, sources, tx);
 
-      const resultingStatus = request.status ?? existing.status;
-      const completionRelevantUpdate = request.status === 'completed'
-        || (resultingStatus === 'completed' && (
-          request.plan !== undefined
-          || request.brief !== undefined
-        ));
+      const completionRelevantUpdate = existing.status === 'completed' && (
+        request.plan !== undefined
+        || request.brief !== undefined
+      );
       if (completionRelevantUpdate) {
         const checks = workspaceCompletionChecks({
           template: existing.template as WorkspaceTemplate,
@@ -344,7 +393,10 @@ export class AcademicWorkspaceService {
       if (request.mode !== undefined) data.mode = request.mode;
       if (request.sources !== undefined) data.sources = asJson(sources);
       if (request.plan !== undefined) data.plan = asJson(plan);
-      if (request.expectedRevision !== undefined) data.autosaveRevision = { increment: 1 };
+      // Legacy clients may omit the CAS token, but their mutation must still
+      // advance the server revision so an older editor cannot finalize stale
+      // state under the same token.
+      data.autosaveRevision = { increment: 1 };
 
       const result = await tx.academicWorkspace.updateMany({
         where: {
@@ -380,6 +432,7 @@ export class AcademicWorkspaceService {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const existing = await tx.academicWorkspace.findFirst({ where: { id, userId } });
       if (!existing) throw new NotFoundException('Workspace not found.');
+      this.assertWorkspaceMutable(existing);
       const existingProgress = fromJson<WorkspaceProgress>(existing.progress, { completedSteps: [] });
       this.assertCompletedWorkspaceDraftPreservesEvidence(existing, existingProgress, request.draft.content);
       const result = await tx.academicWorkspace.updateMany({
@@ -398,6 +451,7 @@ export class AcademicWorkspaceService {
       }
       const row = await tx.academicWorkspace.findFirst({ where: { id, userId } });
       if (!row) throw new NotFoundException('Workspace not found.');
+      this.assertWorkspaceMutable(row);
       const session = await this.resolveWorkspaceSession(row, tx);
       if (session) {
         const synchronized = await tx.experienceSession.updateMany({
@@ -481,6 +535,7 @@ export class AcademicWorkspaceService {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const row = await tx.academicWorkspace.findFirst({ where: { id, userId } });
       if (!row) throw new NotFoundException('Workspace not found.');
+      this.assertWorkspaceMutable(row);
       const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
       const professor = this.reconcileStaleProfessorOperations(this.professorState(row, progress));
       const prior = professor.transitions.find((item) => item.requestId === request.requestId);
@@ -552,6 +607,517 @@ export class AcademicWorkspaceService {
       if (!updatedRow) throw new NotFoundException('Workspace not found.');
       await this.syncExperience(updatedRow, updatedRow.status as WorkspaceProjectStatus, tx);
       return { professor: nextProfessor, revision: row.autosaveRevision };
+    });
+  }
+
+  async completion(userId: string, id: string): Promise<WorkspaceCompletionStateResponse> {
+    const row = await this.requireOwned(userId, id);
+    const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
+    const professor = this.reconcileStaleProfessorOperations(this.professorState(row, progress));
+    const plan = fromJson<WorkspacePlanItem[]>(row.plan, []);
+    const sources = fromJson<WorkspaceSourceReference[]>(row.sources, []);
+    const brief = progress.workflow?.brief ?? emptyWorkspaceBrief();
+    const checks = workspaceCompletionChecks({
+      template: row.template as WorkspaceTemplate,
+      brief,
+      plan,
+      sources,
+      draftContent: row.draftContent,
+    });
+    const sourceStates = await this.resolveFinalizationSourceStates(userId, sources);
+    const blockers = workspaceFinalizationBlockers({
+      phase: professor.currentPhase,
+      draftContent: row.draftContent,
+      checks,
+      sourceStates,
+    });
+    const completion = this.completionState(progress);
+    return {
+      workspaceId: row.id,
+      status: row.status as WorkspaceProjectStatus,
+      revision: row.autosaveRevision,
+      phase: professor.currentPhase,
+      checks,
+      ready: blockers.length === 0 && row.status !== 'archived',
+      blockers,
+      snapshots: completion.snapshots,
+      latestSnapshot: completion.snapshots.at(-1) ?? null,
+    };
+  }
+
+  async finalize(
+    userId: string,
+    id: string,
+    request: WorkspaceFinalizeRequest,
+  ): Promise<WorkspaceFinalizeResponse> {
+    this.assertCompletionRequestId(request.requestId);
+    this.assertOptionalCompletionDraft(request.draft);
+    const requestFingerprint = this.completionRequestFingerprint('finalize', request);
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const row = await tx.academicWorkspace.findFirst({ where: { id, userId } });
+      if (!row) throw new NotFoundException('Workspace not found.');
+      const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
+      const completion = this.completionState(progress);
+      const replay = this.completedCompletionOperation(completion, request.requestId, requestFingerprint, 'finalize');
+      if (replay) {
+        const snapshot = completion.snapshots.find((item) => item.id === replay.snapshotId);
+        if (!snapshot) this.throwCompletionPersistenceConflict();
+        return {
+          snapshot,
+          revision: replay.resultingRevision ?? snapshot.revision,
+          status: row.status as WorkspaceProjectStatus,
+          checks: [...snapshot.checks],
+        };
+      }
+      this.assertWorkspaceNotArchived(row);
+      if (request.expectedRevision !== row.autosaveRevision) this.throwWorkspaceRevisionConflict();
+
+      const draftFormat = request.draft?.format ?? row.draftFormat;
+      const draftContent = request.draft?.content ?? row.draftContent;
+      const resultingRevision = row.autosaveRevision + 1;
+      const plan = fromJson<WorkspacePlanItem[]>(row.plan, []);
+      const sources = fromJson<WorkspaceSourceReference[]>(row.sources, []);
+      const brief = progress.workflow?.brief ?? emptyWorkspaceBrief();
+      const professor = this.reconcileStaleProfessorOperations(this.professorState(row, progress));
+      const tools = this.reconcileStaleToolOperations(this.toolState(progress));
+      if (
+        professor.assistOperations.some((operation) => operation.status === 'pending')
+        || tools.operations.some((operation) => operation.status === 'pending')
+      ) {
+        throw new ConflictException({
+          code: 'workspace_finalization_operation_in_progress',
+          message: 'Wait for the current Workspace operation before finalizing.',
+        });
+      }
+      const existingSnapshot = completion.snapshots.at(-1);
+      if (
+        existingSnapshot
+        && row.status === 'completed'
+        && this.finalSnapshotMatchesCurrent(
+          existingSnapshot,
+          row,
+          brief,
+          plan,
+          sources,
+          draftFormat,
+          draftContent,
+        )
+      ) {
+        const now = new Date().toISOString();
+        const nextCompletion = this.withCompletionOperation(completion, {
+          requestId: request.requestId,
+          requestFingerprint,
+          action: 'finalize',
+          status: 'completed',
+          createdAt: now,
+          updatedAt: now,
+          expectedRevision: request.expectedRevision,
+          resultingRevision: row.autosaveRevision,
+          snapshotId: existingSnapshot.id,
+        });
+        const nextProgress = workspaceProgressFromPlan(
+          plan,
+          this.workspaceWorkflow(progress, brief, { professor, tools, completion: nextCompletion }),
+        );
+        const updated = await tx.academicWorkspace.updateMany({
+          where: { id, userId, autosaveRevision: row.autosaveRevision },
+          data: { progress: asJson(nextProgress) },
+        });
+        if (updated.count !== 1) this.throwWorkspaceRevisionConflict();
+        return {
+          snapshot: existingSnapshot,
+          revision: row.autosaveRevision,
+          status: 'completed',
+          checks: [...existingSnapshot.checks],
+        };
+      }
+      if (row.status === 'completed') this.throwCompletedWorkspaceReadOnly();
+      const sourceStates = await this.resolveFinalizationSourceStates(userId, sources);
+      const citations = await this.availableFinalSnapshotCitations(
+        userId,
+        this.finalSnapshotCitations(row, tools),
+        sourceStates,
+      );
+      const checks = workspaceCompletionChecks({
+        template: row.template as WorkspaceTemplate,
+        brief,
+        plan,
+        sources,
+        draftContent,
+      });
+      const blockers = workspaceFinalizationBlockers({
+        phase: professor.currentPhase,
+        draftContent,
+        checks,
+        sourceStates,
+      });
+      if (blockers.length > 0) {
+        throw new BadRequestException({
+          code: 'workspace_finalization_gate_failed',
+          message: 'This work is not ready to finalize yet.',
+          blockers,
+        });
+      }
+      const now = new Date().toISOString();
+      const snapshot = createWorkspaceFinalSnapshot({
+        snapshotId: randomUUID(),
+        logicalVersion: completion.snapshots.length + 1,
+        workspaceId: row.id,
+        template: row.template as WorkspaceTemplate,
+        shell: workspaceShellFromTemplate(row.template as WorkspaceTemplate),
+        title: row.title,
+        brief,
+        plan,
+        draft: {
+          format: draftFormat as PersistentWorkspace['draft']['format'],
+          content: draftContent,
+          revision: resultingRevision,
+          updatedAt: now,
+        },
+        sources,
+        sourceStates,
+        citations,
+        checks,
+        phase: professor.currentPhase,
+        revision: resultingRevision,
+        createdAt: now,
+      });
+      const operation: WorkspaceCompletionOperation = {
+        requestId: request.requestId,
+        requestFingerprint,
+        action: 'finalize',
+        status: 'completed',
+        createdAt: now,
+        updatedAt: now,
+        expectedRevision: request.expectedRevision,
+        resultingRevision,
+        snapshotId: snapshot.id,
+      };
+      const nextCompletion = this.withCompletionOperation(
+        { ...completion, snapshots: [...completion.snapshots, snapshot] },
+        operation,
+      );
+      const nextProgress = workspaceProgressFromPlan(
+        plan,
+        this.workspaceWorkflow(progress, brief, { professor, tools, completion: nextCompletion }),
+      );
+      const updated = await tx.academicWorkspace.updateMany({
+        where: { id, userId, autosaveRevision: row.autosaveRevision },
+        data: {
+          status: 'completed',
+          draftFormat,
+          draftContent,
+          autosaveRevision: { increment: 1 },
+          progress: asJson(nextProgress),
+        },
+      });
+      if (updated.count !== 1) this.throwWorkspaceRevisionConflict();
+      const updatedRow = await tx.academicWorkspace.findFirst({ where: { id, userId } });
+      if (!updatedRow) throw new NotFoundException('Workspace not found.');
+      await this.syncExperience(updatedRow, 'completed', tx);
+      return { snapshot, revision: resultingRevision, status: 'completed', checks };
+    });
+  }
+
+  async export(
+    userId: string,
+    id: string,
+    request: WorkspaceExportRequest,
+  ): Promise<WorkspaceExportResponse> {
+    this.assertCompletionRequestId(request.requestId);
+    const requestFingerprint = this.completionRequestFingerprint('export', request);
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const row = await tx.academicWorkspace.findFirst({ where: { id, userId } });
+      if (!row) throw new NotFoundException('Workspace not found.');
+      const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
+      const completion = this.completionState(progress);
+      this.completedCompletionOperation(completion, request.requestId, requestFingerprint, 'export');
+      const snapshot = completion.snapshots.find((item) => item.id === request.snapshotId);
+      if (!snapshot) {
+        throw new NotFoundException({
+          code: 'workspace_export_snapshot_not_found',
+          message: 'This final version is unavailable.',
+        });
+      }
+      const response: WorkspaceExportResponse = request.format === 'markdown'
+        ? {
+            snapshotId: snapshot.id,
+            format: 'markdown',
+            fileName: workspaceExportFileName(snapshot.title, 'markdown', snapshot.version),
+            mimeType: 'text/markdown; charset=utf-8',
+            content: renderWorkspaceMarkdown(snapshot, { locale: request.locale }),
+          }
+        : {
+            snapshotId: snapshot.id,
+            format: 'pdf',
+            fileName: workspaceExportFileName(snapshot.title, 'pdf', snapshot.version),
+            mimeType: 'application/pdf',
+            html: renderWorkspaceExportHtml(snapshot, {
+              locale: request.locale,
+              direction: workspaceExportDirection(
+                request.locale,
+                `${snapshot.title}\n${snapshot.draft.content}`,
+              ),
+            }),
+          };
+      const prior = completion.operations.find((item) => item.requestId === request.requestId);
+      if (!prior) {
+        const now = new Date().toISOString();
+        const nextCompletion = this.withCompletionOperation(completion, {
+          requestId: request.requestId,
+          requestFingerprint,
+          action: 'export',
+          status: 'completed',
+          createdAt: now,
+          updatedAt: now,
+          expectedRevision: snapshot.revision,
+          resultingRevision: snapshot.revision,
+          snapshotId: snapshot.id,
+          exportFormat: request.format,
+        });
+        const brief = progress.workflow?.brief ?? emptyWorkspaceBrief();
+        const plan = fromJson<WorkspacePlanItem[]>(row.plan, []);
+        const nextProgress = workspaceProgressFromPlan(
+          plan,
+          this.workspaceWorkflow(progress, brief, { completion: nextCompletion }),
+        );
+        const updated = await tx.academicWorkspace.updateMany({
+          where: { id, userId, autosaveRevision: row.autosaveRevision },
+          data: { progress: asJson(nextProgress) },
+        });
+        if (updated.count !== 1) this.throwWorkspaceRevisionConflict();
+      }
+      return response;
+    });
+  }
+
+  async archive(
+    userId: string,
+    id: string,
+    request: WorkspaceArchiveRequest,
+  ): Promise<WorkspaceArchiveResponse> {
+    this.assertCompletionRequestId(request.requestId);
+    const requestFingerprint = this.completionRequestFingerprint('archive', request);
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const row = await tx.academicWorkspace.findFirst({ where: { id, userId } });
+      if (!row) throw new NotFoundException('Workspace not found.');
+      const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
+      const completion = this.completionState(progress);
+      const replay = this.completedCompletionOperation(completion, request.requestId, requestFingerprint, 'archive');
+      if (replay) {
+        const snapshot = completion.snapshots.find((item) => item.id === replay.snapshotId);
+        if (!snapshot) this.throwCompletionPersistenceConflict();
+        return {
+          archived: true,
+          status: 'archived',
+          revision: replay.resultingRevision ?? row.autosaveRevision,
+          snapshot,
+        };
+      }
+      if (request.expectedRevision !== row.autosaveRevision) this.throwWorkspaceRevisionConflict();
+      const snapshot = completion.snapshots.at(-1);
+      const plan = fromJson<WorkspacePlanItem[]>(row.plan, []);
+      const sources = fromJson<WorkspaceSourceReference[]>(row.sources, []);
+      const brief = progress.workflow?.brief ?? emptyWorkspaceBrief();
+      if (
+        !snapshot
+        || row.status !== 'completed'
+        || !this.finalSnapshotMatchesCurrent(
+          snapshot,
+          row,
+          brief,
+          plan,
+          sources,
+          row.draftFormat,
+          row.draftContent,
+        )
+      ) {
+        throw new BadRequestException({
+          code: 'workspace_archive_finalization_required',
+          message: 'Finalize the latest saved version before archiving.',
+        });
+      }
+      const professor = this.professorState(row, progress);
+      const tools = this.toolState(progress);
+      if (
+        professor.assistOperations.some((operation) => operation.status === 'pending')
+        || tools.operations.some((operation) => operation.status === 'pending')
+      ) {
+        throw new ConflictException({
+          code: 'workspace_archive_operation_in_progress',
+          message: 'Wait for the current Workspace operation before archiving.',
+        });
+      }
+      const now = new Date().toISOString();
+      const resultingRevision = row.autosaveRevision + 1;
+      const nextCompletion = this.withCompletionOperation(completion, {
+        requestId: request.requestId,
+        requestFingerprint,
+        action: 'archive',
+        status: 'completed',
+        createdAt: now,
+        updatedAt: now,
+        expectedRevision: request.expectedRevision,
+        resultingRevision,
+        snapshotId: snapshot.id,
+      });
+      const nextProgress = workspaceProgressFromPlan(
+        plan,
+        this.workspaceWorkflow(progress, brief, { completion: nextCompletion }),
+      );
+      const updated = await tx.academicWorkspace.updateMany({
+        where: { id, userId, autosaveRevision: row.autosaveRevision },
+        data: {
+          status: 'archived',
+          progress: asJson(nextProgress),
+          autosaveRevision: { increment: 1 },
+        },
+      });
+      if (updated.count !== 1) this.throwWorkspaceRevisionConflict();
+      const updatedRow = await tx.academicWorkspace.findFirst({ where: { id, userId } });
+      if (!updatedRow) throw new NotFoundException('Workspace not found.');
+      await this.syncExperience(updatedRow, 'archived', tx);
+      return { archived: true, status: 'archived', revision: resultingRevision, snapshot };
+    });
+  }
+
+  async restore(
+    userId: string,
+    id: string,
+    request: WorkspaceRestoreRequest,
+  ): Promise<WorkspaceRestoreResponse> {
+    this.assertCompletionRequestId(request.requestId);
+    const requestFingerprint = this.completionRequestFingerprint('restore', request);
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = accountDataLockKey(userId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const row = await tx.academicWorkspace.findFirst({ where: { id, userId } });
+      if (!row) throw new NotFoundException('Workspace not found.');
+      const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
+      const completion = this.completionState(progress);
+      const replay = this.completedCompletionOperation(completion, request.requestId, requestFingerprint, 'restore');
+      if (replay) {
+        return {
+          restored: true,
+          status: 'active',
+          revision: replay.resultingRevision ?? row.autosaveRevision,
+          latestSnapshot: completion.snapshots.at(-1) ?? null,
+        };
+      }
+      if (request.expectedRevision !== row.autosaveRevision) this.throwWorkspaceRevisionConflict();
+      if (row.status !== 'archived') {
+        throw new BadRequestException({
+          code: 'workspace_restore_not_archived',
+          message: 'Only an archived Workspace can be restored.',
+        });
+      }
+      const professor = this.professorState(row, progress);
+      const now = new Date().toISOString();
+      const resultingRevision = row.autosaveRevision + 1;
+      const restoredProfessor: WorkspaceProfessorState = {
+        ...this.persistableProfessor(professor),
+        currentPhase: 'WORK',
+        phaseSequence: professor.phaseSequence + 1,
+        phaseEnteredRevision: resultingRevision,
+        phaseEnteredDraftFingerprint: this.draftFingerprint(row.draftContent),
+        transitions: [
+          ...professor.transitions,
+          {
+            id: randomUUID(),
+            requestId: `restore-${this.completionRequestKey(request.requestId).slice(0, 24)}`,
+            from: professor.currentPhase,
+            to: 'WORK' as const,
+            createdAt: now,
+            revision: resultingRevision,
+          },
+        ].slice(-MAX_PROFESSOR_TRANSITIONS),
+      };
+      const nextCompletion = this.withCompletionOperation(completion, {
+        requestId: request.requestId,
+        requestFingerprint,
+        action: 'restore',
+        status: 'completed',
+        createdAt: now,
+        updatedAt: now,
+        expectedRevision: request.expectedRevision,
+        resultingRevision,
+        snapshotId: completion.snapshots.at(-1)?.id,
+      });
+      const brief = progress.workflow?.brief ?? emptyWorkspaceBrief();
+      const plan = fromJson<WorkspacePlanItem[]>(row.plan, []);
+      const sources = fromJson<WorkspaceSourceReference[]>(row.sources, []);
+      const nextProgress = workspaceProgressFromPlan(
+        plan,
+        this.workspaceWorkflow(progress, brief, {
+          professor: restoredProfessor,
+          completion: nextCompletion,
+        }),
+      );
+      const experienceSessionId = randomUUID();
+      const resumeTarget = { kind: 'workspace' as const, id: row.id, path: `/library/workspace/${row.id}` };
+      const context = createContext(userId, [{
+        id: `workspace:${row.id}`,
+        kind: 'workspace',
+        scope: 'active-object',
+        referenceId: row.id,
+        label: row.title,
+        priority: 100,
+        visibility: 'visible',
+      }]);
+      const completed = plan.filter((item) => item.completed).length;
+      const next = plan.find((item) => !item.completed);
+      await tx.experienceSession.create({ data: {
+        id: experienceSessionId,
+        userId,
+        type: 'workspace',
+        status: 'active',
+        title: row.title,
+        intent: row.objective || null,
+        inputModality: 'text',
+        activeContexts: asJson(context),
+        currentStep: optionalJson(next ? { id: next.id, label: next.title, state: 'active' } : null),
+        progress: asJson({
+          completed,
+          total: plan.length,
+          ...(plan.length ? { percent: Math.round((completed / plan.length) * 100) } : {}),
+        }),
+        productions: asJson([]),
+        sourceReferences: asJson(sources.map((source) => ({
+          kind: source.kind === 'document'
+            ? 'document'
+            : source.kind === 'collection'
+              ? 'document-collection'
+              : 'external-source',
+          id: source.id,
+          ...(source.title ? { title: source.title } : {}),
+        }))),
+        resumeTarget: asJson(resumeTarget),
+        workspaceRef: row.id,
+        idempotencyKey: `server:v1:workspace-restore:${this.completionRequestKey(request.requestId)}`,
+      } });
+      const updated = await tx.academicWorkspace.updateMany({
+        where: { id, userId, autosaveRevision: row.autosaveRevision, status: 'archived' },
+        data: {
+          status: 'active',
+          progress: asJson(nextProgress),
+          experienceSessionId,
+          resumeTarget: asJson(resumeTarget),
+          autosaveRevision: { increment: 1 },
+        },
+      });
+      if (updated.count !== 1) this.throwWorkspaceRevisionConflict();
+      return {
+        restored: true,
+        status: 'active',
+        revision: resultingRevision,
+        latestSnapshot: completion.snapshots.at(-1) ?? null,
+      };
     });
   }
 
@@ -651,6 +1217,7 @@ export class AcademicWorkspaceService {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const row = await tx.academicWorkspace.findFirst({ where: { id, userId } });
       if (!row) throw new NotFoundException('Workspace not found.');
+      this.assertWorkspaceMutable(row);
       const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
       const tools = this.reconcileStaleToolOperations(this.toolState(progress));
       const operation = this.toolOperation(tools, request.requestId);
@@ -756,6 +1323,7 @@ export class AcademicWorkspaceService {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const row = await tx.academicWorkspace.findFirst({ where: { id, userId } });
       if (!row) throw new NotFoundException('Workspace not found.');
+      this.assertWorkspaceMutable(row);
       const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
       const tools = this.reconcileStaleToolOperations(this.toolState(progress));
       const operation = this.toolOperation(tools, request.requestId);
@@ -805,6 +1373,7 @@ export class AcademicWorkspaceService {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const row = await tx.academicWorkspace.findFirst({ where: { id, userId } });
       if (!row) throw new NotFoundException('Workspace not found.');
+      this.assertWorkspaceMutable(row);
       await this.resolveWorkspaceSession(row, tx);
       const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
       const professor = this.reconcileStaleProfessorOperations(this.professorState(row, progress));
@@ -1297,15 +1866,279 @@ export class AcademicWorkspaceService {
   private workspaceWorkflow(
     progress: WorkspaceProgress,
     brief: WorkspaceBrief,
-    overrides: { professor?: WorkspaceProfessorState; tools?: WorkspaceToolState } = {},
+    overrides: {
+      professor?: WorkspaceProfessorState;
+      tools?: WorkspaceToolState;
+      completion?: WorkspaceCompletionState;
+    } = {},
   ): NonNullable<WorkspaceProgress['workflow']> {
     return {
       version: 1,
       brief,
       ...(progress.workflow?.professor ? { professor: progress.workflow.professor } : {}),
       ...(progress.workflow?.tools ? { tools: progress.workflow.tools } : {}),
+      ...(progress.workflow?.completion ? { completion: progress.workflow.completion } : {}),
       ...overrides,
     };
+  }
+
+  private completionState(progress: WorkspaceProgress): WorkspaceCompletionState {
+    const stored = progress.workflow?.completion;
+    if (!stored || stored.version !== 1) return initialWorkspaceCompletionState();
+    const now = Date.now();
+    const requestLedger = Object.fromEntries(
+      Object.entries(stored.requestLedger ?? {})
+        .filter(([, receipt]) => {
+          const updatedAt = Date.parse(receipt.updatedAt);
+          return Number.isFinite(updatedAt) && now - updatedAt <= WORKSPACE_COMPLETION_RECEIPT_TTL_MS;
+        })
+        .sort(([, left], [, right]) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+        .slice(0, MAX_WORKSPACE_COMPLETION_RECEIPTS),
+    );
+    return {
+      version: 1,
+      snapshots: Array.isArray(stored.snapshots) ? stored.snapshots : [],
+      operations: Array.isArray(stored.operations)
+        ? stored.operations.slice(-MAX_WORKSPACE_COMPLETION_OPERATIONS)
+        : [],
+      requestLedger,
+    };
+  }
+
+  private completionRequestKey(requestId: string): string {
+    return createHash('sha256').update(requestId).digest('hex');
+  }
+
+  private completionRequestFingerprint(action: string, request: unknown): string {
+    return createHash('sha256').update(JSON.stringify({ action, request })).digest('hex');
+  }
+
+  private completionReceipt(operation: WorkspaceCompletionOperation): WorkspaceCompletionRequestReceipt {
+    return {
+      requestFingerprint: operation.requestFingerprint,
+      action: operation.action,
+      status: operation.status,
+      updatedAt: operation.updatedAt,
+      ...(operation.resultingRevision === undefined ? {} : { resultingRevision: operation.resultingRevision }),
+      ...(operation.snapshotId ? { snapshotId: operation.snapshotId } : {}),
+      ...(operation.exportFormat ? { exportFormat: operation.exportFormat } : {}),
+    };
+  }
+
+  private withCompletionOperation(
+    state: WorkspaceCompletionState,
+    operation: WorkspaceCompletionOperation,
+  ): WorkspaceCompletionState {
+    const operations = [
+      ...state.operations.filter((item) => item.requestId !== operation.requestId),
+      operation,
+    ].slice(-MAX_WORKSPACE_COMPLETION_OPERATIONS);
+    const ledger = {
+      ...state.requestLedger,
+      [this.completionRequestKey(operation.requestId)]: this.completionReceipt(operation),
+    };
+    const requestLedger = Object.fromEntries(
+      Object.entries(ledger)
+        .sort(([, left], [, right]) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+        .slice(0, MAX_WORKSPACE_COMPLETION_RECEIPTS),
+    );
+    return { ...state, operations, requestLedger };
+  }
+
+  private completedCompletionOperation(
+    state: WorkspaceCompletionState,
+    requestId: string,
+    requestFingerprint: string,
+    action: WorkspaceCompletionOperation['action'],
+  ): Pick<WorkspaceCompletionOperation, 'snapshotId' | 'resultingRevision'> | null {
+    const operation = state.operations.find((item) => item.requestId === requestId);
+    const receipt = operation ?? state.requestLedger[this.completionRequestKey(requestId)];
+    if (!receipt) return null;
+    if (receipt.requestFingerprint !== requestFingerprint || receipt.action !== action) {
+      throw new ConflictException({
+        code: 'workspace_completion_idempotency_conflict',
+        message: 'This completion request id is already bound to another action.',
+      });
+    }
+    if (receipt.status !== 'completed') {
+      throw new ConflictException({
+        code: 'workspace_completion_request_unavailable',
+        message: 'This completion request did not complete. Retry with a new request id.',
+      });
+    }
+    return {
+      ...(receipt.snapshotId ? { snapshotId: receipt.snapshotId } : {}),
+      ...(receipt.resultingRevision === undefined ? {} : { resultingRevision: receipt.resultingRevision }),
+    };
+  }
+
+  private finalSnapshotCitations(
+    row: AcademicWorkspace,
+    tools: WorkspaceToolState,
+  ): WorkspaceSourceCitation[] {
+    const history = fromJson<WorkspaceAssistantHistoryEntry[]>(row.assistantHistory, []);
+    const candidates = [
+      ...history.flatMap((entry) => entry.citations ?? []),
+      ...tools.operations.flatMap((operation) => (
+        operation.status === 'applied' && operation.proposal
+          ? operation.proposal.citations
+          : []
+      )),
+    ];
+    const seen = new Set<string>();
+    return candidates.filter((citation) => {
+      const key = JSON.stringify([
+        citation.sourceType,
+        citation.sourceId,
+        citation.documentId ?? null,
+        citation.page ?? null,
+        citation.chunkIndex ?? null,
+        citation.url ?? null,
+        citation.snippet,
+      ]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  private async availableFinalSnapshotCitations(
+    userId: string,
+    citations: readonly WorkspaceSourceCitation[],
+    sourceStates: readonly WorkspaceSourceState[],
+  ): Promise<WorkspaceSourceCitation[]> {
+    const documentIds = [...new Set(citations.flatMap((citation) => {
+      const id = citation.documentId
+        ?? (citation.sourceType === 'document' ? citation.sourceId : undefined);
+      return id?.trim() ? [id.trim()] : [];
+    }))];
+    const directDocumentStates = sourceStates.filter((source) => source.kind === 'document');
+    const knownDocumentIds = new Set(directDocumentStates.map((source) => source.id));
+    const unresolvedDocumentIds = documentIds.filter((id) => !knownDocumentIds.has(id));
+    const resolvedDocumentStates = unresolvedDocumentIds.length > 0
+      ? (await this.sourceEngine.resolve(
+          userId,
+          unresolvedDocumentIds.map((id) => ({ kind: 'document' as const, id })),
+          { query: '', limit: 1 },
+        )).sources
+      : [];
+    const availableDocumentIds = new Set(
+      [...directDocumentStates, ...resolvedDocumentStates]
+        .filter((source) => source.availability === 'available')
+        .map((source) => source.id),
+    );
+    const brainAvailable = sourceStates.some((source) => (
+      source.kind === 'brain' && source.availability === 'available'
+    ));
+
+    return citations.filter((citation) => {
+      const documentId = citation.documentId
+        ?? (citation.sourceType === 'document' ? citation.sourceId : undefined);
+      if (documentId) return availableDocumentIds.has(documentId);
+      if (citation.sourceType === 'brain') return brainAvailable;
+      return true;
+    });
+  }
+
+  private finalSnapshotMatchesCurrent(
+    snapshot: WorkspaceFinalSnapshot,
+    row: AcademicWorkspace,
+    brief: WorkspaceBrief,
+    plan: readonly WorkspacePlanItem[],
+    sources: readonly WorkspaceSourceReference[],
+    draftFormat: string,
+    draftContent: string,
+  ): boolean {
+    return snapshot.revision === row.autosaveRevision
+      && snapshot.workspaceId === row.id
+      && snapshot.template === row.template
+      && snapshot.shell === workspaceShellFromTemplate(row.template as WorkspaceTemplate)
+      && snapshot.title === row.title
+      && snapshot.draft.format === draftFormat
+      && snapshot.draft.content === draftContent
+      && isDeepStrictEqual(snapshot.brief, brief)
+      && isDeepStrictEqual(snapshot.plan, plan)
+      && isDeepStrictEqual(snapshot.sources, sources);
+  }
+
+  private async resolveFinalizationSourceStates(
+    userId: string,
+    sources: readonly WorkspaceSourceReference[],
+  ): Promise<WorkspaceSourceState[]> {
+    if (sources.length === 0) return [];
+    const result = await this.sourceEngine.resolve(userId, sources, { query: '', limit: 1 });
+    return result.sources;
+  }
+
+  private assertCompletionRequestId(requestId: string): void {
+    if (!/^[A-Za-z0-9_-]{8,128}$/.test(requestId)) {
+      throw new BadRequestException('A valid completion request id is required.');
+    }
+  }
+
+  private assertOptionalCompletionDraft(draft: WorkspaceFinalizeRequest['draft']): void {
+    if (!draft) return;
+    if (!['markdown', 'plain-text', 'structured'].includes(draft.format)) {
+      throw new BadRequestException('Unsupported draft format.');
+    }
+    if (typeof draft.content !== 'string' || draft.content.length > 200_000) {
+      throw new BadRequestException('Workspace content is too large.');
+    }
+  }
+
+  private assertWorkspaceNotArchived(row: AcademicWorkspace): void {
+    if (row.status === 'archived') {
+      throw new ConflictException({
+        code: 'workspace_archived_read_only',
+        message: 'Restore this Workspace before changing it.',
+      });
+    }
+  }
+
+  private assertWorkspaceMutable(row: AcademicWorkspace): void {
+    this.assertWorkspaceNotArchived(row);
+    if (row.status === 'completed') this.throwCompletedWorkspaceReadOnly();
+  }
+
+  private continuedProfessorState(
+    row: AcademicWorkspace,
+    progress: WorkspaceProgress,
+    resultingRevision: number,
+  ): WorkspaceProfessorState {
+    const professor = this.professorState(row, progress);
+    const now = new Date().toISOString();
+    return {
+      ...this.persistableProfessor(professor),
+      currentPhase: 'WORK',
+      phaseSequence: professor.phaseSequence + 1,
+      phaseEnteredRevision: resultingRevision,
+      phaseEnteredDraftFingerprint: this.draftFingerprint(row.draftContent),
+      transitions: [
+        ...professor.transitions,
+        {
+          id: randomUUID(),
+          requestId: `continue-${randomUUID()}`,
+          from: professor.currentPhase,
+          to: 'WORK' as const,
+          createdAt: now,
+          revision: resultingRevision,
+        },
+      ].slice(-MAX_PROFESSOR_TRANSITIONS),
+    };
+  }
+
+  private throwCompletedWorkspaceReadOnly(): never {
+    throw new ConflictException({
+      code: 'workspace_completed_read_only',
+      message: 'Continue working before changing this finalized Workspace.',
+    });
+  }
+
+  private throwCompletionPersistenceConflict(): never {
+    throw new ConflictException({
+      code: 'workspace_completion_persistence_conflict',
+      message: 'The saved final version is inconsistent. Reload before continuing.',
+    });
   }
 
   private toolRequestFingerprint(toolId: string, request: WorkspaceToolExecuteRequest): string {
@@ -1348,6 +2181,7 @@ export class AcademicWorkspaceService {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
       const row = await tx.academicWorkspace.findFirst({ where: { id, userId } });
       if (!row) throw new NotFoundException('Workspace not found.');
+      this.assertWorkspaceMutable(row);
       // Validate the optional resumable wrapper before reserving or paying for
       // a provider turn. A corrupt ownership/type link must fail before the
       // external call, not during the post-provider synchronization commit.
@@ -2097,6 +2931,7 @@ export class AcademicWorkspaceService {
     const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
     const brief = progress.workflow?.brief ?? emptyWorkspaceBrief();
     const professor = this.reconcileStaleProfessorOperations(this.professorState(row, progress));
+    const completion = this.completionState(progress);
     return {
       id: row.id,
       userId: row.userId,
@@ -2124,6 +2959,7 @@ export class AcademicWorkspaceService {
         sources,
         draftContent: row.draftContent,
       }),
+      completion,
       professor,
       // Keep the top-level AW-5 view and the existing workflow envelope
       // consistent, including the read-only fallback for legacy dossiers.
@@ -2132,6 +2968,7 @@ export class AcademicWorkspaceService {
         this.workspaceWorkflow(progress, brief, {
           professor,
           tools: this.reconcileStaleToolOperations(this.toolState(progress)),
+          completion,
         }),
       ),
       autosaveRevision: row.autosaveRevision,
@@ -2188,6 +3025,12 @@ function fromJson<T>(value: Prisma.JsonValue, fallback: T): T {
 
 function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function workspaceExportDirection(locale: string | undefined, content: string): 'ltr' | 'rtl' {
+  const language = locale?.trim().toLowerCase().split(/[-_]/)[0];
+  if (language && ['ar', 'he', 'fa', 'ur'].includes(language)) return 'rtl';
+  return inferWorkspaceTextDirection(content);
 }
 
 function legacyPlanItemId(index: number, title: string, stepId?: string): string {
