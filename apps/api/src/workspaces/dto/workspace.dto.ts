@@ -23,6 +23,9 @@ import type {
   WorkspaceProgress,
   WorkspaceSourceReference,
   WorkspaceSourceQueryRequest,
+  WorkspaceToolApplyRequest,
+  WorkspaceToolExecuteRequest,
+  WorkspaceToolRejectRequest,
 } from '@second-brain/shared';
 import {
   WORKSPACE_ASSIST_ACTIONS,
@@ -142,4 +145,34 @@ export class WorkspaceSourceQueryDto implements WorkspaceSourceQueryRequest {
 
   @IsOptional() @IsInt() @Min(1) @Max(20)
   limit?: number;
+}
+
+export class WorkspaceToolExecuteDto implements WorkspaceToolExecuteRequest {
+  @IsString() @MinLength(8) @MaxLength(128) @Matches(/^[A-Za-z0-9_-]+$/)
+  requestId!: string;
+
+  @IsInt() @Min(0)
+  expectedRevision!: number;
+
+  @IsOptional() @IsString() @MaxLength(8_000)
+  selectedText?: string;
+
+  @IsOptional() @IsString() @MaxLength(2_000)
+  message?: string;
+}
+
+export class WorkspaceToolApplyDto implements WorkspaceToolApplyRequest {
+  @IsString() @MinLength(8) @MaxLength(128) @Matches(/^[A-Za-z0-9_-]+$/)
+  requestId!: string;
+
+  @IsInt() @Min(0)
+  expectedRevision!: number;
+
+  @IsObject()
+  draft!: WorkspaceToolApplyRequest['draft'];
+}
+
+export class WorkspaceToolRejectDto implements WorkspaceToolRejectRequest {
+  @IsString() @MinLength(8) @MaxLength(128) @Matches(/^[A-Za-z0-9_-]+$/)
+  requestId!: string;
 }

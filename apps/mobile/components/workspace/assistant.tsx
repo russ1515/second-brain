@@ -10,7 +10,9 @@ import {
   type WorkspaceCompletionCheck,
   type WorkspaceProfessorPhase,
   type WorkspaceProfessorState,
+  type WorkspaceShellKind,
   type WorkspaceSourceCitation,
+  type WorkspaceToolProposal,
 } from '@second-brain/shared';
 import { api } from '../../lib/client';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
@@ -18,17 +20,27 @@ import { useTokens } from '../../lib/design/theme';
 import { createClientRequestId } from '../../lib/request-id';
 import { Alert, Badge, Button, Card, Input } from '../ds/core';
 import { SourceCitation, SourcePreview, type SourceKind } from '../ds/sources';
+import {
+  WorkspaceTools,
+  type WorkspaceToolApplicationMode,
+  type WorkspaceToolSelectionSnapshot,
+} from './tools';
 
 export function WorkspaceAssistant({
   workspaceId,
   initialHistory,
   professor,
+  shellKind,
+  draftRevision,
+  sourceCount,
   completionChecks,
   selectedText,
+  selection,
   onBeforeAssist,
   onAssistFailure,
   onProfessorChange,
   onRequestTransition,
+  onApplyToolProposal,
   onApplyProposal,
   onUndo,
   canUndo,
@@ -36,12 +48,21 @@ export function WorkspaceAssistant({
   workspaceId: string;
   initialHistory: WorkspaceAssistantHistoryEntry[];
   professor: WorkspaceProfessorState;
+  shellKind: WorkspaceShellKind;
+  draftRevision: number;
+  sourceCount: number;
   completionChecks: WorkspaceCompletionCheck[];
   selectedText: string;
+  selection: { start: number; end: number };
   onBeforeAssist: () => Promise<number | null>;
   onAssistFailure: () => Promise<void>;
   onProfessorChange: (professor: WorkspaceProfessorState, revision: number) => void;
   onRequestTransition: (requestedPhase: WorkspaceProfessorPhase) => Promise<void>;
+  onApplyToolProposal: (
+    proposal: WorkspaceToolProposal,
+    mode: WorkspaceToolApplicationMode,
+    selectionAtRun: WorkspaceToolSelectionSnapshot,
+  ) => Promise<void>;
   onApplyProposal: (proposal: string, mode: 'insert' | 'replace') => void;
   onUndo: () => void;
   canUndo: boolean;
@@ -186,6 +207,17 @@ export function WorkspaceAssistant({
         /> : null}
       </View>
     </View>
+    <WorkspaceTools
+      workspaceId={workspaceId}
+      shellKind={shellKind}
+      phase={professor.currentPhase}
+      selectedText={selectedText}
+      selection={selection}
+      sourceCount={sourceCount}
+      currentRevision={draftRevision}
+      onBeforeRun={onBeforeAssist}
+      onApply={onApplyToolProposal}
+    />
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.xs }}>{WORKSPACE_ASSIST_ACTIONS.map((value) => <Button key={value} size="sm" variant={action === value ? 'ai' : 'secondary'} label={t(`workspace10.assist.${value}` as TranslationKey)} onPress={() => setAction(value)} />)}</ScrollView>
     {selectedText ? <Alert tone="info" title={t('workspace10.selection')} detail={selectedText.slice(0, 180)} /> : null}
     <ScrollView

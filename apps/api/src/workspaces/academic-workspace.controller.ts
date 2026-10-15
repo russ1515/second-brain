@@ -8,6 +8,10 @@ import type {
   WorkspaceProfessorTransitionResponse,
   WorkspaceSourceQueryResponse,
   WorkspaceSourceStatesResponse,
+  WorkspaceToolApplyResponse,
+  WorkspaceToolExecuteResponse,
+  WorkspaceToolListResponse,
+  WorkspaceToolRejectResponse,
 } from '@second-brain/shared';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
@@ -20,6 +24,9 @@ import {
   WorkspaceAutosaveDto,
   WorkspaceProfessorTransitionDto,
   WorkspaceSourceQueryDto,
+  WorkspaceToolApplyDto,
+  WorkspaceToolExecuteDto,
+  WorkspaceToolRejectDto,
 } from './dto/workspace.dto';
 
 @UseGuards(JwtAccessGuard)
@@ -80,6 +87,47 @@ export class AcademicWorkspaceController {
     @Body() dto: WorkspaceSourceQueryDto,
   ): Promise<WorkspaceSourceQueryResponse> {
     return this.workspaces.querySources(user.userId, id, dto);
+  }
+
+  @Get(':id/tools')
+  listTools(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<WorkspaceToolListResponse> {
+    return this.workspaces.listTools(user.userId, id);
+  }
+
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post(':id/tools/:toolId')
+  executeTool(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('toolId') toolId: string,
+    @Body() dto: WorkspaceToolExecuteDto,
+  ): Promise<WorkspaceToolExecuteResponse> {
+    return this.workspaces.executeTool(user.userId, id, toolId, dto);
+  }
+
+  @Throttle({ default: { limit: 40, ttl: 60_000 } })
+  @Post(':id/tools/:toolId/apply')
+  applyTool(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('toolId') toolId: string,
+    @Body() dto: WorkspaceToolApplyDto,
+  ): Promise<WorkspaceToolApplyResponse> {
+    return this.workspaces.applyToolProposal(user.userId, id, toolId, dto);
+  }
+
+  @Throttle({ default: { limit: 40, ttl: 60_000 } })
+  @Post(':id/tools/:toolId/reject')
+  rejectTool(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('toolId') toolId: string,
+    @Body() dto: WorkspaceToolRejectDto,
+  ): Promise<WorkspaceToolRejectResponse> {
+    return this.workspaces.rejectToolProposal(user.userId, id, toolId, dto);
   }
 
   @Throttle({ default: { limit: 20, ttl: 60_000 } })

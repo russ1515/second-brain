@@ -19,6 +19,9 @@ import {
   type WorkspaceSourceReference,
   type WorkspaceSourceState,
   type WorkspaceSourceStatesResponse,
+  type WorkspaceToolApplyRequest,
+  type WorkspaceToolApplyResponse,
+  type WorkspaceToolProposal,
 } from '@second-brain/shared';
 import { api, ApiError } from '../../../lib/client';
 import { useI18n, type TranslationKey } from '../../../lib/i18n';
@@ -32,6 +35,10 @@ import { SourceCitation, SourcePreview } from '../../../components/ds/sources';
 import { SmartErrorState, SmartLoadingState } from '../../../components/ds/states';
 import { WorkspaceAssistant } from '../../../components/workspace/assistant';
 import { WorkspaceShell, type WorkspaceShellArea } from '../../../components/workspace/shell';
+import type {
+  WorkspaceToolApplicationMode,
+  WorkspaceToolSelectionSnapshot,
+} from '../../../components/workspace/tools';
 
 interface WorkspaceConflictDraft {
   content: string;
@@ -69,6 +76,7 @@ export default function AcademicWorkspaceScreen() {
   const loadedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentRef = useRef('');
+  const selectionRef = useRef({ start: 0, end: 0 });
   const conflictActiveRef = useRef(false);
   const leavingRef = useRef(false);
   const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
@@ -164,6 +172,7 @@ export default function AcademicWorkspaceScreen() {
 
   saveRef.current = save;
   contentRef.current = content;
+  selectionRef.current = selection;
 
   useEffect(() => {
     if (!loadedRef.current || content === lastSavedRef.current || conflictActiveRef.current) return;
@@ -297,6 +306,89 @@ export default function AcademicWorkspaceScreen() {
     const leading = before && !before.endsWith('\n') ? '\n\n' : '';
     const trailing = after && !after.startsWith('\n') ? '\n\n' : '';
     setContent(`${before}${leading}${normalized}${trailing}${after}`);
+  };
+
+  const markToolProposalStale = () => {
+    const localContent = contentRef.current;
+    conflictActiveRef.current = true;
+    setConflictDraft((current) => current
+      ? { ...current, content: localContent, copyState: 'idle' }
+      : { content: localContent, serverReloaded: false, copyState: 'idle' });
+    setShowConflictDraft(false);
+    setSaveState('error');
+  };
+
+  const applyWorkspaceToolProposal = async (
+    proposal: WorkspaceToolProposal,
+    mode: WorkspaceToolApplicationMode,
+    selectionAtRun: WorkspaceToolSelectionSnapshot,
+  ): Promise<void> => {
+    if (!workspace) return;
+    const currentDraft = contentRef.current;
+    const draftChangedAfterTool = currentDraft !== lastSavedRef.current;
+    const revisionChangedAfterTool = revisionRef.current !== proposal.baseRevision;
+    const currentSelection = selectionRef.current;
+    const selectionChangedAfterTool = mode === 'replace' && (
+      currentSelection.start !== selectionAtRun.start
+      || currentSelection.end !== selectionAtRun.end
+      || currentDraft.slice(selectionAtRun.start, selectionAtRun.end).trim() !== selectionAtRun.text
+    );
+
+    if (draftChangedAfterTool || revisionChangedAfterTool || selectionChangedAfterTool) {
+      throw new ApiError(409, t('error.conflict'));
+    }
+
+    const normalized = proposal.content.trim();
+    if (!normalized) throw new ApiError(422, t('error.validation'));
+    let nextContent: string;
+    if (mode === 'replace' && selectionAtRun.end > selectionAtRun.start) {
+      nextContent = `${currentDraft.slice(0, selectionAtRun.start)}${normalized}${currentDraft.slice(selectionAtRun.end)}`;
+    } else {
+      const before = currentDraft.slice(0, selectionAtRun.end);
+      const after = currentDraft.slice(selectionAtRun.end);
+      const leading = before && !before.endsWith('\n') ? '\n\n' : '';
+      const trailing = after && !after.startsWith('\n') ? '\n\n' : '';
+      nextContent = `${before}${leading}${normalized}${trailing}${after}`;
+    }
+
+    const request: WorkspaceToolApplyRequest = {
+      requestId: proposal.requestId,
+      expectedRevision: proposal.baseRevision,
+      draft: { format: 'markdown', content: nextContent },
+    };
+    try {
+      const response = await api<WorkspaceToolApplyResponse>(
+        `/workspaces/${workspace.id}/tools/${proposal.toolId}/apply`,
+        { method: 'POST', body: request, requestId: request.requestId },
+      );
+      // The server may accept the proposal while the learner is still typing.
+      // Keep that newer local draft in conflict recovery instead of replacing it
+      // with the proposal payload computed before the request started.
+      if (contentRef.current !== currentDraft || revisionRef.current !== proposal.baseRevision) {
+        throw new ApiError(409, t('error.conflict'));
+      }
+      setAssistantUndo(currentDraft);
+      revisionRef.current = response.revision;
+      lastSavedRef.current = nextContent;
+      contentRef.current = nextContent;
+      setContent(nextContent);
+      setWorkspace((current) => current ? {
+        ...current,
+        autosaveRevision: response.revision,
+        draft: {
+          ...current.draft,
+          content: nextContent,
+          revision: response.revision,
+          updatedAt: response.updatedAt,
+        },
+        updatedAt: response.updatedAt,
+      } : current);
+      setSaveState('saved');
+      setError(null);
+    } catch (caught) {
+      if ((caught as ApiError).status === 409) markToolProposalStale();
+      throw caught;
+    }
   };
 
   const undoAssistantInsertion = () => {
@@ -468,12 +560,17 @@ export default function AcademicWorkspaceScreen() {
       workspaceId={workspace.id}
       initialHistory={workspace.assistantHistory}
       professor={workspace.professor}
+      shellKind={shellKind}
+      draftRevision={workspace.autosaveRevision}
+      sourceCount={workspace.sources.length}
       completionChecks={completionChecks}
       selectedText={selectedText}
+      selection={selection}
       onBeforeAssist={prepareProfessorAssist}
       onAssistFailure={handleProfessorAssistFailure}
       onProfessorChange={applyProfessorState}
       onRequestTransition={transitionProfessor}
+      onApplyToolProposal={applyWorkspaceToolProposal}
       onApplyProposal={applyAssistantProposal}
       onUndo={undoAssistantInsertion}
       canUndo={assistantUndo !== null}
@@ -481,11 +578,17 @@ export default function AcademicWorkspaceScreen() {
   );
   const editor = <EditorPanel content={content} saveState={saveState} onChange={(value) => {
     setAssistantUndo(null);
+    // Make in-flight proposal guards observe the keystroke immediately, before
+    // React schedules the render that mirrors `content` into the ref.
+    contentRef.current = value;
     setContent(value);
     if (conflictActiveRef.current) {
       setConflictDraft((current) => current ? { ...current, content: value, copyState: 'idle' } : current);
     }
-  }} onSelection={setSelection} onInsert={insertMarkup} onSave={() => void save(content)} />;
+  }} onSelection={(nextSelection) => {
+    selectionRef.current = nextSelection;
+    setSelection(nextSelection);
+  }} onInsert={insertMarkup} onSave={() => void save(content)} />;
 
   return <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1, backgroundColor: c.background }}>
     <Page width="fluid" style={{ gap: spacing.lg, paddingBottom: spacing.huge }} testID="academic-workspace">
