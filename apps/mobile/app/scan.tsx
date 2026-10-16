@@ -51,10 +51,14 @@ export default function ScanScreen() {
     source?: string | string[];
     captureType?: string | string[];
     workspaceId?: string | string[];
+    researchQuestion?: string | string[];
+    researchDepth?: string | string[];
   }>();
   const mode = first(params.mode) === 'qr' ? 'qr' : 'document';
   const source = first(params.source);
   const workspaceId = first(params.workspaceId);
+  const researchQuestion = first(params.researchQuestion);
+  const researchDepth = first(params.researchDepth);
   const requestedContentType = first(params.captureType) === 'photo' ? 'PHOTO' : 'SCAN';
   const [pages, setPages] = useState<ScanPage[]>([]);
   const [selected, setSelected] = useState(0);
@@ -419,6 +423,21 @@ export default function ScanScreen() {
         </Card>
         {done.content ? <Text style={{ color: c.textSecondary }} numberOfLines={12}>{done.content}</Text> : null}
         {source === 'learn' ? <Button label={t('scan.returnToLearn')} onPress={() => router.replace({ pathname: '/learn', params: { documentId: done.id, documentTitle: done.title } })} /> : null}
+        {source === 'research' ? <Button
+          testID="scan-return-to-research"
+          label={t('researchV1.scan.useAsSource')}
+          onPress={() => router.replace({
+            pathname: '/research',
+            params: {
+              documentId: done.id,
+              documentTitle: done.title,
+              captureStatus: done.status,
+              ...(researchQuestion ? { q: researchQuestion } : {}),
+              ...(researchDepth ? { depth: researchDepth } : {}),
+              ...(workspaceId ? { workspaceId } : {}),
+            },
+          })}
+        /> : null}
         {source === 'workspace' ? <Button
           testID="scan-return-to-workspace"
           label={t('workspace10.addSource')}

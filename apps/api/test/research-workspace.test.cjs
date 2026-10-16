@@ -21,12 +21,12 @@ function serviceWith({ results = [], brainItems = [], availability = 'unavailabl
     if (messages[0]?.content?.includes('small, adaptive research plan')) {
       return { text: JSON.stringify({ queries: planQueries ?? ['Question?', 'Evidence?', 'Contradictions?'] }) };
     }
-    return { text: llmResult ?? JSON.stringify({ synthesis: 'Grounded result', keyPoints: ['Point'], claims: [], sections: [], comparison: null }) };
+    return { text: llmResult ?? JSON.stringify({ synthesis: 'Grounded result', keyPoints: ['Point'], followUpQuestions: ['What evidence comes next?', 'What are the limits?', 'How can I compare this?'], claims: [], sections: [], comparison: null }) };
   } };
   const prisma = { profile: { findUnique: async ({ where }) => { calls.push({ kind: 'profile', userId: where.userId }); return { preferredLanguage: 'en' }; } } };
   const provider = {
     name: availability === 'available' ? 'configured-test-provider' : 'disabled',
-    availability: async () => ({ status: availability, checkedAt: new Date().toISOString(), capabilities: { webSearch: availability === 'available', externalSearch: false, sourceMetadata: false, dateFiltering: false, languageFiltering: false } }),
+    availability: async () => ({ status: availability, checkedAt: new Date().toISOString(), ...(availability !== 'available' ? { reasonCode: 'research.provider.unavailable_config' } : {}), capabilities: { webSearch: availability === 'available', externalSearch: false, sourceMetadata: false, dateFiltering: false, languageFiltering: false } }),
     search: async (request) => { calls.push({ kind: 'web', request }); return { query: request.query, sources: webSources, citations: [], provider: 'configured-test-provider', retrievedAt: new Date().toISOString() }; },
   };
   const externalProvider = {
@@ -40,11 +40,12 @@ function serviceWith({ results = [], brainItems = [], availability = 'unavailabl
 test('quick research is grounded, bounded and strips comparison', async () => {
   const { service, calls } = serviceWith({
     results: [{ documentId: 'd1', documentTitle: 'Owned', chunkIndex: 0, content: 'Evidence', score: 0.9 }],
-    llmResult: JSON.stringify({ synthesis: 'Answer [document:d1:0]', keyPoints: [], sections: [], comparison: { agreements: ['A'], divergences: [], specificities: [] } }),
+    llmResult: JSON.stringify({ synthesis: 'Answer [document:d1:0]', keyPoints: [], followUpQuestions: ['Next?', 'Limits?', 'Compare?', 'Ignored?'], sections: [], comparison: { agreements: ['A'], divergences: [], specificities: [] } }),
   });
   const result = await service.run('user-1', { question: 'Question?', depth: 'quick', scopes: [{ kind: 'library' }] });
   assert.equal(result.citations.length, 1);
   assert.equal(result.comparison, null);
+  assert.deepEqual(result.followUpQuestions, ['Next?', 'Limits?', 'Compare?']);
   assert.deepEqual(result.stages.map((stage) => stage.kind), ['sources-found', 'sources-read', 'synthesized']);
   assert.equal(calls.find((call) => call.kind === 'search').userId, 'user-1');
   assert.equal(calls.find((call) => call.kind === 'search').options.limit, 5);
@@ -73,7 +74,8 @@ test('unconfigured Web never simulates sources or calls the language model', asy
   assert.equal(result.citations.length, 0);
   assert.equal(result.synthesis, '');
   assert.equal(result.partial, true);
-  assert.ok(result.limits.includes('NO_PROVIDER'));
+  assert.ok(result.limits.includes('UNAVAILABLE_CONFIG'));
+  assert.deepEqual(result.followUpQuestions, []);
   assert.equal(calls.some((call) => call.kind === 'llm'), false);
 });
 
@@ -160,6 +162,7 @@ test('workspace path selection persists the brief and drives the contextual assi
   const home = read('apps/mobile/app/library/workspace/index.tsx');
   const workspace = read('apps/mobile/app/library/workspace/[id].tsx');
   const workspaceShell = read('apps/mobile/components/workspace/shell.tsx');
+  const completion = read('apps/mobile/components/workspace/completion.tsx');
 
   assert.match(service, /localizedDefaultWorkspacePlan\(request\.template, locale\)/);
   assert.match(service, /workspaceDefaultPlan\(template\)/);
@@ -178,7 +181,7 @@ test('workspace path selection persists the brief and drives the contextual assi
   assert.match(home, /plan: localizedPlan/);
   assert.match(home, /brief:/);
   assert.match(workspace, /workspace-adaptive-brief/);
-  assert.match(workspace, /workspace-completion-controls/);
+  assert.match(completion, /workspace-aw8-completion/);
   assert.match(workspace, /editorPanel=\{editor\}[\s\S]*assistantPanel=\{assistantPanel\}/);
   assert.match(workspaceShell, /\{editorPanel\}\{assistantPanel\}/);
 });

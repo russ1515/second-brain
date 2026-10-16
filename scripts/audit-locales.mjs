@@ -38,6 +38,7 @@ const TEACHING_LANGUAGE_V1_FILE = path.join(LOCALES_DIR, 'teaching-language-v1.t
 const WORKSPACE_CAPTURE_V1_FILE = path.join(LOCALES_DIR, 'workspace-capture-v1.ts');
 const WORKSPACE_ORCHESTRATOR_V1_FILE = path.join(LOCALES_DIR, 'workspace-orchestrator-v1.ts');
 const WORKSPACE_SHELLS_V1_FILE = path.join(LOCALES_DIR, 'workspace-shells-v1.ts');
+const PRODUCT_UX_V1_FILE = path.join(LOCALES_DIR, 'product-ux-v1.ts');
 
 export const ALL_LOCALE_CODES = Object.freeze(['en', 'fr', ...SUPPORTED_CODES]);
 export const PROTECTED_BRANDS = Object.freeze([
@@ -357,6 +358,13 @@ export function auditRepository() {
   const workspaceCaptureV1 = readNestedCatalog(WORKSPACE_CAPTURE_V1_FILE, 'workspaceCaptureV1');
   const workspaceOrchestratorV1 = readNestedCatalog(WORKSPACE_ORCHESTRATOR_V1_FILE, 'workspaceOrchestratorV1');
   const workspaceShellsV1 = readNestedCatalog(WORKSPACE_SHELLS_V1_FILE, 'workspaceShellsV1');
+  const productUxV1Keys = readStringArray(PRODUCT_UX_V1_FILE, 'productUxV1Keys');
+  const productUxV1 = readTupleCatalog(
+    PRODUCT_UX_V1_FILE,
+    'productUxV1Translations',
+    productUxV1Keys,
+  );
+  const productUxV1Aliases = readCatalog(PRODUCT_UX_V1_FILE, 'productUxV1Aliases');
   const catalogs = new Map([
     ['en', english],
     ['fr', french],
@@ -392,6 +400,7 @@ export function auditRepository() {
     const workspaceCapture = workspaceCaptureV1.get(code) ?? new Map();
     const workspaceOrchestrator = workspaceOrchestratorV1.get(code) ?? new Map();
     const workspaceShells = workspaceShellsV1.get(code) ?? new Map();
+    const productUx = productUxV1.get(code) ?? new Map();
     const beforeAliases = new Map([
       ...base,
       ...essential,
@@ -409,6 +418,7 @@ export function auditRepository() {
       ...workspaceCapture,
       ...workspaceOrchestrator,
       ...workspaceShells,
+      ...productUx,
     ]);
     const globalPath = new Map(
       [...globalPathAliases].flatMap(([target, source]) => {
@@ -416,7 +426,17 @@ export function auditRepository() {
         return typeof value === 'string' && value.trim().length > 0 ? [[target, value]] : [];
       }),
     );
-    const beforeMasteryAliases = new Map([...beforeAliases, ...globalPath]);
+    const beforeProductUxAliases = new Map([...beforeAliases, ...globalPath]);
+    const productUxAliases = new Map(
+      [...productUxV1Aliases].flatMap(([target, source]) => {
+        const value = beforeProductUxAliases.get(source);
+        return typeof value === 'string' && value.trim().length > 0 ? [[target, value]] : [];
+      }),
+    );
+    const beforeMasteryAliases = new Map([
+      ...beforeProductUxAliases,
+      ...productUxAliases,
+    ]);
     const languageMastery = new Map(
       [...languageMasteryAliases].flatMap(([target, source]) => {
         const value = beforeMasteryAliases.get(source);
@@ -445,7 +465,9 @@ export function auditRepository() {
       { name: 'workspace-capture-v1.ts', entries: workspaceCapture },
       { name: 'workspace-orchestrator-v1.ts', entries: workspaceOrchestrator },
       { name: 'workspace-shells-v1.ts', entries: workspaceShells },
+      { name: 'product-ux-v1.ts', entries: productUx },
       { name: 'global-path-v1.ts', entries: globalPath },
+      { name: 'product-ux-v1.ts:aliases', entries: productUxAliases },
       { name: 'language-mastery-v1.ts', entries: languageMastery },
       { name: 'language-mastery-v1.ts:languageBulletinTranslations', entries: languageBulletin },
     ]);

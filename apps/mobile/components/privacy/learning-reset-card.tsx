@@ -11,6 +11,7 @@ import { useAuth } from '../../lib/auth-context';
 import { useTokens } from '../../lib/design/theme';
 import { useI18n } from '../../lib/i18n';
 import { clearLocalLearningState } from '../../lib/learning-reset-local';
+import { PasswordVisibilityField } from './password-visibility-field';
 
 const REQUIRED_CONFIRMATION = 'RÉINITIALISER';
 
@@ -112,7 +113,7 @@ export function LearningResetCard() {
             {t('priv.learningReset.pdfReminder')}
           </Text>
           {error ? <ErrorBanner message={error} /> : null}
-          <TextInput
+          <PasswordVisibilityField
             style={{
               backgroundColor: c.surfaceElevated,
               borderWidth: 1,
@@ -126,8 +127,6 @@ export function LearningResetCard() {
             onChangeText={setPassword}
             placeholder={t('priv.passwordPlaceholder')}
             placeholderTextColor={c.textMuted}
-            secureTextEntry
-            autoCapitalize="none"
             accessibilityLabel={t('priv.passwordPlaceholder')}
             testID="learning-reset-password"
           />

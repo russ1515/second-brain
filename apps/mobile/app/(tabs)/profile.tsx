@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Image, Platform, ScrollView, Text, View } from 'react-native';
+import { Image, ScrollView, Text, View } from 'react-native';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { useFocusEffect, useRouter } from 'expo-router';
 import type {
@@ -339,13 +339,6 @@ export default function ProfileScreen() {
 
               <Section title={t('profile.section.privacy')} description={t('profile.section.privacyDetail')}>
                 <View style={{ gap: 12 }}>
-                  {Platform.OS === 'web' ? (
-                    <Card style={{ gap: 10 }} testID="profile-mfa-card">
-                      <Text style={{ color: c.textPrimary, fontSize: 16, fontWeight: '800' }}>{t('mfa.profileTitle')}</Text>
-                      <Text style={{ color: c.textSecondary, fontSize: 13, lineHeight: 19 }}>{t('mfa.profileDetail')}</Text>
-                      <Button label={t('mfa.open')} variant="secondary" onPress={() => router.push('/two-factor')} />
-                    </Card>
-                  ) : null}
                   <DataPrivacyCard
                     scheme={scheme}
                     onScheme={setScheme}

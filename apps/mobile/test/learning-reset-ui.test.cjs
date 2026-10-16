@@ -15,6 +15,7 @@ test('privacy exposes a distinct strong learning reset flow', () => {
   assert.match(reset, /const REQUIRED_CONFIRMATION = 'RÉINITIALISER'/);
   assert.match(reset, /confirmation === REQUIRED_CONFIRMATION/);
   assert.match(reset, /testID="learning-reset-password"/);
+  assert.match(reset, /<PasswordVisibilityField/);
   assert.match(reset, /testID="learning-reset-confirmation"/);
   assert.match(reset, /testID="learning-reset-open"/);
   assert.match(reset, /testID="learning-reset-cancel"/);
@@ -25,6 +26,16 @@ test('privacy exposes a distinct strong learning reset flow', () => {
   assert.ok(localReset > serverReset);
   assert.match(reset, /refreshOnboarding\(\)/);
   assert.match(reset, /router\.replace\('\/onboarding'\)/);
+});
+
+test('reset and account deletion keep passwords hidden by default with an accessible reveal control', () => {
+  const privacy = read('app/privacy.tsx');
+  const field = read('components/privacy/password-visibility-field.tsx');
+
+  assert.match(privacy, /testID="delete-account-password"/);
+  assert.match(field, /secureTextEntry=\{!visible\}/);
+  assert.match(field, /accessibilityLabel=\{visibilityLabel\}/);
+  assert.match(field, /'auth\.hidePassword' : 'auth\.showPassword'/);
 });
 
 test('successful reset clears owner drafts, cached learning views and the offline outbox', () => {

@@ -88,12 +88,11 @@ test('learning report uses the canonical six evidence dimensions and completion 
   assert.doesNotMatch(source, /score\(assessed\.averageAssessmentScore|averageExerciseScore \* 100/);
 });
 
-test('Privacy makes the A4 learning report primary while retaining JSON portability', () => {
+test('Privacy keeps export engines available but removes their visible learner controls', () => {
   const privacy = fs.readFileSync(path.resolve(__dirname, '../app/privacy.tsx'), 'utf8');
-  const reportIndex = privacy.indexOf("t('priv.learningReport.title')");
-  const jsonIndex = privacy.indexOf("t('priv.exportHelp')");
-  assert.ok(reportIndex >= 0 && jsonIndex > reportIndex);
-  assert.match(privacy, /api<LearningReportView>\(\s*`\/me\/learning-report\?locale=/);
-  assert.match(privacy, /saveLearningReportAsPdf/);
-  assert.match(privacy, /api<DataExportResponse>\('\/me\/export'\)/);
+  assert.doesNotMatch(privacy, /priv\.learningReport|priv\.export|\/me\/learning-report|\/me\/export/);
+  assert.doesNotMatch(privacy, /saveLearningReportAsPdf|DataExportResponse|LearningReportView/);
+  assert.match(privacy, /<LearningResetCard\s*\/>/);
+  assert.match(privacy, /api\('\/me\/delete'/);
+  assert.match(source, /export function learningReportHtml/);
 });

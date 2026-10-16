@@ -9,6 +9,9 @@ import type {
   ResearchSourceQuality,
 } from '@second-brain/shared';
 import type { ResearchProvider } from '../research-provider.interface';
+import { ResearchProviderError } from './research-provider.error';
+
+export { ResearchProviderError } from './research-provider.error';
 
 interface ResearchFetchResponse {
   ok: boolean;
@@ -159,13 +162,6 @@ export class OpenAIWebResearchProvider implements ResearchProvider {
     // Deliberately do not perform arbitrary server-side URL fetches. Metadata is
     // accepted only from the Web Search response that produced the citation.
     return null;
-  }
-}
-
-export class ResearchProviderError extends Error {
-  constructor(readonly code: 'NO_PROVIDER' | 'PROVIDER_TIMEOUT' | 'RATE_LIMIT' | 'NO_RESULTS' | 'SOURCE_FETCH_ERROR', readonly status: number) {
-    super(code);
-    this.name = 'ResearchProviderError';
   }
 }
 

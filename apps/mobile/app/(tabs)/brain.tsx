@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { RefreshControl, ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import type {
@@ -11,11 +12,12 @@ import { api } from '../../lib/client';
 import { useAuth } from '../../lib/auth-context';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
-import { Badge, Card } from '../../components/ds/core';
+import { Badge, Card, SegmentedControl } from '../../components/ds/core';
 import { Page, Section } from '../../components/ds/layout';
 import { SmartEmptyState, SmartErrorState, SmartLoadingState, SmartState } from '../../components/ds/states';
 import { EvidenceProgressPanel } from '../../components/learning/evidence-progress';
-import { LanguageMasteryBulletins } from '../../components/language/course-ui';
+import { BrainLanguageBulletinGrid } from '../../components/brain/language-bulletin-grid';
+import { CognostatityPanel } from '../../components/brain/cognostatity-panel';
 import { loadLanguageProfile, loadRlleCourse } from '../../lib/language-rll-client';
 import {
   resolveBrainLanguageBulletins,
@@ -41,6 +43,7 @@ export default function BrainScreen() {
     : params.languageProfileId;
   const { t } = useI18n();
   const { colors: c, spacing } = useTokens();
+  const [activeTab, setActiveTab] = useState<'evidence' | 'cognostatity'>('evidence');
   const overview = useQuery<BrainOverview>({
     queryKey: ['brain', 'evidence-overview', user?.id],
     queryFn: ({ signal }) => api<BrainOverview>('/brain/overview', { signal }),
@@ -88,18 +91,25 @@ export default function BrainScreen() {
     >
       <Page width="wide" style={{ gap: spacing.xl, paddingBottom: spacing.huge }} testID="brain-evidence-view">
         {overview.error ? <SmartState state="stale" detail={t('home4.stale')} /> : data.partial ? <SmartState state="partial" detail={t('home4.partial')} /> : null}
-        {languageCourses.isPending ? <SmartLoadingState title={t('state.loading')} /> : null}
-        {languageCourses.error || languageCourses.data?.partial ? <SmartState state="partial" detail={t('home4.partial')} /> : null}
-        {languageCourses.data?.items.map(({ profile, course }) => course.kind === 'live' ? (
-          <LanguageMasteryBulletins
-            key={profile.id}
-            bulletins={course.course.masteryBulletins}
-            units={course.course.units}
-            language={profile.language}
-          />
-        ) : null)}
-        <EvidenceProgressPanel progress={data.evidenceProgress} />
-        <CompletionEvidenceHistory items={data.completionHistory.items} />
+        <SegmentedControl
+          options={['evidence', 'cognostatity'] as const}
+          value={activeTab}
+          onChange={setActiveTab}
+          labelFor={(tab) => t(tab === 'evidence' ? 'brainV1.tabs.evidence' : 'brainV1.tabs.cognostatity')}
+          wrap
+          testID="brain-view-tabs"
+        />
+        {activeTab === 'evidence' ? (
+          <>
+            {languageCourses.isPending ? <SmartLoadingState title={t('state.loading')} /> : null}
+            {languageCourses.error || languageCourses.data?.partial ? <SmartState state="partial" detail={t('home4.partial')} /> : null}
+            <BrainLanguageBulletinGrid entries={languageCourses.data?.items ?? []} />
+            <EvidenceProgressPanel progress={data.evidenceProgress} />
+            <CompletionEvidenceHistory items={data.completionHistory.items} />
+          </>
+        ) : (
+          <CognostatityPanel progress={data.evidenceProgress} />
+        )}
       </Page>
     </ScrollView>
   );

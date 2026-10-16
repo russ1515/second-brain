@@ -129,30 +129,85 @@ export function LanguageMasteryBulletins({
   units: readonly RlleCurriculumUnit[];
   language: string;
 }) {
-  const { copy } = useRlleCopy();
-  const { colors: c, spacing, typography } = useTokens();
-  const unitById = new Map(units.map((unit) => [unit.id, unit]));
+  const { spacing } = useTokens();
 
   if (bulletins.length === 0) return null;
 
   return (
     <View style={{ gap: spacing.md }} testID="language-mastery-bulletins">
       {bulletins.map((bulletin) => (
-        <Card key={`${bulletin.languageCode}:${bulletin.level}:${bulletin.mappingVersion}`} elevated style={{ gap: spacing.md, borderColor: c.aiAccent }} testID={`language-mastery-bulletin-${bulletin.level}`}>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }}>
-            <View style={{ gap: spacing.xs, flex: 1 }}>
-              <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{copy('rlle.ui.bulletin.title')}</Text>
-              <Text style={[typography.caption, { color: c.textSecondary }]}>{language} · {bulletin.level}</Text>
-            </View>
-            <Badge
-              label={copy(bulletin.notionGateUnlocked ? 'rlle.ui.bulletin.thresholdReached' : 'rlle.ui.bulletin.thresholdPending')}
-              tone={bulletin.notionGateUnlocked ? 'success' : 'info'}
-            />
-          </View>
+        <LanguageMasteryBulletinCard
+          key={`${bulletin.languageCode}:${bulletin.level}:${bulletin.mappingVersion}`}
+          bulletin={bulletin}
+          units={units}
+          language={language}
+        />
+      ))}
+    </View>
+  );
+}
+
+/** One server-authoritative bulletin. Brain can control `expanded` while the
+ * language course keeps the original fully expanded presentation. */
+export function LanguageMasteryBulletinCard({
+  bulletin,
+  units,
+  language,
+  updatedAt,
+  expanded = true,
+  onToggle,
+}: {
+  bulletin: RlleLevelMasteryBulletin;
+  units: readonly RlleCurriculumUnit[];
+  language: string;
+  updatedAt?: string | null;
+  expanded?: boolean;
+  onToggle?: () => void;
+}) {
+  const { copy, formatLocale } = useRlleCopy();
+  const { colors: c, spacing, typography } = useTokens();
+  const unitById = new Map(units.map((unit) => [unit.id, unit]));
+  const updatedDate = updatedAt ? new Date(updatedAt) : null;
+  const formattedDate = updatedDate && !Number.isNaN(updatedDate.getTime())
+    ? new Intl.DateTimeFormat(formatLocale, { dateStyle: 'medium' }).format(updatedDate)
+    : null;
+
+  return (
+    <Card elevated style={{ gap: spacing.md, borderColor: c.aiAccent }} testID={`language-mastery-bulletin-${bulletin.level}`}>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }}>
+        <View style={{ gap: spacing.xs, flex: 1 }}>
+          <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{copy('rlle.ui.bulletin.title')}</Text>
+          <Text style={[typography.caption, { color: c.textSecondary }]}>{language} · {bulletin.level}</Text>
+          {formattedDate ? (
+            <Text style={[typography.caption, { color: c.textMuted }]}>
+              {copy('rlle.ui.course.lastActivity', { date: formattedDate })}
+            </Text>
+          ) : null}
+        </View>
+        <Badge
+          label={copy(bulletin.notionGateUnlocked ? 'rlle.ui.bulletin.thresholdReached' : 'rlle.ui.bulletin.thresholdPending')}
+          tone={bulletin.notionGateUnlocked ? 'success' : 'info'}
+        />
+      </View>
+      <Progress value={bulletin.displayPercent} tone="ai" />
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
+        <BulletinMetric value={`${bulletin.displayPercent}%`} label={copy('ai.progress')} />
+        {!expanded ? <BulletinMetric value={String(bulletin.toStrengthenRequiredNotions)} label={copy('rlle.ui.bulletin.reinforce')} /> : null}
+      </View>
+      {onToggle ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          label={copy(expanded ? 'brainV1.bulletin.hideDetails' : 'brainV1.bulletin.showDetails')}
+          onPress={onToggle}
+          accessibilityExpanded={expanded}
+          testID={`brain-bulletin-toggle-${bulletin.languageCode}-${bulletin.level}`}
+        />
+      ) : null}
+      {expanded ? (
+        <View style={{ gap: spacing.md }} testID={`brain-bulletin-details-${bulletin.languageCode}-${bulletin.level}`}>
           <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{copy('rlle.ui.bulletin.detail')}</Text>
-          <Progress value={bulletin.displayPercent} tone="ai" />
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
-            <BulletinMetric value={`${bulletin.displayPercent}%`} label={copy('ai.progress')} />
             <BulletinMetric value={String(bulletin.masteredRequiredNotions)} label={copy('rlle.ui.bulletin.mastered')} />
             <BulletinMetric value={String(bulletin.toStrengthenRequiredNotions)} label={copy('rlle.ui.bulletin.reinforce')} />
           </View>
@@ -176,12 +231,10 @@ export function LanguageMasteryBulletins({
                   return (
                     <View
                       key={notion.notionId}
-                      style={{ borderLeftWidth: 2, borderLeftColor: notionStatusColor(notion.status, c), paddingLeft: spacing.sm, gap: 2 }}
+                      style={{ borderStartWidth: 2, borderStartColor: notionStatusColor(notion.status, c), paddingStart: spacing.sm, gap: 2 }}
                       testID={`language-notion-${notion.notionId}`}
                     >
-                      <Text style={[typography.caption, { color: c.textMuted }]}>
-                        {unitLabel}
-                      </Text>
+                      <Text style={[typography.caption, { color: c.textMuted }]}>{unitLabel}</Text>
                       <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }}>
                         <Text style={[typography.bodySmall, { color: c.textPrimary, flex: 1 }]}>{notionLabel}</Text>
                         <Badge label={copy(STATUS_COPY[notion.status])} tone={notionStatusTone(notion.status)} />
@@ -192,9 +245,9 @@ export function LanguageMasteryBulletins({
               </View>
             );
           })}
-        </Card>
-      ))}
-    </View>
+        </View>
+      ) : null}
+    </Card>
   );
 }
 

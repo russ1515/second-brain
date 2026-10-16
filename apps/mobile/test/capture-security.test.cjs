@@ -123,7 +123,7 @@ test('Learn capture shares photo, QR and explicit attachment import with the doc
   assert.match(composer, /mode=qr&source=learn/);
   assert.doesNotMatch(composer, /openScan\('document'\)|learn5\.capture\.document/);
   assert.doesNotMatch(composer, /learn5\.modality\.import|learn5\.modality\.export|learn-composer-export/);
-  assert.match(privacy, /api<DataExportResponse>\('\/me\/export'\)/);
+  assert.doesNotMatch(privacy, /api<DataExportResponse>\('\/me\/export'\)|priv\.export/);
   assert.match(library, /pickDocuments/);
   assert.match(library, /router\.push\('\/scan'\)/);
   assert.match(composer, /onNavigate\('\/scan\?source=learn&captureType=photo'\)/);

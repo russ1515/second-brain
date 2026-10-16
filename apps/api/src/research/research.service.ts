@@ -27,7 +27,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EXTERNAL_RESEARCH_PROVIDER, RESEARCH_PROVIDER, type ResearchProvider } from './research-provider.interface';
 import { ProviderMeteringService } from '../usage/provider-metering.service';
 import { CacheService } from '../redis/cache.service';
-import { ResearchProviderError } from './providers/openai-web-research.provider';
+import { ResearchProviderError } from './providers/research-provider.error';
 
 const MAX_SOURCE_EXCERPT = 1_200;
 const EXTERNAL_QUERY_LIMIT = 16;
@@ -79,7 +79,12 @@ export class ResearchService {
     const metadata = jsonRecord(jsonRecord(production)?.metadata);
     if (!metadata) return null;
     const { sourceAuthority: _sourceAuthority, ...candidate } = metadata;
-    return isResearchResult(candidate) ? candidate : null;
+    return isResearchResult(candidate)
+      ? {
+          ...candidate,
+          followUpQuestions: normalizeFollowUpQuestions(candidate.followUpQuestions),
+        }
+      : null;
   }
 
   async run(userId: string, request: ResearchRunRequest): Promise<ResearchResult> {
@@ -116,6 +121,7 @@ export class ResearchService {
     const limits: string[] = [];
     let partial = false;
     const citations: UnifiedResearchCitation[] = [];
+    const providerGroundedClaims: Array<{ text: string; citationIds: string[] }> = [];
     const providersUsed = new Set<string>();
 
     for (const scope of scopes) {
@@ -134,7 +140,7 @@ export class ResearchService {
           : availability.capabilities.externalSearch;
         if (availability.status !== 'available' || !capable) {
           partial = true;
-          limits.push(scope.kind === 'web' ? 'NO_PROVIDER' : 'EXTERNAL_PROVIDER_REQUIRED');
+          limits.push(scope.kind === 'web' ? 'UNAVAILABLE_CONFIG' : 'EXTERNAL_PROVIDER_REQUIRED');
           continue;
         }
         const settled = await Promise.all(queries.slice(0, execution.maxQueries).map(async (query) => {
@@ -164,6 +170,10 @@ export class ResearchService {
             quality: source.quality,
             relevance: source.relevance,
           })));
+          providerGroundedClaims.push(...(response.groundedClaims ?? []).map((claim) => ({
+            text: claim.text,
+            citationIds: claim.sourceIds.map((sourceId) => `${scope.kind}:${sourceId}`),
+          })));
         }
         continue;
       }
@@ -181,6 +191,7 @@ export class ResearchService {
         excerpt: item.content.slice(0, MAX_SOURCE_EXCERPT),
         documentId: item.documentId,
         chunkIndex: item.chunkIndex,
+        ...(item.pageNumber ? { pageNumber: item.pageNumber } : {}),
         relevance: item.score,
       }))));
     }
@@ -194,6 +205,7 @@ export class ResearchService {
         synthesis: '',
         sections: [],
         keyPoints: [],
+        followUpQuestions: [],
         claims: [],
         comparison: null,
         citations: [],
@@ -207,7 +219,19 @@ export class ResearchService {
       });
     }
 
-    const generated = await this.synthesize(userId, question, request.depth, bounded, locale);
+    const boundedIds = new Set(bounded.map((citation) => citation.id));
+    const boundedGroundedClaims = providerGroundedClaims.flatMap((claim) => {
+      const citationIds = claim.citationIds.filter((id) => boundedIds.has(id));
+      return citationIds.length ? [{ ...claim, citationIds }] : [];
+    });
+    const generated = await this.synthesize(
+      userId,
+      question,
+      request.depth,
+      bounded,
+      boundedGroundedClaims,
+      locale,
+    );
     const comparison = request.depth === 'quick' ? null : generated.comparison;
     const stages: ResearchResult['stages'] = [
       { kind: 'sources-found', completed: true, itemCount: bounded.length },
@@ -222,6 +246,7 @@ export class ResearchService {
       synthesis: generated.synthesis,
       sections: generated.sections,
       keyPoints: generated.keyPoints,
+      followUpQuestions: generated.followUpQuestions,
       claims: generated.claims,
       comparison,
       citations: bounded,
@@ -412,11 +437,13 @@ export class ResearchService {
     question: string,
     depth: ResearchRunRequest['depth'],
     citations: UnifiedResearchCitation[],
+    providerGroundedClaims: Array<{ text: string; citationIds: string[] }>,
     locale: string,
   ): Promise<{
     synthesis: string;
     sections: ResearchResult['sections'];
     keyPoints: string[];
+    followUpQuestions: string[];
     claims: ResearchResult['claims'];
     comparison: ResearchComparison | null;
   }> {
@@ -429,6 +456,11 @@ export class ResearchService {
       citation.quality ? `Quality class: ${citation.quality}` : '',
       citation.excerpt || citation.title,
     ].filter(Boolean).join('\n')).join('\n\n');
+    const groundedClaims = providerGroundedClaims.map((claim) => [
+      'GROUNDED PROVIDER CLAIM (generated synthesis, not a verbatim source excerpt):',
+      claim.text,
+      `Supported by: ${claim.citationIds.map((id) => `[${id}]`).join(' ')}`,
+    ].join('\n')).join('\n\n');
     const depthInstruction = depth === 'quick'
       ? 'Give a concise answer. Keep sections and comparison empty.'
       : depth === 'deep'
@@ -440,8 +472,10 @@ export class ResearchService {
       'Never invent a citation, source, consensus, page or section.',
       'Distinguish personal documents, public Web evidence, external providers, and learning context.',
       'My Brain is learning context, not an external publication.',
+      'Grounded provider claims are generated summaries linked to sources; never quote them as verbatim page excerpts.',
       'When evidence is insufficient, state the limitation.',
       'Return ONLY valid JSON with: synthesis (string), keyPoints (string[]),',
+      'followUpQuestions (exactly 3 concise, useful next questions),',
       'claims ({text,citationIds:string[]}[]), sections ({title, body, citationIds:string[]}[]), and comparison',
       '({agreements:string[], divergences:string[], specificities:string[]} or null).',
       'Every important claim needs citationIds. Every citationIds value must be one of the bracketed ids in the evidence.',
@@ -453,7 +487,7 @@ export class ResearchService {
     try {
       const response = await this.llm.generate([
         { role: 'system', content: system },
-        { role: 'user', content: `Question: ${question}\n\nEvidence:\n${evidence}` },
+        { role: 'user', content: `Question: ${question}\n\nEvidence:\n${evidence}${groundedClaims ? `\n\nGrounded provider claims:\n${groundedClaims}` : ''}` },
       ], {
         temperature: 0.15,
         operation: depth === 'deep' ? 'deep-research' : 'research',
@@ -509,11 +543,19 @@ function normalizeGeneratedResearch(raw: string, allowedIds: Set<string>): {
   synthesis: string;
   sections: ResearchResult['sections'];
   keyPoints: string[];
+  followUpQuestions: string[];
   claims: ResearchResult['claims'];
   comparison: ResearchComparison | null;
 } {
   const parsed = parseObject(raw);
-  if (!parsed) return { synthesis: sanitizeInlineCitations(raw.trim(), allowedIds), sections: [], keyPoints: [], claims: [], comparison: null };
+  if (!parsed) return {
+    synthesis: sanitizeInlineCitations(raw.trim(), allowedIds),
+    sections: [],
+    keyPoints: [],
+    followUpQuestions: [],
+    claims: [],
+    comparison: null,
+  };
   const strings = (value: unknown, max = 12) => Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean).slice(0, max)
     : [];
@@ -545,6 +587,7 @@ function normalizeGeneratedResearch(raw: string, allowedIds: Set<string>): {
     synthesis: typeof parsed.synthesis === 'string' ? sanitizeInlineCitations(parsed.synthesis.trim(), allowedIds) : '',
     sections,
     keyPoints: strings(parsed.keyPoints),
+    followUpQuestions: normalizeFollowUpQuestions(parsed.followUpQuestions),
     claims,
     comparison: usefulComparison,
   };
@@ -552,6 +595,19 @@ function normalizeGeneratedResearch(raw: string, allowedIds: Set<string>): {
 
 function sanitizeInlineCitations(value: string, allowedIds: Set<string>): string {
   return value.replace(/\[([^\]\n]{1,160})\]/g, (match, id: string) => allowedIds.has(id.trim()) ? `[${id.trim()}]` : '');
+}
+
+function normalizeFollowUpQuestions(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((item) => {
+    if (typeof item !== 'string') return [];
+    const question = item.replace(/\s+/g, ' ').trim().slice(0, 240);
+    const key = question.toLocaleLowerCase();
+    if (!question || seen.has(key)) return [];
+    seen.add(key);
+    return [question];
+  }).slice(0, 3);
 }
 
 function parseObject(raw: string): Record<string, unknown> | null {
@@ -587,6 +643,10 @@ function isResearchResult(value: unknown): value is ResearchResult {
     && typeof record.synthesis === 'string'
     && Array.isArray(record.sections)
     && Array.isArray(record.keyPoints)
+    && (record.followUpQuestions === undefined || (
+      Array.isArray(record.followUpQuestions)
+      && record.followUpQuestions.every((question) => typeof question === 'string')
+    ))
     && Array.isArray(record.claims)
     && Array.isArray(record.citations)
     && record.citations.every((citation) => {

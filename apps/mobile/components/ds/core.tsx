@@ -34,6 +34,7 @@ export function Button({
   icon,
   fullWidth,
   accessibilityLabel,
+  accessibilityExpanded,
   testID,
 }: {
   label: string;
@@ -45,6 +46,7 @@ export function Button({
   icon?: string;
   fullWidth?: boolean;
   accessibilityLabel?: string;
+  accessibilityExpanded?: boolean;
   testID?: string;
 }) {
   const { colors: c, radius } = useTokens();
@@ -67,7 +69,11 @@ export function Button({
       disabled={off}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
-      accessibilityState={{ disabled: !!off, busy: !!loading }}
+      accessibilityState={{
+        disabled: !!off,
+        busy: !!loading,
+        ...(accessibilityExpanded === undefined ? {} : { expanded: accessibilityExpanded }),
+      }}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={({ pressed }) => [

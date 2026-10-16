@@ -98,11 +98,11 @@ export default () => ({
     },
   },
   research: {
-    // Public Web search has its own explicit switch while reusing the private
-    // OpenAI credential/model already used by the Responses provider.
+    // Public Web search has its own explicit switch while reusing the private,
+    // server-only Gemini credential. The browser never receives this key.
     provider: process.env.RESEARCH_PROVIDER ?? 'disabled',
-    model: process.env.RESEARCH_MODEL?.trim() || process.env.OPENAI_MODEL || '',
-    openaiApiKey: process.env.OPENAI_API_KEY,
+    model: process.env.RESEARCH_MODEL?.trim() || 'gemini-2.5-flash',
+    geminiApiKey: process.env.GEMINI_API_KEY,
   },
   privateMedia: {
     directory: process.env.PRIVATE_MEDIA_DIR ?? '.private-media',

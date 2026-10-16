@@ -40,6 +40,7 @@ export interface UnifiedResearchCitation {
   documentId?: string;
   conceptId?: string;
   chunkIndex?: number;
+  pageNumber?: number;
   url?: string;
   domain?: string;
   provider?: string;
@@ -93,6 +94,8 @@ export interface ResearchResult {
   synthesis: string;
   sections: ResearchSection[];
   keyPoints: string[];
+  /** Evidence-aware suggestions generated in the same synthesis operation. */
+  followUpQuestions: string[];
   claims: ResearchClaim[];
   comparison: ResearchComparison | null;
   citations: UnifiedResearchCitation[];

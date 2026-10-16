@@ -116,45 +116,89 @@ function readableInline(text: string): string {
 
 /** Render inline emphasis while turning non-interactive links into readable
  * labels. Tutor output must never show Markdown control punctuation. */
-function renderInline(text: string, keyBase: string, styles: ReturnType<typeof makeStyles>) {
+function renderCitationText(
+  text: string,
+  keyBase: string,
+  styles: ReturnType<typeof makeStyles>,
+  citations: ReadonlyMap<string, { label: string; title: string }>,
+  onCitation?: (id: string) => void,
+) {
+  const tokens = text.split(/(\[[^\]\n]{1,160}\])/g).filter(Boolean);
+  return tokens.map((token, index) => {
+    const match = /^\[([^\]\n]{1,160})\]$/.exec(token);
+    const citation = match ? citations.get(match[1].trim()) : undefined;
+    if (!match || !citation || !onCitation) return <Fragment key={`${keyBase}-plain-${index}`}>{token}</Fragment>;
+    return (
+      <Text
+        key={`${keyBase}-citation-${index}`}
+        accessibilityRole="link"
+        accessibilityLabel={citation.title}
+        onPress={() => onCitation(match[1].trim())}
+        style={styles.citation}
+      >
+        [{citation.label}]
+      </Text>
+    );
+  });
+}
+
+function renderInline(
+  text: string,
+  keyBase: string,
+  styles: ReturnType<typeof makeStyles>,
+  citations: ReadonlyMap<string, { label: string; title: string }>,
+  onCitation?: (id: string) => void,
+) {
   const parts = readableInline(text).split(INLINE).filter((p) => p !== '');
   return parts.map((part, i) => {
     const key = `${keyBase}-${i}`;
     if ((part.startsWith('**') && part.endsWith('**')) || (part.startsWith('__') && part.endsWith('__'))) {
       return (
         <Text key={key} style={styles.bold}>
-          {part.slice(2, -2)}
+          {renderCitationText(part.slice(2, -2), key, styles, citations, onCitation)}
         </Text>
       );
     }
     if (part.startsWith('`') && part.endsWith('`')) {
       return (
         <Text key={key} style={styles.code}>
-          {part.slice(1, -1)}
+          {renderCitationText(part.slice(1, -1), key, styles, citations, onCitation)}
         </Text>
       );
     }
     if (part.startsWith('~~') && part.endsWith('~~')) {
       return (
         <Text key={key} style={styles.strike}>
-          {part.slice(2, -2)}
+          {renderCitationText(part.slice(2, -2), key, styles, citations, onCitation)}
         </Text>
       );
     }
     if ((part.startsWith('*') && part.endsWith('*')) || (part.startsWith('_') && part.endsWith('_'))) {
       return (
         <Text key={key} style={styles.italic}>
-          {part.slice(1, -1)}
+          {renderCitationText(part.slice(1, -1), key, styles, citations, onCitation)}
         </Text>
       );
     }
-    return <Fragment key={key}>{part}</Fragment>;
+    return <Fragment key={key}>{renderCitationText(part, key, styles, citations, onCitation)}</Fragment>;
   });
 }
 
-export function Markdown({ text }: { text: string }) {
+export function Markdown({
+  text,
+  citations = [],
+  onCitation,
+}: {
+  text: string;
+  citations?: readonly { id: string; title: string }[];
+  onCitation?: (id: string) => void;
+}) {
   const { colors: c } = useTokens();
   const styles = useMemo(() => makeStyles(c), [c]);
+  const citationMap = useMemo(() => new Map(citations.map((citation, index) => [
+    citation.id,
+    { label: String(index + 1), title: citation.title },
+  ])), [citations]);
   const blocks = toBlocks(text);
   return (
     <View style={styles.root}>
@@ -172,27 +216,27 @@ export function Markdown({ text }: { text: string }) {
                   block.level >= 3 && styles.h3,
                 ]}
               >
-                {renderInline(block.text, key, styles)}
+                {renderInline(block.text, key, styles, citationMap, onCitation)}
               </Text>
             );
           case 'bullet':
             return (
               <View key={key} style={styles.listRow}>
                 <Text style={styles.bulletDot}>•</Text>
-                <Text style={styles.listText}>{renderInline(block.text, key, styles)}</Text>
+                <Text style={styles.listText}>{renderInline(block.text, key, styles, citationMap, onCitation)}</Text>
               </View>
             );
           case 'ordered':
             return (
               <View key={key} style={styles.listRow}>
                 <Text style={styles.orderedMarker}>{block.marker}</Text>
-                <Text style={styles.listText}>{renderInline(block.text, key, styles)}</Text>
+                <Text style={styles.listText}>{renderInline(block.text, key, styles, citationMap, onCitation)}</Text>
               </View>
             );
           case 'quote':
             return (
               <View key={key} style={styles.quote}>
-                <Text style={styles.paragraph}>{renderInline(block.text, key, styles)}</Text>
+                <Text style={styles.paragraph}>{renderInline(block.text, key, styles, citationMap, onCitation)}</Text>
               </View>
             );
           case 'code':
@@ -200,7 +244,7 @@ export function Markdown({ text }: { text: string }) {
           default:
             return (
               <Text key={key} style={styles.paragraph}>
-                {renderInline(block.text, key, styles)}
+                {renderInline(block.text, key, styles, citationMap, onCitation)}
               </Text>
             );
         }
@@ -228,6 +272,11 @@ const makeStyles = (c: ColorScale) => StyleSheet.create({
     fontSize: 14,
     color: c.info,
     backgroundColor: c.surfaceElevated,
+  },
+  citation: {
+    color: c.primary,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
   },
   quote: {
     borderLeftWidth: 3,

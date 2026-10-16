@@ -4,7 +4,7 @@ import { BrainModule } from '../brain/brain.module';
 import { DocumentModule } from '../documents/document.module';
 import { UsageModule } from '../usage/usage.module';
 import { DisabledResearchProvider } from './providers/disabled-research.provider';
-import { OpenAIWebResearchProvider } from './providers/openai-web-research.provider';
+import { GeminiGoogleSearchProvider } from './providers/gemini-google-search.provider';
 import { EXTERNAL_RESEARCH_PROVIDER, RESEARCH_PROVIDER, type ResearchProvider } from './research-provider.interface';
 import { ResearchController } from './research.controller';
 import { ResearchService } from './research.service';
@@ -17,13 +17,13 @@ const webResearchProviderFactory: Provider = {
   useFactory: (config: ConfigService, disabled: DisabledResearchProvider): ResearchProvider => {
     const provider = config.get<string>('research.provider') ?? 'disabled';
     const model = config.get<string>('research.model') ?? '';
-    const apiKey = config.get<string>('research.openaiApiKey') ?? '';
+    const apiKey = config.get<string>('research.geminiApiKey') ?? '';
     researchStartupLogger.log(
       `Research runtime configuration: RESEARCH_PROVIDER=${provider}; ` +
-        `MODEL=${model.trim() || 'MISSING'}; OPENAI_API_KEY=${apiKey.trim() ? 'SET' : 'MISSING'}`,
+        `MODEL=${model.trim() || 'MISSING'}; GEMINI_API_KEY=${apiKey.trim() ? 'SET' : 'MISSING'}`,
     );
     if (provider === 'disabled') return disabled;
-    if (provider === 'openai') return new OpenAIWebResearchProvider(apiKey, model);
+    if (provider === 'gemini') return new GeminiGoogleSearchProvider(apiKey, model);
     throw new Error(`Research provider "${provider}" is not wired.`);
   },
 };

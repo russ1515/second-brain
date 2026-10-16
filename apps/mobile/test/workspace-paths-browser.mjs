@@ -120,7 +120,7 @@ try {
 
     await page.getByTestId(`workspace-shell-${expectedShell}`).waitFor({ state: 'visible' });
     await page.getByTestId('workspace-adaptive-brief').waitFor({ state: 'visible' });
-    await page.getByTestId('workspace-completion-controls').waitFor({ state: 'visible' });
+    await page.getByTestId('workspace-aw8-completion').waitFor({ state: 'visible' });
     const persistedPlan = (await page.getByTestId('workspace-plan').innerText()).replace(/\s+/gu, ' ').trim();
     assert.ok(persistedPlan.length > 30, `${template}: persisted plan`);
 

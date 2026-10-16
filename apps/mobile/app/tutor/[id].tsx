@@ -36,6 +36,7 @@ import { SpeakButton } from '../../components/speak-button';
 import { VoiceState } from '../../components/ds/language';
 import { pauseSpeaking, resumeSpeaking, speak, stopSpeaking } from '../../lib/speak';
 import { useTeachingSpeechLanguage } from '../../lib/language-teaching';
+import { createClientRequestId } from '../../lib/request-id';
 import {
   ProgressNarrative,
   ResultActionBar,
@@ -49,6 +50,8 @@ type TurnFailure =
   | { kind: 'quota'; quota: QuotaErrorContract }
   | { kind: 'provider'; message: string }
   | { kind: 'generic'; message: string };
+
+type VoicePlaybackState = 'idle' | 'loading' | 'playing' | 'paused' | 'ended' | 'error';
 
 /** The Tutor is one resumable learning experience: objective and context stay
  * visible, the lesson can change shape, and the composer remains anchored. */
@@ -92,10 +95,15 @@ export default function TutorSessionScreen() {
   const recordingStartedAt = useRef(0);
   const pausedStartedAt = useRef(0);
   const pausedDuration = useRef(0);
+  const voicePlaybackInFlight = useRef(false);
+  const voicePlaybackAttempt = useRef(0);
+  const voicePlaybackController = useRef<AbortController | null>(null);
+  const lastVoiceReply = useRef<{ text: string; requestId: string } | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [voiceDraft, setVoiceDraft] = useState(false);
   const [recordingStarting, setRecordingStarting] = useState(false);
-  const [voicePlayback, setVoicePlayback] = useState<'loading' | 'playing' | 'paused' | null>(null);
+  const [voicePlayback, setVoicePlayback] = useState<VoicePlaybackState>('idle');
+  const [voicePlaybackError, setVoicePlaybackError] = useState<string | null>(null);
   const scroll = useRef<ScrollView | null>(null);
   const busy = workState === 'THINKING' || workState === 'TRANSCRIPTION' || recordingStarting;
   const recording = workState === 'LISTENING' || workState === 'PAUSED';
@@ -116,6 +124,8 @@ export default function TutorSessionScreen() {
       const activeRecorder = recorder.current;
       recorder.current = null;
       activeRecorder?.cancel();
+      voicePlaybackAttempt.current += 1;
+      voicePlaybackController.current?.abort();
       stopSpeaking();
     };
   }, []);
@@ -175,6 +185,54 @@ export default function TutorSessionScreen() {
     return () => clearTimeout(timer);
   }, [draft, draftReady, id, user?.id]);
 
+  const playVoiceReply = async (text: string, requestId = createClientRequestId('tts')) => {
+    if (voicePlaybackInFlight.current) return;
+    voicePlaybackInFlight.current = true;
+    const attempt = voicePlaybackAttempt.current + 1;
+    voicePlaybackAttempt.current = attempt;
+    voicePlaybackController.current?.abort();
+    const controller = new AbortController();
+    voicePlaybackController.current = controller;
+    lastVoiceReply.current = { text, requestId };
+    setVoicePlaybackError(null);
+    setVoicePlayback('loading');
+    try {
+      await speak(text, activeSpeechLanguage, {
+        signal: controller.signal,
+        requestId,
+        onFirstAudio: () => {
+          if (voicePlaybackAttempt.current === attempt && !controller.signal.aborted) {
+            setVoicePlayback('playing');
+          }
+        },
+      });
+      if (voicePlaybackAttempt.current === attempt && !controller.signal.aborted) {
+        setVoicePlayback('ended');
+      }
+    } catch {
+      if (voicePlaybackAttempt.current === attempt && !controller.signal.aborted) {
+        setVoicePlaybackError(t('voice.error.playback'));
+        setVoicePlayback('error');
+      }
+    } finally {
+      if (voicePlaybackAttempt.current === attempt) {
+        voicePlaybackInFlight.current = false;
+        voicePlaybackController.current = null;
+      }
+    }
+  };
+
+  const failVoicePlayback = () => {
+    voicePlaybackAttempt.current += 1;
+    voicePlaybackInFlight.current = false;
+    voicePlaybackController.current?.abort();
+    voicePlaybackController.current = null;
+    stopSpeaking();
+    setVoicePlaybackError(t('voice.error.playback'));
+    setVoicePlayback('error');
+    setWorkState('READY');
+  };
+
   const postTurn = async (content: string, viaVoice = false) => {
     if (!id) return;
     setWorkState('THINKING');
@@ -210,13 +268,7 @@ export default function TutorSessionScreen() {
       await load(false);
       requestAnimationFrame(() => scroll.current?.scrollToEnd({ animated: true }));
       if (viaVoice && spokenReply) {
-        setVoicePlayback('loading');
-        await speak(spokenReply, activeSpeechLanguage, {
-          onFirstAudio: () => setVoicePlayback('playing'),
-        }).catch((cause) => {
-          setFailure({ kind: 'provider', message: (cause as Error).message });
-        });
-        setVoicePlayback(null);
+        await playVoiceReply(spokenReply);
         setWorkState('READY');
       } else if (!viaVoice && !voiceFocused) {
         setWorkState('READY');
@@ -238,8 +290,7 @@ export default function TutorSessionScreen() {
     setRecordingStarting(true);
     setFailure(null);
     setNotice(null);
-    stopSpeaking();
-    setVoicePlayback(null);
+    stopPlayback();
     let nextRecorder: Recorder | null = null;
     try {
       nextRecorder = createRecorder();
@@ -342,16 +393,29 @@ export default function TutorSessionScreen() {
   };
 
   const pausePlayback = async () => {
-    if (await pauseSpeaking()) setVoicePlayback('paused');
+    try {
+      if (await pauseSpeaking()) setVoicePlayback('paused');
+    } catch {
+      failVoicePlayback();
+    }
   };
 
   const resumePlayback = async () => {
-    if (await resumeSpeaking()) setVoicePlayback('playing');
+    try {
+      if (await resumeSpeaking()) setVoicePlayback('playing');
+    } catch {
+      failVoicePlayback();
+    }
   };
 
   const stopPlayback = () => {
+    voicePlaybackAttempt.current += 1;
+    voicePlaybackInFlight.current = false;
+    voicePlaybackController.current?.abort();
+    voicePlaybackController.current = null;
     stopSpeaking();
-    setVoicePlayback(null);
+    setVoicePlayback('idle');
+    setVoicePlaybackError(null);
     setWorkState('READY');
   };
 
@@ -557,7 +621,7 @@ export default function TutorSessionScreen() {
                 {t('voice11.transcript.edit')}
               </Text>
             ) : null}
-            {voiceFocused && RECORDING_SUPPORTED && !voicePlayback ? (
+            {voiceFocused && RECORDING_SUPPORTED && !['loading', 'playing', 'paused'].includes(voicePlayback) ? (
               <Button
                 icon={recording ? '■' : '🎙'}
                 label={recording ? t('voice11.transcribe') : t('tutor.speak')}
@@ -590,7 +654,7 @@ export default function TutorSessionScreen() {
                 maxLength={4_000}
                 testID="tutor-input"
               />
-              {!voiceFocused && RECORDING_SUPPORTED && !voicePlayback ? (
+              {!voiceFocused && RECORDING_SUPPORTED && !['loading', 'playing', 'paused'].includes(voicePlayback) ? (
                 <Button
                   icon={recording ? '■' : '🎙'}
                   label={recording ? t('voice11.transcribe') : t('tutor.speak')}
@@ -624,7 +688,21 @@ export default function TutorSessionScreen() {
               ) : null}
               {voicePlayback === 'playing' ? <IconButton icon="⏸" label={t('voice11.pause')} onPress={() => void pausePlayback()} /> : null}
               {voicePlayback === 'paused' ? <IconButton icon="▶" label={t('voice11.resume')} onPress={() => void resumePlayback()} /> : null}
-              {voicePlayback ? <IconButton icon="⏹" label={t('learn.oral.stop')} onPress={stopPlayback} /> : null}
+              {['loading', 'playing', 'paused'].includes(voicePlayback) ? <IconButton icon="⏹" label={t('learn.oral.stop')} onPress={stopPlayback} /> : null}
+              {voicePlayback === 'error' && voicePlaybackError ? (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs }} testID="tutor-voice-error">
+                  <Text accessibilityLiveRegion="polite" style={[typography.caption, { color: c.error }]}>{voicePlaybackError}</Text>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    label={t('app.tryAgain')}
+                    onPress={() => {
+                      const reply = lastVoiceReply.current;
+                      if (reply) void playVoiceReply(reply.text, reply.requestId);
+                    }}
+                  />
+                </View>
+              ) : null}
               {recording ? (
                 <>
                   {workState === 'PAUSED'

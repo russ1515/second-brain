@@ -71,11 +71,19 @@ export interface ResearchProviderUsage {
   unpricedUsageReason?: string | null;
 }
 
+/** Provider-generated statement explicitly linked to structured source ids.
+ * This is not a verbatim source excerpt and must never be rendered as one. */
+export interface ResearchProviderGroundedClaim {
+  text: string;
+  sourceIds: string[];
+}
+
 export interface ResearchSearchResponse {
   query: string;
   sources: ExternalResearchSource[];
   citations: ResearchCitation[];
   provider: string | null;
   retrievedAt: string;
+  groundedClaims?: ResearchProviderGroundedClaim[];
   usage?: ResearchProviderUsage;
 }

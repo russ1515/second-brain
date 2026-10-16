@@ -226,6 +226,14 @@ const teachingLanguageCatalogs = tupleCatalog(
 const workspaceCaptureCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'workspace-capture-v1.ts'), 'workspaceCaptureV1');
 const workspaceOrchestratorCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'workspace-orchestrator-v1.ts'), 'workspaceOrchestratorV1');
 const workspaceShellCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'workspace-shells-v1.ts'), 'workspaceShellsV1');
+const productUxV1File = path.join(LOCALES_DIR, 'product-ux-v1.ts');
+const productUxV1Keys = stringArray(productUxV1File, 'productUxV1Keys');
+const productUxV1Catalogs = tupleCatalog(
+  productUxV1File,
+  'productUxV1Translations',
+  productUxV1Keys,
+);
+const productUxV1Aliases = catalog(productUxV1File, 'productUxV1Aliases');
 const overlayFiles = new Set([
   'auth-errors.ts',
   'essential.ts',
@@ -237,6 +245,7 @@ const overlayFiles = new Set([
   'learning-data-control-asia-v1.ts',
   'learning-data-control-europe-v1.ts',
   'library-v1.ts',
+  'product-ux-v1.ts',
   'research-web-v1.ts',
   'review.ts',
   'teaching-language-v1.ts',
@@ -295,10 +304,16 @@ function effectiveCatalog(resource) {
     ...(workspaceCaptureCatalogs.get(code) ?? new Map()),
     ...(workspaceOrchestratorCatalogs.get(code) ?? new Map()),
     ...(workspaceShellCatalogs.get(code) ?? new Map()),
+    ...(productUxV1Catalogs.get(code) ?? new Map()),
   ]);
   for (const [key, sourceKey] of globalPathAliases) {
     const value = translations.get(sourceKey);
     assert.ok(value, `${code} alias source ${sourceKey} is missing`);
+    translations.set(key, value);
+  }
+  for (const [key, sourceKey] of productUxV1Aliases) {
+    const value = translations.get(sourceKey);
+    assert.ok(value, `${code} product UX alias source ${sourceKey} is missing`);
     translations.set(key, value);
   }
   for (const [key, sourceKey] of languageMasteryAliases) {

@@ -257,6 +257,7 @@ function researchCitationCandidate(citation: UnifiedResearchCitation, order: num
     ...(citation.conceptId ? { conceptId: citation.conceptId } : {}),
     title: citation.title,
     ...(citation.chunkIndex !== undefined ? { chunkIndex: citation.chunkIndex } : {}),
+    ...(citation.pageNumber !== undefined ? { page: citation.pageNumber } : {}),
     ...(citation.url ? { url: citation.url } : {}),
     ...(citation.retrievedAt ? { retrievedAt: citation.retrievedAt } : {}),
     snippet,
