@@ -101,7 +101,7 @@ export default () => ({
     // Public Web search has its own explicit switch while reusing the private,
     // server-only Gemini credential. The browser never receives this key.
     provider: process.env.RESEARCH_PROVIDER ?? 'disabled',
-    model: process.env.RESEARCH_MODEL?.trim() || 'gemini-2.5-flash',
+    model: process.env.RESEARCH_MODEL?.trim() || 'gemini-3.8-flash',
     geminiApiKey: process.env.GEMINI_API_KEY,
   },
   privateMedia: {

@@ -8,6 +8,38 @@ const {
 const {
   ResearchProviderError,
 } = require('../dist/research/providers/research-provider.error.js');
+const configuration = require('../dist/config/configuration.js').default;
+
+test('Gemini Search model defaults to 3.8 Flash and stays isolated from the general LLM', () => {
+  const previous = {
+    researchModel: process.env.RESEARCH_MODEL,
+    llmProvider: process.env.LLM_PROVIDER,
+    llmModel: process.env.LLM_MODEL,
+    openaiModel: process.env.OPENAI_MODEL,
+  };
+  try {
+    delete process.env.RESEARCH_MODEL;
+    process.env.LLM_PROVIDER = 'openai';
+    process.env.LLM_MODEL = 'legacy-openai-model';
+    process.env.OPENAI_MODEL = 'general-openai-model';
+
+    assert.equal(configuration().research.model, 'gemini-3.8-flash');
+    assert.equal(configuration().llm.model, 'general-openai-model');
+
+    process.env.RESEARCH_MODEL = 'configured-search-model';
+    assert.equal(configuration().research.model, 'configured-search-model');
+    assert.equal(configuration().llm.model, 'general-openai-model');
+  } finally {
+    if (previous.researchModel === undefined) delete process.env.RESEARCH_MODEL;
+    else process.env.RESEARCH_MODEL = previous.researchModel;
+    if (previous.llmProvider === undefined) delete process.env.LLM_PROVIDER;
+    else process.env.LLM_PROVIDER = previous.llmProvider;
+    if (previous.llmModel === undefined) delete process.env.LLM_MODEL;
+    else process.env.LLM_MODEL = previous.llmModel;
+    if (previous.openaiModel === undefined) delete process.env.OPENAI_MODEL;
+    else process.env.OPENAI_MODEL = previous.openaiModel;
+  }
+});
 
 test('Gemini Google Search uses one bounded grounded request and trusts only grounding metadata', async () => {
   let request;
@@ -46,6 +78,7 @@ test('Gemini Google Search uses one bounded grounded request and trusts only gro
   });
 
   assert.deepEqual(request.config.tools, [{ googleSearch: {} }]);
+  assert.equal(request.model, 'configured-model');
   assert.equal(request.config.httpOptions.retryOptions.attempts, 1);
   assert.match(request.config.systemInstruction, /untrusted source data/);
   assert.equal(result.sources.length, 1);
