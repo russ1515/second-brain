@@ -39,6 +39,7 @@ const WORKSPACE_CAPTURE_V1_FILE = path.join(LOCALES_DIR, 'workspace-capture-v1.t
 const WORKSPACE_ORCHESTRATOR_V1_FILE = path.join(LOCALES_DIR, 'workspace-orchestrator-v1.ts');
 const WORKSPACE_SHELLS_V1_FILE = path.join(LOCALES_DIR, 'workspace-shells-v1.ts');
 const PRODUCT_UX_V1_FILE = path.join(LOCALES_DIR, 'product-ux-v1.ts');
+const LANDING_V1_FILE = path.join(LOCALES_DIR, 'landing-v1.ts');
 
 export const ALL_LOCALE_CODES = Object.freeze(['en', 'fr', ...SUPPORTED_CODES]);
 export const PROTECTED_BRANDS = Object.freeze([
@@ -365,6 +366,12 @@ export function auditRepository() {
     productUxV1Keys,
   );
   const productUxV1Aliases = readCatalog(PRODUCT_UX_V1_FILE, 'productUxV1Aliases');
+  const landingV1Keys = readStringArray(LANDING_V1_FILE, 'landingV1Keys');
+  const landingV1 = readTupleCatalog(
+    LANDING_V1_FILE,
+    'landingV1Translations',
+    landingV1Keys,
+  );
   const catalogs = new Map([
     ['en', english],
     ['fr', french],
@@ -401,6 +408,7 @@ export function auditRepository() {
     const workspaceOrchestrator = workspaceOrchestratorV1.get(code) ?? new Map();
     const workspaceShells = workspaceShellsV1.get(code) ?? new Map();
     const productUx = productUxV1.get(code) ?? new Map();
+    const landing = landingV1.get(code) ?? new Map();
     const beforeAliases = new Map([
       ...base,
       ...essential,
@@ -447,6 +455,7 @@ export function auditRepository() {
       ...beforeMasteryAliases,
       ...languageMastery,
       ...languageBulletin,
+      ...landing,
     ]));
     layersByLocale.set(code, [
       { name: path.relative(LOCALES_DIR, file).replaceAll('\\', '/'), entries: base },
@@ -470,6 +479,7 @@ export function auditRepository() {
       { name: 'product-ux-v1.ts:aliases', entries: productUxAliases },
       { name: 'language-mastery-v1.ts', entries: languageMastery },
       { name: 'language-mastery-v1.ts:languageBulletinTranslations', entries: languageBulletin },
+      { name: 'landing-v1.ts', entries: landing },
     ]);
   }
 

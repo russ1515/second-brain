@@ -29,7 +29,7 @@ export function GlowBackground({ children }: { children: ReactNode }) {
     ...style,
   });
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <View style={{ flex: 1, backgroundColor: c.background, overflow: 'hidden' }}>
       <View pointerEvents="none" style={halo({ top: -120, left: -80 }, c.aiAccent, 420)} />
       <View pointerEvents="none" style={halo({ bottom: -160, right: -100 }, c.primary, 460)} />
       {children}
