@@ -319,9 +319,9 @@ try {
   await password.fill('StaticAcceptance123!');
   assert.equal(await password.getAttribute('type'), 'password', 'password does not start masked');
   await mobilePage.getByRole('button', { name: 'Show password', exact: true }).click();
-  await mobilePage.waitForFunction((input) => input?.getAttribute('type') === 'text', await password.elementHandle());
+  await mobilePage.waitForFunction((input) => input?.type === 'text', await password.elementHandle());
   await mobilePage.getByRole('button', { name: 'Hide password', exact: true }).click();
-  await mobilePage.waitForFunction((input) => input?.getAttribute('type') === 'password', await password.elementHandle());
+  await mobilePage.waitForFunction((input) => input?.type === 'password', await password.elementHandle());
 
   const privacyLink = mobilePage.getByTestId('auth-privacy-link');
   await privacyLink.focus();

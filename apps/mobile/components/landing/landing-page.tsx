@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   Modal,
   Platform,
@@ -51,6 +51,8 @@ export function LandingPage() {
   const { colors: c } = useTokens();
   const { locale, t } = useI18n();
   const router = useRouter();
+  const { section } = useLocalSearchParams<{ section?: string | string[] }>();
+  const requestedSection = Array.isArray(section) ? section[0] : section;
   const scrollRef = useRef<ScrollView>(null);
   const anchors = useRef<Partial<Record<LandingAnchor, number>>>({});
   const [activeAnchor, setActiveAnchor] = useState<LandingAnchor>('product');
@@ -111,12 +113,10 @@ export function LandingPage() {
   }, []);
 
   useEffect(() => {
-    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
-    const requested = new URLSearchParams(window.location.search).get('section') as LandingAnchor | null;
-    if (!requested) return;
-    const timer = window.setTimeout(() => scrollTo(requested), 250);
+    if (Platform.OS !== 'web' || typeof window === 'undefined' || !requestedSection) return;
+    const timer = window.setTimeout(() => scrollTo(requestedSection as LandingAnchor), 250);
     return () => window.clearTimeout(timer);
-  }, [scrollTo]);
+  }, [requestedSection, scrollTo]);
   const start = () => router.push('/signup');
   const signIn = () => router.push('/login');
 
