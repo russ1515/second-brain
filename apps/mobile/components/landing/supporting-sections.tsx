@@ -14,6 +14,7 @@ import {
   type PublicPlatformId,
   type PublicPlanId,
 } from './landing-content';
+import { capability, publicStatusDetailKey, publicStatusLabel } from './capabilities.registry';
 import {
   LandingButton,
   LandingKicker,
@@ -63,7 +64,7 @@ function NextBestActionDemo() {
       <View style={{ flex: 0.8, gap: 9, justifyContent: 'center' }}>
         <LandingPill label={t('landing12.demo.label')} />
         <LandingKicker inverse>{t('landing12.nba.kicker')}</LandingKicker>
-        <Text accessibilityRole="header" style={{ color: c.background, fontSize: 23, lineHeight: 30, fontWeight: '800' }}>{t('landing12.nba.title')}</Text>
+        <Text accessibilityRole="header" aria-level={3} style={{ color: c.background, fontSize: 23, lineHeight: 30, fontWeight: '800' }}>{t('landing12.nba.title')}</Text>
         <Text style={{ color: c.border, fontSize: 13, lineHeight: 20 }}>{t('landing12.nba.lead')}</Text>
       </View>
       <View style={{ flex: 1.2, gap: 8 }}>
@@ -114,15 +115,18 @@ function PlatformAction({ id, status, href, onUseWeb }: { id: PublicPlatformId; 
   const available = status === 'available' && Boolean(href);
   if (!available) {
     const platform = t(k(`landing12.platform.${id}`));
-    const statusLabel = t(k(`landing12.platform.status.${status}`));
+    const fact = capability(id);
+    const statusLabel = publicStatusLabel(fact.status, t);
+    const statusDetail = t(publicStatusDetailKey(fact.status));
     return (
       <View
         accessible
         accessibilityLabel={`${platform}. ${statusLabel}`}
-        style={{ minHeight: 48, minWidth: 132, justifyContent: 'center', borderWidth: 1, borderColor: c.border, borderRadius: radius.md, backgroundColor: c.surface, paddingHorizontal: 13, paddingVertical: 7 }}
+        style={{ minHeight: 72, minWidth: 172, maxWidth: 230, justifyContent: 'center', borderWidth: 1, borderColor: c.border, borderRadius: radius.md, backgroundColor: c.surface, paddingHorizontal: 13, paddingVertical: 8 }}
       >
         <Text style={{ color: c.textPrimary, fontSize: 12, lineHeight: 17, fontWeight: '800' }}>{platform}</Text>
         <Text style={{ color: c.textMuted, fontSize: 10, lineHeight: 14, fontWeight: '600' }}>{statusLabel}</Text>
+        <Text style={{ color: c.textMuted, fontSize: 9, lineHeight: 13, maxWidth: 210 }}>{statusDetail}</Text>
       </View>
     );
   }
@@ -176,21 +180,26 @@ export function PrivacySection() {
   const { colors: c, radius } = useTokens();
   const { width } = useResponsive();
   const { t } = useI18n();
-  const controls = ['memory', 'export', 'documents', 'delete'];
+  const controls: readonly { id: string; labelKey: TranslationKey }[] = [
+    { id: 'memory', labelKey: 'landing12.privacy.memory' },
+    { id: 'documents', labelKey: 'landing12.privacy.documents' },
+    { id: 'learning-reset', labelKey: 'priv.learningReset.title' },
+    { id: 'delete', labelKey: 'landing12.privacy.delete' },
+  ];
   return (
     <LandingSection compact>
       <View style={{ flexDirection: width >= 860 ? 'row' : 'column', gap: 24, alignItems: width >= 860 ? 'center' : 'stretch' }}>
         <View style={{ flex: 1, gap: 10 }}>
           <LandingKicker>{t('landing12.privacy.kicker')}</LandingKicker>
           <LandingTitle>{t('landing12.privacy.title')}</LandingTitle>
-          <LandingLead>{t('landing12.privacy.lead')}</LandingLead>
+          <LandingLead>{t('profile.section.privacyDetail')}</LandingLead>
           <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 17 }}>{t('landing12.privacy.scope')}</Text>
         </View>
         <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 9 }}>
           {controls.map((control) => (
-            <View key={control} style={{ flexGrow: 1, flexBasis: width >= 600 ? '45%' : '100%', minHeight: 74, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface, borderRadius: radius.md, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <View key={control.id} style={{ flexGrow: 1, flexBasis: width >= 600 ? '45%' : '100%', minHeight: 74, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface, borderRadius: radius.md, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               <Text accessible={false} style={{ color: c.success, fontSize: 14, fontWeight: '900' }}>✓</Text>
-              <Text style={{ flex: 1, color: c.textPrimary, fontSize: 12, lineHeight: 18, fontWeight: '700' }}>{t(k(`landing12.privacy.${control}`))}</Text>
+              <Text style={{ flex: 1, color: c.textPrimary, fontSize: 12, lineHeight: 18, fontWeight: '700' }}>{t(control.labelKey)}</Text>
             </View>
           ))}
         </View>
@@ -239,11 +248,18 @@ function PlanCard({ id, pending, onStart }: { id: PublicPlanId; pending: boolean
 
 export function FaqSection() {
   const { t } = useI18n();
+  const answerFor = (index: number): string => {
+    if (index === 6) return `${t('landing12.professor.lead')} ${t('landing12.professor.identity')}`;
+    if (index === 9) return `${t('landing12.feature.research.desc')} ${t('research10.scope.web')} · ${publicStatusLabel(capability('groundedWebResearch').status, t)}.`;
+    if (index === 10) return t('profile.section.privacyDetail');
+    if (index === 12) return t('landing12.download.lead');
+    return t(k(`landing12.faq.a${index}`));
+  };
   return (
     <LandingSection>
       <SectionHeading kicker={t('landing12.faq.kicker')} title={t('landing12.faq.title')} lead={t('landing12.faq.lead')} />
       <View style={{ marginTop: 26, gap: 9 }}>
-        {FAQ_ITEMS.map((index) => <FaqItem key={index} question={t(k(`landing12.faq.q${index}`))} answer={t(k(`landing12.faq.a${index}`))} />)}
+        {FAQ_ITEMS.map((index) => <FaqItem key={index} question={t(k(`landing12.faq.q${index}`))} answer={answerFor(index)} />)}
       </View>
     </LandingSection>
   );
@@ -308,7 +324,7 @@ export function ContactSection({ onAccount }: { onAccount: () => void }) {
   );
 }
 
-export function FinalCtaSection({ onStart, onDownload }: { onStart: () => void; onDownload: () => void }) {
+export function FinalCtaSection({ onStart, onDemo }: { onStart: () => void; onDemo: () => void }) {
   const { colors: c, radius } = useTokens();
   const { width } = useResponsive();
   const { t } = useI18n();
@@ -321,7 +337,7 @@ export function FinalCtaSection({ onStart, onDownload }: { onStart: () => void; 
         <LandingLead inverse align="center">{t('landing12.final.lead')}</LandingLead>
         <View style={{ marginTop: 8, flexDirection: width < 480 ? 'column' : 'row', width: width < 480 ? '100%' : undefined, gap: 10 }}>
           <LandingButton label={t('landing12.cta.start')} onPress={onStart} variant="inverse" />
-          <LandingButton label={t('landing12.cta.download')} onPress={onDownload} variant="secondary" />
+          <LandingButton label={t('landing12.cta.how')} onPress={onDemo} variant="secondary" />
         </View>
       </View>
     </LandingSection>
@@ -340,8 +356,20 @@ export function LandingFooter({
   const { colors: c } = useTokens();
   const { width } = useResponsive();
   const { t } = useI18n();
-  const productLinks: readonly LandingAnchor[] = ['features', 'brain', 'languages', 'pricing', 'download'];
-  const resourceLinks: readonly LandingAnchor[] = ['how', 'faq', 'contact'];
+  const productLinks: readonly { id: LandingAnchor; label: string }[] = [
+    { id: 'academic', label: t('landing.academic.title') },
+    { id: 'professor', label: t('landing12.professor.kicker') },
+    { id: 'research', label: t('research10.title') },
+    { id: 'brain', label: t('landing12.footer.brain') },
+    { id: 'languages', label: t('landing12.footer.languages') },
+    { id: 'review', label: t('landing12.feature.review.title') },
+  ];
+  const resourceLinks: readonly { key: string; id: LandingAnchor; label: string }[] = [
+    { key: 'how', id: 'product', label: t('landing12.footer.how') },
+    { key: 'faq', id: 'faq', label: t('landing12.footer.faq') },
+    { key: 'support', id: 'contact', label: t('landing.footer.resources2') },
+    { key: 'contact', id: 'contact', label: t('landing12.footer.contact') },
+  ];
   return (
     <LandingSection tone="soft" compact>
       <View style={{ flexDirection: width >= 780 ? 'row' : 'column', gap: 32 }}>
@@ -350,14 +378,23 @@ export function LandingFooter({
           <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 18, maxWidth: 330 }}>{t('landing12.footer.tagline')}</Text>
           <Text style={{ color: c.textMuted, fontSize: 10, lineHeight: 15 }}>{t('landing12.footer.beta')}</Text>
         </View>
-        <FooterColumn title={t('landing12.footer.product')} items={productLinks.map((id) => ({ id, label: t(k(`landing12.footer.${id}`)) }))} onNav={onNav} />
-        <FooterColumn title={t('landing12.footer.resources')} items={resourceLinks.map((id) => ({ id, label: t(k(`landing12.footer.${id}`)) }))} onNav={onNav} />
+        <FooterColumn title={t('landing12.footer.product')} items={productLinks} onNav={onNav} />
+        <FooterColumn title={t('landing12.footer.resources')} items={resourceLinks} onNav={onNav} />
         <View style={{ flex: 0.7, minWidth: 150, gap: 8 }}>
           <Text style={{ color: c.textPrimary, fontSize: 12, lineHeight: 17, fontWeight: '800' }}>{t('landing12.footer.account')}</Text>
           <FooterAction label={t('landing12.cta.signin')} onPress={onSignIn} />
           <FooterAction label={t('landing12.cta.start')} onPress={onStart} />
           <FooterAction label={t('landing12.footer.privacy')} onPress={() => onNav('privacy')} />
         </View>
+      </View>
+      <View accessible style={{ marginTop: 24, paddingVertical: 12, paddingHorizontal: 14, borderWidth: 1, borderColor: c.borderSubtle, backgroundColor: c.surface, flexDirection: 'row', flexWrap: 'wrap', gap: 7 }}>
+        <Text style={{ color: c.textMuted, fontSize: 10, lineHeight: 15, fontWeight: '800' }}>{t('landing12.footer.beta').split('·')[0].trim()}</Text>
+        <Text style={{ color: c.borderStrong }}>·</Text>
+        <Text style={{ color: c.textMuted, fontSize: 10, lineHeight: 15 }}>{t('landing12.platform.web')} · {publicStatusLabel(capability('web').status, t)}</Text>
+        <Text style={{ color: c.borderStrong }}>·</Text>
+        <Text style={{ color: c.textMuted, fontSize: 10, lineHeight: 15 }}>{t('landing12.feature.voice.title')} · {publicStatusLabel(capability('voice').status, t)}</Text>
+        <Text style={{ color: c.borderStrong }}>·</Text>
+        <Text style={{ color: c.textMuted, fontSize: 10, lineHeight: 15 }}>{t('research10.scope.web')} · {publicStatusLabel(capability('groundedWebResearch').status, t)}</Text>
       </View>
       <View style={{ marginTop: 28, paddingTop: 17, borderTopWidth: 1, borderTopColor: c.borderSubtle, flexDirection: width >= 600 ? 'row' : 'column', gap: 6, justifyContent: 'space-between' }}>
         <Text style={{ color: c.textMuted, fontSize: 10, lineHeight: 15 }}>{t('landing12.footer.copy')}</Text>
@@ -367,12 +404,12 @@ export function LandingFooter({
   );
 }
 
-function FooterColumn({ title, items, onNav }: { title: string; items: readonly { id: LandingAnchor; label: string }[]; onNav: (id: LandingAnchor) => void }) {
+function FooterColumn({ title, items, onNav }: { title: string; items: readonly { key?: string; id: LandingAnchor; label: string }[]; onNav: (id: LandingAnchor) => void }) {
   const { colors: c } = useTokens();
   return (
     <View style={{ flex: 0.8, minWidth: 150, gap: 8 }}>
       <Text style={{ color: c.textPrimary, fontSize: 12, lineHeight: 17, fontWeight: '800' }}>{title}</Text>
-      {items.map((item) => <FooterAction key={item.id} label={item.label} onPress={() => onNav(item.id)} />)}
+      {items.map((item) => <FooterAction key={item.key ?? item.id} label={item.label} onPress={() => onNav(item.id)} />)}
     </View>
   );
 }

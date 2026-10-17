@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import Head from 'expo-router/head';
 import { useRouter } from 'expo-router';
 import {
@@ -9,27 +9,33 @@ import {
   Text,
   View,
   type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from 'react-native';
 import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
 import { localeDirection, useI18n } from '../../lib/i18n';
 import { LangPill } from '../auth/kit';
-import { CapabilityExperience, PersonalIntelligenceSection } from './feature-experience';
 import { LandingHero } from './hero-section';
 import { LanguageExperience } from './language-experience';
-import { LearnerPassportLandingSection } from './learner-passport-section';
 import {
   HEADER_NAV_ITEMS,
   ContactSection,
   DownloadSection,
   FaqSection,
   FinalCtaSection,
-  HowItWorksSection,
   LandingFooter,
   PricingSection,
   PrivacySection,
 } from './supporting-sections';
 import { ProductStory } from './product-story';
+import {
+  AcademicWorkspaceSection,
+  BrainEvidenceSection,
+  ProfessorJourneySection,
+  ResearchEvidenceSection,
+  ReviewNextActionSection,
+} from './product-realignment-sections';
 import { type LandingAnchor } from './landing-content';
 import {
   LANDING_CONTENT_MAX,
@@ -47,6 +53,7 @@ export function LandingPage() {
   const router = useRouter();
   const scrollRef = useRef<ScrollView>(null);
   const anchors = useRef<Partial<Record<LandingAnchor, number>>>({});
+  const [activeAnchor, setActiveAnchor] = useState<LandingAnchor>('product');
   // Direction comes from the same 34-language registry as the root provider.
   // Keeping the Landing on that source of truth prevents its public shell from
   // disagreeing with <html dir> when the active locale changes.
@@ -61,16 +68,42 @@ export function LandingPage() {
   const onAnchor = (id: LandingAnchor) => (event: LayoutChangeEvent) => {
     anchors.current[id] = event.nativeEvent.layout.y;
   };
-  const scrollTo = (id: LandingAnchor) => {
+  const scrollTo = useCallback((id: LandingAnchor) => {
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
       const target = document.getElementById(`landing-${id}`);
       if (target) {
         target.scrollIntoView({ behavior: 'auto', block: 'start' });
+        setActiveAnchor(id);
         return;
       }
     }
     scrollRef.current?.scrollTo({ y: Math.max(0, (anchors.current[id] ?? 0) - 72), animated: true });
-  };
+    setActiveAnchor(id);
+  }, []);
+  const scrollTop = useCallback(() => {
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+    setActiveAnchor('product');
+  }, []);
+  const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const y = event.nativeEvent.contentOffset.y + 128;
+    const visible = (Object.entries(anchors.current) as Array<[LandingAnchor, number]>)
+      .filter((entry): entry is [LandingAnchor, number] => typeof entry[1] === 'number')
+      .sort((a, b) => a[1] - b[1]);
+    let current: LandingAnchor = 'product';
+    for (const [id, offset] of visible) {
+      if (offset <= y) current = id;
+      else break;
+    }
+    setActiveAnchor((previous) => previous === current ? previous : current);
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const requested = new URLSearchParams(window.location.search).get('section') as LandingAnchor | null;
+    if (!requested) return;
+    const timer = window.setTimeout(() => scrollTo(requested), 250);
+    return () => window.clearTimeout(timer);
+  }, [scrollTo]);
   const start = () => router.push('/signup');
   const signIn = () => router.push('/login');
 
@@ -97,21 +130,24 @@ export function LandingPage() {
         contentContainerStyle={{ paddingBottom: 0 }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        onScroll={onScroll}
+        scrollEventThrottle={100}
       >
-        <LandingHeader onNav={scrollTo} onStart={start} onSignIn={signIn} />
-        <LandingHero onStart={start} onHow={() => scrollTo('product')} onDownload={() => scrollTo('download')} />
+        <LandingHeader activeAnchor={activeAnchor} onHome={scrollTop} onNav={scrollTo} onStart={start} onSignIn={signIn} />
+        <LandingHero onStart={start} onHow={() => scrollTo('product')} />
         <Anchor id="product" onAnchor={onAnchor}><ProductStory /></Anchor>
-        <Anchor id="features" onAnchor={onAnchor}><CapabilityExperience /></Anchor>
-        <LearnerPassportLandingSection />
+        <Anchor id="academic" onAnchor={onAnchor}><AcademicWorkspaceSection /></Anchor>
+        <Anchor id="professor" onAnchor={onAnchor}><ProfessorJourneySection /></Anchor>
+        <Anchor id="research" onAnchor={onAnchor}><ResearchEvidenceSection /></Anchor>
         <Anchor id="languages" onAnchor={onAnchor}><LanguageExperience onStart={start} /></Anchor>
-        <Anchor id="how" onAnchor={onAnchor}><HowItWorksSection /></Anchor>
-        <Anchor id="brain" onAnchor={onAnchor}><PersonalIntelligenceSection /></Anchor>
+        <Anchor id="brain" onAnchor={onAnchor}><BrainEvidenceSection /></Anchor>
+        <Anchor id="review" onAnchor={onAnchor}><ReviewNextActionSection /></Anchor>
         <Anchor id="download" onAnchor={onAnchor}><DownloadSection onUseWeb={start} /></Anchor>
         <Anchor id="privacy" onAnchor={onAnchor}><PrivacySection /></Anchor>
         <Anchor id="pricing" onAnchor={onAnchor}><PricingSection onStart={start} /></Anchor>
         <Anchor id="faq" onAnchor={onAnchor}><FaqSection /></Anchor>
         <Anchor id="contact" onAnchor={onAnchor}><ContactSection onAccount={signIn} /></Anchor>
-        <FinalCtaSection onStart={start} onDownload={() => scrollTo('download')} />
+        <FinalCtaSection onStart={start} onDemo={() => scrollTo('product')} />
         <LandingFooter onNav={scrollTo} onStart={start} onSignIn={signIn} />
       </ScrollView>
     </>
@@ -122,7 +158,7 @@ function Anchor({ id, onAnchor, children }: { id: LandingAnchor; onAnchor: (id: 
   return <View nativeID={`landing-${id}`} onLayout={onAnchor(id)} style={webOnly({ scrollMarginTop: 72 })}>{children}</View>;
 }
 
-function LandingHeader({ onNav, onStart, onSignIn }: { onNav: (id: LandingAnchor) => void; onStart: () => void; onSignIn: () => void }) {
+function LandingHeader({ activeAnchor, onHome, onNav, onStart, onSignIn }: { activeAnchor: LandingAnchor; onHome: () => void; onNav: (id: LandingAnchor) => void; onStart: () => void; onSignIn: () => void }) {
   const { colors: c, radius } = useTokens();
   const { width } = useResponsive();
   const { t } = useI18n();
@@ -146,16 +182,19 @@ function LandingHeader({ onNav, onStart, onSignIn }: { onNav: (id: LandingAnchor
   return (
     <View style={[{ width: '100%', zIndex: 100, borderBottomWidth: 1, borderBottomColor: c.borderSubtle, backgroundColor: c.background }, webOnly({ position: 'sticky', top: 0, backdropFilter: 'blur(12px) saturate(135%)' })]}>
       <View style={{ width: '100%', maxWidth: LANDING_CONTENT_MAX, minHeight: 68, alignSelf: 'center', paddingHorizontal: tiny ? 10 : gutter, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: tiny ? 7 : 11 }}>
-        <Pressable onPress={() => onNav('product')} accessibilityRole="link" accessibilityLabel={t('landing12.brand')} style={({ pressed }) => ({ flexShrink: 1, opacity: pressed ? 0.7 : 1 })}>
-          <Text numberOfLines={1} style={{ color: c.aiAccent, fontSize: tiny ? 14 : 16, lineHeight: 21, fontWeight: '900', letterSpacing: 0.2 }}>◉ {t('landing12.brand')}</Text>
+        <Pressable onPress={onHome} accessibilityRole="link" accessibilityLabel={t('landing12.brand')} style={({ pressed }) => ({ flexShrink: 1, opacity: pressed ? 0.7 : 1 })}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 7 }}>
+            <Text numberOfLines={1} style={{ color: c.aiAccent, fontSize: tiny ? 14 : 16, lineHeight: 21, fontWeight: '900', letterSpacing: 0.2 }}>◉ {t('landing12.brand')}</Text>
+            {!tiny ? <View style={{ borderWidth: 1, borderColor: c.aiAccent, backgroundColor: c.aiAccentSoft, borderRadius: radius.full, paddingVertical: 2, paddingHorizontal: 7 }}><Text style={{ color: c.aiAccent, fontSize: 8, lineHeight: 12, fontWeight: '900', textTransform: 'uppercase' }}>{t('landing12.footer.beta').split('·')[0].trim()}</Text></View> : null}
+          </View>
           {width >= 1370 ? <Text numberOfLines={1} style={{ color: c.textMuted, fontSize: 9, lineHeight: 13, fontWeight: '700' }}>{t('landing12.signature')}</Text> : null}
         </Pressable>
         <View style={{ flex: 1 }} />
         {desktop ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
             {HEADER_NAV_ITEMS.map((item) => (
-              <Pressable key={item.id} onPress={() => onNav(item.id)} accessibilityRole="link" accessibilityLabel={t(item.labelKey)} style={({ pressed }) => ({ minHeight: 38, justifyContent: 'center', opacity: pressed ? 0.62 : 1 })}>
-                <Text numberOfLines={1} style={{ color: c.textSecondary, fontSize: 12, lineHeight: 17, fontWeight: '700' }}>{t(item.labelKey)}</Text>
+              <Pressable key={item.id} onPress={() => onNav(item.id)} accessibilityRole="link" accessibilityLabel={t(item.labelKey)} accessibilityState={{ selected: activeAnchor === item.id }} style={({ pressed }) => ({ minHeight: 38, justifyContent: 'center', borderBottomWidth: activeAnchor === item.id ? 2 : 0, borderBottomColor: c.aiAccent, opacity: pressed ? 0.62 : 1 })}>
+                <Text numberOfLines={1} style={{ color: activeAnchor === item.id ? c.aiAccent : c.textSecondary, fontSize: 12, lineHeight: 17, fontWeight: '700' }}>{t(item.labelKey)}</Text>
               </Pressable>
             ))}
           </View>
@@ -188,8 +227,8 @@ function LandingHeader({ onNav, onStart, onSignIn }: { onNav: (id: LandingAnchor
             </View>
             <ScrollView contentContainerStyle={{ padding: 8 }}>
               {HEADER_NAV_ITEMS.map((item) => (
-                <Pressable key={item.id} onPress={() => go(item.id)} accessibilityRole="link" accessibilityLabel={t(item.labelKey)} style={({ pressed }) => ({ minHeight: 46, justifyContent: 'center', borderRadius: radius.sm, paddingHorizontal: 12, backgroundColor: pressed ? c.surfaceSunken : 'transparent' })}>
-                  <Text style={{ color: c.textPrimary, fontSize: 14, lineHeight: 20, fontWeight: '700' }}>{t(item.labelKey)}</Text>
+                <Pressable key={item.id} onPress={() => go(item.id)} accessibilityRole="link" accessibilityLabel={t(item.labelKey)} accessibilityState={{ selected: activeAnchor === item.id }} style={({ pressed }) => ({ minHeight: 46, justifyContent: 'center', borderRadius: radius.sm, paddingHorizontal: 12, backgroundColor: pressed || activeAnchor === item.id ? c.aiAccentSoft : 'transparent' })}>
+                  <Text style={{ color: activeAnchor === item.id ? c.aiAccent : c.textPrimary, fontSize: 14, lineHeight: 20, fontWeight: '700' }}>{t(item.labelKey)}</Text>
                 </Pressable>
               ))}
               <View style={{ height: 1, backgroundColor: c.borderSubtle, marginVertical: 7 }} />

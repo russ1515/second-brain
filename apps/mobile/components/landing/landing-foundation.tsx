@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
+import { localeDirection, useI18n } from '../../lib/i18n';
 
 export const LANDING_CONTENT_MAX = 1280;
 
@@ -75,7 +76,7 @@ export function LandingKicker({ children, inverse = false }: { children: ReactNo
 
 export function LandingTitle({
   children,
-  align = 'left',
+  align,
   inverse = false,
 }: {
   children: ReactNode;
@@ -84,16 +85,19 @@ export function LandingTitle({
 }) {
   const { colors: c } = useTokens();
   const { width } = useResponsive();
+  const { locale } = useI18n();
+  const resolvedAlign = align ?? (localeDirection(locale) === 'rtl' ? 'right' : 'left');
   return (
     <Text
       accessibilityRole="header"
+      aria-level={2}
       style={{
         color: inverse ? c.background : c.textPrimary,
         fontSize: width >= 1024 ? 40 : width >= 600 ? 34 : 28,
         lineHeight: width >= 1024 ? 47 : width >= 600 ? 41 : 35,
         letterSpacing: -0.45,
         fontWeight: '800',
-        textAlign: align,
+        textAlign: resolvedAlign,
       }}
     >
       {children}
@@ -103,7 +107,7 @@ export function LandingTitle({
 
 export function LandingLead({
   children,
-  align = 'left',
+  align,
   inverse = false,
   maxWidth = 720,
 }: {
@@ -113,6 +117,8 @@ export function LandingLead({
   maxWidth?: number;
 }) {
   const { colors: c } = useTokens();
+  const { locale } = useI18n();
+  const resolvedAlign = align ?? (localeDirection(locale) === 'rtl' ? 'right' : 'left');
   return (
     <Text
       style={{
@@ -120,7 +126,7 @@ export function LandingLead({
         fontSize: 16,
         lineHeight: 25,
         maxWidth,
-        textAlign: align,
+        textAlign: resolvedAlign,
       }}
     >
       {children}
@@ -132,7 +138,7 @@ export function SectionHeading({
   kicker,
   title,
   lead,
-  align = 'left',
+  align,
   inverse = false,
 }: {
   kicker: string;
@@ -141,11 +147,13 @@ export function SectionHeading({
   align?: 'left' | 'center' | 'right';
   inverse?: boolean;
 }) {
+  const { locale } = useI18n();
+  const resolvedAlign = align ?? (localeDirection(locale) === 'rtl' ? 'right' : 'left');
   return (
-    <View style={{ gap: 10, alignItems: align === 'center' ? 'center' : align === 'right' ? 'flex-end' : 'flex-start' }}>
+    <View style={{ gap: 10, alignItems: resolvedAlign === 'center' ? 'center' : resolvedAlign === 'right' ? 'flex-end' : 'flex-start' }}>
       <LandingKicker inverse={inverse}>{kicker}</LandingKicker>
-      <LandingTitle align={align} inverse={inverse}>{title}</LandingTitle>
-      {lead ? <LandingLead align={align} inverse={inverse}>{lead}</LandingLead> : null}
+      <LandingTitle align={resolvedAlign} inverse={inverse}>{title}</LandingTitle>
+      {lead ? <LandingLead align={resolvedAlign} inverse={inverse}>{lead}</LandingLead> : null}
     </View>
   );
 }

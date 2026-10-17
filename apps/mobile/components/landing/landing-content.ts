@@ -6,6 +6,10 @@ import {
   type SupportedLanguageCode,
 } from '@second-brain/shared';
 import type { TranslationKey } from '../../lib/i18n';
+import {
+  PUBLIC_CAPABILITIES,
+  type PublicCapabilityStatus,
+} from './capabilities.registry';
 
 /**
  * Public Landing content contract.
@@ -18,10 +22,12 @@ import type { TranslationKey } from '../../lib/i18n';
 
 export type LandingAnchor =
   | 'product'
-  | 'features'
+  | 'academic'
+  | 'professor'
+  | 'research'
   | 'languages'
-  | 'how'
   | 'brain'
+  | 'review'
   | 'download'
   | 'privacy'
   | 'pricing'
@@ -33,12 +39,11 @@ export const LANDING_NAV_ITEMS: readonly {
   labelKey: TranslationKey;
 }[] = [
   { id: 'product', labelKey: 'landing12.nav.product' },
-  { id: 'how', labelKey: 'landing12.nav.how' },
+  { id: 'academic', labelKey: 'landing.academic.title' },
+  { id: 'professor', labelKey: 'landing12.professor.kicker' },
   { id: 'languages', labelKey: 'landing12.nav.languages' },
+  { id: 'brain', labelKey: 'landing12.footer.brain' },
   { id: 'pricing', labelKey: 'landing12.nav.pricing' },
-  { id: 'download', labelKey: 'landing12.nav.download' },
-  { id: 'faq', labelKey: 'landing12.nav.faq' },
-  { id: 'contact', labelKey: 'landing12.nav.contact' },
 ] as const;
 
 export type ProductStoryStageId =
@@ -98,7 +103,23 @@ export const LANDING_CAPABILITIES: readonly {
 export const CAPABILITY_GROUPS = ['personal', 'understand', 'practice', 'produce'] as const;
 
 export type PublicPlatformId = 'web' | 'android' | 'ios' | 'windows' | 'macos';
-export type PublicPlatformStatus = 'available' | 'prepared' | 'coming-soon';
+const PLATFORM_STATUS_TRANSLATION_IDS = {
+  AVAILABLE: 'available',
+  IN_PREPARATION: 'prepared',
+  COMING_SOON: 'coming-soon',
+} as const satisfies Record<
+  Extract<PublicCapabilityStatus, 'AVAILABLE' | 'IN_PREPARATION' | 'COMING_SOON'>,
+  string
+>;
+
+export type PublicPlatformStatus =
+  (typeof PLATFORM_STATUS_TRANSLATION_IDS)[keyof typeof PLATFORM_STATUS_TRANSLATION_IDS];
+
+function platformStatus(
+  status: Extract<PublicCapabilityStatus, 'AVAILABLE' | 'IN_PREPARATION' | 'COMING_SOON'>,
+): PublicPlatformStatus {
+  return PLATFORM_STATUS_TRANSLATION_IDS[status];
+}
 
 /** Store URLs are null because none exists in the repository or public config. */
 export const PUBLIC_PLATFORMS: readonly {
@@ -107,11 +128,11 @@ export const PUBLIC_PLATFORMS: readonly {
   status: PublicPlatformStatus;
   href: string | null;
 }[] = [
-  { id: 'web', icon: '◎', status: 'available', href: '/sign-in' },
-  { id: 'android', icon: '▯', status: 'prepared', href: null },
-  { id: 'ios', icon: '▯', status: 'prepared', href: null },
-  { id: 'windows', icon: '▣', status: 'coming-soon', href: null },
-  { id: 'macos', icon: '▣', status: 'coming-soon', href: null },
+  { id: 'web', icon: '◎', status: platformStatus(PUBLIC_CAPABILITIES.web.status), href: PUBLIC_CAPABILITIES.web.href },
+  { id: 'android', icon: '▯', status: platformStatus(PUBLIC_CAPABILITIES.android.status), href: PUBLIC_CAPABILITIES.android.href },
+  { id: 'ios', icon: '▯', status: platformStatus(PUBLIC_CAPABILITIES.ios.status), href: PUBLIC_CAPABILITIES.ios.href },
+  { id: 'windows', icon: '▣', status: platformStatus(PUBLIC_CAPABILITIES.windows.status), href: PUBLIC_CAPABILITIES.windows.href },
+  { id: 'macos', icon: '▣', status: platformStatus(PUBLIC_CAPABILITIES.macos.status), href: PUBLIC_CAPABILITIES.macos.href },
 ] as const;
 
 export type PublicPlanId = 'free' | 'pro' | 'max';

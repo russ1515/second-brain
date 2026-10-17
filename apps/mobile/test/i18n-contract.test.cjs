@@ -234,12 +234,20 @@ const productUxV1Catalogs = tupleCatalog(
   productUxV1Keys,
 );
 const productUxV1Aliases = catalog(productUxV1File, 'productUxV1Aliases');
+const landingV1File = path.join(LOCALES_DIR, 'landing-v1.ts');
+const landingV1Keys = stringArray(landingV1File, 'landingV1Keys');
+const landingV1Catalogs = tupleCatalog(
+  landingV1File,
+  'landingV1Translations',
+  landingV1Keys,
+);
 const overlayFiles = new Set([
   'auth-errors.ts',
   'essential.ts',
   'global-path-v1.ts',
   'index.ts',
   'language-mastery-v1.ts',
+  'landing-v1.ts',
   'learning-control-v1.ts',
   'learning-data-control-africa-v1.ts',
   'learning-data-control-asia-v1.ts',
@@ -305,6 +313,7 @@ function effectiveCatalog(resource) {
     ...(workspaceOrchestratorCatalogs.get(code) ?? new Map()),
     ...(workspaceShellCatalogs.get(code) ?? new Map()),
     ...(productUxV1Catalogs.get(code) ?? new Map()),
+    ...(landingV1Catalogs.get(code) ?? new Map()),
   ]);
   for (const [key, sourceKey] of globalPathAliases) {
     const value = translations.get(sourceKey);

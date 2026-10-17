@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import type { RlleDemoStage } from '@second-brain/shared';
 import { useTokens } from '../../lib/design/theme';
 import { useResponsive } from '../../lib/responsive';
-import { useI18n, type TranslationKey } from '../../lib/i18n';
+import { localeDirection, useI18n, type TranslationKey } from '../../lib/i18n';
 import { LanguageFlag } from '../ds/language-flag';
 import { publicLanguageOptions, RLLE_PUBLIC_DEMO } from './landing-content';
 import {
@@ -25,9 +25,16 @@ export function LanguageExperience({ onStart }: { onStart: () => void }) {
   const { colors: c, radius } = useTokens();
   const { width } = useResponsive();
   const { locale, t } = useI18n();
+  const rtl = localeDirection(locale) === 'rtl';
   const [activeIndex, setActiveIndex] = useState(0);
   const active = RLLE_PUBLIC_DEMO.stages[activeIndex];
   const languages = useMemo(() => publicLanguageOptions(locale), [locale]);
+  const supportLanguage = languages.find((language) => language.code === locale);
+  const supportLanguageLabel = supportLanguage
+    ? supportLanguage.displayName === supportLanguage.nativeName
+      ? supportLanguage.nativeName
+      : `${supportLanguage.nativeName} · ${supportLanguage.displayName}`
+    : locale.toUpperCase();
   const demoLanguage = languages.find((language) => language.code === RLLE_PUBLIC_DEMO.languageCode);
   const demoLanguageLabel = demoLanguage
     ? demoLanguage.displayName === demoLanguage.nativeName
@@ -43,6 +50,15 @@ export function LanguageExperience({ onStart }: { onStart: () => void }) {
         <LandingKicker inverse>{t('landing12.languages.kicker')}</LandingKicker>
         <LandingTitle inverse>{t('landing12.languages.title')}</LandingTitle>
         <LandingLead inverse>{t('landing12.languages.lead')}</LandingLead>
+      </View>
+
+      <View accessible style={{ marginBottom: 20, flexDirection: width >= 700 ? 'row' : 'column', alignItems: 'center', gap: 9, borderWidth: 1, borderColor: c.borderStrong, borderRadius: radius.xl, backgroundColor: c.surface, padding: 16 }}>
+        <LandingPill label={`${t('languageSelector.nativeLabel')} · ${supportLanguageLabel}`} icon="文" />
+        <Text accessible={false} style={{ color: c.aiAccent, fontSize: 18, fontWeight: '900' }}>{width >= 700 ? (rtl ? '←' : '→') : '↓'}</Text>
+        <LandingPill label={t('landing12.professor.identity')} tone="accent" icon="✦" />
+        <Text accessible={false} style={{ color: c.aiAccent, fontSize: 18, fontWeight: '900' }}>{width >= 700 ? (rtl ? '←' : '→') : '↓'}</Text>
+        <LandingPill label={t('languageSelector.learningLabel')} tone="success" icon="◎" />
+        <Text style={{ flex: 1, color: c.textSecondary, fontSize: 11, lineHeight: 17 }}>{t('landing12.languages.stage.conversation.note')}</Text>
       </View>
 
       <View style={{ flexDirection: desktop ? 'row' : 'column', gap: 18, alignItems: 'stretch' }}>
@@ -70,9 +86,9 @@ export function LanguageExperience({ onStart }: { onStart: () => void }) {
 
         <Surface accent style={{ flex: 1, minHeight: desktop ? 560 : 440 }}>
           {!desktop ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0, maxHeight: 60 }} contentContainerStyle={{ alignItems: 'center', gap: 6, paddingBottom: 15 }}>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingBottom: 15 }}>
               {RLLE_PUBLIC_DEMO.stages.map((stage, index) => <LanguageStageTab key={stage} stage={stage} index={index} selected={index === activeIndex} onPress={() => setActiveIndex(index)} compact />)}
-            </ScrollView>
+            </View>
           ) : null}
           <StageTransition revision={active}>
             <View accessibilityLiveRegion="polite" style={{ gap: 15 }}>
@@ -82,13 +98,13 @@ export function LanguageExperience({ onStart }: { onStart: () => void }) {
                 </View>
                 <View style={{ flex: 1, gap: 2 }}>
                   <Text style={{ color: c.aiAccent, fontSize: 10, lineHeight: 15, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase' }}>{t('landing12.languages.rlle')}</Text>
-                  <Text accessibilityRole="header" style={{ color: c.textPrimary, fontSize: width >= 700 ? 24 : 20, lineHeight: width >= 700 ? 31 : 27, fontWeight: '800' }}>{t(k(`landing12.languages.stage.${active}`))}</Text>
+                  <Text accessibilityRole="header" aria-level={3} style={{ color: c.textPrimary, fontSize: width >= 700 ? 24 : 20, lineHeight: width >= 700 ? 31 : 27, fontWeight: '800' }}>{t(k(`landing12.languages.stage.${active}`))}</Text>
                 </View>
               </View>
-              <LanguageStageVisual stage={active} />
+              <LanguageStageVisual stage={active} supportLanguageLabel={supportLanguageLabel} />
               <View style={{ flexDirection: width < 500 ? 'column' : 'row', alignItems: width < 500 ? 'stretch' : 'center', gap: 10, paddingTop: 4 }}>
                 <Text style={{ flex: 1, color: c.textSecondary, fontSize: 11, lineHeight: 17 }}>{t(k(`landing12.languages.stage.${active}.note`))}</Text>
-                <LandingButton compact variant="secondary" label={activeIndex === RLLE_PUBLIC_DEMO.stages.length - 1 ? t('landing12.cta.restart') : t('landing12.cta.next')} onPress={next} icon={activeIndex === RLLE_PUBLIC_DEMO.stages.length - 1 ? '↻' : '→'} />
+                <LandingButton compact variant="secondary" label={activeIndex === RLLE_PUBLIC_DEMO.stages.length - 1 ? t('landing12.cta.restart') : t('landing12.cta.next')} onPress={next} icon={activeIndex === RLLE_PUBLIC_DEMO.stages.length - 1 ? '↻' : rtl ? '←' : '→'} />
               </View>
             </View>
           </StageTransition>
@@ -97,14 +113,14 @@ export function LanguageExperience({ onStart }: { onStart: () => void }) {
 
       <View style={{ marginTop: 24, flexDirection: width >= 900 ? 'row' : 'column', gap: 16 }}>
         <View style={{ flex: 1, gap: 14, padding: 20, backgroundColor: c.surface, borderRadius: radius.xl, borderWidth: 1, borderColor: c.border }}>
-          <Text accessibilityRole="header" style={{ color: c.textPrimary, fontSize: 18, lineHeight: 24, fontWeight: '800' }}>{t('landing12.languages.courseTitle')}</Text>
+          <Text accessibilityRole="header" aria-level={3} style={{ color: c.textPrimary, fontSize: 18, lineHeight: 24, fontWeight: '800' }}>{t('landing12.languages.courseTitle')}</Text>
           <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 18 }}>{t('landing12.languages.courseLead')}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7 }}>
             {['vocabulary', 'grammar', 'verbs', 'conjugation', 'reading', 'writing', 'listening', 'oral', 'pronunciation', 'mediation'].map((strand) => <LandingPill key={strand} label={t(k(`landing12.languages.strand.${strand}`))} />)}
           </View>
         </View>
         <View style={{ flex: 1, gap: 14, padding: 20, backgroundColor: c.surface, borderRadius: radius.xl, borderWidth: 1, borderColor: c.border }}>
-          <Text accessibilityRole="header" style={{ color: c.textPrimary, fontSize: 18, lineHeight: 24, fontWeight: '800' }}>{t('landing12.languages.missionsTitle')}</Text>
+          <Text accessibilityRole="header" aria-level={3} style={{ color: c.textPrimary, fontSize: 18, lineHeight: 24, fontWeight: '800' }}>{t('landing12.languages.missionsTitle')}</Text>
           <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 18 }}>{t('landing12.languages.missionsLead')}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7 }}>
             {['travel', 'work', 'studies', 'social'].map((mission) => <LandingPill key={mission} label={t(k(`landing12.languages.mission.${mission}`))} tone="accent" />)}
@@ -114,7 +130,7 @@ export function LanguageExperience({ onStart }: { onStart: () => void }) {
 
       <View style={{ marginTop: 24, padding: width >= 700 ? 24 : 16, backgroundColor: c.surface, borderRadius: radius.xl, borderWidth: 1, borderColor: c.border }}>
         <View style={{ gap: 8, marginBottom: 18 }}>
-          <Text accessibilityRole="header" style={{ color: c.textPrimary, fontSize: 20, lineHeight: 27, fontWeight: '800' }}>{t('landing12.languages.registryTitle')}</Text>
+          <Text accessibilityRole="header" aria-level={3} style={{ color: c.textPrimary, fontSize: 20, lineHeight: 27, fontWeight: '800' }}>{t('landing12.languages.registryTitle')}</Text>
           <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 18 }}>{t('landing12.languages.registryLead')}</Text>
         </View>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -168,9 +184,10 @@ function LanguageStageTab({ stage, index, selected, onPress, compact = false }: 
   );
 }
 
-function LanguageStageVisual({ stage }: { stage: RlleDemoStage }) {
+function LanguageStageVisual({ stage, supportLanguageLabel }: { stage: RlleDemoStage; supportLanguageLabel: string }) {
   const { colors: c, radius } = useTokens();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
+  const rtl = localeDirection(locale) === 'rtl';
   const panel = { minHeight: 330, justifyContent: 'center', gap: 13, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface, borderRadius: radius.lg, padding: 18 } as const;
 
   if (stage === 'goal' || stage === 'course' || stage === 'mission') {
@@ -178,9 +195,9 @@ function LanguageStageVisual({ stage }: { stage: RlleDemoStage }) {
       <View style={panel}>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 9 }}>
           <LanguagePathItem label={t('landing12.languages.objectiveValue')} active={stage === 'goal'} icon="◎" />
-          <Text accessible={false} style={{ color: c.textMuted }}>→</Text>
+          <Text accessible={false} style={{ color: c.textMuted }}>{rtl ? '←' : '→'}</Text>
           <LanguagePathItem label={`English · ${RLLE_PUBLIC_DEMO.level}`} active={stage === 'course'} icon="◉" />
-          <Text accessible={false} style={{ color: c.textMuted }}>→</Text>
+          <Text accessible={false} style={{ color: c.textMuted }}>{rtl ? '←' : '→'}</Text>
           <LanguagePathItem label={t('landing12.languages.missionMeeting')} active={stage === 'mission'} icon="⌁" />
         </View>
         <View style={{ height: 1, backgroundColor: c.borderSubtle, marginVertical: 4 }} />
@@ -194,6 +211,11 @@ function LanguageStageVisual({ stage }: { stage: RlleDemoStage }) {
     return (
       <View style={panel}>
         <LandingPill label={t('landing12.languages.professorLabel')} tone="accent" icon="✦" />
+        <View style={{ alignSelf: 'stretch', borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceSunken, borderRadius: radius.md, padding: 11, gap: 6 }}>
+          <LandingPill label={`${t('languageSelector.nativeLabel')} · ${supportLanguageLabel}`} icon="文" />
+          <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 19 }}>{t('landing12.languages.gapExplanation')}</Text>
+        </View>
+        <LandingPill label={t('languageSelector.learningLabel')} tone="success" icon="◎" />
         <View style={{ alignSelf: 'flex-start', maxWidth: '92%', backgroundColor: c.aiAccentSoft, borderWidth: 1, borderColor: c.aiAccent, borderRadius: radius.lg, padding: 13 }}>
           <Text style={{ color: c.textPrimary, fontSize: 15, lineHeight: 23 }}>“Could you explain your proposal to the team?”</Text>
         </View>

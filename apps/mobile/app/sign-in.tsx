@@ -11,7 +11,6 @@ import { safeReturnPath } from '../lib/navigation';
 import {
   AuthButton,
   AuthField,
-  BrandBadge,
   GlassCard,
   GlowBackground,
   LangPill,
@@ -19,6 +18,7 @@ import {
   PasswordStrength,
   ThemeToggle,
 } from '../components/auth/kit';
+import { SignupProductDemo } from '../components/auth/signup-product-demo';
 
 type Mode = 'login' | 'register';
 type Step = 'credentials' | 'otp' | 'twofactor' | 'forgot' | 'forgotSent';
@@ -44,6 +44,7 @@ export default function SignInScreen() {
   const destination = safeReturnPath(returnTo);
   const requestedModeValue = Array.isArray(requestedMode) ? requestedMode[0] : requestedMode;
   const split = width >= 768; // desktop/tablet: brand + form side by side
+  const desktop = width >= 1080;
   const fmt = (k: TranslationKey, vars: Record<string, string | number> = {}) =>
     Object.entries(vars).reduce((s, [key, v]) => s.replace(`{${key}}`, String(v)), t(k));
 
@@ -113,8 +114,21 @@ export default function SignInScreen() {
   }, [step]);
 
   const clear = () => { setError(null); setInfo(null); };
-  const toggleMode = () => { clear(); setMode((m) => (m === 'login' ? 'register' : 'login')); };
+  const navigateMode = (nextMode: Mode, replace = false) => {
+    const route = nextMode === 'register' ? '/signup' : '/login';
+    const href = {
+      pathname: route,
+      params: destination === '/' ? {} : { returnTo: destination },
+    } as const;
+    if (replace) router.replace(href);
+    else router.push(href);
+  };
+  const toggleMode = () => {
+    clear();
+    navigateMode(mode === 'login' ? 'register' : 'login');
+  };
   const goHome = () => router.push('/');
+  const goPrivacy = () => router.push('/?section=privacy');
 
   const homeLink = (
     <Pressable
@@ -206,6 +220,7 @@ export default function SignInScreen() {
       setPassword('');
       setStep('credentials');
       setBusy(false);
+      navigateMode('login', true);
     }
   };
 
@@ -244,7 +259,7 @@ export default function SignInScreen() {
     setBusy(true); clear();
     try {
       await api('/auth/reset-password', { method: 'POST', anonymous: true, body: { email: email.trim(), code: otp, password: newPassword } });
-      setMode('login'); setStep('credentials'); setInfo(t('auth.resetOk'));
+      setMode('login'); setStep('credentials'); setInfo(t('auth.resetOk')); navigateMode('login', true);
     } catch (e) { setError((e as Error).message || t('auth.otpError')); } finally { setBusy(false); }
   };
 
@@ -258,6 +273,7 @@ export default function SignInScreen() {
       )}
     </View>
   );
+  const publicBetaLabel = t('landing12.footer.beta').split(' · ')[0];
 
   const form = (
     <GlassCard>
@@ -267,6 +283,11 @@ export default function SignInScreen() {
             <View style={{ gap: 2 }}>
               <Text style={{ color: c.textPrimary, fontSize: 22, fontWeight: '800' }}>{mode === 'register' ? t('auth.createAccount') : t('auth.welcomeBack')}</Text>
               <Text style={{ color: c.textMuted, fontSize: 13 }}>{mode === 'register' ? t('auth.signUpSubtitle') : t('auth.signInSubtitle')}</Text>
+              {mode === 'register' ? (
+                <Text style={{ color: c.primary, fontSize: 11, lineHeight: 16, fontWeight: '800', paddingTop: 4 }}>
+                  {t('landing12.pricing.freeStatus')} · {publicBetaLabel}
+                </Text>
+              ) : null}
             </View>
             {mode === 'register' ? <AuthField label={t('auth.name')} placeholder={t('auth.namePh')} value={name} onChangeText={setName} autoCapitalize="words" /> : null}
             <AuthField label={t('auth.email')} placeholder={t('auth.emailPh')} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" autoComplete="email" />
@@ -280,10 +301,20 @@ export default function SignInScreen() {
             <AuthButton label={mode === 'register' ? t('auth.createBtn') : t('auth.signIn')} onPress={submitCredentials} busy={busy} disabled={!email.trim() || !password} />
             <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
               <Text style={{ color: c.textMuted, fontSize: 14 }}>{mode === 'register' ? t('auth.haveAccount') : t('auth.noAccount')}</Text>
-              <Pressable onPress={toggleMode} accessibilityRole="button">
+              <Pressable onPress={toggleMode} accessibilityRole="link">
                 <Text style={{ color: c.primary, fontSize: 14, fontWeight: '800' }}>{mode === 'register' ? t('auth.signIn') : t('auth.createAccount')}</Text>
               </Pressable>
             </View>
+            {mode === 'register' ? (
+              <View style={{ gap: 5, paddingTop: 4, borderTopWidth: 1, borderTopColor: c.borderSubtle }}>
+                <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, textAlign: 'center' }}>
+                  {t('landingV1.auth.privacy')}
+                </Text>
+                <Pressable testID="auth-privacy-link" onPress={goPrivacy} accessibilityRole="link" style={{ alignSelf: 'center', minHeight: 32, justifyContent: 'center' }}>
+                  <Text style={{ color: c.primary, fontSize: 11, fontWeight: '700' }}>{t('landing12.footer.privacy')}</Text>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
         ) : null}
 
@@ -356,28 +387,50 @@ export default function SignInScreen() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         {split ? (
           <View style={{ flex: 1, flexDirection: 'row' }}>
-            {/* Left — brand experience (§7-9) */}
-            <View style={{ width: '46%', padding: spacing.xl, justifyContent: 'space-between' }}>
-              <View style={{ flexDirection: 'row' }}><ThemeToggle /></View>
-              <View style={{ gap: spacing.lg, maxWidth: 460 }}>
-                <Pressable testID="auth-brand-home-desktop" onPress={goHome} accessibilityRole="link" style={{ alignSelf: 'flex-start' }}>
-                  <Text style={{ color: c.primary, fontSize: 13, fontWeight: '800', letterSpacing: 2, textTransform: 'uppercase' }}>Second Brain</Text>
-                </Pressable>
-                <Text style={{ color: c.textPrimary, fontSize: 40, fontWeight: '800', lineHeight: 48 }}>{t('auth.brandTitle')}</Text>
-                <Text style={{ color: c.textSecondary, fontSize: 16, lineHeight: 24 }}>{t('auth.brandSubtitle')}</Text>
-                <AuthScene />
-              </View>
-              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-                <BrandBadge icon="🌍" label={t('auth.badgeLangs')} />
-                <BrandBadge icon="🤖" label={t('auth.badgeModels')} />
-                <BrandBadge icon="🧠" label={t('auth.badgeGraph')} />
-              </View>
+            {/* Signup tells the V1 product story; login intentionally stays quieter. */}
+            <View style={{ width: desktop ? '46%' : '38%', padding: desktop ? spacing.xl : spacing.lg }}>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ flexGrow: 1, justifyContent: 'space-between', gap: spacing.lg }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <ThemeToggle />
+                  {mode === 'register' ? (
+                    <Text style={{ color: c.primary, fontSize: 10, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase' }}>
+                      {publicBetaLabel}
+                    </Text>
+                  ) : null}
+                </View>
+                <View style={{ gap: desktop ? spacing.lg : spacing.md, maxWidth: 520 }}>
+                  <Pressable testID="auth-brand-home-desktop" onPress={goHome} accessibilityRole="link" style={{ alignSelf: 'flex-start', minHeight: 36, justifyContent: 'center' }}>
+                    <Text style={{ color: c.primary, fontSize: 13, fontWeight: '800', letterSpacing: 2, textTransform: 'uppercase' }}>{t('landing12.brand')}</Text>
+                  </Pressable>
+                  {mode === 'register' ? (
+                    <Text style={{ color: c.primary, fontSize: 11, fontWeight: '800' }}>
+                      {t('landing12.pricing.freeStatus')} · {publicBetaLabel}
+                    </Text>
+                  ) : null}
+                  <Text style={{ color: c.textPrimary, fontSize: desktop ? 40 : 30, fontWeight: '800', lineHeight: desktop ? 48 : 37 }}>{t('auth.brandTitle')}</Text>
+                  <Text style={{ color: c.textSecondary, fontSize: desktop ? 16 : 14, lineHeight: desktop ? 24 : 21 }}>
+                    {mode === 'register' ? t('landing12.story.outcome') : t('auth.brandSubtitle')}
+                  </Text>
+                  {mode === 'register' ? (
+                    <SignupProductDemo compact={!desktop} />
+                  ) : (
+                    <View style={{ borderWidth: 1, borderColor: c.borderSubtle, backgroundColor: c.surface, borderRadius: 16, padding: spacing.lg, gap: 8 }}>
+                      <Text style={{ color: c.primary, fontSize: 12, fontWeight: '800' }}>{t('landing12.signature')}</Text>
+                      <Text style={{ color: c.textSecondary, fontSize: 13, lineHeight: 19 }}>{t('landing12.hero.subtitle')}</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16 }}>{t('landing12.footer.noTracking')}</Text>
+              </ScrollView>
             </View>
             {/* Right — form */}
             <View style={{ flex: 1, borderLeftWidth: 1, borderLeftColor: c.borderSubtle }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.lg }}>
                 <Pressable testID="auth-logo-home-desktop" onPress={goHome} accessibilityRole="link">
-                  <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '800' }}>🧠 Second Brain</Text>
+                  <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '800' }}>🧠 {t('landing12.brand')}</Text>
                 </Pressable>
                 <LangPill />
               </View>
@@ -388,11 +441,11 @@ export default function SignInScreen() {
             </View>
           </View>
         ) : (
-          <ScrollView contentContainerStyle={{ flexGrow: 1, padding: spacing.lg, justifyContent: 'center' }}>
-            {/* Mobile — compact header + form only (§18) */}
+          <ScrollView contentContainerStyle={{ flexGrow: 1, padding: spacing.lg, justifyContent: 'flex-start' }}>
+            {/* Mobile prioritises the form; the signup demo follows it. */}
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.lg }}>
               <Pressable testID="auth-logo-home-mobile" onPress={goHome} accessibilityRole="link">
-                <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '800' }}>🧠 Second Brain</Text>
+                <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '800' }}>🧠 {t('landing12.brand')}</Text>
               </Pressable>
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <LangPill />
@@ -400,16 +453,19 @@ export default function SignInScreen() {
               </View>
             </View>
             {homeLink}
-            <View style={{ alignItems: 'center', gap: 8, marginBottom: spacing.lg }}>
-              <Text style={{ color: c.textPrimary, fontSize: 26, fontWeight: '800', textAlign: 'center', lineHeight: 32 }}>{t('auth.brandTitle')}</Text>
-              <Text style={{ color: c.textSecondary, fontSize: 14, textAlign: 'center', maxWidth: 340, lineHeight: 20 }}>{t('auth.brandSubtitle')}</Text>
-            </View>
             {form}
-            <View style={{ flexDirection: 'row', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: spacing.lg }}>
-              <BrandBadge icon="🌍" label={t('auth.badgeLangs')} />
-              <BrandBadge icon="🤖" label={t('auth.badgeModels')} />
-              <BrandBadge icon="🧠" label={t('auth.badgeGraph')} />
-            </View>
+            {mode === 'register' && step === 'credentials' ? (
+              <View style={{ gap: spacing.md, marginTop: spacing.xl }}>
+                <View style={{ alignItems: 'center', gap: 7 }}>
+                  <Text style={{ color: c.primary, fontSize: 11, fontWeight: '800' }}>
+                    {t('landing12.pricing.freeStatus')} · {publicBetaLabel}
+                  </Text>
+                  <Text style={{ color: c.textPrimary, fontSize: 24, fontWeight: '800', textAlign: 'center', lineHeight: 30 }}>{t('auth.brandTitle')}</Text>
+                   <Text style={{ color: c.textSecondary, fontSize: 13, textAlign: 'center', maxWidth: 420, lineHeight: 19 }}>{t('landing12.story.outcome')}</Text>
+                </View>
+                <SignupProductDemo compact />
+              </View>
+            ) : null}
           </ScrollView>
         )}
       </KeyboardAvoidingView>
@@ -423,35 +479,4 @@ function maskEmail(email: string): string {
   if (!domain) return email;
   const shown = user.slice(0, 1);
   return `${shown}${'*'.repeat(Math.max(1, user.length - 1))}@${domain}`;
-}
-
-/** Lightweight product illustration (§8): a question, the teacher's reply, and
- *  a few concept nodes — suggesting the system learns with the user. Static,
- *  no fake app, no business engine. */
-function AuthScene() {
-  const { colors: c, radius } = useTokens();
-  const { t } = useI18n();
-  const chip = (label: string) => (
-    <View key={label} style={{ borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceElevated, borderRadius: radius.full, paddingVertical: 5, paddingHorizontal: 10 }}>
-      <Text style={{ color: c.textSecondary, fontSize: 12, fontWeight: '600' }}>{label}</Text>
-    </View>
-  );
-  return (
-    <View style={{ gap: 10, padding: 16, borderRadius: radius.lg, borderWidth: 1, borderColor: c.borderSubtle, backgroundColor: c.surface }}>
-      <View style={{ alignSelf: 'flex-end', maxWidth: '85%', backgroundColor: c.primary, borderRadius: radius.lg, paddingVertical: 8, paddingHorizontal: 12 }}>
-        <Text style={{ color: c.onPrimary, fontSize: 13 }}>{t('auth.sceneQuestion')}</Text>
-      </View>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, maxWidth: '90%' }}>
-        <Text style={{ fontSize: 18 }}>👨‍🏫</Text>
-        <View style={{ flex: 1, backgroundColor: c.surfaceElevated, borderRadius: radius.lg, paddingVertical: 8, paddingHorizontal: 12 }}>
-          <Text style={{ color: c.textPrimary, fontSize: 13, lineHeight: 19 }}>{t('auth.sceneAnswer')}</Text>
-        </View>
-      </View>
-      <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
-        {chip(`🧩 ${t('auth.sceneConcept')}`)}
-        {chip(`🔗 ${t('auth.sceneRelation')}`)}
-        {chip(`⭐ ${t('auth.sceneMastery')}`)}
-      </View>
-    </View>
-  );
 }

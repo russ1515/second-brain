@@ -3940,6 +3940,20 @@ const en = {
   'landing.footer.legal3': 'Security',
   'landing.footer.copy': '© 2026 Second Brain — Your personal AI learning environment.',
 
+  // ── Public Landing V1 product realignment ────────────────────────────────
+  'landingV1.status.beta': 'Beta',
+  'landingV1.status.inPreparation': 'In preparation',
+  'landingV1.status.mobilePreparationDetail': 'Mobile version in preparation. Use the adaptive Web App for now.',
+  'landingV1.action.apply': 'Apply',
+  'landingV1.action.reject': 'Reject',
+  'landingV1.demo.detectedHomework': 'I detected a physics assignment',
+  'landingV1.demo.professorPrompt': 'Let’s start by understanding the question',
+  'landingV1.demo.formulaFound': 'Formula identified · page 17',
+  'landingV1.demo.suggestionGap': 'Your argument is missing a justification',
+  'landingV1.demo.suggestionSource': 'Use this information from your course · p. 17',
+  'landingV1.demo.deconstruction': 'Here is why this method works and what you should remember',
+  'landingV1.auth.privacy': 'Your learning space is private. Your account and access controls protect your data.',
+
   // ── Public Landing — Lot 12 (English source of truth) ─────────────────────
   'landing12.seo.title': 'Second Brain — Your personal intelligent learning system',
   'landing12.seo.description': 'Learn, understand, practise, remember and produce with one connected learning system: your documents, AI Professor, cognitive twin, review, research, languages and workspace.',
@@ -8208,6 +8222,19 @@ const fr: Record<TranslationKey, string> = {
   'landing.footer.copy': '© 2026 Second Brain — Ton environnement d’apprentissage personnel augmenté par l’IA.',
 
   // ── Landing publique — Lot 12 ─────────────────────────────────────────────
+  'landingV1.status.beta': 'Bêta',
+  'landingV1.status.inPreparation': 'En préparation',
+  'landingV1.status.mobilePreparationDetail': 'Version mobile en préparation. Utilise actuellement la Web App adaptative.',
+  'landingV1.action.apply': 'Appliquer',
+  'landingV1.action.reject': 'Rejeter',
+  'landingV1.demo.detectedHomework': 'J’ai détecté un devoir de physique',
+  'landingV1.demo.professorPrompt': 'Commençons par comprendre la question',
+  'landingV1.demo.formulaFound': 'Formule identifiée · page 17',
+  'landingV1.demo.suggestionGap': 'Ton argument manque d’une justification',
+  'landingV1.demo.suggestionSource': 'Utilise cette information de ton cours · p. 17',
+  'landingV1.demo.deconstruction': 'Voici pourquoi cette méthode fonctionne et ce que tu dois retenir',
+  'landingV1.auth.privacy': 'Ton espace d’apprentissage est privé. Ton compte et les contrôles d’accès protègent tes données.',
+
   'landing12.seo.title': 'Second Brain — Ton système d’apprentissage personnel intelligent',
   'landing12.seo.description': 'Apprends, comprends, pratique, souviens-toi et produis avec un seul système connecté : tes documents, ton Professeur IA, ton jumeau cognitif, tes révisions, tes langues et ton espace de travail.',
   'landing12.brand': 'Second Brain',
