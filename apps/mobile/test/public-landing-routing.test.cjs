@@ -41,6 +41,6 @@ test('login and signup share hardened auth while exposing a public home return',
   assert.match(auth, /testID="auth-back-home"/);
   assert.match(auth, /testID="auth-logo-home-desktop"/);
   assert.match(auth, /testID="auth-logo-home-mobile"/);
-  assert.match(auth, /router\.navigate\('\/'\)/);
+  assert.match(auth, /router\.dismissTo\('\/'\)/);
   assert.match(auth, /t\('session\.home'\)/);
 });

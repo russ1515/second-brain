@@ -138,8 +138,8 @@ export default function SignInScreen() {
     clear();
     navigateMode(mode === 'login' ? 'register' : 'login', true);
   };
-  const goHome = () => router.navigate('/');
-  const goPrivacy = () => router.navigate('/?section=privacy');
+  const goHome = () => router.dismissTo('/');
+  const goPrivacy = () => router.dismissTo('/?section=privacy');
 
   const homeLink = (
     <Pressable

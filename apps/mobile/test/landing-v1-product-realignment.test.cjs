@@ -98,7 +98,7 @@ test('privacy, signup and login are realigned without weakening auth', () => {
   assert.doesNotMatch(supporting, /landing12\.privacy\.export/);
   assert.match(supporting, /priv\.learningReset\.title/);
   assert.match(auth, /pathname: route/);
-  assert.match(auth, /router\.navigate\('\/\?section=privacy'\)/);
+  assert.match(auth, /router\.dismissTo\('\/\?section=privacy'\)/);
   assert.match(auth, /SignupProductDemo/);
   assert.match(auth, /landingV1\.auth\.privacy/);
   assert.match(signupDemo, /PUBLIC_CAPABILITIES\.voice\.status/);
