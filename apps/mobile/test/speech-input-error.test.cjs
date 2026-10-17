@@ -104,3 +104,16 @@ test('web and native recorders emit stable local failure categories', () => {
   assert.match(native, /restorePlaybackMode/);
   assert.match(native, /finally \{[\s\S]*await restorePlaybackMode\(\)/);
 });
+
+test('Tutor keeps speech failures local and blocks concurrent voice actions', () => {
+  const tutor = fs.readFileSync(path.join(ROOT, 'apps/mobile/app/tutor/[id].tsx'), 'utf8');
+  assert.match(tutor, /classifySpeechInputFailure/);
+  assert.match(tutor, /setSpeechFailure\(toSpeechFailure\(error, 'recording', t\)\)/);
+  assert.match(tutor, /setSpeechFailure\(toSpeechFailure\(error, 'transcription', t\)\)/);
+  assert.match(tutor, /testID=\{`tutor-speech-error-/);
+  assert.match(tutor, /!RECORDING_SUPPORTED/);
+  assert.match(tutor, /recordingStopInFlight\.current/);
+  assert.match(tutor, /transcriptionInFlight\.current/);
+  assert.match(tutor, /turnInFlight\.current/);
+  assert.match(tutor, /<Button[\s\S]*?icon="↑"[\s\S]*?testID="tutor-send"/);
+});

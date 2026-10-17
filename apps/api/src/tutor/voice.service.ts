@@ -137,6 +137,7 @@ export class VoiceService {
         durationSeconds,
       }, 'TUTOR_VOICE');
     } catch (error) {
+      if (error instanceof HttpException) throw error;
       this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException(
         'Could not transcribe that audio. Please try again shortly.',

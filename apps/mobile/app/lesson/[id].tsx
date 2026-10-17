@@ -289,7 +289,21 @@ export default function LessonScreen() {
             variant="ghost"
             label={t('lesson.savePdf')}
             onPress={() => {
-              saveLessonAsPdf(lesson, formatLocale).catch((e) => setError((e as Error).message));
+              saveLessonAsPdf(lesson, formatLocale, {
+                introduction: t('lesson.introduction'),
+                examples: t('lesson.examples'),
+                questions: t('lesson.questions'),
+                exercises: t('lesson.exercises'),
+                correction: t('lesson.correction'),
+                keyPoints: t('lesson.keyPoints'),
+                objective: t('lesson.objectiveLabel'),
+                explanation: t('lesson.concept'),
+                homework: t('lesson.homework'),
+                summary: t('lesson.summary'),
+                revision: t('lesson.revision'),
+                level: t('lesson.pitchedAt'),
+                cardsScheduled: t('lesson.cardsScheduled'),
+              }).catch((e) => setError((e as Error).message));
             }}
           />
         </>

@@ -127,6 +127,10 @@ export class SpeechController {
         ...(this.durationSeconds(durationMs) ? { durationSeconds: this.durationSeconds(durationMs)! } : {}),
       });
     } catch (error) {
+      // Quota, entitlement and request-validation errors are authoritative.
+      // Keep their status/code intact so the voice composer can distinguish a
+      // provider outage from an account or upload problem.
+      if (error instanceof HttpException) throw error;
       this.logger.error('Learning operation failed.');
       throw new ServiceUnavailableException({
         code: 'SPEECH_TRANSCRIPTION_UNAVAILABLE',

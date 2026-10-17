@@ -78,6 +78,8 @@ test('speaker UI measures first playback honestly and exposes delayed loading pl
   assert.match(button, /setState\('error'\)/);
   assert.match(button, /setTimeout\([\s\S]*FIRST_AUDIO_TARGET_MS/);
   assert.match(button, /t\('app\.tryAgain'\)/);
+  assert.match(button, /setError\(t\('voice\.error\.playback'\)\)/);
+  assert.doesNotMatch(button, /setError\(\(cause as Error\)\.message\)/);
   assert.match(button, /slowStart \? <Text[^>]*>\{t\('state\.loading'\)\}<\/Text>/);
   assert.match(button, /createClientRequestId\('tts'\)/);
   assert.match(button, /if \(startInFlightRef\.current\) return;[\s\S]*startInFlightRef\.current = true;/);

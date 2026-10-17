@@ -98,7 +98,7 @@ test('Conversation uses structured blocks, real-only progress and a compact cent
   assert.doesNotMatch(screen, /TutorSidebar|conversationSidebar|historySidebar/);
   assert.match(components, /globalPath\.copy/);
   assert.match(components, /onSavePdf/);
-  assert.match(read('apps/mobile/components/speak-button.tsx'), /<IconButton icon="🔊"/);
+  assert.match(read('apps/mobile/components/speak-button.tsx'), /icon=\{error \? '↻' : '🔊'\}/);
   assert.match(components, /progress\.percent !== undefined/);
   assert.match(components, /session\.twinImpact\?\.changes/);
   assert.doesNotMatch(components, /setInterval|Math\.random/);

@@ -103,7 +103,7 @@ export function SpeakButton({
         setError(
           message === 'TTS_TEXT_REQUIRED' || message === 'TTS_TEXT_TOO_LONG'
             ? t('error.validation')
-            : message,
+            : t('voice.error.playback'),
         );
         setState('error');
       }
@@ -125,8 +125,8 @@ export function SpeakButton({
   const resume = async () => {
     try {
       if (await resumeSpeaking()) setState('playing');
-    } catch (cause) {
-      setError((cause as Error).message);
+    } catch {
+      setError(t('voice.error.playback'));
       stopSpeaking();
       setState('error');
     }

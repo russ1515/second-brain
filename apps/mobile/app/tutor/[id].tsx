@@ -16,6 +16,11 @@ import { isQuotaError } from '@second-brain/shared';
 import { useAuth } from '../../lib/auth-context';
 import { ApiError, api, apiUpload } from '../../lib/client';
 import { createRecorder, RECORDING_SUPPORTED, type Recorder, type Recording } from '../../lib/recorder';
+import {
+  classifySpeechInputFailure,
+  type SpeechInputFailure,
+  type SpeechInputPhase,
+} from '../../lib/speech-input-error';
 import { useTokens } from '../../lib/design/theme';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { useResponsive } from '../../lib/responsive';
@@ -90,6 +95,9 @@ export default function TutorSessionScreen() {
   const [missionFeedback, setMissionFeedback] = useState<RlleMissionEvaluation | null>(null);
   const recorder = useRef<Recorder | null>(null);
   const recordingStartInFlight = useRef(false);
+  const recordingStopInFlight = useRef(false);
+  const transcriptionInFlight = useRef(false);
+  const turnInFlight = useRef(false);
   const screenActive = useRef(true);
   const lastRecording = useRef<Recording | null>(null);
   const recordingStartedAt = useRef(0);
@@ -101,6 +109,7 @@ export default function TutorSessionScreen() {
   const lastVoiceReply = useRef<{ text: string; requestId: string } | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [voiceDraft, setVoiceDraft] = useState(false);
+  const [speechFailure, setSpeechFailure] = useState<SpeechInputFailure | null>(null);
   const [recordingStarting, setRecordingStarting] = useState(false);
   const [voicePlayback, setVoicePlayback] = useState<VoicePlaybackState>('idle');
   const [voicePlaybackError, setVoicePlaybackError] = useState<string | null>(null);
@@ -121,6 +130,9 @@ export default function TutorSessionScreen() {
     return () => {
       screenActive.current = false;
       recordingStartInFlight.current = false;
+      recordingStopInFlight.current = false;
+      transcriptionInFlight.current = false;
+      turnInFlight.current = false;
       const activeRecorder = recorder.current;
       recorder.current = null;
       activeRecorder?.cancel();
@@ -234,7 +246,8 @@ export default function TutorSessionScreen() {
   };
 
   const postTurn = async (content: string, viaVoice = false) => {
-    if (!id) return;
+    if (!id || turnInFlight.current) return;
+    turnInFlight.current = true;
     setWorkState('THINKING');
     setFailure(null);
     setNotice(null);
@@ -276,6 +289,8 @@ export default function TutorSessionScreen() {
     } catch (error) {
       setFailure(toFailure(error));
       setWorkState('ERROR');
+    } finally {
+      turnInFlight.current = false;
     }
   };
 
@@ -289,6 +304,7 @@ export default function TutorSessionScreen() {
     recordingStartInFlight.current = true;
     setRecordingStarting(true);
     setFailure(null);
+    setSpeechFailure(null);
     setNotice(null);
     stopPlayback();
     let nextRecorder: Recorder | null = null;
@@ -310,8 +326,8 @@ export default function TutorSessionScreen() {
       nextRecorder?.cancel();
       if (recorder.current === nextRecorder) recorder.current = null;
       if (screenActive.current) {
-        setFailure(toFailure(error));
-        setWorkState('ERROR');
+        setSpeechFailure(toSpeechFailure(error, 'recording', t));
+        setWorkState('READY');
       }
     } finally {
       recordingStartInFlight.current = false;
@@ -320,8 +336,11 @@ export default function TutorSessionScreen() {
   };
 
   const transcribeRecording = async (recording: Recording) => {
+    if (transcriptionInFlight.current) return;
+    transcriptionInFlight.current = true;
     setWorkState('TRANSCRIPTION');
     setFailure(null);
+    setSpeechFailure(null);
     try {
       const form = new FormData();
       const ext = recording.mimeType.includes('mp4') ? 'mp4' : recording.mimeType.includes('ogg') ? 'ogg' : 'webm';
@@ -335,25 +354,31 @@ export default function TutorSessionScreen() {
       setNotice(t('voice11.transcript.edit'));
       setWorkState('READY');
     } catch (error) {
-      setFailure(toFailure(error));
-      setWorkState('ERROR');
+      setSpeechFailure(toSpeechFailure(error, 'transcription', t));
+      setWorkState('READY');
+    } finally {
+      transcriptionInFlight.current = false;
     }
   };
 
   const stopAndTranscribe = async () => {
-    if (!recorder.current) return;
+    if (!recorder.current || recordingStopInFlight.current) return;
+    recordingStopInFlight.current = true;
     setWorkState('TRANSCRIPTION');
     setFailure(null);
+    setSpeechFailure(null);
+    const activeRecorder = recorder.current;
+    recorder.current = null;
     try {
-      const captured = await recorder.current.stop();
+      const captured = await activeRecorder.stop();
       lastRecording.current = captured;
       if (captured.durationMs !== undefined) setElapsedSeconds(Math.round(captured.durationMs / 1000));
       await transcribeRecording(captured);
     } catch (error) {
-      setFailure(toFailure(error));
-      setWorkState('ERROR');
+      setSpeechFailure(toSpeechFailure(error, 'recording', t));
+      setWorkState('READY');
     } finally {
-      recorder.current = null;
+      recordingStopInFlight.current = false;
     }
   };
 
@@ -364,8 +389,10 @@ export default function TutorSessionScreen() {
       pausedStartedAt.current = Date.now();
       setWorkState('PAUSED');
     } catch (error) {
-      setFailure(toFailure(error));
-      setWorkState('ERROR');
+      recorder.current?.cancel();
+      recorder.current = null;
+      setSpeechFailure(toSpeechFailure(error, 'recording', t));
+      setWorkState('READY');
     }
   };
 
@@ -377,8 +404,10 @@ export default function TutorSessionScreen() {
       pausedStartedAt.current = 0;
       setWorkState('LISTENING');
     } catch (error) {
-      setFailure(toFailure(error));
-      setWorkState('ERROR');
+      recorder.current?.cancel();
+      recorder.current = null;
+      setSpeechFailure(toSpeechFailure(error, 'recording', t));
+      setWorkState('READY');
     }
   };
 
@@ -389,6 +418,7 @@ export default function TutorSessionScreen() {
     pausedStartedAt.current = 0;
     pausedDuration.current = 0;
     setElapsedSeconds(0);
+    setSpeechFailure(null);
     setWorkState('READY');
   };
 
@@ -621,6 +651,30 @@ export default function TutorSessionScreen() {
                 {t('voice11.transcript.edit')}
               </Text>
             ) : null}
+            {speechFailure ? (
+              <View testID={`tutor-speech-error-${speechFailure.code.toLowerCase()}`}>
+                <Alert
+                  tone="warning"
+                  title={speechFailure.message}
+                  detail={t('error.detail')}
+                />
+                {lastRecording.current && speechFailure.code !== 'MIC_PERMISSION' ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    label={t('app.tryAgain')}
+                    onPress={() => void transcribeRecording(lastRecording.current!)}
+                    disabled={busy}
+                  />
+                ) : null}
+              </View>
+            ) : !RECORDING_SUPPORTED ? (
+              <Alert
+                tone="warning"
+                title={t('learn5.voice.unavailable')}
+                detail={t('voice.error.recordUnsupported')}
+              />
+            ) : null}
             {voiceFocused && RECORDING_SUPPORTED && !['loading', 'playing', 'paused'].includes(voicePlayback) ? (
               <Button
                 icon={recording ? '■' : '🎙'}
@@ -666,11 +720,12 @@ export default function TutorSessionScreen() {
                   testID="tutor-voice-toggle"
                 />
               ) : null}
-              <IconButton
+              <Button
                 icon="↑"
                 label={t('tutor.send')}
                 onPress={send}
                 disabled={!draft.trim() || recording || busy}
+                size="sm"
                 testID="tutor-send"
               />
             </View>
@@ -728,6 +783,26 @@ function toFailure(error: unknown): TurnFailure {
     return { kind: 'generic', message: error.message };
   }
   return { kind: 'generic', message: (error as Error).message };
+}
+
+function toSpeechFailure(
+  error: unknown,
+  phase: SpeechInputPhase,
+  t: (key: TranslationKey) => string,
+): SpeechInputFailure {
+  const code = classifySpeechInputFailure(error, phase);
+  const message = code === 'MIC_PERMISSION'
+    ? t('voice.error.micDenied')
+    : code === 'MEDIARECORDER_UNAVAILABLE'
+      ? t('voice.error.recordUnsupported')
+      : code === 'AUDIO_RECORDING'
+        ? t('learn5.voice.error')
+        : code === 'AUDIO_UPLOAD' || code === 'TRANSCODE'
+          ? t('error.upload')
+          : code === 'STT_UNAVAILABLE'
+            ? `${t('rlle.ui.capabilities.transcription')} — ${t('state.partial')}`
+            : `${t('rlle.ui.capabilities.transcription')} — ${t('error.detail')}`;
+  return { code, message };
 }
 
 function readMissionEvaluation(value: unknown): RlleMissionEvaluation | null {

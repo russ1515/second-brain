@@ -9,6 +9,8 @@ const path = require('node:path');
 const { ForbiddenException } = require('@nestjs/common');
 const { OpenAISpeechProvider } = require('../dist/speech/providers/openai-speech.provider.js');
 const { SpeechService } = require('../dist/speech/speech.service.js');
+const { SpeechController } = require('../dist/speech/speech.controller.js');
+const { VoiceService } = require('../dist/tutor/voice.service.js');
 const { LanguageController } = require('../dist/languages/language.controller.js');
 const { languageSystemPrompt } = require('../dist/languages/language-modes.js');
 const {
@@ -112,6 +114,35 @@ test('owned language STT is scoped to a voice exercise and attributed to LANGUAG
       && error.getResponse()?.code === 'TRANSCODE',
   );
   assert.equal(calls.length, 1);
+});
+
+test('speech HTTP and Tutor voice preserve authoritative quota errors', async () => {
+  const quota = new ForbiddenException({ code: 'quota_exceeded' });
+  const speech = {
+    transcribe: async () => { throw quota; },
+  };
+  const controller = new SpeechController(speech, undefined);
+  const audio = {
+    buffer: Buffer.from('audio'),
+    mimetype: 'audio/webm',
+    originalname: 'turn.webm',
+    size: 5,
+  };
+  await assert.rejects(
+    () => controller.transcribe(audio),
+    (error) => error === quota && error.getStatus() === 403,
+  );
+
+  const voice = new VoiceService(
+    { tutorSession: { findUnique: async () => ({ userId: 'u-1' }) } },
+    speech,
+    {},
+    {},
+  );
+  await assert.rejects(
+    () => voice.handleTurn('u-1', 'session-1', audio),
+    (error) => error === quota && error.getStatus() === 403,
+  );
 });
 
 test('language STT rejects unrelated exercises before the provider call', async () => {
@@ -579,21 +610,27 @@ test('Tutor voice UI preserves one session, provides playback controls and oral 
   assert.match(session, /\/speech\/stt/);
   assert.match(session, /\/tutor\/sessions\/\$\{id\}\/messages/);
   assert.match(session, /viaVoice/);
-  assert.match(session, /await speak\(spokenReply/);
-  assert.match(session, /voiceFocused && RECORDING_SUPPORTED && !voicePlayback/);
-  assert.match(session, /voiceFocused && RECORDING_SUPPORTED && !voicePlayback[\s\S]*?<Button[\s\S]*?fullWidth[\s\S]*?testID="tutor-voice-toggle"/);
-  assert.match(session, /!voiceFocused && RECORDING_SUPPORTED && !voicePlayback[\s\S]*?<Button[\s\S]*?label=\{recording \? t\('voice11\.transcribe'\) : t\('tutor\.speak'\)\}[\s\S]*?size="sm"[\s\S]*?testID="tutor-voice-toggle"/);
+  assert.match(session, /await playVoiceReply\(spokenReply/);
+  assert.match(session, /voiceFocused && RECORDING_SUPPORTED && !\['loading', 'playing', 'paused'\]\.includes\(voicePlayback\)/);
+  assert.match(session, /voiceFocused && RECORDING_SUPPORTED[\s\S]*?<Button[\s\S]*?fullWidth[\s\S]*?testID="tutor-voice-toggle"/);
+  assert.match(session, /!voiceFocused && RECORDING_SUPPORTED[\s\S]*?<Button[\s\S]*?label=\{recording \? t\('voice11\.transcribe'\) : t\('tutor\.speak'\)\}[\s\S]*?size="sm"[\s\S]*?testID="tutor-voice-toggle"/);
   assert.match(session, /testID="tutor-voice-toggle"/);
   assert.match(session, /voiceFocused && voiceDraft/);
   assert.match(session, /tutor-voice-review-hint/);
   assert.match(session, /voice11\.transcript\.edit/);
   assert.match(session, /setVoicePlayback\('loading'\)/);
-  assert.match(session, /onFirstAudio: \(\) => setVoicePlayback\('playing'\)/);
+  assert.match(session, /onFirstAudio: \(\) => \{[\s\S]*?setVoicePlayback\('playing'\)/);
   assert.match(session, /voicePlayback === 'loading'[\s\S]*?testID="tutor-voice-loading"/);
   assert.match(session, /recordingStartInFlight\.current \|\| recorder\.current/);
   assert.match(session, /recordingStartInFlight\.current = true/);
   assert.match(session, /nextRecorder\.cancel\(\)/);
   assert.match(session, /loading=\{recordingStarting\}/);
+  assert.match(session, /classifySpeechInputFailure/);
+  assert.match(session, /recordingStopInFlight\.current/);
+  assert.match(session, /transcriptionInFlight\.current/);
+  assert.match(session, /turnInFlight\.current/);
+  assert.match(session, /tutor-speech-error-/);
+  assert.match(session, /!RECORDING_SUPPORTED/);
   assert.match(player, /pauseSpeaking/);
   assert.match(player, /resumeSpeaking/);
   assert.match(player, /stopSpeaking/);
