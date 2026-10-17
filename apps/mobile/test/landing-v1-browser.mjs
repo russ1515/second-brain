@@ -199,7 +199,7 @@ try {
   assert.ok(await research.getByText('Coming soon', { exact: true }).count(), 'Web research status is not coming soon');
 
   const languages = page.locator('#landing-languages');
-  assert.ok(await languages.getByText('Native language', { exact: true }).count(), 'support-language side of the language path is missing');
+  assert.ok(await languages.getByText(/^Native language(?:\s*·|$)/u).count(), 'support-language side of the language path is missing');
   assert.ok(await languages.getByText('Learning language', { exact: true }).count(), 'target-language side of the language path is missing');
   assert.ok(await languages.locator('img').count() >= 34, 'the 34-language registry is not rendered');
 

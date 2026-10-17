@@ -18,10 +18,10 @@
     "web": {
       "bundler": "metro",
       "output": "single",
-      "name": "Second Brain — Learn with one personal intelligence",
+      "name": "Second Brain — Your personal intelligent learning system",
       "shortName": "Second Brain",
       "lang": "en",
-      "description": "Capture what matters, understand it with your personal AI professor, practise it, review it and turn it into lasting knowledge.",
+      "description": "Learn, understand, practise, remember and produce with one connected learning system: your documents, AI Professor, cognitive twin, review, research, languages and workspace.",
       "themeColor": "#0B1020"
     },
     "plugins": [

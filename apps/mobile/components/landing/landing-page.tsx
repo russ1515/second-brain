@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import Head from 'expo-router/head';
 import { useRouter } from 'expo-router';
 import {
   Modal,
@@ -64,7 +63,20 @@ export function LandingPage() {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
     document.documentElement.lang = locale;
     document.documentElement.dir = rtl ? 'rtl' : 'ltr';
-  }, [locale, rtl]);
+    const title = t('landing12.seo.title');
+    const description = t('landing12.seo.description');
+    document.title = title;
+    const metadata: ReadonlyArray<readonly [string, string]> = [
+      ['meta[name="description"]', description],
+      ['meta[property="og:title"]', title],
+      ['meta[property="og:description"]', description],
+      ['meta[name="twitter:title"]', title],
+      ['meta[name="twitter:description"]', description],
+    ];
+    for (const [selector, content] of metadata) {
+      document.querySelector<HTMLMetaElement>(selector)?.setAttribute('content', content);
+    }
+  }, [locale, rtl, t]);
 
   const onAnchor = (id: LandingAnchor) => (event: LayoutChangeEvent) => {
     anchors.current[id] = event.nativeEvent.layout.y;
@@ -110,21 +122,6 @@ export function LandingPage() {
 
   return (
     <>
-      {Platform.OS === 'web' ? (
-        <Head>
-          <title>{t('landing12.seo.title')}</title>
-          <meta name="description" content={t('landing12.seo.description')} />
-          <meta name="robots" content="index,follow" />
-          <meta name="theme-color" content={c.background} />
-          <meta property="og:type" content="website" />
-          <meta property="og:title" content={t('landing12.seo.title')} />
-          <meta property="og:description" content={t('landing12.seo.description')} />
-          <meta property="og:site_name" content="Second Brain" />
-          <meta name="twitter:card" content="summary" />
-          <meta name="twitter:title" content={t('landing12.seo.title')} />
-          <meta name="twitter:description" content={t('landing12.seo.description')} />
-        </Head>
-      ) : null}
       <ScrollView
         ref={scrollRef}
         style={[{ flex: 1, backgroundColor: c.background }, webOnly({ direction: rtl ? 'rtl' : 'ltr' })]}
