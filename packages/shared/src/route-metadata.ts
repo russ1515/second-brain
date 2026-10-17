@@ -71,12 +71,15 @@ const objectContexts: ContextKind[] = [
  */
 export const ROUTE_METADATA: readonly RouteMetadata[] = [
   route('/', 'home', 'home', { shellMode: 'primary', requiresAuth: false, allowedContexts: objectContexts, composerMode: 'universal' }),
+  route('/home', 'home', 'home', { shellMode: 'primary', allowedContexts: objectContexts, composerMode: 'universal' }),
   route('/learn', 'learn', 'learning', { shellMode: 'primary', allowedContexts: objectContexts, composerMode: 'universal' }),
   route('/brain', 'brain', 'brain', { shellMode: 'primary', allowedContexts: ['brain', 'concept', 'document', 'learning-path', 'language'], composerMode: 'contextual' }),
   route('/study', 'study', 'review', { shellMode: 'primary', allowedContexts: ['revision', 'concept', 'exam', 'goal', 'learning-path'] }),
   route('/profile', 'profile', 'profile', { shellMode: 'primary', allowedContexts: ['user-profile', 'language'] }),
 
   route('/sign-in', null, 'auth', { shellMode: 'hidden', requiresAuth: false }),
+  route('/login', null, 'auth', { shellMode: 'hidden', requiresAuth: false }),
+  route('/signup', null, 'auth', { shellMode: 'hidden', requiresAuth: false }),
   route('/onboarding', 'profile', 'profile', { shellMode: 'focused', immersive: true, allowedContexts: ['user-profile', 'goal', 'language'] }),
   route('/lesson/[id]', 'learn', 'learning', { allowedContexts: ['lesson', 'concept', 'document', 'goal'], composerMode: 'contextual', resumable: true }),
   route('/lesson/new', 'learn', 'learning', { allowedContexts: ['concept', 'document', 'goal'], composerMode: 'contextual' }),
@@ -190,9 +193,9 @@ export function routeTemplateMatches(template: string, concretePath: string): bo
  * onboarding destinations fall back to Home.
  */
 export function safeAuthenticatedReturnPath(candidate?: string | null): string {
-  if (!candidate) return '/';
+  if (!candidate) return '/home';
   const metadata = routeMetadataFor(candidate);
-  if (!metadata?.requiresAuth || metadata.path === '/onboarding') return '/';
+  if (!metadata?.requiresAuth || metadata.path === '/onboarding') return '/home';
   const trimmed = candidate.trim();
   const suffixIndex = trimmed.search(/[?#]/);
   const suffix = suffixIndex >= 0 ? trimmed.slice(suffixIndex) : '';

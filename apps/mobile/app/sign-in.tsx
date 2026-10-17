@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Animated, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, usePathname, useRouter } from 'expo-router';
 import { toSupportedLanguage } from '@second-brain/shared';
 import { useAuth } from '../lib/auth-context';
 import { api } from '../lib/client';
@@ -39,6 +39,7 @@ export default function SignInScreen() {
   const { colors: c, spacing, reducedMotion } = useTokens();
   const { width } = useResponsive();
   const router = useRouter();
+  const pathname = usePathname();
   const { returnTo, mode: requestedMode } = useLocalSearchParams<{ returnTo?: string | string[]; mode?: string | string[] }>();
   const destination = safeReturnPath(returnTo);
   const requestedModeValue = Array.isArray(requestedMode) ? requestedMode[0] : requestedMode;
@@ -46,7 +47,14 @@ export default function SignInScreen() {
   const fmt = (k: TranslationKey, vars: Record<string, string | number> = {}) =>
     Object.entries(vars).reduce((s, [key, v]) => s.replace(`{${key}}`, String(v)), t(k));
 
-  const [mode, setMode] = useState<Mode>(requestedModeValue === 'login' ? 'login' : 'register');
+  const routeMode: Mode = pathname === '/login'
+    ? 'login'
+    : pathname === '/signup'
+      ? 'register'
+      : requestedModeValue === 'login'
+        ? 'login'
+        : 'register';
+  const [mode, setMode] = useState<Mode>(routeMode);
   const [step, setStep] = useState<Step>('credentials');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -62,11 +70,9 @@ export default function SignInScreen() {
   const [expired, setExpired] = useState(false);
 
   useEffect(() => {
-    if (requestedModeValue === 'login' || requestedModeValue === 'register') {
-      setMode(requestedModeValue);
-      setStep('credentials');
-    }
-  }, [requestedModeValue]);
+    setMode(routeMode);
+    setStep('credentials');
+  }, [routeMode]);
 
   // A pending-verification session is deliberately restorable. Returning to
   // this route after a reload must reopen the OTP step instead of stranding the
@@ -108,6 +114,18 @@ export default function SignInScreen() {
 
   const clear = () => { setError(null); setInfo(null); };
   const toggleMode = () => { clear(); setMode((m) => (m === 'login' ? 'register' : 'login')); };
+  const goHome = () => router.push('/');
+
+  const homeLink = (
+    <Pressable
+      testID="auth-back-home"
+      onPress={goHome}
+      accessibilityRole="link"
+      style={{ minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start' }}
+    >
+      <Text style={{ color: c.primary, fontSize: 14, fontWeight: '700' }}>← {t('session.home')}</Text>
+    </Pressable>
+  );
 
   const submitCredentials = async () => {
     setBusy(true); clear();
@@ -342,7 +360,9 @@ export default function SignInScreen() {
             <View style={{ width: '46%', padding: spacing.xl, justifyContent: 'space-between' }}>
               <View style={{ flexDirection: 'row' }}><ThemeToggle /></View>
               <View style={{ gap: spacing.lg, maxWidth: 460 }}>
-                <Text style={{ color: c.primary, fontSize: 13, fontWeight: '800', letterSpacing: 2, textTransform: 'uppercase' }}>Second Brain</Text>
+                <Pressable testID="auth-brand-home-desktop" onPress={goHome} accessibilityRole="link" style={{ alignSelf: 'flex-start' }}>
+                  <Text style={{ color: c.primary, fontSize: 13, fontWeight: '800', letterSpacing: 2, textTransform: 'uppercase' }}>Second Brain</Text>
+                </Pressable>
                 <Text style={{ color: c.textPrimary, fontSize: 40, fontWeight: '800', lineHeight: 48 }}>{t('auth.brandTitle')}</Text>
                 <Text style={{ color: c.textSecondary, fontSize: 16, lineHeight: 24 }}>{t('auth.brandSubtitle')}</Text>
                 <AuthScene />
@@ -356,10 +376,13 @@ export default function SignInScreen() {
             {/* Right — form */}
             <View style={{ flex: 1, borderLeftWidth: 1, borderLeftColor: c.borderSubtle }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.lg }}>
-                <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '800' }}>🧠 Second Brain</Text>
+                <Pressable testID="auth-logo-home-desktop" onPress={goHome} accessibilityRole="link">
+                  <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '800' }}>🧠 Second Brain</Text>
+                </Pressable>
                 <LangPill />
               </View>
-              <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: spacing.lg }}>
+              <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: spacing.lg, gap: spacing.sm }}>
+                {homeLink}
                 {form}
               </ScrollView>
             </View>
@@ -368,12 +391,15 @@ export default function SignInScreen() {
           <ScrollView contentContainerStyle={{ flexGrow: 1, padding: spacing.lg, justifyContent: 'center' }}>
             {/* Mobile — compact header + form only (§18) */}
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.lg }}>
-              <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '800' }}>🧠 Second Brain</Text>
+              <Pressable testID="auth-logo-home-mobile" onPress={goHome} accessibilityRole="link">
+                <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '800' }}>🧠 Second Brain</Text>
+              </Pressable>
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <LangPill />
                 <ThemeToggle />
               </View>
             </View>
+            {homeLink}
             <View style={{ alignItems: 'center', gap: 8, marginBottom: spacing.lg }}>
               <Text style={{ color: c.textPrimary, fontSize: 26, fontWeight: '800', textAlign: 'center', lineHeight: 32 }}>{t('auth.brandTitle')}</Text>
               <Text style={{ color: c.textSecondary, fontSize: 14, textAlign: 'center', maxWidth: 340, lineHeight: 20 }}>{t('auth.brandSubtitle')}</Text>

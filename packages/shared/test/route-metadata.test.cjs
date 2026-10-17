@@ -28,7 +28,17 @@ test('post-auth return paths remain registered and internal', () => {
   assert.equal(shared.safeAuthenticatedReturnPath('/lesson/abc?mode=guided'), '/lesson/abc?mode=guided');
   assert.equal(shared.safeAuthenticatedReturnPath('//lesson///abc'), '/lesson/abc');
   assert.equal(shared.safeAuthenticatedReturnPath('/admin'), '/admin');
-  assert.equal(shared.safeAuthenticatedReturnPath('/sign-in'), '/');
-  assert.equal(shared.safeAuthenticatedReturnPath('/onboarding'), '/');
-  assert.equal(shared.safeAuthenticatedReturnPath('//example.com/steal'), '/');
+  assert.equal(shared.safeAuthenticatedReturnPath('/sign-in'), '/home');
+  assert.equal(shared.safeAuthenticatedReturnPath('/login'), '/home');
+  assert.equal(shared.safeAuthenticatedReturnPath('/signup'), '/home');
+  assert.equal(shared.safeAuthenticatedReturnPath('/onboarding'), '/home');
+  assert.equal(shared.safeAuthenticatedReturnPath('//example.com/steal'), '/home');
+});
+
+test('public landing and auth aliases stay separate from protected learner home', () => {
+  assert.equal(shared.routeMetadataFor('/')?.requiresAuth, false);
+  assert.equal(shared.routeMetadataFor('/login')?.requiresAuth, false);
+  assert.equal(shared.routeMetadataFor('/signup')?.requiresAuth, false);
+  assert.equal(shared.routeMetadataFor('/home')?.requiresAuth, true);
+  assert.equal(shared.routeMetadataFor('/home')?.parentSpace, 'home');
 });

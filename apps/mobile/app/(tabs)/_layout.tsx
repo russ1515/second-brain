@@ -8,7 +8,6 @@ import { ResponsiveTabBar } from '../../components/nav/responsive-tab-bar';
 import { SidebarProvider, useSidebar, useIsRTL } from '../../components/nav/app-shell';
 import { LandingPage } from '../../components/landing/landing-page';
 import { newAppShellEnabledForPath } from '../../lib/navigation';
-import { featureFlags } from '../../lib/feature-flags';
 
 function TabIcon({ emoji, color }: { emoji: string; color: string }) {
   return <Text style={{ fontSize: 20, color }}>{emoji}</Text>;
@@ -25,6 +24,11 @@ export default function TabsLayout() {
   const { user, loading, offline, onboarded, retry, logout } = useAuth();
   const { t } = useI18n();
   const pathname = usePathname();
+
+  // `/` is the public product entrance for every visitor, including someone
+  // who already has a session. The authenticated learner home lives at
+  // `/home`, so opening the public URL can never be swallowed by an auth guard.
+  if (pathname === '/') return <LandingPage />;
 
   if (loading) return <Loading label={t('classroom.opening')} />;
 
@@ -44,13 +48,7 @@ export default function TabsLayout() {
     );
   }
 
-  // Public landing rollout: a logged-out visitor sees the demonstrative page
-  // only when its operational flag is enabled. Disabling the flag restores the
-  // existing auth entry point without changing routes or data.
-  if (!user) {
-    if (!featureFlags.newLanding) return <Redirect href="/sign-in" />;
-    return <LandingPage />;
-  }
+  if (!user) return <Redirect href="/login" />;
 
   // The Universal KYC gate (UI/UX Sprint 2): a signed-in learner who has not
   // finished onboarding is sent to build their space first. `onboarded === null`
@@ -93,6 +91,10 @@ function Shell({ externallyManaged = false }: { externallyManaged?: boolean }) {
     >
       <Tabs.Screen
         name="index"
+        options={{ href: null }}
+      />
+      <Tabs.Screen
+        name="home"
         options={{
           title: t('tab.home'),
           tabBarIcon: ({ color }) => <TabIcon emoji="🏠" color={color} />,

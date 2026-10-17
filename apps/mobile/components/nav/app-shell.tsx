@@ -182,7 +182,7 @@ function InternalChrome({ metadata }: { metadata: RouteMetadata }) {
           </Text>
         </View>
         <Pressable
-          onPress={() => router.replace('/')}
+          onPress={() => router.replace('/home')}
           accessibilityRole="link"
           style={{ minHeight: 44, justifyContent: 'center', alignSelf: mode === 'compact' ? 'flex-start' : 'center' }}
         >

@@ -34,7 +34,7 @@ test('pending email verification survives reload and cannot enter the learner sh
   assert.match(signIn, /const changeAccount = async[\s\S]*await logout\(\)[\s\S]*setMode\('login'\)[\s\S]*setStep\('credentials'\)/);
   assert.match(signIn, /onPress=\{\(\) => void changeAccount\(\)\}[\s\S]*t\('app\.signOut'\)/);
   assert.match(layout, /const redirectToEmailVerification/);
-  assert.match(layout, /user\?\.emailVerified === false[\s\S]*metadata\?\.path !== '\/sign-in'/);
+  assert.match(layout, /Boolean\(metadata\?\.requiresAuth\)[\s\S]*user\?\.emailVerified === false[\s\S]*metadata\?\.experienceType !== 'auth'/);
   assert.match(layout, /user\?\.emailVerified === true &&\s+userExperience/);
   assert.match(auth, /if \(me\.emailVerified\)[\s\S]*refreshOnboarding\(\)[\s\S]*setOnboarded\(false\)/);
 });

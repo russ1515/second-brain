@@ -29,7 +29,7 @@ const {
 test('route metadata: core spaces, auth and non-user categories are coherent', () => {
   assert.deepEqual(shared.validateRouteMetadataRegistry(), []);
   const expectedSpaces = new Map([
-    ['/', 'home'],
+    ['/home', 'home'],
     ['/learn', 'learn'],
     ['/brain', 'brain'],
     ['/study', 'study'],
@@ -41,6 +41,9 @@ test('route metadata: core spaces, auth and non-user categories are coherent', (
     assert.equal(metadata?.shellMode, 'primary');
     assert.equal(metadata?.category, 'USER');
   }
+  assert.equal(shared.routeMetadataFor('/').requiresAuth, false);
+  assert.equal(shared.routeMetadataFor('/login').requiresAuth, false);
+  assert.equal(shared.routeMetadataFor('/signup').requiresAuth, false);
   assert.equal(shared.routeMetadataFor('/sign-in').requiresAuth, false);
   assert.equal(shared.routeMetadataFor('/admin').category, 'ADMIN');
   assert.deepEqual(shared.routeMetadataFor('/admin').permissions, ['admin']);

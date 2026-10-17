@@ -26,13 +26,20 @@ import {
   ResumeSection,
 } from '../../components/home/decision';
 import { EvidenceProgressPanel } from '../../components/learning/evidence-progress';
+import { LandingPage } from '../../components/landing/landing-page';
+
+/** Public route component. TabsLayout also short-circuits `/` before auth and
+ * onboarding guards so this remains public for every session state. */
+export default function PublicLandingRoute() {
+  return <LandingPage />;
+}
 
 /**
  * Accueil is a decision surface: one server-ranked next action, then continuity
  * and planning. Business priority stays on the API so every client sees the
  * same factual recommendation and the same explanation.
  */
-export default function HomeScreen() {
+export function HomeScreen() {
   const { user } = useAuth();
   const { t, locale } = useI18n();
   const router = useRouter();

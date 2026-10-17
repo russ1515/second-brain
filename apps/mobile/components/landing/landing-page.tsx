@@ -71,11 +71,8 @@ export function LandingPage() {
     }
     scrollRef.current?.scrollTo({ y: Math.max(0, (anchors.current[id] ?? 0) - 72), animated: true });
   };
-  const openAuth = (mode: 'login' | 'register') => {
-    router.push({ pathname: '/sign-in', params: { mode } });
-  };
-  const start = () => openAuth('register');
-  const signIn = () => openAuth('login');
+  const start = () => router.push('/signup');
+  const signIn = () => router.push('/login');
 
   return (
     <>

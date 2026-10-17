@@ -10,13 +10,13 @@ import { featureFlags } from './feature-flags';
 
 export interface PrimarySpaceDefinition {
   space: ParentSpace;
-  href: '/' | '/learn' | '/brain' | '/study' | '/profile';
+  href: '/home' | '/learn' | '/brain' | '/study' | '/profile';
   icon: string;
   labelKey: TranslationKey;
 }
 
 export const PRIMARY_SPACES: readonly PrimarySpaceDefinition[] = [
-  { space: 'home', href: '/', icon: '🏠', labelKey: 'tab.home' },
+  { space: 'home', href: '/home', icon: '🏠', labelKey: 'tab.home' },
   { space: 'learn', href: '/learn', icon: '📚', labelKey: 'tab.learn' },
   { space: 'brain', href: '/brain', icon: '🧠', labelKey: 'tab.brain' },
   { space: 'study', href: '/study', icon: '📅', labelKey: 'tab.study' },
@@ -25,6 +25,7 @@ export const PRIMARY_SPACES: readonly PrimarySpaceDefinition[] = [
 
 const TITLE_KEYS: Readonly<Partial<Record<string, TranslationKey>>> = {
   '/': 'tab.home',
+  '/home': 'tab.home',
   '/learn': 'tab.learn',
   '/brain': 'tab.brain',
   '/study': 'tab.study',
@@ -132,7 +133,7 @@ export function routeTitleKey(metadata: RouteMetadata): TranslationKey {
 export function newAppShellEnabledForPath(pathname: string): boolean {
   if (!featureFlags.newAppShell) return false;
   const metadata = routeMetadataFor(pathname);
-  if (!metadata || metadata.path === '/sign-in') return false;
+  if (!metadata || !metadata.requiresAuth || metadata.shellMode === 'hidden') return false;
   const configured: string | undefined = process.env.EXPO_PUBLIC_NEW_APP_SHELL_ROUTES?.trim();
   if (!configured) return true;
   const allowlist = configured.split(',').map((entry: string) => entry.trim()).filter(Boolean);

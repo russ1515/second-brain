@@ -73,8 +73,9 @@ function Navigator() {
   const redirectToEmailVerification =
     navigationReady &&
     !loading &&
+    Boolean(metadata?.requiresAuth) &&
     user?.emailVerified === false &&
-    metadata?.path !== '/sign-in';
+    metadata?.experienceType !== 'auth';
 
   const redirectToOnboarding =
     navigationReady &&
@@ -101,6 +102,8 @@ function Navigator() {
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           {/* Full-screen, outside the tabs. Brand name — not translated. */}
           <Stack.Screen name="sign-in" options={{ title: 'Second Brain' }} />
+          <Stack.Screen name="login" options={{ title: 'Second Brain' }} />
+          <Stack.Screen name="signup" options={{ title: 'Second Brain' }} />
           {/* Universal KYC / onboarding (UI/UX Sprint 2). Owns its own chrome. */}
           <Stack.Screen name="onboarding" options={{ headerShown: false }} />
           {/* Detail screens pushed on top of a space (tab bar hidden). */}
@@ -149,11 +152,11 @@ function Navigator() {
       </RouteShellBoundary>
 
       {redirectToSignIn ? (
-        <Redirect href={{ pathname: '/sign-in', params: { returnTo: pathname } }} />
+        <Redirect href={{ pathname: '/login', params: { returnTo: pathname } }} />
       ) : null}
 
       {redirectToEmailVerification ? (
-        <Redirect href={{ pathname: '/sign-in', params: { mode: 'login', returnTo: pathname } }} />
+        <Redirect href={{ pathname: '/login', params: { returnTo: pathname } }} />
       ) : null}
 
       {redirectToOnboarding ? (
