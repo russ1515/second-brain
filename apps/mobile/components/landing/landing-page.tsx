@@ -194,7 +194,7 @@ function LandingHeader({ activeAnchor, onHome, onNav, onStart, onSignIn }: { act
         {desktop ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
             {HEADER_NAV_ITEMS.map((item) => (
-              <Pressable key={item.id} {...webLinkKeyboardProps(() => onNav(item.id))} onPress={() => onNav(item.id)} accessibilityRole="link" accessibilityLabel={t(item.labelKey)} accessibilityState={{ selected: activeAnchor === item.id }} style={({ pressed }) => ({ minHeight: 38, justifyContent: 'center', borderBottomWidth: activeAnchor === item.id ? 2 : 0, borderBottomColor: c.aiAccent, opacity: pressed ? 0.62 : 1 })}>
+              <Pressable key={item.id} {...webLinkKeyboardProps(() => onNav(item.id), activeAnchor === item.id)} onPress={() => onNav(item.id)} accessibilityRole="link" accessibilityLabel={t(item.labelKey)} accessibilityState={{ selected: activeAnchor === item.id }} style={({ pressed }) => ({ minHeight: 38, justifyContent: 'center', borderBottomWidth: activeAnchor === item.id ? 2 : 0, borderBottomColor: c.aiAccent, opacity: pressed ? 0.62 : 1 })}>
                 <Text numberOfLines={1} style={{ color: activeAnchor === item.id ? c.aiAccent : c.textSecondary, fontSize: 12, lineHeight: 17, fontWeight: '700' }}>{t(item.labelKey)}</Text>
               </Pressable>
             ))}
@@ -228,7 +228,7 @@ function LandingHeader({ activeAnchor, onHome, onNav, onStart, onSignIn }: { act
             </View>
             <ScrollView contentContainerStyle={{ padding: 8 }}>
               {HEADER_NAV_ITEMS.map((item) => (
-                <Pressable key={item.id} {...webLinkKeyboardProps(() => go(item.id))} onPress={() => go(item.id)} accessibilityRole="link" accessibilityLabel={t(item.labelKey)} accessibilityState={{ selected: activeAnchor === item.id }} style={({ pressed }) => ({ minHeight: 46, justifyContent: 'center', borderRadius: radius.sm, paddingHorizontal: 12, backgroundColor: pressed || activeAnchor === item.id ? c.aiAccentSoft : 'transparent' })}>
+                <Pressable key={item.id} {...webLinkKeyboardProps(() => go(item.id), activeAnchor === item.id)} onPress={() => go(item.id)} accessibilityRole="link" accessibilityLabel={t(item.labelKey)} accessibilityState={{ selected: activeAnchor === item.id }} style={({ pressed }) => ({ minHeight: 46, justifyContent: 'center', borderRadius: radius.sm, paddingHorizontal: 12, backgroundColor: pressed || activeAnchor === item.id ? c.aiAccentSoft : 'transparent' })}>
                   <Text style={{ color: activeAnchor === item.id ? c.aiAccent : c.textPrimary, fontSize: 14, lineHeight: 20, fontWeight: '700' }}>{t(item.labelKey)}</Text>
                 </Pressable>
               ))}

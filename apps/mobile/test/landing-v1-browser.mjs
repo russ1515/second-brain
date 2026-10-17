@@ -156,7 +156,7 @@ try {
   await page.waitForFunction(() => (
     [...document.querySelectorAll('[role="link"]')].some((node) => (
       node.getAttribute('aria-label') === 'Academic Workspace'
-      && node.getAttribute('aria-selected') === 'true'
+      && node.getAttribute('aria-current') === 'location'
     ))
   ));
 

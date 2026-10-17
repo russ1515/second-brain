@@ -16,10 +16,11 @@ export const LANDING_CONTENT_MAX = 1280;
 export const webOnly = (style: Record<string, unknown>): ViewStyle =>
   (Platform.OS === 'web' ? style : {}) as unknown as ViewStyle;
 
-/** Restore Enter activation for React Native Web Pressables exposed as links. */
-export function webLinkKeyboardProps(onActivate: () => void) {
+/** Restore Enter activation and current-location semantics for Web links. */
+export function webLinkKeyboardProps(onActivate: () => void, current = false) {
   if (Platform.OS !== 'web') return {};
   return {
+    'aria-current': current ? 'location' : undefined,
     onKeyDown: (event: { key?: string; preventDefault?: () => void }) => {
       if (event.key !== 'Enter') return;
       event.preventDefault?.();
