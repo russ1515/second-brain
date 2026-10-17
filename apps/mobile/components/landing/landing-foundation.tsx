@@ -16,6 +16,18 @@ export const LANDING_CONTENT_MAX = 1280;
 export const webOnly = (style: Record<string, unknown>): ViewStyle =>
   (Platform.OS === 'web' ? style : {}) as unknown as ViewStyle;
 
+/** Restore Enter activation for React Native Web Pressables exposed as links. */
+export function webLinkKeyboardProps(onActivate: () => void) {
+  if (Platform.OS !== 'web') return {};
+  return {
+    onKeyDown: (event: { key?: string; preventDefault?: () => void }) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault?.();
+      onActivate();
+    },
+  };
+}
+
 export function useLandingGutter(): number {
   const { width } = useResponsive();
   return width >= 1024 ? 32 : width >= 640 ? 24 : 16;

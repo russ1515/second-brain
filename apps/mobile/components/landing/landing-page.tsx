@@ -41,6 +41,7 @@ import {
   LANDING_CONTENT_MAX,
   LandingButton,
   useLandingGutter,
+  webLinkKeyboardProps,
   webOnly,
 } from './landing-foundation';
 
@@ -182,7 +183,7 @@ function LandingHeader({ activeAnchor, onHome, onNav, onStart, onSignIn }: { act
   return (
     <View style={[{ width: '100%', zIndex: 100, borderBottomWidth: 1, borderBottomColor: c.borderSubtle, backgroundColor: c.background }, webOnly({ position: 'sticky', top: 0, backdropFilter: 'blur(12px) saturate(135%)' })]}>
       <View style={{ width: '100%', maxWidth: LANDING_CONTENT_MAX, minHeight: 68, alignSelf: 'center', paddingHorizontal: tiny ? 10 : gutter, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: tiny ? 7 : 11 }}>
-        <Pressable onPress={onHome} accessibilityRole="link" accessibilityLabel={t('landing12.brand')} style={({ pressed }) => ({ flexShrink: 1, opacity: pressed ? 0.7 : 1 })}>
+        <Pressable {...webLinkKeyboardProps(onHome)} onPress={onHome} accessibilityRole="link" accessibilityLabel={t('landing12.brand')} style={({ pressed }) => ({ flexShrink: 1, opacity: pressed ? 0.7 : 1 })}>
           <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 7 }}>
             <Text numberOfLines={1} style={{ color: c.aiAccent, fontSize: tiny ? 14 : 16, lineHeight: 21, fontWeight: '900', letterSpacing: 0.2 }}>◉ {t('landing12.brand')}</Text>
             {!tiny ? <View style={{ borderWidth: 1, borderColor: c.aiAccent, backgroundColor: c.aiAccentSoft, borderRadius: radius.full, paddingVertical: 2, paddingHorizontal: 7 }}><Text style={{ color: c.aiAccent, fontSize: 8, lineHeight: 12, fontWeight: '900', textTransform: 'uppercase' }}>{t('landing12.footer.beta').split('·')[0].trim()}</Text></View> : null}
@@ -193,7 +194,7 @@ function LandingHeader({ activeAnchor, onHome, onNav, onStart, onSignIn }: { act
         {desktop ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
             {HEADER_NAV_ITEMS.map((item) => (
-              <Pressable key={item.id} onPress={() => onNav(item.id)} accessibilityRole="link" accessibilityLabel={t(item.labelKey)} accessibilityState={{ selected: activeAnchor === item.id }} style={({ pressed }) => ({ minHeight: 38, justifyContent: 'center', borderBottomWidth: activeAnchor === item.id ? 2 : 0, borderBottomColor: c.aiAccent, opacity: pressed ? 0.62 : 1 })}>
+              <Pressable key={item.id} {...webLinkKeyboardProps(() => onNav(item.id))} onPress={() => onNav(item.id)} accessibilityRole="link" accessibilityLabel={t(item.labelKey)} accessibilityState={{ selected: activeAnchor === item.id }} style={({ pressed }) => ({ minHeight: 38, justifyContent: 'center', borderBottomWidth: activeAnchor === item.id ? 2 : 0, borderBottomColor: c.aiAccent, opacity: pressed ? 0.62 : 1 })}>
                 <Text numberOfLines={1} style={{ color: activeAnchor === item.id ? c.aiAccent : c.textSecondary, fontSize: 12, lineHeight: 17, fontWeight: '700' }}>{t(item.labelKey)}</Text>
               </Pressable>
             ))}
@@ -202,7 +203,7 @@ function LandingHeader({ activeAnchor, onHome, onNav, onStart, onSignIn }: { act
         <View style={{ width: desktop ? 8 : 0 }} />
         {!tiny || desktop ? <LangPill /> : null}
         {desktop ? (
-          <Pressable onPress={onSignIn} accessibilityRole="link" accessibilityLabel={t('landing12.cta.signin')} style={({ pressed }) => ({ minHeight: 42, justifyContent: 'center', paddingHorizontal: 5, opacity: pressed ? 0.62 : 1 })}>
+          <Pressable {...webLinkKeyboardProps(onSignIn)} onPress={onSignIn} accessibilityRole="link" accessibilityLabel={t('landing12.cta.signin')} style={({ pressed }) => ({ minHeight: 42, justifyContent: 'center', paddingHorizontal: 5, opacity: pressed ? 0.62 : 1 })}>
             <Text style={{ color: c.textSecondary, fontSize: 13, lineHeight: 18, fontWeight: '800' }}>{t('landing12.cta.signin')}</Text>
           </Pressable>
         ) : null}
@@ -227,12 +228,12 @@ function LandingHeader({ activeAnchor, onHome, onNav, onStart, onSignIn }: { act
             </View>
             <ScrollView contentContainerStyle={{ padding: 8 }}>
               {HEADER_NAV_ITEMS.map((item) => (
-                <Pressable key={item.id} onPress={() => go(item.id)} accessibilityRole="link" accessibilityLabel={t(item.labelKey)} accessibilityState={{ selected: activeAnchor === item.id }} style={({ pressed }) => ({ minHeight: 46, justifyContent: 'center', borderRadius: radius.sm, paddingHorizontal: 12, backgroundColor: pressed || activeAnchor === item.id ? c.aiAccentSoft : 'transparent' })}>
+                <Pressable key={item.id} {...webLinkKeyboardProps(() => go(item.id))} onPress={() => go(item.id)} accessibilityRole="link" accessibilityLabel={t(item.labelKey)} accessibilityState={{ selected: activeAnchor === item.id }} style={({ pressed }) => ({ minHeight: 46, justifyContent: 'center', borderRadius: radius.sm, paddingHorizontal: 12, backgroundColor: pressed || activeAnchor === item.id ? c.aiAccentSoft : 'transparent' })}>
                   <Text style={{ color: activeAnchor === item.id ? c.aiAccent : c.textPrimary, fontSize: 14, lineHeight: 20, fontWeight: '700' }}>{t(item.labelKey)}</Text>
                 </Pressable>
               ))}
               <View style={{ height: 1, backgroundColor: c.borderSubtle, marginVertical: 7 }} />
-              <Pressable onPress={() => { setMenuOpen(false); onSignIn(); }} accessibilityRole="link" accessibilityLabel={t('landing12.cta.signin')} style={{ minHeight: 46, justifyContent: 'center', paddingHorizontal: 12 }}>
+              <Pressable {...webLinkKeyboardProps(() => { setMenuOpen(false); onSignIn(); })} onPress={() => { setMenuOpen(false); onSignIn(); }} accessibilityRole="link" accessibilityLabel={t('landing12.cta.signin')} style={{ minHeight: 46, justifyContent: 'center', paddingHorizontal: 12 }}>
                 <Text style={{ color: c.aiAccent, fontSize: 14, fontWeight: '800' }}>{t('landing12.cta.signin')}</Text>
               </Pressable>
             </ScrollView>

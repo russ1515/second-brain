@@ -13,6 +13,7 @@ import {
   StageTransition,
   Surface,
   useLandingGutter,
+  webLinkKeyboardProps,
   webOnly,
 } from './landing-foundation';
 
@@ -97,7 +98,7 @@ export function LandingHero({
                 const fact = capability(platform.id);
                 const label = `${t(k(`landing12.platform.${platform.id}`))} · ${publicStatusLabel(fact.status, t)}`;
                 return platform.id === 'web' ? (
-                  <Pressable key={platform.id} onPress={onStart} accessibilityRole="link" accessibilityLabel={label}>
+                  <Pressable key={platform.id} {...webLinkKeyboardProps(onStart)} onPress={onStart} accessibilityRole="link" accessibilityLabel={label}>
                     <LandingPill label={label} tone="success" />
                   </Pressable>
                 ) : <LandingPill key={platform.id} label={label} tone="neutral" />;

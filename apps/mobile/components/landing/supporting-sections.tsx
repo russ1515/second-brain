@@ -23,6 +23,7 @@ import {
   LandingSection,
   LandingTitle,
   SectionHeading,
+  webLinkKeyboardProps,
   webOnly,
 } from './landing-foundation';
 
@@ -417,7 +418,7 @@ function FooterColumn({ title, items, onNav }: { title: string; items: readonly 
 function FooterAction({ label, onPress }: { label: string; onPress: () => void }) {
   const { colors: c } = useTokens();
   return (
-    <Pressable onPress={onPress} accessibilityRole="link" accessibilityLabel={label} style={({ pressed }) => ({ minHeight: 30, justifyContent: 'center', opacity: pressed ? 0.62 : 1 })}>
+    <Pressable {...webLinkKeyboardProps(onPress)} onPress={onPress} accessibilityRole="link" accessibilityLabel={label} style={({ pressed }) => ({ minHeight: 30, justifyContent: 'center', opacity: pressed ? 0.62 : 1 })}>
       <Text style={{ color: c.textSecondary, fontSize: 11, lineHeight: 16 }}>{label}</Text>
     </Pressable>
   );

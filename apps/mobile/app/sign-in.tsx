@@ -25,6 +25,17 @@ type Step = 'credentials' | 'otp' | 'twofactor' | 'forgot' | 'forgotSent';
 const RESEND_SECONDS = 30;
 const EXPIRY_SECONDS = 300;
 
+function webLinkKeyboardProps(onActivate: () => void) {
+  if (Platform.OS !== 'web') return {};
+  return {
+    onKeyDown: (event: { key?: string; preventDefault?: () => void }) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault?.();
+      onActivate();
+    },
+  };
+}
+
 /**
  * Premium authentication (refactor v2) — the first product screen of Second
  * Brain, as a theme-aware split-screen (brand story left, form right; form-only
@@ -132,6 +143,7 @@ export default function SignInScreen() {
 
   const homeLink = (
     <Pressable
+      {...webLinkKeyboardProps(goHome)}
       testID="auth-back-home"
       onPress={goHome}
       accessibilityRole="link"
@@ -301,7 +313,7 @@ export default function SignInScreen() {
             <AuthButton label={mode === 'register' ? t('auth.createBtn') : t('auth.signIn')} onPress={submitCredentials} busy={busy} disabled={!email.trim() || !password} />
             <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
               <Text style={{ color: c.textMuted, fontSize: 14 }}>{mode === 'register' ? t('auth.haveAccount') : t('auth.noAccount')}</Text>
-              <Pressable onPress={toggleMode} accessibilityRole="link">
+              <Pressable {...webLinkKeyboardProps(toggleMode)} onPress={toggleMode} accessibilityRole="link">
                 <Text style={{ color: c.primary, fontSize: 14, fontWeight: '800' }}>{mode === 'register' ? t('auth.signIn') : t('auth.createAccount')}</Text>
               </Pressable>
             </View>
@@ -310,7 +322,7 @@ export default function SignInScreen() {
                 <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, textAlign: 'center' }}>
                   {t('landingV1.auth.privacy')}
                 </Text>
-                <Pressable testID="auth-privacy-link" onPress={goPrivacy} accessibilityRole="link" style={{ alignSelf: 'center', minHeight: 32, justifyContent: 'center' }}>
+                <Pressable {...webLinkKeyboardProps(goPrivacy)} testID="auth-privacy-link" onPress={goPrivacy} accessibilityRole="link" style={{ alignSelf: 'center', minHeight: 32, justifyContent: 'center' }}>
                   <Text style={{ color: c.primary, fontSize: 11, fontWeight: '700' }}>{t('landing12.footer.privacy')}</Text>
                 </Pressable>
               </View>
@@ -402,7 +414,7 @@ export default function SignInScreen() {
                   ) : null}
                 </View>
                 <View style={{ gap: desktop ? spacing.lg : spacing.md, maxWidth: 520 }}>
-                  <Pressable testID="auth-brand-home-desktop" onPress={goHome} accessibilityRole="link" style={{ alignSelf: 'flex-start', minHeight: 36, justifyContent: 'center' }}>
+                  <Pressable {...webLinkKeyboardProps(goHome)} testID="auth-brand-home-desktop" onPress={goHome} accessibilityRole="link" style={{ alignSelf: 'flex-start', minHeight: 36, justifyContent: 'center' }}>
                     <Text style={{ color: c.primary, fontSize: 13, fontWeight: '800', letterSpacing: 2, textTransform: 'uppercase' }}>{t('landing12.brand')}</Text>
                   </Pressable>
                   {mode === 'register' ? (
@@ -429,7 +441,7 @@ export default function SignInScreen() {
             {/* Right — form */}
             <View style={{ flex: 1, borderLeftWidth: 1, borderLeftColor: c.borderSubtle }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.lg }}>
-                <Pressable testID="auth-logo-home-desktop" onPress={goHome} accessibilityRole="link">
+                <Pressable {...webLinkKeyboardProps(goHome)} testID="auth-logo-home-desktop" onPress={goHome} accessibilityRole="link">
                   <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '800' }}>🧠 {t('landing12.brand')}</Text>
                 </Pressable>
                 <LangPill />
@@ -444,7 +456,7 @@ export default function SignInScreen() {
           <ScrollView contentContainerStyle={{ flexGrow: 1, padding: spacing.lg, justifyContent: 'flex-start' }}>
             {/* Mobile prioritises the form; the signup demo follows it. */}
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.lg }}>
-              <Pressable testID="auth-logo-home-mobile" onPress={goHome} accessibilityRole="link">
+              <Pressable {...webLinkKeyboardProps(goHome)} testID="auth-logo-home-mobile" onPress={goHome} accessibilityRole="link">
                 <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '800' }}>🧠 {t('landing12.brand')}</Text>
               </Pressable>
               <View style={{ flexDirection: 'row', gap: 8 }}>
