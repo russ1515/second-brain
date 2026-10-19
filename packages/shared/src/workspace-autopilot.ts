@@ -47,6 +47,24 @@ export interface WorkspaceAutopilotReceipt {
   action: WorkspaceAutopilotAction;
   status: 'pending' | 'completed' | 'failed';
   createdAt: string;
+  /** Server-only binding to one explicitly authorized, scoped run extension. */
+  stepGrantId?: string;
+}
+
+/** Audit of a private server grant, never accepted through learner progress. */
+export interface WorkspaceAutopilotStepGrant {
+  version: 1;
+  grantId: string;
+  workspaceId: string;
+  runId: string;
+  fromMaxAiSteps: number;
+  maxAiSteps: number;
+  aiStepsAtGrant: number;
+  additionalAiSteps: number;
+  maxPromptBytes: number;
+  requestId: string;
+  revision: number;
+  appliedAt: string;
 }
 
 /** Additive metadata in the existing progress JSON, never a second phase machine. */
@@ -67,6 +85,8 @@ export interface WorkspaceAutopilotState {
     createdAt: string;
   };
   receipts: WorkspaceAutopilotReceipt[];
+  /** Preserves a bounded exception for this exact run, without resetting usage. */
+  stepGrant?: WorkspaceAutopilotStepGrant;
   errorCode?: string;
   reason?: string;
   /** Long-form work is evaluated one server-selected plan section at a time. */

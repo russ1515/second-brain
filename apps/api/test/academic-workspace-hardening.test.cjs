@@ -2059,3 +2059,207 @@ test('WORK production contract leaves manual Work explanations as commentary wit
   assert.equal(autopilotState(workspace).status, 'IDLE');
   assert.equal(workspace.professor.currentPhase, 'WORK');
 });
+
+async function exhaustedRunGrantFixture(overrides = {}) {
+  const config = {
+    WORKSPACE_AUTOPILOT_MAX_AI_STEPS: 5,
+    WORKSPACE_AUTOPILOT_MAX_PROMPT_BYTES: 60_000,
+    WORKSPACE_AUTOPILOT_RUN_GRANT: '',
+  };
+  const harness = await autopilotFixture({ config }, { autopilotConsent: true, ...overrides });
+  const stored = harness.state.workspaces[0].progress.workflow.autopilot;
+  // A persisted pre-existing exhausted run, not a new cycle or a provider invocation.
+  stored.aiSteps = 5;
+  stored.maxAiSteps = 5;
+  stored.status = 'NEEDS_INPUT';
+  stored.errorCode = 'STOP_AUTOPILOT_REVIEW_REQUIRED';
+  stored.reason = 'step-limit';
+  const workspace = await harness.service.get('owner', harness.workspace.id);
+  const grant = {
+    version: 1, grantId: 'technical-targeted-run-grant', workspaceId: workspace.id,
+    runId: autopilotState(workspace).runId, expectedAiSteps: 5,
+    fromMaxAiSteps: 5, additionalAiSteps: 4, maxPromptBytes: 50_000,
+  };
+  return { ...harness, workspace, config, grant };
+}
+
+test('Targeted run grant is disabled by default and malformed private configuration never lifts the global five-step cap', async () => {
+  for (const value of ['', '{broken json', '{}', 'null', JSON.stringify({ version: 2 })]) {
+    const { service, state, workspace, config } = await exhaustedRunGrantFixture();
+    config.WORKSPACE_AUTOPILOT_RUN_GRANT = value;
+    await assert.rejects(autopilotCommand(service, workspace, 'resume', 'grant-disabled'), (error) => httpStatus(error) === 409);
+    const persisted = await service.get('owner', workspace.id);
+    assert.equal(autopilotState(persisted).aiSteps, 5);
+    assert.equal(autopilotState(persisted).maxAiSteps, 5);
+    assert.equal(autopilotState(persisted).stepGrant, undefined);
+    assert.equal(config.WORKSPACE_AUTOPILOT_MAX_AI_STEPS, 5);
+    assert.equal(state.llmCalls, 0);
+  }
+});
+
+test('Targeted owner resume applies one audited grant, preserves five consumed steps and survives configuration removal', async () => {
+  const { service, state, workspace, config, grant, prisma, llm, sourceEngine } = await exhaustedRunGrantFixture();
+  config.WORKSPACE_AUTOPILOT_RUN_GRANT = JSON.stringify(grant);
+  const request = { requestId: 'targeted-run-resume-once', expectedRevision: workspace.autosaveRevision, action: 'resume' };
+  await Promise.all([service.autopilot('owner', workspace.id, request), service.autopilot('owner', workspace.id, request)]);
+  let persisted = await service.get('owner', workspace.id);
+  let current = autopilotState(persisted);
+  const audit = structuredClone(current.stepGrant);
+  assert.equal(current.status, 'RUNNING');
+  assert.equal(current.aiSteps, 5);
+  assert.equal(current.maxAiSteps, 9);
+  assert.equal(current.runId, grant.runId);
+  assert.deepEqual(audit, {
+    version: 1, grantId: grant.grantId, workspaceId: workspace.id, runId: grant.runId,
+    fromMaxAiSteps: 5, maxAiSteps: 9, aiStepsAtGrant: 5, additionalAiSteps: 4,
+    maxPromptBytes: 50_000, requestId: request.requestId, revision: workspace.autosaveRevision,
+    appliedAt: audit.appliedAt,
+  });
+  assert.ok(Number.isFinite(Date.parse(audit.appliedAt)));
+  const receipt = current.receipts.find((item) => item.requestId === request.requestId);
+  assert.equal(receipt.status, 'completed');
+  assert.equal(receipt.action, 'resume');
+  assert.equal(receipt.stepGrantId, grant.grantId);
+  assert.equal(current.receipts.filter((item) => item.stepGrantId === grant.grantId).length, 1);
+  await service.autopilot('owner', workspace.id, request);
+  // The grant proof must not disappear when the ordinary bounded command journal rolls over.
+  state.workspaces[0].progress.workflow.autopilot.receipts = [receipt, ...Array.from({ length: 255 }, (_, index) => ({
+    requestId: `historical-control-${index}`, fingerprint: `historical-fingerprint-${index}`,
+    action: 'pause', status: 'completed', createdAt: audit.appliedAt,
+  }))];
+  persisted = await autopilotCommand(service, persisted, 'pause', 'targeted-run-pause');
+  config.WORKSPACE_AUTOPILOT_RUN_GRANT = '';
+  const reconnected = new AcademicWorkspaceService(prisma, llm, sourceEngine, undefined, { get: (key) => config[key] });
+  persisted = await reconnected.get('owner', workspace.id);
+  assert.deepEqual(autopilotState(persisted).stepGrant, audit);
+  persisted = await autopilotCommand(reconnected, persisted, 'resume', 'targeted-run-reconnected');
+  current = autopilotState(persisted);
+  assert.equal(current.aiSteps, 5);
+  assert.equal(current.maxAiSteps, 9);
+  assert.deepEqual(current.stepGrant, audit);
+  assert.equal(current.receipts.filter((item) => item.stepGrantId === grant.grantId).length, 1);
+  assert.equal(current.receipts.length, 256);
+  assert.equal(config.WORKSPACE_AUTOPILOT_MAX_AI_STEPS, 5);
+  assert.equal(state.llmCalls, 0, 'A grant/resume is never itself a billable call');
+});
+
+test('Targeted run grant cannot cross ownership, Workspace, run or persisted counter boundaries', async () => {
+  const foreign = await exhaustedRunGrantFixture();
+  foreign.config.WORKSPACE_AUTOPILOT_RUN_GRANT = JSON.stringify(foreign.grant);
+  await assert.rejects(foreign.service.autopilot('intruder', foreign.workspace.id, {
+    requestId: 'targeted-run-foreign-resume', expectedRevision: foreign.workspace.autosaveRevision, action: 'resume',
+  }), (error) => httpStatus(error) === 404);
+  assert.equal(autopilotState(await foreign.service.get('owner', foreign.workspace.id)).stepGrant, undefined);
+  for (const changes of [
+    { workspaceId: 'another-workspace' }, { runId: 'another-run' },
+    { expectedAiSteps: 4 }, { fromMaxAiSteps: 4 },
+    { additionalAiSteps: 0 }, { maxPromptBytes: 0 },
+  ]) {
+    const { service, state, workspace, config, grant } = await exhaustedRunGrantFixture();
+    config.WORKSPACE_AUTOPILOT_RUN_GRANT = JSON.stringify({ ...grant, ...changes });
+    await assert.rejects(autopilotCommand(service, workspace, 'resume', 'grant-not-targeted'), (error) => httpStatus(error) === 409);
+    const persisted = autopilotState(await service.get('owner', workspace.id));
+    assert.equal(persisted.aiSteps, 5);
+    assert.equal(persisted.maxAiSteps, 5);
+    assert.equal(persisted.stepGrant, undefined);
+    assert.equal(state.llmCalls, 0);
+  }
+  assert.equal(foreign.state.llmCalls, 0);
+});
+
+test('Targeted run grant requires the existing resume command, valid consent and the current revision', async () => {
+  for (const action of ['start', 'step', 'pause', 'stop']) {
+    const { service, state, workspace, config, grant } = await exhaustedRunGrantFixture();
+    config.WORKSPACE_AUTOPILOT_RUN_GRANT = JSON.stringify(grant);
+    try { await autopilotCommand(service, workspace, action, `grant-other-action-${action}`, { consent: true }); } catch (error) { assert.equal(httpStatus(error), 409); }
+    const persisted = autopilotState(await service.get('owner', workspace.id));
+    assert.equal(persisted.maxAiSteps, 5);
+    assert.equal(persisted.aiSteps, 5);
+    assert.equal(persisted.stepGrant, undefined);
+    assert.equal(state.llmCalls, 0);
+  }
+  const stale = await exhaustedRunGrantFixture();
+  stale.config.WORKSPACE_AUTOPILOT_RUN_GRANT = JSON.stringify(stale.grant);
+  await assert.rejects(stale.service.autopilot('owner', stale.workspace.id, {
+    requestId: 'targeted-run-stale-resume', expectedRevision: stale.workspace.autosaveRevision + 1, action: 'resume',
+  }), (error) => httpStatus(error) === 409);
+  stale.state.workspaces[0].progress.workflow.autopilot.activeRequest = {
+    requestId: 'technical-still-pending', status: 'pending', phase: 'CAPTURE',
+    revision: stale.workspace.autosaveRevision, createdAt: new Date().toISOString(),
+  };
+  await assert.rejects(autopilotCommand(stale.service, stale.workspace, 'resume', 'grant-while-pending'), (error) => httpStatus(error) === 409);
+  delete stale.state.workspaces[0].progress.workflow.autopilot.activeRequest;
+  delete stale.state.workspaces[0].progress.workflow.autopilot.consent;
+  await assert.rejects(autopilotCommand(stale.service, stale.workspace, 'resume', 'grant-no-consent'), (error) => httpStatus(error) === 400);
+  assert.equal(autopilotState(await stale.service.get('owner', stale.workspace.id)).stepGrant, undefined);
+  assert.equal(stale.state.llmCalls, 0);
+});
+
+test('Targeted run grant is never cumulative and stops after exactly four additional reserved turns at nine', async () => {
+  const { service, state, workspace: initial, config, grant } = await exhaustedRunGrantFixture();
+  config.WORKSPACE_AUTOPILOT_RUN_GRANT = JSON.stringify(grant);
+  let workspace = await autopilotCommand(service, initial, 'resume', 'grant-bounded-first');
+  const firstAudit = structuredClone(autopilotState(workspace).stepGrant);
+  const phases = ['METHOD', 'WORK', 'VERIFICATION', 'FINALIZATION'];
+  for (let index = 0; index < 4; index += 1) {
+    if (index > 0) {
+      // Even a differently named runtime grant cannot restart or add four more turns.
+      config.WORKSPACE_AUTOPILOT_RUN_GRANT = JSON.stringify({ ...grant, grantId: `second-grant-${index}` });
+      workspace = await autopilotCommand(service, workspace, 'resume', `grant-bounded-resume-${index}`);
+    }
+    workspace = await autopilotCommand(service, workspace, 'step', `grant-bounded-step-${index}`);
+    assert.equal(autopilotState(workspace).aiSteps, 6 + index);
+    assert.equal(autopilotState(workspace).maxAiSteps, 9);
+    assert.deepEqual(autopilotState(workspace).stepGrant, firstAudit);
+    assert.equal(workspace.professor.currentPhase, phases[index]);
+  }
+  workspace = await autopilotCommand(service, workspace, 'step', 'grant-tenth-blocked');
+  assert.equal(autopilotState(workspace).status, 'NEEDS_INPUT');
+  assert.equal(autopilotState(workspace).errorCode, 'STOP_AUTOPILOT_REVIEW_REQUIRED');
+  await assert.rejects(autopilotCommand(service, workspace, 'resume', 'grant-after-ninth'), (error) => httpStatus(error) === 409);
+  assert.equal(autopilotState(await service.get('owner', workspace.id)).aiSteps, 9);
+  assert.equal(workspace.status, 'active');
+  assert.equal(workspace.completion.snapshots.length, 0);
+  assert.equal(workspace.professor.currentPhase, 'FINALIZATION');
+  assert.equal(state.llmCalls, 4);
+  assert.equal(config.WORKSPACE_AUTOPILOT_MAX_AI_STEPS, 5);
+});
+
+test('Targeted run grant audit needs its exact Workspace, run, counters and completed resume receipt', async () => {
+  const { service, state, workspace: initial, config, grant } = await exhaustedRunGrantFixture();
+  config.WORKSPACE_AUTOPILOT_RUN_GRANT = JSON.stringify(grant);
+  const workspace = await autopilotCommand(service, initial, 'resume', 'grant-audit-required');
+  const snapshot = structuredClone(state.workspaces[0].progress.workflow.autopilot);
+  config.WORKSPACE_AUTOPILOT_RUN_GRANT = '';
+  for (const corrupt of [
+    (stored) => { stored.stepGrant.workspaceId = 'wrong-workspace'; },
+    (stored) => { stored.stepGrant.runId = 'wrong-run'; },
+    (stored) => { stored.stepGrant.aiStepsAtGrant = 0; },
+    (stored) => { stored.stepGrant.maxAiSteps = 10; },
+    (stored) => { stored.receipts = stored.receipts.filter((item) => item.requestId !== stored.stepGrant.requestId); },
+    (stored) => { stored.receipts.find((item) => item.requestId === stored.stepGrant.requestId).status = 'failed'; },
+  ]) {
+    const stored = structuredClone(snapshot);
+    corrupt(stored);
+    state.workspaces[0].progress.workflow.autopilot = stored;
+    assert.equal(autopilotState(await service.get('owner', workspace.id)).maxAiSteps, 5);
+  }
+  assert.equal(state.llmCalls, 0);
+});
+
+test('Targeted run grant enforces its smaller prompt ceiling before provider use without altering the global ceiling', async () => {
+  const instruction = 'Preserved source context. '.repeat(2_200).trim();
+  const { service, state, workspace: initial, config, grant } = await exhaustedRunGrantFixture({
+    brief: { version: 1, fields: { subject: 'Physics', userInstructions: instruction } },
+  });
+  config.WORKSPACE_AUTOPILOT_RUN_GRANT = JSON.stringify(grant);
+  let workspace = await autopilotCommand(service, initial, 'resume', 'grant-smaller-prompt');
+  assert.equal(autopilotState(workspace).stepGrant.maxPromptBytes, 50_000);
+  workspace = await autopilotCommand(service, workspace, 'step', 'grant-prompt-stops');
+  assert.equal(autopilotState(workspace).errorCode, 'STOP_AUTOPILOT_REVIEW_REQUIRED');
+  assert.ok(workspace.brief.fields.userInstructions === instruction, 'The complete captured instructions remain unchanged');
+  assert.equal(workspace.professor.evidence.length, 0);
+  assert.equal(workspace.draft.content, '');
+  assert.equal(state.llmCalls, 0);
+  assert.equal(config.WORKSPACE_AUTOPILOT_MAX_PROMPT_BYTES, 60_000);
+});

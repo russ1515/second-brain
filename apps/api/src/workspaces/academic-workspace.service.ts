@@ -69,6 +69,8 @@ import type {
   WorkspaceAutopilotRequest,
   WorkspaceAutopilotState,
   WorkspaceAutopilotOutput,
+  WorkspaceAutopilotReceipt,
+  WorkspaceAutopilotStepGrant,
   LLMMessage,
 } from '@second-brain/shared';
 import {
@@ -177,10 +179,22 @@ interface GeneratedWorkspaceToolProposal {
 
 /** Only server orchestration can construct this argument; HTTP DTOs cannot. */
 interface AutopilotExecution {
+  workspaceId: string;
   runId: string;
   requestId: string;
   /** Changes from the existing Professor/tool are guarded in the transaction. */
   expectedRevision?: number;
+}
+
+interface AutopilotRunGrantConfig {
+  version: 1;
+  grantId: string;
+  workspaceId: string;
+  runId: string;
+  expectedAiSteps: number;
+  fromMaxAiSteps: number;
+  additionalAiSteps: number;
+  maxPromptBytes: number;
 }
 
 @Injectable()
@@ -382,7 +396,7 @@ export class AcademicWorkspaceService {
         if (state.aiSteps >= state.maxAiSteps && phase !== 'DECONSTRUCTION' && !cached) {
           return { state: { ...state, status: 'NEEDS_INPUT', errorCode: 'STOP_AUTOPILOT_REVIEW_REQUIRED', reason: 'step-limit' } };
         }
-        execution = { runId: state.runId, requestId: request.requestId };
+        execution = { workspaceId: id, runId: state.runId, requestId: request.requestId };
         state.activeRequest = { requestId: request.requestId, status: 'pending', phase, revision: row.autosaveRevision, createdAt: now };
         // Consumed before the external call, including failures and timeouts.
         if (phase !== 'DECONSTRUCTION' && !cached) state.aiSteps += 1;
@@ -392,6 +406,9 @@ export class AcademicWorkspaceService {
         this.assertWorkspaceMutable(row);
         if (state.activeRequest) throw new ConflictException({ code: 'workspace_autopilot_in_progress', message: 'Wait for the current Professor operation to finish.' });
         if (!state.consent && request.consent !== true) throw new BadRequestException({ code: 'workspace_autopilot_consent_required', message: 'Confirm reversible draft preparation before starting.' });
+        // Only an authenticated, revision-checked resume may consume the private
+        // grant. GET/start/step and client JSON can never raise a run's ceiling.
+        if (request.action === 'resume') state = this.withAutopilotRunGrant(state, id, request.requestId, row.autosaveRevision, now);
         const professor = this.professorState(row, progress);
         if (state.aiSteps >= state.maxAiSteps && professor.currentPhase !== 'DECONSTRUCTION' && !this.autopilotCachedReply(row, state, professor)) throw new ConflictException({ code: 'STOP_AUTOPILOT_REVIEW_REQUIRED', message: 'The bounded Professor run needs your review.' });
         state = { ...state, status: 'RUNNING', consent: state.consent ?? { version: 1, grantedAt: now }, errorCode: undefined, reason: undefined };
@@ -401,10 +418,14 @@ export class AcademicWorkspaceService {
         const undo = state.undo;
         if (!undo || undo.appliedRevision !== row.autosaveRevision) throw new ConflictException({ code: 'workspace_autopilot_undo_conflict', message: 'The draft changed after this modification. Its saved version has been preserved.' });
         state = { ...state, status: 'PAUSED', undo: undefined, pendingResult: undefined, errorCode: undefined, reason: undefined };
-        state.receipts = [...state.receipts, { requestId: request.requestId, fingerprint, action: request.action, status: 'completed' as const, createdAt: now }].slice(-256);
+        state.receipts = this.boundedAutopilotReceipts(state, [...state.receipts, { requestId: request.requestId, fingerprint, action: request.action, status: 'completed' as const, createdAt: now }]);
         return { state, draft: undo.draft, plan: undo.plan, brief: undo.brief };
       }
-      state.receipts = [...state.receipts, { requestId: request.requestId, fingerprint, action: request.action, status: execution ? 'pending' as const : 'completed' as const, createdAt: now }].slice(-256);
+      state.receipts = this.boundedAutopilotReceipts(state, [...state.receipts, {
+        requestId: request.requestId, fingerprint, action: request.action,
+        status: execution ? 'pending' as const : 'completed' as const, createdAt: now,
+        ...(state.stepGrant?.requestId === request.requestId ? { stepGrantId: state.stepGrant.grantId } : {}),
+      }]);
       return { state };
     });
     if (!execution) return reserved;
@@ -434,19 +455,81 @@ export class AcademicWorkspaceService {
     return Number.isSafeInteger(value) ? Math.max(min, Math.min(value, max)) : fallback;
   }
 
-  private autopilotState(progress: WorkspaceProgress): WorkspaceAutopilotState {
+  private privateAutopilotRunGrant(): AutopilotRunGrantConfig | undefined {
+    const raw = this.config?.get<string>('WORKSPACE_AUTOPILOT_RUN_GRANT') ?? process.env.WORKSPACE_AUTOPILOT_RUN_GRANT;
+    if (typeof raw !== 'string' || !raw || raw.length > 2_000) return undefined;
+    try {
+      const grant = JSON.parse(raw) as AutopilotRunGrantConfig;
+      if (!grant || grant.version !== 1
+        || ![grant.grantId, grant.workspaceId, grant.runId].every((value) => typeof value === 'string' && /^[A-Za-z0-9_-]{8,128}$/.test(value))
+        || ![grant.expectedAiSteps, grant.fromMaxAiSteps, grant.additionalAiSteps, grant.maxPromptBytes].every(Number.isSafeInteger)
+        || grant.fromMaxAiSteps < 1 || grant.expectedAiSteps !== grant.fromMaxAiSteps
+        || grant.additionalAiSteps < 1 || grant.additionalAiSteps > 4
+        || grant.fromMaxAiSteps + grant.additionalAiSteps > MAX_PROFESSOR_ASSIST_OPERATIONS
+        || grant.maxPromptBytes < 2_000 || grant.maxPromptBytes > 50_000) return undefined;
+      return grant;
+    } catch {
+      // Private configuration is never included in logs or response errors.
+      return undefined;
+    }
+  }
+
+  private withAutopilotRunGrant(state: WorkspaceAutopilotState, workspaceId: string, requestId: string, revision: number, now: string): WorkspaceAutopilotState {
+    if (state.stepGrant) return state;
+    const grant = this.privateAutopilotRunGrant();
+    if (!grant || grant.workspaceId !== workspaceId || grant.runId !== state.runId
+      || state.aiSteps !== grant.expectedAiSteps || state.maxAiSteps !== grant.fromMaxAiSteps) return state;
+    const maxAiSteps = grant.fromMaxAiSteps + grant.additionalAiSteps;
+    return {
+      ...state, maxAiSteps,
+      stepGrant: {
+        version: 1, grantId: grant.grantId, workspaceId, runId: state.runId,
+        fromMaxAiSteps: grant.fromMaxAiSteps, maxAiSteps,
+        aiStepsAtGrant: state.aiSteps, additionalAiSteps: grant.additionalAiSteps,
+        maxPromptBytes: grant.maxPromptBytes, requestId, revision, appliedAt: now,
+      },
+    };
+  }
+
+  private validAutopilotStepGrant(state: WorkspaceAutopilotState, workspaceId: string): WorkspaceAutopilotStepGrant | undefined {
+    const grant = state.stepGrant;
+    if (!grant || grant.version !== 1 || grant.workspaceId !== workspaceId || grant.runId !== state.runId
+      || ![grant.grantId, grant.requestId].every((value) => typeof value === 'string' && /^[A-Za-z0-9_-]{8,128}$/.test(value))
+      || ![grant.fromMaxAiSteps, grant.maxAiSteps, grant.aiStepsAtGrant, grant.additionalAiSteps, grant.maxPromptBytes, grant.revision].every(Number.isSafeInteger)
+      || grant.fromMaxAiSteps < 1 || grant.additionalAiSteps < 1 || grant.additionalAiSteps > 4
+      || grant.maxAiSteps !== grant.fromMaxAiSteps + grant.additionalAiSteps || grant.maxAiSteps > MAX_PROFESSOR_ASSIST_OPERATIONS
+      || grant.aiStepsAtGrant !== grant.fromMaxAiSteps || state.aiSteps < grant.aiStepsAtGrant
+      || grant.maxPromptBytes < 2_000 || grant.maxPromptBytes > 50_000 || grant.revision < 0
+      || !Number.isFinite(Date.parse(grant.appliedAt))) return undefined;
+    const receipt = state.receipts.find((item) => item.requestId === grant.requestId);
+    return receipt?.action === 'resume' && receipt.status === 'completed'
+      && receipt.stepGrantId === grant.grantId && receipt.createdAt === grant.appliedAt
+      && /^[a-f0-9]{64}$/.test(receipt.fingerprint) ? grant : undefined;
+  }
+
+  private boundedAutopilotReceipts(state: WorkspaceAutopilotState, receipts: WorkspaceAutopilotReceipt[]): WorkspaceAutopilotReceipt[] {
+    const grantReceipt = state.stepGrant && receipts.find((item) => item.requestId === state.stepGrant!.requestId && item.stepGrantId === state.stepGrant!.grantId);
+    return grantReceipt
+      ? [grantReceipt, ...receipts.filter((item) => item.requestId !== grantReceipt.requestId).slice(-255)]
+      : receipts.slice(-256);
+  }
+
+  private autopilotState(progress: WorkspaceProgress, workspaceId: string): WorkspaceAutopilotState {
     const value = progress.workflow?.autopilot;
     if (!value || value.version !== 1 || !Array.isArray(value.receipts)) return this.newAutopilotState();
+    const stepGrant = this.validAutopilotStepGrant(value, workspaceId);
     return {
       ...value,
-      maxAiSteps: Math.min(value.maxAiSteps, this.autopilotLimit('WORKSPACE_AUTOPILOT_MAX_AI_STEPS', 15, 1, 15)),
+      maxAiSteps: stepGrant ? stepGrant.maxAiSteps
+        : Math.min(value.maxAiSteps, this.autopilotLimit('WORKSPACE_AUTOPILOT_MAX_AI_STEPS', 15, 1, 15)),
       maxCorrectionLoops: Math.min(value.maxCorrectionLoops, this.autopilotLimit('WORKSPACE_AUTOPILOT_MAX_CORRECTION_LOOPS', 1, 0, 2)),
-      receipts: value.receipts.slice(-256),
+      stepGrant,
+      receipts: this.boundedAutopilotReceipts({ ...value, stepGrant }, value.receipts),
     };
   }
 
   private assertAutopilotExecution(progress: WorkspaceProgress, execution: AutopilotExecution): void {
-    const state = this.autopilotState(progress);
+    const state = this.autopilotState(progress, execution.workspaceId);
     if (state.runId !== execution.runId || state.status !== 'RUNNING' || !state.consent || state.activeRequest?.requestId !== execution.requestId) {
       throw new ConflictException({ code: 'workspace_autopilot_interrupted', message: 'The Professor is paused. Your work is saved.' });
     }
@@ -486,7 +569,7 @@ export class AcademicWorkspaceService {
       const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
       if (internal) this.assertAutopilotExecution(progress, internal);
       if (internal?.expectedRevision !== undefined && row.autosaveRevision !== internal.expectedRevision) this.throwWorkspaceRevisionConflict();
-      const result = change(row, progress, this.autopilotState(progress));
+      const result = change(row, progress, this.autopilotState(progress, row.id));
       const plan = result.plan ?? fromJson<WorkspacePlanItem[]>(row.plan, []);
       const brief = result.brief ?? progress.workflow?.brief ?? emptyWorkspaceBrief();
       const contentChanged = result.draft !== undefined || result.plan !== undefined || result.brief !== undefined;
@@ -535,7 +618,7 @@ export class AcademicWorkspaceService {
     }
     const providerRevision = workspace.autosaveRevision;
     const requestId = `auto-${execution.requestId}`.slice(0, 128);
-    const pending = this.autopilotState(workspace.progress).pendingResult;
+    const pending = this.autopilotState(workspace.progress, workspace.id).pendingResult;
     const cachedReply = pending?.phase === phase && pending.phaseSequence === workspace.professor.phaseSequence && pending.revision === workspace.autosaveRevision
       ? workspace.assistantHistory.find((entry) => entry.id === pending.replyId && entry.autopilot?.runId === execution.runId)
       : undefined;
@@ -572,7 +655,7 @@ export class AcademicWorkspaceService {
     this.assertAutopilotExecution(workspace.progress, execution);
     if (workspace.autosaveRevision !== providerRevision) this.throwWorkspaceRevisionConflict();
     execution.expectedRevision = workspace.autosaveRevision;
-    const alreadyApplied = Boolean(this.autopilotState(workspace.progress).pendingResult?.applied);
+    const alreadyApplied = Boolean(this.autopilotState(workspace.progress, workspace.id).pendingResult?.applied);
     if (output.needsInput) return this.finishAutopilot(userId, id, execution, 'NEEDS_INPUT', 'workspace_autopilot_clarification_required', output.needsInput);
     if (phase === 'WORK' && !output.workArtifactValidated) {
       // Retained turns from the previous contract cannot become new WORK proof
@@ -602,7 +685,7 @@ export class AcademicWorkspaceService {
       await move(phase === 'COMPREHENSION' ? 'METHOD' : 'WORK');
     } else if (phase === 'WORK' || phase === 'COACHING') {
       if (!output.draft?.trim()) return this.finishAutopilot(userId, id, execution, 'NEEDS_INPUT', 'workspace_autopilot_draft_required');
-      const toolResult = this.autopilotState(workspace.progress).pendingResult?.tool;
+      const toolResult = this.autopilotState(workspace.progress, workspace.id).pendingResult?.tool;
       if (!alreadyApplied && toolResult) {
         const selectedLength = Math.min(workspace.draft.content.length, 8_000);
         await this.applyToolProposal(userId, id, toolResult.toolId, {
@@ -639,7 +722,7 @@ export class AcademicWorkspaceService {
       if ((output.checkedPlanItemIds ?? []).some((item) => !ids.has(item))) {
         return this.finishAutopilot(userId, id, execution, 'PAUSED_ERROR', 'workspace_autopilot_invalid_verification');
       }
-      const sectionPlanItemId = this.autopilotState(workspace.progress).sectionPlanItemId;
+      const sectionPlanItemId = this.autopilotState(workspace.progress, workspace.id).sectionPlanItemId;
       // One generated section can never certify an entire thesis/article.
       // Other claims still require their own bounded work and verification.
       const checked = new Set((output.checkedPlanItemIds ?? []).filter((item) => !longForm || item === sectionPlanItemId));
@@ -655,7 +738,7 @@ export class AcademicWorkspaceService {
       }
       if (missingChecks.length || output.issues?.length) {
         const reason = output.issues?.join('\n') || missingChecks.map((item) => item.id).join(', ');
-        const state = this.autopilotState(workspace.progress);
+        const state = this.autopilotState(workspace.progress, workspace.id);
         if (state.correctionLoops >= state.maxCorrectionLoops) {
           return this.finishAutopilot(userId, id, execution, 'NEEDS_INPUT', 'STOP_AUTOPILOT_REVIEW_REQUIRED', reason);
         }
@@ -691,8 +774,11 @@ export class AcademicWorkspaceService {
     return 'workspace_autopilot_provider_or_persistence_error';
   }
 
-  private assertAutopilotPromptBudget(messages: readonly LLMMessage[]): void {
-    if (Buffer.byteLength(JSON.stringify(messages), 'utf8') > this.autopilotLimit('WORKSPACE_AUTOPILOT_MAX_PROMPT_BYTES', 60_000, 2_000, 120_000)) {
+  private assertAutopilotPromptBudget(messages: readonly LLMMessage[], progress: WorkspaceProgress, workspaceId: string): void {
+    const configuredLimit = this.autopilotLimit('WORKSPACE_AUTOPILOT_MAX_PROMPT_BYTES', 60_000, 2_000, 120_000);
+    const grant = this.autopilotState(progress, workspaceId).stepGrant;
+    const limit = grant ? Math.min(configuredLimit, grant.maxPromptBytes) : configuredLimit;
+    if (Buffer.byteLength(JSON.stringify(messages), 'utf8') > limit) {
       throw new BadRequestException({ code: 'STOP_AUTOPILOT_REVIEW_REQUIRED', message: 'This bounded Professor step requires a smaller section. Your work is saved.' });
     }
   }
@@ -741,7 +827,7 @@ export class AcademicWorkspaceService {
             ),
             ...(existingProgress.workflow?.autopilot ? {
               autopilot: {
-                ...this.autopilotState(existingProgress), status: 'PAUSED', activeRequest: undefined,
+                ...this.autopilotState(existingProgress, existing.id), status: 'PAUSED', activeRequest: undefined,
                 ...(existingProgress.workflow.autopilot.undo?.appliedRevision === existing.autosaveRevision && request.plan === undefined && request.brief === undefined ? {
                   undo: { ...existingProgress.workflow.autopilot.undo, appliedRevision: existing.autosaveRevision + 1 },
                 } : {}),
@@ -1206,7 +1292,7 @@ export class AcademicWorkspaceService {
           professor, tools, completion: nextCompletion,
           ...(internal && progress.workflow?.autopilot?.undo?.appliedRevision === row.autosaveRevision ? {
             autopilot: {
-              ...this.autopilotState(progress),
+              ...this.autopilotState(progress, row.id),
               undo: { ...progress.workflow.autopilot.undo, appliedRevision: resultingRevision },
             },
           } : {}),
@@ -1706,7 +1792,7 @@ export class AcademicWorkspaceService {
           tools: nextTools,
           ...(internal ? {
             autopilot: {
-              ...this.autopilotState(progress),
+              ...this.autopilotState(progress, row.id),
               ...(progress.workflow?.autopilot?.pendingResult ? { pendingResult: { ...progress.workflow.autopilot.pendingResult, revision: appliedRevision, applied: true } } : {}),
               undo: {
                 draft: { format: row.draftFormat as WorkspaceAutosaveRequest['draft']['format'], content: row.draftContent },
@@ -2040,7 +2126,7 @@ export class AcademicWorkspaceService {
       },
       { role: 'user', content: prompt },
     ];
-    if (internal) this.assertAutopilotPromptBudget(messages);
+    if (internal) this.assertAutopilotPromptBudget(messages, progress, row.id);
     const response = await this.llm.generate(messages, { temperature: 0.2, operation: 'workspace-assistant', maxOutputTokens: 1_000 });
     // Validate even without source context so an invented [Wn] label can never
     // be rendered as if it were an AW-6 citation.
@@ -2124,7 +2210,7 @@ export class AcademicWorkspaceService {
           ...(automaticReply ? { professor: nextProfessor } : {}),
           ...(automaticReply && progress.workflow?.autopilot?.runId === automaticReply.autopilot?.runId ? {
             autopilot: {
-              ...this.autopilotState(progress),
+              ...this.autopilotState(progress, row.id),
               pendingResult: {
                 replyId: automaticReply.id, phase: operation.phase,
                 phaseSequence: operation.phaseSequence, revision: operation.baseRevision,
@@ -2857,7 +2943,7 @@ export class AcademicWorkspaceService {
         })),
         { role: 'user' as const, content: prompt },
       ];
-      if (internal) this.assertAutopilotPromptBudget(messages);
+      if (internal) this.assertAutopilotPromptBudget(messages, progress, row.id);
       const response = await this.llm.generate(messages, { temperature: 0.25, operation: 'workspace-assistant', maxOutputTokens: 1_500 });
       providerSucceeded = true;
       if (sourceResolution.usedContext) {
@@ -2961,7 +3047,7 @@ export class AcademicWorkspaceService {
           professor: nextProfessor,
           ...(generated.reply.autopilot && progress.workflow?.autopilot?.runId === generated.reply.autopilot.runId ? {
             autopilot: {
-              ...this.autopilotState(progress),
+              ...this.autopilotState(progress, row.id),
               pendingResult: {
                 replyId: generated.reply.id,
                 phase: operation.phase,
@@ -3445,8 +3531,8 @@ export class AcademicWorkspaceService {
     const storedAutopilot = progress.workflow?.autopilot;
     const autopilot = storedAutopilot?.activeRequest
       && Date.now() - Date.parse(storedAutopilot.activeRequest.createdAt) > PROFESSOR_PENDING_LEASE_MS
-      ? this.endAutopilotRequest(this.autopilotState(progress), 'PAUSED_ERROR', 'workspace_autopilot_interrupted')
-      : storedAutopilot ? this.autopilotState(progress) : undefined;
+      ? this.endAutopilotRequest(this.autopilotState(progress, row.id), 'PAUSED_ERROR', 'workspace_autopilot_interrupted')
+      : storedAutopilot ? this.autopilotState(progress, row.id) : undefined;
     return {
       id: row.id,
       userId: row.userId,
