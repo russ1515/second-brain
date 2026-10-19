@@ -9,6 +9,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Verificación',
     'workspaceProfessor.phase.FINALIZATION': 'Finalización',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Deconstrucción',
+    'workspaceProfessor.comprehensionResponseRequired': 'Pide al Profesor que explique esta tarea y espera su respuesta antes de continuar con el Método.',
   },
   de: {
     'workspaceShell.dissertation.thesis': 'These',
@@ -16,6 +17,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Überprüfung',
     'workspaceProfessor.phase.FINALIZATION': 'Fertigstellung',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Dekonstruktion',
+    'workspaceProfessor.comprehensionResponseRequired': 'Bitte den Professor, diese Aufgabenstellung zu erklären, und warte auf seine Antwort, bevor du mit der Methode fortfährst.',
   },
   it: {
     'workspaceShell.dissertation.thesis': 'Tesi',
@@ -23,6 +25,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Verifica',
     'workspaceProfessor.phase.FINALIZATION': 'Finalizzazione',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Decostruzione',
+    'workspaceProfessor.comprehensionResponseRequired': 'Chiedi al Professore di spiegare questa consegna e attendi la sua risposta prima di continuare con il Metodo.',
   },
   pt: {
     'workspaceShell.dissertation.thesis': 'Tese',
@@ -30,6 +33,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Verificação',
     'workspaceProfessor.phase.FINALIZATION': 'Finalização',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Desconstrução',
+    'workspaceProfessor.comprehensionResponseRequired': 'Pede ao Professor que explique esta tarefa e aguarda a resposta antes de continuar para o Método.',
   },
   hi: {
     'workspaceShell.dissertation.thesis': 'पक्ष',
@@ -37,6 +41,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'सत्यापन',
     'workspaceProfessor.phase.FINALIZATION': 'अंतिम रूप देना',
     'workspaceProfessor.phase.DECONSTRUCTION': 'विखंडन और पुनरावलोकन',
+    'workspaceProfessor.comprehensionResponseRequired': 'प्राध्यापक से इस कार्य के निर्देश समझाने को कहें और विधि चरण पर जाने से पहले उत्तर की प्रतीक्षा करें।',
   },
   tr: {
     'workspaceShell.dissertation.thesis': 'Tez',
@@ -44,6 +49,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Doğrulama',
     'workspaceProfessor.phase.FINALIZATION': 'Sonlandırma',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Yapısöküm',
+    'workspaceProfessor.comprehensionResponseRequired': 'Öğretmenden bu görevi açıklamasını iste ve Yöntem aşamasına geçmeden önce yanıtını bekle.',
   },
   pl: {
     'workspaceShell.dissertation.thesis': 'Teza',
@@ -51,6 +57,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Weryfikacja',
     'workspaceProfessor.phase.FINALIZATION': 'Finalizacja',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Dekonstrukcja',
+    'workspaceProfessor.comprehensionResponseRequired': 'Poproś Profesora o wyjaśnienie tego zadania i poczekaj na odpowiedź, zanim przejdziesz do Metody.',
   },
   ru: {
     'workspaceShell.dissertation.thesis': 'Тезис',
@@ -58,6 +65,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Проверка',
     'workspaceProfessor.phase.FINALIZATION': 'Финализация',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Деконструкция',
+    'workspaceProfessor.comprehensionResponseRequired': 'Попроси преподавателя объяснить это задание и дождись ответа, прежде чем переходить к этапу «Метод».',
   },
   zh: {
     'workspaceShell.dissertation.thesis': '论点',
@@ -65,6 +73,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': '核验',
     'workspaceProfessor.phase.FINALIZATION': '定稿',
     'workspaceProfessor.phase.DECONSTRUCTION': '解构与复盘',
+    'workspaceProfessor.comprehensionResponseRequired': '请先让教授解释这项任务，并等待回复后再进入“方法”阶段。',
   },
   vi: {
     'workspaceShell.dissertation.thesis': 'Luận đề',
@@ -72,6 +81,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Xác minh',
     'workspaceProfessor.phase.FINALIZATION': 'Hoàn thiện',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Giải cấu trúc và nhìn lại',
+    'workspaceProfessor.comprehensionResponseRequired': 'Hãy nhờ Giáo sư giải thích yêu cầu của bài này và chờ câu trả lời trước khi chuyển sang Phương pháp.',
   },
   ja: {
     'workspaceShell.dissertation.thesis': '主張',
@@ -79,6 +89,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': '検証',
     'workspaceProfessor.phase.FINALIZATION': '最終仕上げ',
     'workspaceProfessor.phase.DECONSTRUCTION': '振り返りと分解',
+    'workspaceProfessor.comprehensionResponseRequired': '教授にこの課題の説明を依頼し、回答を待ってから「方法」に進んでください。',
   },
   sv: {
     'workspaceShell.dissertation.thesis': 'Tes',
@@ -86,6 +97,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Verifiering',
     'workspaceProfessor.phase.FINALIZATION': 'Slutförande',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Dekonstruktion',
+    'workspaceProfessor.comprehensionResponseRequired': 'Be Professorn förklara uppgiften och vänta på svaret innan du fortsätter till Metod.',
   },
   th: {
     'workspaceShell.dissertation.thesis': 'ข้อเสนอ',
@@ -93,6 +105,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'การตรวจสอบ',
     'workspaceProfessor.phase.FINALIZATION': 'การสรุปงาน',
     'workspaceProfessor.phase.DECONSTRUCTION': 'การถอดบทเรียน',
+    'workspaceProfessor.comprehensionResponseRequired': 'ขอให้อาจารย์อธิบายโจทย์นี้และรอคำตอบก่อนเข้าสู่ขั้นวิธีการ',
   },
   ar: {
     'workspaceShell.dissertation.thesis': 'الأطروحة',
@@ -100,6 +113,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'التحقق',
     'workspaceProfessor.phase.FINALIZATION': 'الإنهاء',
     'workspaceProfessor.phase.DECONSTRUCTION': 'التفكيك والمراجعة',
+    'workspaceProfessor.comprehensionResponseRequired': 'اطلب من الأستاذ شرح هذه المهمة وانتظر إجابته قبل الانتقال إلى مرحلة المنهجية.',
   },
   ko: {
     'workspaceShell.dissertation.thesis': '정립',
@@ -107,6 +121,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': '검증',
     'workspaceProfessor.phase.FINALIZATION': '마무리',
     'workspaceProfessor.phase.DECONSTRUCTION': '해체와 성찰',
+    'workspaceProfessor.comprehensionResponseRequired': '교수님께 이 과제를 설명해 달라고 요청하고, 답변을 기다린 후 방법 단계로 진행하세요.',
   },
   nl: {
     'workspaceShell.dissertation.thesis': 'These',
@@ -114,6 +129,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Verificatie',
     'workspaceProfessor.phase.FINALIZATION': 'Afronding',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Deconstructie',
+    'workspaceProfessor.comprehensionResponseRequired': 'Vraag de Professor om deze opdracht uit te leggen en wacht op het antwoord voordat je doorgaat naar Methode.',
   },
   el: {
     'workspaceShell.dissertation.thesis': 'Θέση',
@@ -121,6 +137,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Επαλήθευση',
     'workspaceProfessor.phase.FINALIZATION': 'Οριστικοποίηση',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Αποδόμηση',
+    'workspaceProfessor.comprehensionResponseRequired': 'Ζήτησε από τον Καθηγητή να εξηγήσει αυτή την εργασία και περίμενε την απάντησή του πριν συνεχίσεις στη Μέθοδο.',
   },
   cs: {
     'workspaceShell.dissertation.thesis': 'Teze',
@@ -128,6 +145,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Ověření',
     'workspaceProfessor.phase.FINALIZATION': 'Dokončení',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Dekonstrukce',
+    'workspaceProfessor.comprehensionResponseRequired': 'Požádej Profesora o vysvětlení tohoto zadání a před přechodem k Metodě počkej na jeho odpověď.',
   },
   ro: {
     'workspaceShell.dissertation.thesis': 'Teză',
@@ -135,6 +153,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Verificare',
     'workspaceProfessor.phase.FINALIZATION': 'Finalizare',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Deconstrucție',
+    'workspaceProfessor.comprehensionResponseRequired': 'Cere Profesorului să explice această cerință și așteaptă răspunsul înainte de a continua la Metodă.',
   },
   hu: {
     'workspaceShell.dissertation.thesis': 'Tézis',
@@ -142,6 +161,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Ellenőrzés',
     'workspaceProfessor.phase.FINALIZATION': 'Véglegesítés',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Dekonstrukció',
+    'workspaceProfessor.comprehensionResponseRequired': 'Kérd meg a Tanárt, hogy magyarázza el ezt a feladatot, és várd meg a válaszát, mielőtt továbblépsz a Módszer szakaszra.',
   },
   da: {
     'workspaceShell.dissertation.thesis': 'Tese',
@@ -149,6 +169,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Verificering',
     'workspaceProfessor.phase.FINALIZATION': 'Færdiggørelse',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Dekonstruktion',
+    'workspaceProfessor.comprehensionResponseRequired': 'Bed Professoren om at forklare opgaven, og vent på svaret, før du fortsætter til Metode.',
   },
   fi: {
     'workspaceShell.dissertation.thesis': 'Teesi',
@@ -156,6 +177,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Varmennus',
     'workspaceProfessor.phase.FINALIZATION': 'Viimeistely',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Purkaminen ja jälkiarviointi',
+    'workspaceProfessor.comprehensionResponseRequired': 'Pyydä Opettajaa selittämään tämä tehtävä ja odota vastausta ennen kuin jatkat Menetelmä-vaiheeseen.',
   },
   id: {
     'workspaceShell.dissertation.thesis': 'Tesis',
@@ -163,6 +185,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Verifikasi',
     'workspaceProfessor.phase.FINALIZATION': 'Finalisasi',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Dekonstruksi dan refleksi',
+    'workspaceProfessor.comprehensionResponseRequired': 'Minta Profesor menjelaskan tugas ini dan tunggu jawabannya sebelum melanjutkan ke Metode.',
   },
   nb: {
     'workspaceShell.dissertation.thesis': 'Tese',
@@ -170,6 +193,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Verifisering',
     'workspaceProfessor.phase.FINALIZATION': 'Ferdigstilling',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Dekonstruksjon',
+    'workspaceProfessor.comprehensionResponseRequired': 'Be Professoren forklare oppgaven, og vent på svaret før du fortsetter til Metode.',
   },
   uk: {
     'workspaceShell.dissertation.thesis': 'Теза',
@@ -177,6 +201,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Перевірка',
     'workspaceProfessor.phase.FINALIZATION': 'Завершення',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Деконструкція',
+    'workspaceProfessor.comprehensionResponseRequired': 'Попроси викладача пояснити це завдання й дочекайся відповіді, перш ніж переходити до етапу «Метод».',
   },
   ln: {
     'workspaceShell.dissertation.thesis': 'Likanisi ya liboso',
@@ -184,6 +209,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Botali',
     'workspaceProfessor.phase.FINALIZATION': 'Bosilisi',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Kobuka mpe kotalela lisusu',
+    'workspaceProfessor.comprehensionResponseRequired': 'Sɛngá Molakisi alimbola malako ya mosala oyo mpe zelá eyano na ye liboso ya kokende na lolenge ya kosala.',
   },
   sw: {
     'workspaceShell.dissertation.thesis': 'Hoja kuu',
@@ -191,6 +217,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Uthibitishaji',
     'workspaceProfessor.phase.FINALIZATION': 'Ukamilishaji',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Uchanganuzi na tafakari',
+    'workspaceProfessor.comprehensionResponseRequired': 'Mwombe Mwalimu aeleze kazi hii na usubiri jibu lake kabla ya kuendelea kwenye Mbinu.',
   },
   wo: {
     'workspaceShell.dissertation.thesis': 'Xalaat bu njëkk',
@@ -198,6 +225,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Seetlu',
     'workspaceProfessor.phase.FINALIZATION': 'Jeexital',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Xoolaat ak xàmmee doxalin wi',
+    'workspaceProfessor.comprehensionResponseRequired': 'Ñaanal Jàngalekat bi mu leeral ndigal li te xaar tontoom bala ngay jàll ci Pexe bi.',
   },
   ha: {
     'workspaceShell.dissertation.thesis': 'Babban hujja',
@@ -205,6 +233,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'Tabbatarwa',
     'workspaceProfessor.phase.FINALIZATION': 'Kammalawa',
     'workspaceProfessor.phase.DECONSTRUCTION': 'Bincike da nazari kan yadda aka yi',
+    'workspaceProfessor.comprehensionResponseRequired': 'Nemi Malamin ya bayyana wannan aikin, sannan ka jira amsarsa kafin ka ci gaba zuwa Hanyar aiki.',
   },
   he: {
     'workspaceShell.dissertation.thesis': 'תזה',
@@ -212,6 +241,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'אימות',
     'workspaceProfessor.phase.FINALIZATION': 'השלמה סופית',
     'workspaceProfessor.phase.DECONSTRUCTION': 'פירוק וניתוח',
+    'workspaceProfessor.comprehensionResponseRequired': 'יש לבקש מהמורה להסביר את המטלה ולהמתין לתשובה לפני המעבר לשלב השיטה.',
   },
   'zh-Hant': {
     'workspaceShell.dissertation.thesis': '論點',
@@ -219,6 +249,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': '驗證',
     'workspaceProfessor.phase.FINALIZATION': '定稿',
     'workspaceProfessor.phase.DECONSTRUCTION': '解構與回顧',
+    'workspaceProfessor.comprehensionResponseRequired': '請先讓教授解釋這項任務，並等待回覆後再進入「方法」階段。',
   },
   bn: {
     'workspaceShell.dissertation.thesis': 'মূল বক্তব্য',
@@ -226,6 +257,7 @@ export const workspaceShellsV1: Record<string, Record<string, string>> = {
     'workspaceProfessor.phase.VERIFICATION': 'যাচাই',
     'workspaceProfessor.phase.FINALIZATION': 'চূড়ান্তকরণ',
     'workspaceProfessor.phase.DECONSTRUCTION': 'বিশ্লেষণ ও পুনর্বিবেচনা',
+    'workspaceProfessor.comprehensionResponseRequired': 'অধ্যাপককে এই কাজের নির্দেশনা ব্যাখ্যা করতে বলো এবং পদ্ধতি ধাপে যাওয়ার আগে তাঁর উত্তরের জন্য অপেক্ষা করো।',
   },
 };
 

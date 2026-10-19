@@ -935,6 +935,82 @@ test('AW-5 server owns the complete Professor cycle and rejects skipped phases',
   );
 });
 
+test('AW-5 accepts an empty objective with a captured brief and persists Method only after an evidenced explanation', async () => {
+  const { service, state } = createHarness();
+  const capturedBrief = 'Explain why two fractions can represent the same quantity, then compare 1/2 and 2/4.';
+  const workspace = await service.create('owner', request({
+    requestId: 'workspace-aw5-empty-objective-create',
+    objective: '',
+    brief: { version: 1, fields: { requirements: capturedBrief } },
+  }));
+  assert.equal(workspace.objective, '');
+  assert.equal(workspace.professor.currentPhase, 'CAPTURE');
+
+  const comprehension = await service.transition('owner', workspace.id, {
+    requestId: 'aw5-empty-objective-to-comprehension',
+    expectedPhase: 'CAPTURE', requestedPhase: 'COMPREHENSION',
+    expectedRevision: workspace.autosaveRevision,
+  });
+  assert.equal(comprehension.professor.currentPhase, 'COMPREHENSION');
+  const methodTransition = {
+    requestId: 'aw5-empty-objective-to-method',
+    expectedPhase: 'COMPREHENSION', requestedPhase: 'METHOD',
+    expectedRevision: comprehension.revision,
+  };
+  await assert.rejects(
+    service.transition('owner', workspace.id, methodTransition),
+    (error) => httpStatus(error) === 400
+      && error.getResponse().code === 'workspace_professor_transition_criteria_not_met',
+  );
+  assert.equal((await service.get('owner', workspace.id)).professor.currentPhase, 'COMPREHENSION');
+  assert.equal(state.llmCalls, 0);
+
+  const explanationRequest = {
+    requestId: 'aw5-empty-objective-explain',
+    expectedPhase: 'COMPREHENSION', expectedRevision: comprehension.revision,
+    action: 'explain',
+  };
+  await assert.rejects(
+    service.assist('intruder', workspace.id, explanationRequest),
+    (error) => httpStatus(error) === 404,
+  );
+  assert.equal(state.llmCalls, 0);
+
+  const explanation = await service.assist('owner', workspace.id, explanationRequest);
+  assert.equal(explanation.reply.content, state.llmResponse);
+  assert.equal(state.llmCalls, 1);
+  assert.ok(state.llmMessages[0].at(-1).content.includes(capturedBrief));
+  const evidence = explanation.professor.evidence;
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0].phase, 'COMPREHENSION');
+  assert.equal(evidence[0].phaseSequence, comprehension.professor.phaseSequence);
+  assert.equal(evidence[0].assistantReplyId, explanation.reply.id);
+
+  const method = await service.transition('owner', workspace.id, {
+    ...methodTransition, expectedRevision: explanation.revision,
+  });
+  assert.equal(method.professor.currentPhase, 'METHOD');
+  const resumed = await service.get('owner', workspace.id);
+  assert.equal(resumed.objective, '');
+  assert.equal(resumed.professor.currentPhase, 'METHOD');
+  assert.equal(resumed.assistantHistory.at(-1).id, explanation.reply.id);
+  assert.equal(resumed.assistantHistory.at(-1).content, state.llmResponse);
+
+  const sourceCalls = state.sourceCalls;
+  const replay = await service.assist('owner', workspace.id, explanationRequest);
+  assert.equal(replay.reply.id, explanation.reply.id);
+  assert.equal(state.llmCalls, 1);
+  assert.equal(state.sourceCalls, sourceCalls);
+  const afterReplay = await service.get('owner', workspace.id);
+  assert.equal(afterReplay.professor.currentPhase, 'METHOD');
+  assert.equal(afterReplay.professor.evidence.length, 1);
+  assert.equal(afterReplay.assistantHistory.length, 2);
+  await assert.rejects(
+    service.get('intruder', workspace.id),
+    (error) => httpStatus(error) === 404,
+  );
+});
+
 test('AW-5 transition retries converge once while competing request ids conflict', async () => {
   const { service } = createHarness();
   const idempotentWorkspace = await service.create('owner', request({

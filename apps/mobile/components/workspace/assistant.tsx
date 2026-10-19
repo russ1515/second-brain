@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Linking, ScrollView, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import {
@@ -14,7 +14,7 @@ import {
   type WorkspaceSourceCitation,
   type WorkspaceToolProposal,
 } from '@second-brain/shared';
-import { api } from '../../lib/client';
+import { api, ApiError } from '../../lib/client';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { useTokens } from '../../lib/design/theme';
 import { createClientRequestId } from '../../lib/request-id';
@@ -74,6 +74,7 @@ export function WorkspaceAssistant({
   const [action, setAction] = useState<WorkspaceAssistAction>('suggest');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const sendInFlightRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRequest, setLastRequest] = useState<PersistentWorkspaceAssistRequest | null>(null);
   const [failedRequest, setFailedRequest] = useState<PersistentWorkspaceAssistRequest | null>(null);
@@ -93,13 +94,14 @@ export function WorkspaceAssistant({
   }, [professor.currentPhase, professor.phaseSequence]);
 
   const send = async (requestOverride?: PersistentWorkspaceAssistRequest) => {
-    if (busy) return;
+    if (busy || sendInFlightRef.current || transitioningTo) return;
     const baseRequest: PersistentWorkspaceAssistRequest = requestOverride ?? {
       action,
       ...(message.trim() ? { message: message.trim() } : {}),
       ...(selectedText.trim() ? { selectedText: selectedText.trim() } : {}),
     };
     if (!baseRequest.message?.trim() && !baseRequest.selectedText?.trim()) return;
+    sendInFlightRef.current = true;
     setBusy(true);
     setError(null);
     setFailedRequest(null);
@@ -155,18 +157,29 @@ export function WorkspaceAssistant({
       setError((caught as Error).message);
       await onAssistFailure().catch(() => undefined);
     } finally {
+      sendInFlightRef.current = false;
       setBusy(false);
     }
   };
 
   const transition = async (requestedPhase: WorkspaceProfessorPhase) => {
-    if (transitioningTo) return;
+    if (transitioningTo || sendInFlightRef.current) return;
     setTransitioningTo(requestedPhase);
     setError(null);
     try {
       await onRequestTransition(requestedPhase);
     } catch (caught) {
-      setError((caught as Error).message);
+      const payload = caught instanceof ApiError ? caught.payload : null;
+      const code = payload && typeof payload === 'object'
+        ? (payload as { code?: unknown }).code
+        : null;
+      setError(
+        professor.currentPhase === 'COMPREHENSION'
+        && requestedPhase === 'METHOD'
+        && code === 'workspace_professor_transition_criteria_not_met'
+          ? t('workspaceProfessor.comprehensionResponseRequired')
+          : (caught as Error).message,
+      );
     } finally {
       setTransitioningTo(null);
     }
@@ -184,7 +197,7 @@ export function WorkspaceAssistant({
           variant="secondary"
           label={`${t('onb.continue')} · ${t(`workspaceProfessor.phase.${mainTransition}` as TranslationKey)}`}
           loading={transitioningTo === mainTransition}
-          disabled={Boolean(transitioningTo)}
+          disabled={busy || Boolean(transitioningTo)}
           onPress={() => void transition(mainTransition)}
         /> : null}
         {professor.currentPhase === 'WORK' ? <Button
@@ -218,7 +231,26 @@ export function WorkspaceAssistant({
       onBeforeRun={onBeforeAssist}
       onApply={onApplyToolProposal}
     />
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.xs }}>{WORKSPACE_ASSIST_ACTIONS.map((value) => <Button key={value} size="sm" variant={action === value ? 'ai' : 'secondary'} label={t(`workspace10.assist.${value}` as TranslationKey)} onPress={() => setAction(value)} />)}</ScrollView>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.xs }}>{WORKSPACE_ASSIST_ACTIONS.map((value) => <Button
+      key={value}
+      testID={`workspace-professor-action-${value}`}
+      size="sm"
+      variant={action === value ? 'ai' : 'secondary'}
+      label={t(`workspace10.assist.${value}` as TranslationKey)}
+      disabled={busy || Boolean(transitioningTo)}
+      onPress={() => {
+        setAction(value);
+        if (value === 'explain') void send({
+          action: value,
+          ...(message.trim()
+            ? { message: message.trim() }
+            : !selectedText.trim()
+              ? { message: t('workspace10.assist.explain') }
+              : {}),
+          ...(selectedText.trim() ? { selectedText: selectedText.trim() } : {}),
+        });
+      }}
+    />)}</ScrollView>
     {selectedText ? <Alert tone="info" title={t('workspace10.selection')} detail={selectedText.slice(0, 180)} /> : null}
     <ScrollView
       style={{ maxHeight: 360 }}
