@@ -1,6 +1,7 @@
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsDateString,
   IsIn,
   IsInt,
@@ -30,12 +31,14 @@ import type {
   WorkspaceExportRequest,
   WorkspaceFinalizeRequest,
   WorkspaceRestoreRequest,
+  WorkspaceAutopilotRequest,
 } from '@second-brain/shared';
 import {
   WORKSPACE_EXPORT_FORMATS,
   WORKSPACE_ASSIST_ACTIONS,
   WORKSPACE_PROFESSOR_PHASES,
   WORKSPACE_TEMPLATES,
+  WORKSPACE_AUTOPILOT_ACTIONS,
 } from '@second-brain/shared';
 
 export class CreateWorkspaceDto implements CreateWorkspaceRequest {
@@ -65,6 +68,23 @@ export class CreateWorkspaceDto implements CreateWorkspaceRequest {
 
   @IsOptional() @IsString() @MaxLength(200_000)
   initialContent?: string;
+
+  @IsOptional() @IsBoolean()
+  autopilotConsent?: boolean;
+}
+
+export class WorkspaceAutopilotDto implements WorkspaceAutopilotRequest {
+  @IsString() @MinLength(8) @MaxLength(128) @Matches(/^[A-Za-z0-9_-]+$/)
+  requestId!: string;
+
+  @IsInt() @Min(0)
+  expectedRevision!: number;
+
+  @IsIn(WORKSPACE_AUTOPILOT_ACTIONS)
+  action!: WorkspaceAutopilotRequest['action'];
+
+  @IsOptional() @IsBoolean()
+  consent?: boolean;
 }
 
 export class UpdateWorkspaceDto implements UpdateWorkspaceRequest {

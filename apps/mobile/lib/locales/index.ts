@@ -61,5 +61,6 @@ import './teaching-language-v1';
 import './workspace-capture-v1';
 import './workspace-orchestrator-v1';
 import './workspace-shells-v1';
+import './workspace-autopilot-v1';
 import './product-ux-v1';
 import './landing-v1';

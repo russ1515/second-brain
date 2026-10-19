@@ -3,6 +3,7 @@ import type { WorkspaceMessage, WorkspaceMode } from './document';
 import type { ExperienceContext } from './context';
 import type { WorkspaceToolState } from './workspace-tools';
 import type { WorkspaceCompletionState } from './workspace-completion';
+import type { WorkspaceAutopilotOutput, WorkspaceAutopilotState } from './workspace-autopilot';
 
 /** Target persistence contract. Lot 0 does not add a workspace database model. */
 export type WorkspaceProjectStatus = 'active' | 'paused' | 'completed' | 'archived';
@@ -277,6 +278,7 @@ export interface WorkspaceProgress {
     tools?: WorkspaceToolState;
     /** AW-8 snapshots and bounded idempotency metadata stored in existing JSON. */
     completion?: WorkspaceCompletionState;
+    autopilot?: WorkspaceAutopilotState;
   };
 }
 
@@ -375,6 +377,7 @@ export interface WorkspaceAssistantHistoryEntry extends WorkspaceMessage {
   requestFingerprint?: string;
   professorPhase?: WorkspaceProfessorPhase;
   professorPhaseSequence?: number;
+  autopilot?: { runId: string; output: WorkspaceAutopilotOutput };
 }
 
 export interface PersistentWorkspace {
@@ -431,6 +434,7 @@ export interface CreateWorkspaceRequest {
   plan?: WorkspacePlanItem[];
   brief?: WorkspaceBrief;
   initialContent?: string;
+  autopilotConsent?: boolean;
 }
 
 export interface UpdateWorkspaceRequest {

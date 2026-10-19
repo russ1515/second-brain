@@ -128,6 +128,7 @@ export default function WorkspaceHomeScreen() {
         title: title.trim(),
         template,
         objective: objective.trim(),
+        autopilotConsent: true,
         sources: sources.map(canonicalWorkspaceSource),
         plan: localizedPlan,
         brief: {
@@ -286,7 +287,8 @@ export default function WorkspaceHomeScreen() {
           </View>
           <Card style={{ gap: spacing.xs, backgroundColor: c.surfaceSunken }} testID="workspace-adaptive-plan"><Text style={[typography.label, { color: c.textPrimary }]}>{t('workspace10.structure')}</Text>{localizedPlan.map((item, index) => <Text key={item.id} style={[typography.bodySmall, { color: c.textSecondary }]}>{index + 1}. {item.title}</Text>)}</Card>
           <Alert tone="info" title={t('workspace10.integrity')} detail={t('workspace10.integrityDetail')} />
-          <Button testID="workspace-create-action" label={t('workspace10.createAction')} variant="ai" loading={busy} disabled={!title.trim() || !requiredBriefReady} onPress={() => void create()} />
+          <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('workspaceAutopilot.consent')}</Text>
+          <Button testID="workspace-create-action" label={t('workspaceAutopilot.start')} variant="ai" loading={busy} disabled={!title.trim() || !requiredBriefReady} onPress={() => void create()} />
         </Card> : null}
 
         <View style={{ width: manualOpen && desktop ? 420 : '100%', gap: spacing.md }}>

@@ -226,6 +226,9 @@ const teachingLanguageCatalogs = tupleCatalog(
 const workspaceCaptureCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'workspace-capture-v1.ts'), 'workspaceCaptureV1');
 const workspaceOrchestratorCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'workspace-orchestrator-v1.ts'), 'workspaceOrchestratorV1');
 const workspaceShellCatalogs = nestedCatalog(path.join(LOCALES_DIR, 'workspace-shells-v1.ts'), 'workspaceShellsV1');
+const workspaceAutopilotFile = path.join(LOCALES_DIR, 'workspace-autopilot-v1.ts');
+const workspaceAutopilotCatalogs = tupleCatalog(workspaceAutopilotFile, 'workspaceAutopilotTranslations', stringArray(workspaceAutopilotFile, 'workspaceAutopilotKeys'));
+const workspaceAutopilotAliases = catalog(workspaceAutopilotFile, 'workspaceAutopilotAliases');
 const productUxV1File = path.join(LOCALES_DIR, 'product-ux-v1.ts');
 const productUxV1Keys = stringArray(productUxV1File, 'productUxV1Keys');
 const productUxV1Catalogs = tupleCatalog(
@@ -261,6 +264,7 @@ const overlayFiles = new Set([
   'workspace-capture-v1.ts',
   'workspace-orchestrator-v1.ts',
   'workspace-shells-v1.ts',
+  'workspace-autopilot-v1.ts',
 ]);
 
 function registeredLocale(file) {
@@ -312,9 +316,15 @@ function effectiveCatalog(resource) {
     ...(workspaceCaptureCatalogs.get(code) ?? new Map()),
     ...(workspaceOrchestratorCatalogs.get(code) ?? new Map()),
     ...(workspaceShellCatalogs.get(code) ?? new Map()),
+    ...(workspaceAutopilotCatalogs.get(code) ?? new Map()),
     ...(productUxV1Catalogs.get(code) ?? new Map()),
     ...(landingV1Catalogs.get(code) ?? new Map()),
   ]);
+  for (const [key, sourceKey] of workspaceAutopilotAliases) {
+    const value = translations.get(sourceKey);
+    assert.ok(value, `${code} Autopilot alias source ${sourceKey} is missing`);
+    translations.set(key, value);
+  }
   for (const [key, sourceKey] of globalPathAliases) {
     const value = translations.get(sourceKey);
     assert.ok(value, `${code} alias source ${sourceKey} is missing`);

@@ -65,7 +65,7 @@ test('the six desktop experiences are distinct compositions of the same slots', 
   for (const kind of ['assignment', 'thesis', 'dissertation', 'article', 'report', 'general']) {
     assert.match(shell, new RegExp(`workspace-shell-desktop-${kind}`));
   }
-  assert.match(shell, /shellKind === 'assignment'[\s\S]*\{briefPanel\}\{sourcesPanel\}\{assistantPanel\}[\s\S]*\{editorPanel\}\{planPanel\}\{completionPanel\}/);
+  assert.match(shell, /shellKind === 'assignment'[\s\S]*\{briefPanel\}\{sourcesPanel\}\{planPanel\}\{completionPanel\}[\s\S]*\{editorPanel\}\{assistantPanel\}/);
   assert.match(shell, /shellKind === 'thesis'[\s\S]*\{planPanel\}\{briefPanel\}\{completionPanel\}[\s\S]*\{editorPanel\}\{assistantPanel\}[\s\S]*\{sourcesPanel\}/);
   assert.match(shell, /workspace-shell-desktop-general[\s\S]*\{briefPanel\}\{sourcesPanel\}\{planPanel\}\{completionPanel\}[\s\S]*\{editorPanel\}\{assistantPanel\}/);
 });

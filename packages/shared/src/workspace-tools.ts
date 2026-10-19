@@ -6,6 +6,7 @@ import type {
   WorkspaceSourceState,
 } from './workspace-persistence';
 import type { WorkspaceShellKind } from './workspace-orchestrator';
+import type { WorkspaceAutopilotOutput } from './workspace-autopilot';
 
 export const WORKSPACE_TOOL_OPERATION_TYPES = [
   'ANALYZE',
@@ -209,6 +210,7 @@ export interface WorkspaceToolProposal {
   provenance: WorkspaceToolProvenance;
   citations: WorkspaceSourceCitation[];
   createdAt: string;
+  autopilot?: { runId: string; output: WorkspaceAutopilotOutput };
 }
 
 export type WorkspaceToolOperationStatus = 'pending' | 'completed' | 'failed' | 'applied' | 'rejected';

@@ -20,8 +20,9 @@ test('Universal Capture exposes exactly the five authorized entry modes', () => 
   }
 });
 
-test('free text becomes initial Workspace content without a parallel text uploader', () => {
-  assert.match(component, /initialContent: initialContent\.trim\(\)/);
+test('free text becomes canonical instructions separate from the new Autopilot draft', () => {
+  assert.match(component, /autopilotConsent: true/);
+  assert.match(component, /userInstructions: initialContent\.trim\(\)/);
   assert.match(component, /mode === 'text' \|\| mode === 'voice'/);
   assert.doesNotMatch(component, /\/documents['"`]/);
 });

@@ -38,7 +38,7 @@ function applyData(row, data) {
   return row;
 }
 
-function createHarness() {
+function createHarness(options = {}) {
   const state = {
     workspaces: [],
     sessions: [],
@@ -52,6 +52,8 @@ function createHarness() {
     ],
     llmCalls: 0,
     llmMessages: [],
+    llmOptions: [],
+    llmResponder: options.llmResponder ?? null,
     llmResponse: 'Technical assistant response.',
     llmError: null,
     llmBarrier: null,
@@ -169,12 +171,13 @@ function createHarness() {
     },
   };
   const llm = {
-    generate: async (messages) => {
+    generate: async (messages, generateOptions) => {
       state.llmCalls += 1;
       state.llmMessages.push(structuredClone(messages));
+      state.llmOptions.push(structuredClone(generateOptions));
       if (state.llmBarrier) await state.llmBarrier;
       if (state.llmError) throw state.llmError;
-      return { text: state.llmResponse };
+      return { text: state.llmResponder ? await state.llmResponder(messages, generateOptions, state) : state.llmResponse };
     },
   };
   const sourceEngine = {
@@ -207,7 +210,9 @@ function createHarness() {
     },
   };
   return {
-    service: new AcademicWorkspaceService(prisma, llm, sourceEngine),
+    service: new AcademicWorkspaceService(prisma, llm, sourceEngine, undefined, {
+      get: (key) => options.config?.[key],
+    }),
     state,
     prisma,
     llm,
@@ -1277,4 +1282,466 @@ test('AW-5 Workspace Professor never performs an automatic paid provider retry',
   const policy = service.policy('workspace-assistant', 'openai');
   assert.equal(policy.retries, 0);
   assert.equal(policy.backoffMs, 0);
+});
+
+function autopilotState(workspace) {
+  return workspace.progress.workflow.autopilot;
+}
+
+function autopilotReply(_messages, _options, state) {
+  const row = state.workspaces.at(-1);
+  const phase = row.progress.workflow.professor.currentPhase;
+  const output = { text: `Verified technical ${phase.toLowerCase()} explanation.` };
+  if (phase === 'COMPREHENSION') {
+    output.briefFields = {
+      subject: 'Kinetic and potential energy',
+      requirements: 'Explain formulas and compute the kinetic energy of 2 kg at 5 m/s.',
+    };
+  }
+  if (phase === 'METHOD') {
+    output.plan = [
+      { title: 'Define kinetic and potential energy', stepId: 'drafting' },
+      { title: 'Calculate and verify kinetic energy', stepId: 'drafting' },
+      { title: 'State the conclusion and missing height', stepId: 'drafting' },
+    ];
+  }
+  if (phase === 'WORK' || phase === 'COACHING') {
+    output.draft = 'Kinetic energy: E = 1/2 mv² = 1/2 × 2 × 5² = 25 J. '
+      + 'Potential energy is mgh; height is not supplied, so no numerical value is asserted. '
+      + 'The method is to identify units, substitute values, and verify the conclusion.';
+  }
+  if (phase === 'VERIFICATION') output.checkedPlanItemIds = row.plan.map((item) => item.id);
+  if (phase === 'FINALIZATION') output.deconstruction = 'We identified the formula, substituted measured inputs, verified 25 J, and kept the unavailable height explicit.';
+  return JSON.stringify(output);
+}
+
+async function autopilotCommand(service, workspace, action, suffix, extra = {}) {
+  return service.autopilot('owner', workspace.id, {
+    requestId: `autopilot-test-${suffix}`,
+    expectedRevision: workspace.autosaveRevision,
+    action,
+    ...extra,
+  });
+}
+
+async function autopilotFixture(options = {}, overrides = {}) {
+  const harness = createHarness({ llmResponder: autopilotReply, ...options });
+  const workspace = await harness.service.create('owner', request({
+    requestId: `autopilot-create-${overrides.template ?? 'assignment'}`,
+    objective: '',
+    brief: { version: 1, fields: {
+      subject: 'University physics',
+      requirements: 'Explain kinetic/potential energy, formulas, the 2 kg / 5 m/s calculation, method and conclusion.',
+    } },
+    ...overrides,
+  }));
+  return { ...harness, workspace };
+}
+
+test('Autopilot requires one consent, preserves the capture and completes the authoritative five-call cycle', async () => {
+  const { service, state, workspace: created } = await autopilotFixture({}, {
+    brief: { version: 1, fields: {
+      subject: 'University physics',
+      requirements: 'Explain the formulas and calculate kinetic energy for 2 kg at 5 m/s.',
+      userInstructions: 'Original captured instructions must never be erased.',
+    } },
+  });
+  assert.equal(autopilotState(created).status, 'IDLE');
+  await assert.rejects(autopilotCommand(service, created, 'start', 'without-consent'), (error) => httpStatus(error) === 400);
+  let workspace = await autopilotCommand(service, created, 'start', 'consented', { consent: true });
+  assert.equal(autopilotState(workspace).status, 'RUNNING');
+  assert.equal(state.llmCalls, 0);
+  const phases = ['METHOD', 'WORK', 'VERIFICATION', 'FINALIZATION', 'DECONSTRUCTION'];
+  for (const [index, phase] of phases.entries()) {
+    workspace = await autopilotCommand(service, workspace, 'step', `happy-${index}`);
+    assert.equal(workspace.professor.currentPhase, phase, JSON.stringify(autopilotState(workspace)));
+  }
+  assert.equal(state.llmCalls, 5);
+  assert.equal(autopilotState(workspace).aiSteps, 5);
+  assert.equal(autopilotState(workspace).status, 'COMPLETED');
+  assert.equal(workspace.status, 'completed');
+  assert.match(workspace.draft.content, /25 J/);
+  assert.equal(workspace.brief.fields.userInstructions, 'Original captured instructions must never be erased.');
+  assert.equal(workspace.professor.transitions.length, 6);
+  assert.equal(workspace.completion.snapshots.at(-1).draft.content, workspace.draft.content);
+  assert.equal(state.llmOptions.every((option) => option.operation === 'workspace-assistant'), true);
+  assert.ok(state.llmMessages.every((messages) => messages[0].content.includes('explicitly consented')));
+});
+
+test('Autopilot metadata is resumable across a new service instance without resetting counters or phase', async () => {
+  const { service, state, prisma, llm, sourceEngine, workspace: created } = await autopilotFixture();
+  let workspace = await autopilotCommand(service, created, 'start', 'resume-start', { consent: true });
+  workspace = await autopilotCommand(service, workspace, 'step', 'resume-first');
+  workspace = await autopilotCommand(service, workspace, 'pause', 'resume-pause');
+  const reconnected = new AcademicWorkspaceService(prisma, llm, sourceEngine);
+  const restored = await reconnected.get('owner', workspace.id);
+  assert.equal(restored.professor.currentPhase, 'METHOD');
+  assert.equal(autopilotState(restored).aiSteps, 1);
+  assert.equal(autopilotState(restored).status, 'PAUSED');
+  workspace = await autopilotCommand(reconnected, restored, 'resume', 'resume-command');
+  workspace = await autopilotCommand(reconnected, workspace, 'step', 'resume-next');
+  assert.equal(workspace.professor.currentPhase, 'WORK');
+  assert.equal(autopilotState(workspace).aiSteps, 2);
+  assert.equal(state.llmCalls, 2);
+});
+
+test('Autopilot rejects foreign ownership, stale commands and missing consent before any paid step', async () => {
+  const { service, state, workspace } = await autopilotFixture();
+  await assert.rejects(service.autopilot('intruder', workspace.id, {
+    requestId: 'autopilot-foreign-command', expectedRevision: workspace.autosaveRevision, action: 'start', consent: true,
+  }), (error) => httpStatus(error) === 404);
+  await assert.rejects(service.autopilot('owner', workspace.id, {
+    requestId: 'autopilot-stale-command', expectedRevision: 99, action: 'start', consent: true,
+  }), (error) => httpStatus(error) === 409);
+  await assert.rejects(autopilotCommand(service, workspace, 'step', 'unconsented-step'), (error) => httpStatus(error) === 409);
+  assert.equal(state.llmCalls, 0);
+  assert.equal(state.sourceCalls, 0);
+});
+
+test('Autopilot concurrent retry and completed replay never duplicate a provider call or transition', async () => {
+  const { service, state, workspace: created } = await autopilotFixture();
+  const workspace = await autopilotCommand(service, created, 'start', 'race-start', { consent: true });
+  let release;
+  state.llmBarrier = new Promise((resolve) => { release = resolve; });
+  const payload = { requestId: 'autopilot-concurrent-step', expectedRevision: workspace.autosaveRevision, action: 'step' };
+  const first = service.autopilot('owner', workspace.id, payload);
+  while (state.llmCalls === 0) await new Promise((resolve) => setImmediate(resolve));
+  await service.autopilot('owner', workspace.id, payload);
+  await autopilotCommand(service, await service.get('owner', workspace.id), 'step', 'competing-step');
+  assert.equal(state.llmCalls, 1);
+  release();
+  const completed = await first;
+  const transitions = completed.professor.transitions.length;
+  await service.autopilot('owner', workspace.id, payload);
+  const persisted = await service.get('owner', workspace.id);
+  assert.equal(state.llmCalls, 1);
+  assert.equal(persisted.professor.transitions.length, transitions);
+  assert.equal(autopilotState(persisted).aiSteps, 1);
+});
+
+test('Autopilot pause during a provider call prevents its mutation and next transition', async () => {
+  const { service, state, workspace: created } = await autopilotFixture();
+  let workspace = await autopilotCommand(service, created, 'start', 'pause-start', { consent: true });
+  let release;
+  state.llmBarrier = new Promise((resolve) => { release = resolve; });
+  const pending = autopilotCommand(service, workspace, 'step', 'pause-running-step');
+  while (state.llmCalls === 0) await new Promise((resolve) => setImmediate(resolve));
+  workspace = await service.get('owner', workspace.id);
+  await autopilotCommand(service, workspace, 'pause', 'pause-during-provider');
+  release();
+  await pending;
+  const stopped = await service.get('owner', workspace.id);
+  assert.equal(autopilotState(stopped).status, 'PAUSED');
+  assert.equal(stopped.professor.currentPhase, 'COMPREHENSION');
+  assert.equal(stopped.draft.content, '');
+  assert.equal(state.llmCalls, 1);
+});
+
+test('Autopilot provider failure and invalid structured output pause safely without automatic replay', async () => {
+  for (const invalidOutput of [false, true]) {
+    const { service, state, workspace: created } = await autopilotFixture();
+    let workspace = await autopilotCommand(service, created, 'start', `error-start-${invalidOutput}`, { consent: true });
+    if (invalidOutput) state.llmResponder = () => 'Unverified non-JSON provider output';
+    else state.llmError = new Error('TECHNICAL_PROVIDER_FAILURE');
+    const payload = { requestId: `autopilot-failed-${invalidOutput}`, expectedRevision: workspace.autosaveRevision, action: 'step' };
+    workspace = await service.autopilot('owner', workspace.id, payload);
+    assert.equal(autopilotState(workspace).status, 'PAUSED_ERROR');
+    assert.equal(workspace.professor.currentPhase, 'COMPREHENSION');
+    assert.equal(workspace.draft.content, '');
+    assert.equal(workspace.professor.evidence.length, 0);
+    await service.autopilot('owner', workspace.id, payload);
+    assert.equal(state.llmCalls, 1);
+    assert.equal(autopilotState(workspace).aiSteps, 1);
+  }
+});
+
+test('Autopilot enforces its durable configured step limit before provider and resume cannot reset it', async () => {
+  const { service, state, workspace: created } = await autopilotFixture({ config: { WORKSPACE_AUTOPILOT_MAX_AI_STEPS: 1 } });
+  let workspace = await autopilotCommand(service, created, 'start', 'cap-start', { consent: true });
+  workspace = await autopilotCommand(service, workspace, 'step', 'cap-one');
+  workspace = await autopilotCommand(service, workspace, 'step', 'cap-two');
+  assert.equal(autopilotState(workspace).status, 'NEEDS_INPUT');
+  assert.equal(autopilotState(workspace).errorCode, 'STOP_AUTOPILOT_REVIEW_REQUIRED');
+  assert.equal(autopilotState(workspace).aiSteps, 1);
+  assert.equal(state.llmCalls, 1);
+  await assert.rejects(autopilotCommand(service, workspace, 'resume', 'cap-resume'), (error) => httpStatus(error) === 409);
+  assert.equal(state.llmCalls, 1);
+});
+
+test('Autopilot missing attached source asks once, performs no provider call and records no fabricated evidence', async () => {
+  const { service, state, workspace: created } = await autopilotFixture({}, {
+    sources: [{ kind: 'document', id: 'document-owner' }],
+  });
+  let workspace = await autopilotCommand(service, created, 'start', 'source-start', { consent: true });
+  workspace = await autopilotCommand(service, workspace, 'step', 'source-missing');
+  assert.equal(autopilotState(workspace).status, 'NEEDS_INPUT');
+  assert.equal(state.llmCalls, 0);
+  assert.equal(workspace.professor.evidence.length, 0);
+  assert.equal(workspace.professor.currentPhase, 'COMPREHENSION');
+  assert.equal(workspace.draft.content, '');
+});
+
+test('Autopilot preserves AW-6 citation validation and source ownership for automatic steps', async () => {
+  const { service, state, workspace: created } = await autopilotFixture({}, {
+    sources: [{ kind: 'document', id: 'document-owner' }],
+  });
+  state.sourceResolution = {
+    query: 'technical source', usedContext: true, context: 'Owned technical passage [W1].',
+    citations: [{ sourceKind: 'document', sourceId: 'document-owner', documentId: 'document-owner', documentTitle: 'Owned document', citationLabel: 'W1', chunkIndex: 0, content: 'Owned technical passage.' }],
+    sources: [{ kind: 'document', id: 'document-owner', title: 'Owned document', availability: 'available' }],
+  };
+  const responder = state.llmResponder;
+  state.llmResponder = (...args) => {
+    const output = { ...JSON.parse(responder(...args)), text: 'Verified [W1], invented [W99].' };
+    if (output.draft) output.draft += ' Valid source [W1], invented source [W99].';
+    return JSON.stringify(output);
+  };
+  let workspace = await autopilotCommand(service, created, 'start', 'grounded-start', { consent: true });
+  workspace = await autopilotCommand(service, workspace, 'step', 'grounded-step');
+  const reply = workspace.assistantHistory.find((entry) => entry.role === 'assistant');
+  assert.match(reply.content, /\[W1\]/);
+  assert.doesNotMatch(reply.content, /W99/);
+  assert.deepEqual(reply.citations.map((citation) => citation.documentId), ['document-owner']);
+  assert.equal(state.llmCalls, 1);
+  workspace = await autopilotCommand(service, workspace, 'step', 'grounded-method');
+  workspace = await autopilotCommand(service, workspace, 'step', 'grounded-work');
+  assert.match(workspace.draft.content, /\[W1\]/);
+  assert.doesNotMatch(workspace.draft.content, /W99/);
+  assert.equal(state.llmCalls, 3);
+});
+
+test('Autopilot correction loops stop for review rather than repeatedly coaching the same failure', async () => {
+  const { service, state, workspace: created } = await autopilotFixture({ config: { WORKSPACE_AUTOPILOT_MAX_CORRECTION_LOOPS: 1 } });
+  const responder = state.llmResponder;
+  state.llmResponder = (...args) => {
+    const output = JSON.parse(responder(...args));
+    if (state.workspaces[0].progress.workflow.professor.currentPhase === 'VERIFICATION') output.issues = ['A real unresolved issue remains.'];
+    return JSON.stringify(output);
+  };
+  let workspace = await autopilotCommand(service, created, 'start', 'loop-start', { consent: true });
+  for (let step = 0; step < 6 && autopilotState(workspace).status === 'RUNNING'; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `loop-${step}`);
+  assert.equal(autopilotState(workspace).status, 'NEEDS_INPUT', JSON.stringify(autopilotState(workspace)));
+  assert.equal(autopilotState(workspace).errorCode, 'STOP_AUTOPILOT_REVIEW_REQUIRED');
+  assert.equal(autopilotState(workspace).correctionLoops, 1);
+  assert.equal(state.llmCalls, 6);
+  assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
+});
+
+test('Autopilot draft contribution has revision-checked undo and cannot erase a later user edit', async () => {
+  const { service, workspace: created } = await autopilotFixture({}, { initialContent: 'Original learner text.' });
+  let workspace = await autopilotCommand(service, created, 'start', 'undo-start', { consent: true });
+  for (let step = 0; step < 3; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `undo-${step}`);
+  assert.match(workspace.draft.content, /25 J/);
+  workspace = await autopilotCommand(service, workspace, 'pause', 'undo-pause');
+  const appliedRevision = workspace.autosaveRevision;
+  workspace = await autopilotCommand(service, workspace, 'undo', 'undo-once');
+  assert.equal(workspace.draft.content, 'Original learner text.');
+  assert.equal(workspace.autosaveRevision, appliedRevision + 1);
+  assert.equal(autopilotState(workspace).status, 'PAUSED');
+  assert.equal(autopilotState(workspace).undo, undefined);
+  await assert.rejects(autopilotCommand(service, workspace, 'undo', 'undo-again'), (error) => httpStatus(error) === 409);
+
+  const second = await autopilotFixture({}, { initialContent: 'Original second learner text.' });
+  let stale = await autopilotCommand(second.service, second.workspace, 'start', 'undo-stale-start', { consent: true });
+  for (let step = 0; step < 3; step += 1) stale = await autopilotCommand(second.service, stale, 'step', `undo-stale-${step}`);
+  stale = await autopilotCommand(second.service, stale, 'pause', 'undo-stale-pause');
+  await second.service.autosave('owner', stale.id, { workspaceId: stale.id, expectedRevision: stale.autosaveRevision, draft: { format: 'markdown', content: 'Newer user edit must remain.' } });
+  stale = await second.service.get('owner', stale.id);
+  await assert.rejects(autopilotCommand(second.service, stale, 'undo', 'undo-stale-refused'), (error) => httpStatus(error) === 409);
+  assert.equal((await second.service.get('owner', stale.id)).draft.content, 'Newer user edit must remain.');
+});
+
+test('Autopilot routes six shells through the existing Professor while keeping explicit user and institution instructions', async () => {
+  for (const template of ['assignment', 'memoire', 'dissertation', 'article', 'report', 'other']) {
+    const { service, state, workspace: created } = await autopilotFixture({}, {
+      template,
+      brief: { version: 1, fields: { subject: 'Physics', requirements: 'Keep my explicit institution instructions.', userInstructions: 'Never invent observations.' } },
+    });
+    let workspace = await autopilotCommand(service, created, 'start', `shell-${template}`, { consent: true });
+    for (let step = 0; step < 3; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `shell-${template}-${step}`);
+    assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
+    assert.equal(state.llmCalls, 3);
+    assert.equal(workspace.brief.fields.requirements, 'Keep my explicit institution instructions.');
+    assert.equal(workspace.brief.fields.userInstructions, 'Never invent observations.');
+    assert.ok(state.llmMessages.every((messages) => messages[0].content.includes('existing Professor')));
+  }
+});
+
+test('Autopilot can pause for a manual question then resume without replacing the manual action contract', async () => {
+  const { service, state, workspace: created } = await autopilotFixture();
+  let workspace = await autopilotCommand(service, created, 'start', 'question-start', { consent: true });
+  workspace = await autopilotCommand(service, workspace, 'step', 'question-first');
+  workspace = await autopilotCommand(service, workspace, 'pause', 'question-pause');
+  state.llmResponder = null;
+  state.llmResponse = 'A real stubbed manual explanation for this deterministic test.';
+  const answer = await service.assist('owner', workspace.id, {
+    requestId: 'autopilot-manual-question', expectedPhase: 'METHOD', expectedRevision: workspace.autosaveRevision,
+    action: 'explain', message: 'Why this method?',
+  });
+  assert.equal(answer.reply.content, state.llmResponse);
+  workspace = await service.get('owner', workspace.id);
+  assert.equal(autopilotState(workspace).status, 'PAUSED');
+  workspace = await autopilotCommand(service, workspace, 'resume', 'question-resume');
+  assert.equal(autopilotState(workspace).status, 'RUNNING');
+  assert.equal(state.llmCalls, 2);
+});
+
+test('Autopilot separates captured homework instructions from the editable answer without duplicating the capture', async () => {
+  const { service, state } = createHarness({ llmResponder: autopilotReply });
+  const instruction = 'Explain the energy formulas and calculate 2 kg moving at 5 m/s.';
+  const workspace = await service.create('owner', request({
+    requestId: 'autopilot-capture-separation', initialContent: instruction, autopilotConsent: true,
+  }));
+  assert.equal(autopilotState(workspace).status, 'RUNNING');
+  assert.equal(workspace.draft.content, '');
+  assert.equal(workspace.brief.fields.userInstructions, instruction);
+  assert.equal(state.llmCalls, 0);
+});
+
+test('Autopilot verification refuses invented plan IDs and cannot manufacture completion flags', async () => {
+  const { service, state, workspace: created } = await autopilotFixture();
+  let workspace = await autopilotCommand(service, created, 'start', 'bad-ids-start', { consent: true });
+  for (let step = 0; step < 3; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `bad-ids-${step}`);
+  state.llmResponder = () => JSON.stringify({ text: 'Invalid verification result', checkedPlanItemIds: ['not-a-real-plan-id'] });
+  workspace = await autopilotCommand(service, workspace, 'step', 'bad-ids-verify');
+  assert.equal(autopilotState(workspace).status, 'PAUSED_ERROR');
+  assert.equal(autopilotState(workspace).errorCode, 'workspace_autopilot_invalid_verification');
+  assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
+  assert.equal(workspace.plan.some((item) => item.completed), false);
+  assert.equal(workspace.status, 'active');
+  assert.equal(state.llmCalls, 4);
+});
+
+test('Autopilot missing verified plan work stays unfinished instead of filling completion flags', async () => {
+  const { service, state, workspace: created } = await autopilotFixture({ config: { WORKSPACE_AUTOPILOT_MAX_CORRECTION_LOOPS: 0 } });
+  let workspace = await autopilotCommand(service, created, 'start', 'incomplete-start', { consent: true });
+  for (let step = 0; step < 3; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `incomplete-${step}`);
+  const verifiedId = workspace.plan[0].id;
+  state.llmResponder = () => JSON.stringify({ text: 'Only the first section was verified.', checkedPlanItemIds: [verifiedId], issues: ['Remaining sections are absent.'] });
+  workspace = await autopilotCommand(service, workspace, 'step', 'incomplete-verify');
+  assert.equal(autopilotState(workspace).status, 'NEEDS_INPUT');
+  assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
+  assert.equal(workspace.plan.filter((item) => item.completed).length, 1);
+  assert.equal(workspace.status, 'active');
+  assert.equal(workspace.completion.snapshots.length, 0);
+});
+
+test('Autopilot undo survives its own verification revision but invalidates all derived verification', async () => {
+  const { service, workspace: created } = await autopilotFixture({}, { initialContent: 'Prior learner answer.' });
+  let workspace = await autopilotCommand(service, created, 'start', 'verify-undo-start', { consent: true });
+  for (let step = 0; step < 4; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `verify-undo-${step}`);
+  assert.equal(workspace.professor.currentPhase, 'FINALIZATION');
+  assert.ok(workspace.plan.every((item) => item.completed));
+  workspace = await autopilotCommand(service, workspace, 'pause', 'verify-undo-pause');
+  workspace = await autopilotCommand(service, workspace, 'undo', 'verify-undo-restore');
+  assert.equal(workspace.draft.content, 'Prior learner answer.');
+  assert.equal(workspace.plan.some((item) => item.completed), false);
+  assert.equal(workspace.status, 'active');
+  assert.equal(workspace.completion.snapshots.length, 0);
+  await assert.rejects(service.finalize('owner', workspace.id, {
+    requestId: 'autopilot-undo-cannot-finalize', expectedRevision: workspace.autosaveRevision,
+  }), (error) => httpStatus(error) === 400);
+});
+
+test('Autopilot completed snapshot stays immutable when the learner explicitly continues editing', async () => {
+  const { service, workspace: created } = await autopilotFixture();
+  let workspace = await autopilotCommand(service, created, 'start', 'snapshot-start', { consent: true });
+  for (let step = 0; step < 5; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `snapshot-${step}`);
+  const snapshot = structuredClone(workspace.completion.snapshots.at(-1));
+  workspace = await service.update('owner', workspace.id, { status: 'active', expectedRevision: workspace.autosaveRevision });
+  assert.equal(workspace.professor.currentPhase, 'WORK');
+  assert.equal(workspace.status, 'active');
+  await service.autosave('owner', workspace.id, {
+    workspaceId: workspace.id, expectedRevision: workspace.autosaveRevision,
+    draft: { format: 'markdown', content: `${workspace.draft.content}\n\nLearner follow-up.` },
+  });
+  workspace = await service.get('owner', workspace.id);
+  assert.deepEqual(workspace.completion.snapshots.at(-1), snapshot);
+  assert.equal(autopilotState(workspace).aiSteps, 5);
+});
+
+test('Autopilot stale pending state is shown as a safe pause after reload without replaying the provider', async () => {
+  const { service, state, workspace: created } = await autopilotFixture();
+  let workspace = await autopilotCommand(service, created, 'start', 'stale-start', { consent: true });
+  const stored = state.workspaces[0].progress.workflow.autopilot;
+  stored.activeRequest = {
+    requestId: 'autopilot-stale-operation', status: 'pending', phase: 'CAPTURE', revision: workspace.autosaveRevision,
+    createdAt: new Date(Date.now() - 180_000).toISOString(),
+  };
+  stored.aiSteps = 1;
+  workspace = await service.get('owner', workspace.id);
+  assert.equal(autopilotState(workspace).status, 'PAUSED_ERROR');
+  assert.equal(autopilotState(workspace).activeRequest, undefined);
+  assert.equal(autopilotState(workspace).aiSteps, 1);
+  assert.equal(state.llmCalls, 0);
+});
+
+test('Autopilot resumes a paid result retained during pause exactly once without another call or draft append', async () => {
+  const { service, state, workspace: created } = await autopilotFixture();
+  let workspace = await autopilotCommand(service, created, 'start', 'pending-result-start', { consent: true });
+  for (let step = 0; step < 2; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `pending-result-${step}`);
+  assert.equal(workspace.professor.currentPhase, 'WORK');
+  let release;
+  state.llmBarrier = new Promise((resolve) => { release = resolve; });
+  const pending = autopilotCommand(service, workspace, 'step', 'pending-result-work');
+  while (state.llmCalls < 3) await new Promise((resolve) => setImmediate(resolve));
+  workspace = await service.get('owner', workspace.id);
+  await autopilotCommand(service, workspace, 'pause', 'pending-result-pause');
+  release();
+  await pending;
+  workspace = await service.get('owner', workspace.id);
+  assert.equal(autopilotState(workspace).status, 'PAUSED');
+  assert.equal(workspace.draft.content, '');
+  assert.ok(autopilotState(workspace).pendingResult, 'Paid result must be saved for continuation');
+  const consumed = autopilotState(workspace).aiSteps;
+  state.llmBarrier = null;
+  workspace = await autopilotCommand(service, workspace, 'resume', 'pending-result-resume');
+  const payload = { requestId: 'autopilot-pending-result-apply', expectedRevision: workspace.autosaveRevision, action: 'step' };
+  workspace = await service.autopilot('owner', workspace.id, payload);
+  assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
+  assert.equal(state.llmCalls, 3);
+  assert.equal(autopilotState(workspace).aiSteps, consumed);
+  const saved = workspace.draft.content;
+  await service.autopilot('owner', workspace.id, payload);
+  assert.equal((await service.get('owner', workspace.id)).draft.content, saved);
+  assert.equal((saved.match(/Kinetic energy:/g) ?? []).length, 1);
+  assert.equal(state.llmCalls, 3);
+});
+
+test('Autopilot long-form work cannot mark a whole thesis or article complete from one generated section', async () => {
+  for (const template of ['memoire', 'tfc', 'article', 'academic-research']) {
+    const { service, state, workspace: created } = await autopilotFixture({}, {
+      template,
+      brief: { version: 1, fields: {
+        subject: 'Energy', researchQuestion: 'How does kinetic energy depend on velocity?',
+        methodology: 'Analyze the supplied formulas and state evidential limits.',
+        requirements: 'Work section by section without inventing research results.',
+        deliverable: 'A sectioned technical review',
+      } },
+    });
+    let workspace = await autopilotCommand(service, created, 'start', `longform-${template}`, { consent: true });
+    const originalPlanLength = workspace.plan.length;
+    for (let step = 0; step < 4; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `longform-${template}-${step}`);
+    assert.equal(state.llmCalls, 4);
+    assert.equal(workspace.plan.length, originalPlanLength, 'The full long-form structure must be preserved');
+    assert.equal(workspace.plan.filter((item) => item.completed).length, 1, 'Only the server-selected section can be validated');
+    assert.equal(workspace.status, 'active');
+    assert.equal(workspace.completion.snapshots.length, 0);
+    assert.notEqual(workspace.professor.currentPhase, 'FINALIZATION');
+    assert.notEqual(autopilotState(workspace).status, 'COMPLETED');
+  }
+});
+
+test('Autopilot bounds the complete provider prompt before spending and preserves the draft on a byte limit', async () => {
+  const { service, state, workspace: created } = await autopilotFixture({ config: { WORKSPACE_AUTOPILOT_MAX_PROMPT_BYTES: 2_000 } }, {
+    brief: { version: 1, fields: { subject: 'Physics', requirements: 'A'.repeat(6_000) } },
+  });
+  let workspace = await autopilotCommand(service, created, 'start', 'bytes-start', { consent: true });
+  workspace = await autopilotCommand(service, workspace, 'step', 'bytes-step');
+  assert.ok(['NEEDS_INPUT', 'PAUSED_ERROR'].includes(autopilotState(workspace).status));
+  assert.equal(autopilotState(workspace).errorCode, 'STOP_AUTOPILOT_REVIEW_REQUIRED');
+  assert.equal(state.llmCalls, 0);
+  assert.equal(workspace.professor.currentPhase, 'COMPREHENSION');
+  assert.equal(workspace.professor.evidence.length, 0);
+  assert.equal(workspace.draft.content, '');
 });

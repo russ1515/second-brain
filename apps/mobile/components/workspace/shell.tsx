@@ -137,8 +137,8 @@ function renderDesktopShell({
 
   if (shellKind === 'assignment') {
     return <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing }} testID="workspace-shell-desktop-assignment">
-      <View style={{ width: 380, gap: spacing }}>{briefPanel}{sourcesPanel}{assistantPanel}</View>
-      <View style={{ flex: 1, minWidth: 0, gap: spacing }}>{editorPanel}{planPanel}{completionPanel}</View>
+      <View style={{ width: 380, gap: spacing }}>{briefPanel}{sourcesPanel}{planPanel}{completionPanel}</View>
+      <View style={{ flex: 1, minWidth: 0, gap: spacing }}>{editorPanel}{assistantPanel}</View>
     </View>;
   }
 

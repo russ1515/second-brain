@@ -618,7 +618,8 @@ export function WorkspaceUniversalCapture({
         template: selectedTemplate,
         objective: objective.trim(),
         sources: sources.map(canonicalWorkspaceSource),
-        ...(initialContent.trim() ? { initialContent: initialContent.trim() } : {}),
+        autopilotConsent: true,
+        ...(initialContent.trim() ? { brief: { version: 1 as const, fields: { userInstructions: initialContent.trim() } } } : {}),
       };
       const signature = workspaceCaptureSignature(JSON.stringify(body));
       const request = pendingCreate?.signature === signature
@@ -837,7 +838,8 @@ export function WorkspaceUniversalCapture({
       <Input testID="workspace-capture-title" label={t('workspace10.field.title')} value={title} onChangeText={(value) => { setTitle(value); setTitleEdited(true); }} placeholder={t('workspace10.field.titlePlaceholder')} editable={hydrated && !busy && !creationFrozen} />
       <Input testID="workspace-capture-objective" label={t('workspace10.field.objective')} value={objective} onChangeText={setObjective} placeholder={t('workspace10.field.objectivePlaceholder')} editable={hydrated && !busy && !creationFrozen} multiline />
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
-        <Button testID="workspace-orchestrator-continue" label={t('onb.continue')} variant="ai" loading={busy} disabled={!hydrated || !title.trim() || busy} onPress={() => void createWorkspace(template)} />
+        <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{t('workspaceAutopilot.consent')}</Text>
+        <Button testID="workspace-orchestrator-continue" label={t('workspaceAutopilot.start')} variant="ai" loading={busy} disabled={!hydrated || !title.trim() || busy} onPress={() => void createWorkspace(template)} />
         <Button testID="workspace-orchestrator-modify" label={t('onb.edit')} variant="secondary" disabled={busy || creationFrozen} onPress={() => setChangingClassification((value) => !value)} />
       </View>
       {changingClassification ? <View accessibilityRole="radiogroup" style={{ gap: spacing.xs }} testID="workspace-orchestrator-families">

@@ -15,6 +15,7 @@ import {
   type WorkspaceProfessorState,
   type WorkspaceProfessorTransitionRequest,
   type WorkspaceProfessorTransitionResponse,
+  type WorkspaceAutopilotRequest,
   type WorkspaceSaveState,
   type WorkspaceSourceReference,
   type WorkspaceSourceState,
@@ -34,6 +35,7 @@ import { Page } from '../../../components/ds/layout';
 import { SourceCitation, SourcePreview } from '../../../components/ds/sources';
 import { SmartErrorState, SmartLoadingState } from '../../../components/ds/states';
 import { WorkspaceAssistant } from '../../../components/workspace/assistant';
+import { WorkspaceAutopilot } from '../../../components/workspace/autopilot';
 import { WorkspaceCompletion } from '../../../components/workspace/completion';
 import { WorkspaceShell, type WorkspaceShellArea } from '../../../components/workspace/shell';
 import type {
@@ -70,6 +72,8 @@ export default function AcademicWorkspaceScreen() {
   const [sourceStates, setSourceStates] = useState<WorkspaceSourceState[]>([]);
   const [sourcePickerLoaded, setSourcePickerLoaded] = useState(false);
   const [assistantUndo, setAssistantUndo] = useState<string | null>(null);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [briefEditRequest, setBriefEditRequest] = useState(0);
   const [conflictDraft, setConflictDraft] = useState<WorkspaceConflictDraft | null>(null);
   const [showConflictDraft, setShowConflictDraft] = useState(false);
   const [completionLocked, setCompletionLocked] = useState(false);
@@ -464,6 +468,55 @@ export default function AcademicWorkspaceScreen() {
     await refreshProfessorState();
   };
 
+  const prepareAutopilotCommand = async (action: WorkspaceAutopilotRequest['action']): Promise<number | null> => {
+    // Pause/stop must remain possible while a provider step is in progress.
+    if (action === 'pause' || action === 'stop') return revisionRef.current;
+    await saveQueueRef.current;
+    if (conflictActiveRef.current || completionLockRef.current) return null;
+    const pending = contentRef.current;
+    if (pending !== lastSavedRef.current && !await save(pending)) return null;
+    if (contentRef.current !== lastSavedRef.current) return null;
+    return revisionRef.current;
+  };
+
+  const applyAutopilotWorkspace = (next: PersistentWorkspace): boolean => {
+    if (!workspace || next.id !== workspace.id) return false;
+    if (next.autosaveRevision < revisionRef.current) return false;
+    const localDraft = contentRef.current;
+    if (localDraft !== lastSavedRef.current || conflictActiveRef.current) {
+      if (!conflictActiveRef.current && next.draft.content === lastSavedRef.current) {
+        // The server changed only workflow/plan metadata. Keep the learner's
+        // pending text and allow its existing autosave to use the current CAS
+        // token; no conflict exists between two drafts in this case.
+        revisionRef.current = next.autosaveRevision;
+        setWorkspace(next);
+        setSaveState('dirty');
+        return false;
+      }
+      // A keypress made during an automatic step always remains recoverable.
+      // The canonical result may be read, but it cannot overwrite newer typing.
+      conflictActiveRef.current = true;
+      setConflictDraft({ content: localDraft, serverReloaded: false, copyState: 'idle' });
+      setShowConflictDraft(false);
+      setSaveState('error');
+      setWorkspace((current) => current ? {
+        ...next,
+        draft: current.draft,
+        autosaveRevision: current.autosaveRevision,
+      } : current);
+      return false;
+    }
+    if (timerRef.current) clearTimeout(timerRef.current);
+    revisionRef.current = next.autosaveRevision;
+    lastSavedRef.current = next.draft.content;
+    contentRef.current = next.draft.content;
+    setContent(next.draft.content);
+    setWorkspace(next);
+    setSaveState('saved');
+    setError(null);
+    return true;
+  };
+
   const transitionProfessor = async (requestedPhase: WorkspaceProfessorPhase) => {
     if (!workspace) return;
     const pendingDraft = contentRef.current;
@@ -569,7 +622,7 @@ export default function AcademicWorkspaceScreen() {
     draftContent: content,
   });
   const workspaceReadOnly = completionLocked || workspace.status === 'archived' || workspace.status === 'completed';
-  const briefPanel = <BriefPanel workspace={workspace} readOnly={workspaceReadOnly} onUpdate={(brief) => patchWorkspace({ brief })} />;
+  const briefPanel = <BriefPanel workspace={workspace} readOnly={workspaceReadOnly} editRequest={briefEditRequest} onUpdate={(brief) => patchWorkspace({ brief })} />;
   const planPanel = <PlanPanel workspace={workspace} readOnly={workspaceReadOnly} onUpdate={updatePlan} onMove={movePlan} onRemove={removePlanItem} onAdd={addPlanItem} />;
   const completionPanel = <WorkspaceCompletion
     workspaceId={workspace.id}
@@ -602,6 +655,18 @@ export default function AcademicWorkspaceScreen() {
       if (source.kind === 'research-source') router.push({ pathname: '/research', params: { experienceSessionId: source.id } });
     }}
   />;
+  const autopilotPanel = workspace.status !== 'archived' ? <WorkspaceAutopilot
+      key={`autopilot-${workspace.id}`}
+      workspace={workspace}
+      onPrepare={prepareAutopilotCommand}
+      onWorkspace={applyAutopilotWorkspace}
+      manualOpen={manualOpen}
+      onToggleManual={() => setManualOpen((value) => !value)}
+      onQuestion={() => { setManualOpen(true); setActiveArea('work'); }}
+      onAddSource={() => { setActiveArea('sources'); void openSourcePicker(); }}
+      onOrientation={() => { setActiveArea('plan'); setBriefEditRequest((value) => value + 1); }}
+      onContinueEditing={() => { void patchWorkspace({ status: 'active' }).then((resumed) => { if (resumed) { setActiveArea('work'); setManualOpen(true); } }); }}
+    /> : null;
   const assistantPanel = workspaceReadOnly ? (
     <Card testID="workspace-assistant-read-only">
       <Text style={[typography.bodySmall, { color: c.textMuted }]}>{t(
@@ -612,8 +677,9 @@ export default function AcademicWorkspaceScreen() {
             : 'workspace10.save.saving',
       )}</Text>
     </Card>
-  ) : (
-    <WorkspaceAssistant
+  ) : manualOpen ? <View style={{ gap: spacing.sm }} testID="workspace-manual-mode">
+    <Text style={[typography.overline, { color: c.textMuted }]}>{t('workspaceAutopilot.manual')}</Text>
+    {workspace.progress.workflow?.autopilot?.activeRequest ? <Alert tone="info" title={t('workspaceAutopilot.pending')} /> : <WorkspaceAssistant
       key={workspace.id}
       workspaceId={workspace.id}
       initialHistory={workspace.assistantHistory}
@@ -632,9 +698,16 @@ export default function AcademicWorkspaceScreen() {
       onApplyProposal={applyAssistantProposal}
       onUndo={undoAssistantInsertion}
       canUndo={assistantUndo !== null}
-    />
-  );
-  const editor = <EditorPanel content={content} saveState={saveState} readOnly={workspaceReadOnly} onChange={(value) => {
+    />}
+  </View> : null;
+  const originalInstructions = workspace.brief.fields.userInstructions?.trim() || workspace.brief.fields.requirements?.trim();
+  const editor = <View style={{ gap: spacing.md }}>
+    {shellKind === 'assignment' && originalInstructions ? <Card style={{ gap: spacing.sm }} testID="workspace-original-instructions">
+      <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('workspaceAutopilot.instruction')}</Text>
+      <Text selectable style={[typography.body, { color: c.textSecondary }]}>{originalInstructions}</Text>
+    </Card> : null}
+    {shellKind === 'assignment' ? <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{t('workspaceAutopilot.response')}</Text> : null}
+    <EditorPanel content={content} saveState={saveState} readOnly={workspaceReadOnly} onChange={(value) => {
     if (completionLockRef.current || workspace.status === 'archived' || workspace.status === 'completed') return;
     setAssistantUndo(null);
     // Make in-flight proposal guards observe the keystroke immediately, before
@@ -647,7 +720,8 @@ export default function AcademicWorkspaceScreen() {
   }} onSelection={(nextSelection) => {
     selectionRef.current = nextSelection;
     setSelection(nextSelection);
-  }} onInsert={insertMarkup} onSave={() => void save(content)} />;
+  }} onInsert={insertMarkup} onSave={() => void save(content)} />
+  </View>;
 
   return <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1, backgroundColor: c.background }}>
     <Page width="fluid" style={{ gap: spacing.lg, paddingBottom: spacing.huge }} testID="academic-workspace">
@@ -668,6 +742,7 @@ export default function AcademicWorkspaceScreen() {
         {showConflictDraft ? <TextInput testID="workspace-conflict-local-draft" value={conflictDraft.content} editable={false} multiline selectTextOnFocus accessibilityLabel={t('workspace10.editor.label')} style={[typography.bodySmall, { minHeight: 120, borderWidth: 1, borderColor: c.border, color: c.textPrimary, padding: spacing.sm }]} /> : null}
       </Card> : null}
       {error ? <Alert tone="error" title={t('state.error')} detail={error} /> : null}
+      {autopilotPanel}
       <WorkspaceShell
         shellKind={shellKind}
         templateLabel={t(`workspace10.template.${workspace.template}` as TranslationKey)}
@@ -690,10 +765,12 @@ export default function AcademicWorkspaceScreen() {
 function BriefPanel({
   workspace,
   readOnly,
+  editRequest,
   onUpdate,
 }: {
   workspace: PersistentWorkspace;
   readOnly: boolean;
+  editRequest: number;
   onUpdate: (brief: WorkspaceBrief) => Promise<boolean>;
 }) {
   const { t } = useI18n();
@@ -710,6 +787,10 @@ function BriefPanel({
   useEffect(() => {
     if (readOnly) setEditing(false);
   }, [readOnly]);
+
+  useEffect(() => {
+    if (editRequest > 0 && !readOnly) setEditing(true);
+  }, [editRequest, readOnly]);
 
   const save = async () => {
     setSaving(true);

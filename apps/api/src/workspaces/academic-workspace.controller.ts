@@ -36,6 +36,7 @@ import {
   WorkspaceExportDto,
   WorkspaceFinalizeDto,
   WorkspaceRestoreDto,
+  WorkspaceAutopilotDto,
 } from './dto/workspace.dto';
 
 @UseGuards(JwtAccessGuard)
@@ -165,6 +166,16 @@ export class AcademicWorkspaceController {
     @Param('id') id: string,
   ): Promise<WorkspaceCompletionStateResponse> {
     return this.workspaces.completion(user.userId, id);
+  }
+
+  @Throttle({ default: { limit: 40, ttl: 60_000 } })
+  @Post(':id/autopilot')
+  autopilot(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: WorkspaceAutopilotDto,
+  ): Promise<PersistentWorkspace> {
+    return this.workspaces.autopilot(user.userId, id, dto);
   }
 
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
