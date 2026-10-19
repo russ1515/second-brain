@@ -194,7 +194,7 @@ export class AcademicWorkspaceService {
     const sources = this.normalizeSources(request.sources ?? []);
     const locale = await resolveLocale(this.prisma, userId);
     const brief = this.normalizeBrief(request.brief);
-    if (request.autopilotConsent && request.initialContent?.trim() && request.initialContent.length <= 8_000 && !brief.fields.userInstructions?.trim()) {
+    if (request.autopilotConsent && request.initialContent?.trim() && request.initialContent.length <= 200_000 && !brief.fields.userInstructions?.trim()) {
       brief.fields.userInstructions = request.initialContent.trim();
     }
     const initialContent = request.autopilotConsent && request.initialContent?.trim() === brief.fields.userInstructions?.trim()
@@ -3199,7 +3199,7 @@ export class AcademicWorkspaceService {
     for (const field of WORKSPACE_BRIEF_FIELDS) {
       const value = brief.fields[field];
       if (typeof value !== 'string') continue;
-      const normalized = value.trim().slice(0, 4_000);
+      const normalized = value.trim().slice(0, field === 'userInstructions' ? 200_000 : 4_000);
       if (normalized) fields[field] = normalized;
     }
     return { version: 1, fields };

@@ -1745,3 +1745,39 @@ test('Autopilot bounds the complete provider prompt before spending and preserve
   assert.equal(workspace.professor.evidence.length, 0);
   assert.equal(workspace.draft.content, '');
 });
+
+test('Autopilot preserves long captured instructions exactly and stops an oversized prompt without losing the capture', async () => {
+  for (const length of [12_000, 62_000]) {
+    const { service, state } = createHarness({
+      llmResponder: autopilotReply,
+      config: { WORKSPACE_AUTOPILOT_MAX_PROMPT_BYTES: 60_000 },
+    });
+    const instruction = 'Original technical instructions. '.repeat(Math.ceil(length / 33)).slice(0, length);
+    const created = await service.create('owner', request({
+      requestId: `autopilot-long-capture-${length}`,
+      objective: '',
+      autopilotConsent: true,
+      // The capture UI sends this field directly, without duplicating it in initialContent.
+      brief: { version: 1, fields: {
+        subject: 'University physics', requirements: 'Keep the entire original instructions.',
+        userInstructions: instruction,
+      } },
+    }));
+    assert.equal(instruction.length, length);
+    assert.equal(created.brief.fields.userInstructions, instruction);
+    assert.equal(created.draft.content, '');
+    const reloaded = await service.get('owner', created.id);
+    assert.equal(reloaded.brief.fields.userInstructions, instruction);
+    assert.equal(reloaded.draft.content, '');
+    assert.equal(state.llmCalls, 0);
+    if (length > 60_000) {
+      const stopped = await autopilotCommand(service, reloaded, 'step', `long-capture-stop-${length}`);
+      assert.ok(['NEEDS_INPUT', 'PAUSED_ERROR'].includes(autopilotState(stopped).status));
+      assert.equal(autopilotState(stopped).errorCode, 'STOP_AUTOPILOT_REVIEW_REQUIRED');
+      assert.equal(stopped.brief.fields.userInstructions, instruction);
+      assert.equal(stopped.draft.content, '');
+      assert.equal(stopped.professor.evidence.length, 0);
+      assert.equal(state.llmCalls, 0);
+    }
+  }
+});
