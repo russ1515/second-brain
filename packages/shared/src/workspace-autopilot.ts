@@ -37,7 +37,7 @@ export interface WorkspaceWorkContract {
   sectionPlanItemId?: string;
   /** Computed by the server; provider/client fingerprints are ignored. */
   instructionFingerprint?: string;
-  origin?: 'comprehension' | 'method' | 'legacy-work';
+  origin?: 'comprehension' | 'method' | 'legacy-work' | 'explicit-intent';
 }
 
 export interface WorkspaceTaskFulfillment {
@@ -57,6 +57,8 @@ export interface WorkspaceAutopilotRequest {
   action: WorkspaceAutopilotAction;
   /** Explicit permission to make reversible changes to this Workspace draft. */
   consent?: boolean;
+  /** Optional explicit task intent for creation/start or a legacy resume. */
+  workIntent?: WorkspaceWorkIntent;
 }
 
 /** Server-derived structured result of one existing Professor/tool call. */
@@ -125,6 +127,8 @@ export interface WorkspaceAutopilotState {
   /** Preserves a bounded exception for this exact run, without resetting usage. */
   stepGrant?: WorkspaceAutopilotStepGrant;
   workContract?: WorkspaceWorkContract;
+  /** Explicit typed orchestration context; never inferred from shell alone. */
+  workIntent?: WorkspaceWorkIntent;
   workReview?: { draftFingerprint: string; contractFingerprint: string; instructionFingerprint: string; sourceFingerprint: string; replyId: string };
   errorCode?: string;
   reason?: string;

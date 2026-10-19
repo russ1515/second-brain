@@ -71,6 +71,7 @@ import type {
   WorkspaceAutopilotOutput,
   WorkspaceAutopilotReceipt,
   WorkspaceAutopilotStepGrant,
+  WorkspaceWorkIntent,
   LLMMessage,
 } from '@second-brain/shared';
 import {
@@ -83,6 +84,7 @@ import {
   initialWorkspaceToolState,
   initialWorkspaceAutopilotState,
   WORKSPACE_AUTOPILOT_ACTIONS,
+  WORKSPACE_WORK_INTENTS,
   legacyWorkspaceProfessorState,
   WORKSPACE_BRIEF_FIELDS,
   WORKSPACE_STEP_IDS,
@@ -116,7 +118,11 @@ import {
   taskFulfillmentIssues,
   workProductionFingerprint,
   workContractFingerprint,
+  getAutopilotDiagnosticReason,
+  createAutopilotDiagnosticException,
 } from './workspace-autopilot';
+import { workContractFromIntent, workContractResponseSchema, workOutputKindForIntent } from './workspace-work-contract';
+import { writePrivateWorkspaceWorkDiagnostic, type WorkspaceWorkDiagnosticInput } from './workspace-work-diagnostics';
 
 const MAX_ASSISTANT_HISTORY = 30;
 const MAX_PROFESSOR_TRANSITIONS = 40;
@@ -214,6 +220,7 @@ export class AcademicWorkspaceService {
     const title = request.title.trim();
     if (!title) throw new BadRequestException('A title is required.');
     if (!WORKSPACE_TEMPLATES.includes(request.template)) throw new BadRequestException('Unknown workspace template.');
+    if (request.workIntent !== undefined && !WORKSPACE_WORK_INTENTS.includes(request.workIntent)) throw new BadRequestException('Invalid work intent.');
     const sources = this.normalizeSources(request.sources ?? []);
     const locale = await resolveLocale(this.prisma, userId);
     const brief = this.normalizeBrief(request.brief);
@@ -232,6 +239,7 @@ export class AcademicWorkspaceService {
       this.draftFingerprint(initialContent),
     );
     progress.workflow!.autopilot = this.newAutopilotState(Boolean(request.autopilotConsent));
+    if (request.workIntent) progress.workflow!.autopilot.workIntent = request.workIntent;
     const dueAt = request.dueAt ? new Date(request.dueAt) : null;
     const requestId = request.requestId?.trim();
     const idempotencyKey = requestId
@@ -282,6 +290,7 @@ export class AcademicWorkspaceService {
             brief,
             initialContent,
             autopilotConsent: Boolean(request.autopilotConsent),
+            workIntent: request.workIntent,
           });
           return existingWorkspace;
         }
@@ -375,6 +384,8 @@ export class AcademicWorkspaceService {
       || !Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
       throw new BadRequestException('Invalid Professor Autopilot command.');
     }
+    if (request.workIntent !== undefined && (!WORKSPACE_WORK_INTENTS.includes(request.workIntent)
+      || !['start', 'resume'].includes(request.action))) throw new BadRequestException('A work intent can only be supplied when starting or resuming.');
     const fingerprint = createHash('sha256').update(JSON.stringify(request)).digest('hex');
     let execution: AutopilotExecution | undefined;
     const reserved = await this.changeAutopilot(userId, id, (row, progress, current) => {
@@ -414,6 +425,20 @@ export class AcademicWorkspaceService {
         if (request.action === 'resume') state = this.withAutopilotRunGrant(state, id, request.requestId, row.autosaveRevision, now);
         const professor = this.professorState(row, progress);
         if (state.aiSteps >= state.maxAiSteps && professor.currentPhase !== 'DECONSTRUCTION' && !this.autopilotCachedReply(row, state, professor)) throw new ConflictException({ code: 'STOP_AUTOPILOT_REVIEW_REQUIRED', message: 'The bounded Professor run needs your review.' });
+        if (request.workIntent) {
+          if ((state.workIntent && state.workIntent !== request.workIntent)
+            || (state.workContract && state.workContract.taskIntent !== request.workIntent)) {
+            throw new ConflictException({ code: 'workspace_autopilot_intent_conflict', message: 'The existing work intent must be preserved.' });
+          }
+          state.workIntent = request.workIntent;
+          // An explicit task intent can restore a missing legacy orchestration
+          // contract without inventing evidence, moving phase or resetting usage.
+          if (!state.workContract && professor.currentPhase === 'WORK') {
+            state.workContract = { ...workContractFromIntent(request.workIntent, row.template as WorkspaceTemplate,
+              this.workInstructions(progress.workflow?.brief ?? emptyWorkspaceBrief(), row.objective),
+              fromJson<WorkspacePlanItem[]>(row.plan, [])), origin: 'explicit-intent' };
+          }
+        }
         state = { ...state, status: 'RUNNING', consent: state.consent ?? { version: 1, grantedAt: now }, errorCode: undefined, reason: undefined };
       } else if (request.action === 'undo') {
         if (state.status === 'RUNNING' || state.activeRequest) throw new ConflictException({ code: 'workspace_autopilot_pause_required', message: 'Pause the Professor before undoing a modification.' });
@@ -699,7 +724,7 @@ export class AcademicWorkspaceService {
           ...validateAutopilotWorkContract(proposedContract, row.template as WorkspaceTemplate, this.workInstructions(brief, row.objective), plan ?? existingPlan),
           origin: existingContract?.origin ?? (phase === 'COMPREHENSION' ? 'comprehension' as const : 'method' as const),
         } : undefined;
-        return { state: { ...state, ...(workContract ? { workContract } : {}) }, ...(briefChanged ? { brief } : {}), ...(plan ? { plan } : {}) };
+        return { state: { ...state, ...(workContract ? { workContract, workIntent: workContract.taskIntent } : {}) }, ...(briefChanged ? { brief } : {}), ...(plan ? { plan } : {}) };
       }, execution);
       await move(phase === 'COMPREHENSION' ? 'METHOD' : 'WORK');
     } else if (phase === 'WORK' || phase === 'COACHING') {
@@ -818,6 +843,17 @@ export class AcademicWorkspaceService {
       brief.fields.requirements, brief.fields.deliverable, objective,
       brief.fields.subject, brief.fields.context, brief.fields.researchQuestion,
     ].filter((part) => part?.trim()).join('\n\n');
+  }
+
+  private async recordWorkDiagnostic(row: AcademicWorkspace, phase: WorkspaceProfessorPhase, state: WorkspaceAutopilotState,
+    requestId: string | undefined, result: Omit<WorkspaceWorkDiagnosticInput, 'trace'>): Promise<void> {
+    if (phase !== 'WORK' || !requestId) return;
+    const intent = state.workContract?.taskIntent ?? state.workIntent;
+    const expected = state.workContract?.outputKind ?? (intent ? workOutputKindForIntent(intent) : undefined);
+    await writePrivateWorkspaceWorkDiagnostic(this.config?.get<string>('WORKSPACE_WORK_DIAGNOSTIC_SCOPE'), {
+      ownerId: row.userId, workspaceId: row.id, runId: state.runId, requestId: state.activeRequest?.requestId ?? requestId,
+    }, { ...result, trace: { workspaceId: row.id, shellKind: workspaceShellFromTemplate(row.template as WorkspaceTemplate),
+      intent, artifactType: expected, currentPhase: phase, expectedWorkOutputType: expected } });
   }
 
   private autopilotDraftCitations(history: readonly WorkspaceAssistantHistoryEntry[], runId: string): WorkspaceSourceCitation[] {
@@ -2902,9 +2938,20 @@ export class AcademicWorkspaceService {
     const instructions = this.workInstructions(brief, row.objective);
     const capturedMaterial = [brief.fields.userInstructions, brief.fields.institutionInstructions, row.objective].filter((item) => item?.trim()).join('\n\n');
     const storedAutopilot = this.autopilotState(progress, row.id);
-    const workContract = storedAutopilot.workContract?.instructionFingerprint === workProductionFingerprint(instructions)
+    let workContract = storedAutopilot.workContract?.instructionFingerprint === workProductionFingerprint(instructions)
       ? storedAutopilot.workContract : undefined;
     const template = row.template as WorkspaceTemplate;
+    if (internal && professor.currentPhase === 'WORK') {
+      try {
+        const validated = validateAutopilotWorkContract(workContract, template, instructions, plan);
+        workContract = { ...validated, ...(workContract?.origin ? { origin: workContract.origin } : {}) };
+      } catch (error) {
+        await this.recordWorkDiagnostic(row, professor.currentPhase, storedAutopilot, request.requestId, {
+          parserResult: 'NOT_RUN', validatorResult: 'NOT_RUN', rejectReasonCode: getAutopilotDiagnosticReason(error) ?? 'UNKNOWN',
+        });
+        throw error;
+      }
+    }
     const definition = WORKSPACE_TEMPLATE_DEFINITIONS[template];
     const locale = await resolveLocale(this.prisma, userId);
     const passport = await this.learnerPassport?.tutorContext(userId, true).catch(() => undefined);
@@ -2977,6 +3024,7 @@ export class AcademicWorkspaceService {
         `Learner and institution brief:\n${this.briefContext(brief)}`,
         internal ? 'The original userInstructions and institutionInstructions above are authoritative; derived brief fields never weaken or replace them.' : '',
         internal && workContract ? `Recorded work contract (not certification; verify against all original instructions):\n${JSON.stringify(workContract)}` : '',
+        internal && storedAutopilot.workIntent ? `Explicit orchestration intent: ${storedAutopilot.workIntent}. Expected work output: ${workOutputKindForIntent(storedAutopilot.workIntent)}. Preserve this intent; the shell remains a scaffold, not an instruction to change the task.` : '',
         internal && storedAutopilot.reason ? `Recorded verification feedback:\n${storedAutopilot.reason}` : '',
         recheckingDraftSources ? `Source citations recorded with the produced draft and re-resolved by AW-6 (preserve their identities):\n${JSON.stringify(draftCitations)}` : '',
         `Current plan:\n${plan.map((item) => `- [${item.completed ? 'x' : ' '}] ${item.id}: ${item.title}`).join('\n') || 'No plan yet.'}`,
@@ -3017,7 +3065,15 @@ export class AcademicWorkspaceService {
         { role: 'user' as const, content: prompt },
       ];
       if (internal) this.assertAutopilotPromptBudget(messages, progress, row.id);
-      const response = await this.llm.generate(messages, { temperature: 0.25, operation: 'workspace-assistant', maxOutputTokens: internal && professor.currentPhase === 'WORK' ? 2_000 : 1_500 });
+      const response = await this.llm.generate(messages, { temperature: 0.25, operation: 'workspace-assistant',
+        maxOutputTokens: internal && professor.currentPhase === 'WORK' ? 2_000 : 1_500,
+        ...(internal ? { jsonSchema: workContractResponseSchema(professor.currentPhase, workContract, storedAutopilot.workIntent) } : {}),
+      }).catch(async (error: unknown) => {
+        if (internal) await this.recordWorkDiagnostic(row, professor.currentPhase, storedAutopilot, request.requestId, {
+          parserResult: 'NOT_REACHED', validatorResult: 'NOT_REACHED', rejectReasonCode: 'PROVIDER_FAILED',
+        });
+        throw error;
+      });
       providerSucceeded = true;
       if (sourceResolution.usedContext) {
         const validated = this.sourceEngine.validateReply(response.text, sourceResolution.citations);
@@ -3028,13 +3084,50 @@ export class AcademicWorkspaceService {
         replyContent = response.text.trim();
       }
       if (internal) {
-        const output = parseAutopilotOutput(this.sourceEngine.validateReply(replyContent, professor.currentPhase === 'VERIFICATION' ? draftCitations : sourceResolution.citations).content);
-        if (professor.currentPhase === 'WORK' && !output.needsInput) {
-          const validatedContract = assertAutopilotWorkArtifact(output, template, instructions, {
-            contract: workContract, sourceContext: sourceResolution.context, sourceMaterial: capturedMaterial || instructions, citations: sourceResolution.citations, plan,
-          });
-          output.workContract = { ...validatedContract, origin: workContract?.origin ?? 'legacy-work' };
-          output.workArtifactValidated = true;
+        const normalizedText = this.sourceEngine.validateReply(replyContent, professor.currentPhase === 'VERIFICATION' ? draftCitations : sourceResolution.citations).content;
+        const diagnostic: Omit<WorkspaceWorkDiagnosticInput, 'trace'> = { providerResponse: response,
+          rawText: response.text, normalizedText, parserResult: 'NOT_RUN', validatorResult: 'NOT_RUN', rejectReasonCode: 'NONE' };
+        let output: WorkspaceAutopilotOutput;
+        try {
+          output = parseAutopilotOutput(normalizedText);
+          diagnostic.parserResult = 'PASS';
+          if (['COMPREHENSION', 'METHOD'].includes(professor.currentPhase) && !output.needsInput) {
+            const proposed = validateAutopilotWorkContract(output.workContract, template, instructions, plan);
+            const expectedIntent = workContract?.taskIntent ?? storedAutopilot.workIntent;
+            if (expectedIntent && proposed.taskIntent !== expectedIntent) {
+              throw createAutopilotDiagnosticException('WORK_CONTRACT_KIND_INTENT_MISMATCH', { code: 'workspace_autopilot_invalid_result',
+                message: 'The task context must be preserved. Your work is saved.' });
+            }
+          }
+          if (professor.currentPhase === 'WORK' && !output.needsInput) {
+            const returnedContract = validateAutopilotWorkContract(output.workContract, template, instructions, plan);
+            if (returnedContract.taskIntent !== workContract!.taskIntent || returnedContract.outputKind !== workContract!.outputKind
+              || returnedContract.scope !== workContract!.scope || returnedContract.operation !== workContract!.operation
+              || returnedContract.sourceRequirement !== workContract!.sourceRequirement) {
+              throw createAutopilotDiagnosticException('WORK_CONTRACT_KIND_INTENT_MISMATCH', { code: 'workspace_autopilot_work_artifact_required',
+                message: 'The work result must preserve the task contract. Your work is saved.' });
+            }
+            if (returnedContract.criteria.length !== workContract!.criteria.length || workContract!.criteria.some((criterion) => (
+              !returnedContract.criteria.some((returned) => returned.id === criterion.id
+                && returned.requirement === criterion.requirement && returned.required === criterion.required)
+            ))) {
+              throw createAutopilotDiagnosticException('WORK_REQUIRED_CRITERION_MISSING', { code: 'workspace_autopilot_work_artifact_required',
+                message: 'The work result must preserve the task criteria. Your work is saved.' });
+            }
+            const validatedContract = assertAutopilotWorkArtifact(output, template, instructions, {
+              contract: workContract, sourceContext: sourceResolution.context, sourceMaterial: capturedMaterial || instructions, citations: sourceResolution.citations, plan,
+            });
+            output.workContract = { ...validatedContract, origin: workContract?.origin ?? 'legacy-work' };
+            output.workArtifactValidated = true;
+            diagnostic.validatorResult = 'PASS';
+          }
+        } catch (error) {
+          if (diagnostic.parserResult !== 'PASS') diagnostic.parserResult = 'FAIL';
+          else diagnostic.validatorResult = 'FAIL';
+          diagnostic.rejectReasonCode = getAutopilotDiagnosticReason(error) ?? 'UNKNOWN';
+          throw error;
+        } finally {
+          await this.recordWorkDiagnostic(row, professor.currentPhase, storedAutopilot, request.requestId, diagnostic);
         }
         if (professor.currentPhase === 'VERIFICATION' && output.taskFulfillment) {
           replyCitations = draftCitations.filter((citation) => output.taskFulfillment!.citationLabels?.includes(citation.citationLabel));
@@ -3131,7 +3224,7 @@ export class AcademicWorkspaceService {
             autopilot: {
               ...this.autopilotState(progress, row.id),
               ...(generated.reply.autopilot.output.workArtifactValidated && generated.reply.autopilot.output.workContract
-                ? { workContract: generated.reply.autopilot.output.workContract, workReview: undefined } : {}),
+                ? { workContract: generated.reply.autopilot.output.workContract, workIntent: generated.reply.autopilot.output.workContract.taskIntent, workReview: undefined } : {}),
               pendingResult: {
                 replyId: generated.reply.id,
                 phase: operation.phase,
@@ -3577,6 +3670,7 @@ export class AcademicWorkspaceService {
       brief: WorkspaceBrief;
       initialContent: string;
       autopilotConsent?: boolean;
+      workIntent?: WorkspaceWorkIntent;
     },
   ): void {
     const progress = fromJson<WorkspaceProgress>(row.progress, { completedSteps: [] });
@@ -3587,6 +3681,7 @@ export class AcademicWorkspaceService {
       && (row.dueAt?.toISOString() ?? null) === (expected.dueAt?.toISOString() ?? null)
       && row.draftContent === expected.initialContent
       && Boolean(progress.workflow?.autopilot?.consent) === Boolean(expected.autopilotConsent)
+      && (expected.workIntent === undefined || progress.workflow?.autopilot?.workIntent === expected.workIntent)
       && sameJson(
         this.normalizeSources(fromJson<WorkspaceSourceReference[]>(row.sources, [])),
         this.normalizeSources(expected.sources),

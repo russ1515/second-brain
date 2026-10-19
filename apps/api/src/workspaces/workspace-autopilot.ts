@@ -14,6 +14,44 @@ const LEGACY_WORK_OUTPUT_KINDS: Record<string, WorkspaceWorkOutputKind> = {
   REPORT_SECTION_DRAFT: 'REPORT_DRAFT', ADAPTIVE_DRAFT: 'INTENT_MATCHED_DRAFT',
 };
 
+/** Internal, content-free rejection reasons. Public UI codes/messages remain stable. */
+export const AUTOPILOT_DIAGNOSTIC_REASONS = [
+  'PARSE_INVALID_JSON', 'PARSE_ROOT_NOT_OBJECT', 'PARSE_TEXT_MISSING', 'PARSE_TEXT_INVALID_TYPE', 'PARSE_TEXT_EMPTY', 'PARSE_TEXT_TOO_LONG',
+  'PARSE_WORK_OUTPUT_KIND_INVALID', 'PARSE_CONTRACT_NOT_OBJECT', 'PARSE_CONTRACT_VERSION_INVALID',
+  'PARSE_CONTRACT_INTENT_INVALID', 'PARSE_CONTRACT_OPERATION_INVALID', 'PARSE_CONTRACT_SCOPE_INVALID',
+  'PARSE_CONTRACT_SOURCE_REQUIREMENT_INVALID', 'PARSE_CONTRACT_TASK_INVALID', 'PARSE_CONTRACT_SOURCE_EXCERPT_INVALID',
+  'PARSE_CONTRACT_CRITERIA_INVALID', 'PARSE_CONTRACT_CRITERION_INVALID', 'PARSE_CONTRACT_CRITERION_ID_DUPLICATE',
+  'PARSE_CONTRACT_OUTPUT_KIND_INVALID', 'PARSE_TASK_FULFILLMENT_INVALID', 'PARSE_CRITERION_REVIEW_INVALID',
+  'PARSE_REVIEW_LIST_INVALID', 'PARSE_WORK_EVIDENCE_INVALID', 'PARSE_WORK_EVIDENCE_ITEM_INVALID',
+  'PARSE_TEXT_FIELD_INVALID', 'PARSE_LIST_FIELD_INVALID', 'PARSE_BRIEF_FIELDS_INVALID', 'PARSE_BRIEF_FIELD_INVALID',
+  'PARSE_PLAN_INVALID', 'PARSE_PLAN_ITEM_INVALID',
+  'WORK_CONTRACT_MISSING', 'WORK_INSTRUCTIONS_MISSING', 'WORK_CRITERION_NOT_IN_INSTRUCTIONS',
+  'WORK_REQUIRED_CRITERION_MISSING', 'WORK_CONTRACT_KIND_INTENT_MISMATCH', 'WORK_CONTRACT_SCOPE_MISMATCH',
+  'WORK_RESEARCH_SOURCE_REQUIREMENT_INVALID', 'WORK_SUMMARY_CONTRACT_INVALID', 'WORK_SOURCE_EXCERPT_MISSING',
+  'WORK_SECTION_PLAN_MISSING', 'WORK_DRAFT_MISSING', 'WORK_OUTPUT_KIND_MISMATCH', 'WORK_EVIDENCE_MISSING',
+  'WORK_EXACT_INSTRUCTION_ECHO', 'WORK_EVIDENCE_REQUIREMENT_UNANCHORED', 'WORK_EVIDENCE_DRAFT_EXCERPT_UNANCHORED',
+  'WORK_REQUIRED_CRITERION_EVIDENCE_MISSING', 'WORK_SOURCE_CONTEXT_MISSING', 'WORK_SOURCE_CITATION_MISSING',
+  'WORK_SOURCE_CITATION_UNKNOWN', 'WORK_SOURCE_EXCERPT_UNANCHORED',
+] as const;
+export type AutopilotDiagnosticReason = typeof AUTOPILOT_DIAGNOSTIC_REASONS[number];
+const INTERNAL_DIAGNOSTIC_REASONS = new WeakMap<Error, AutopilotDiagnosticReason>();
+
+/** Diagnostic metadata is deliberately absent from the HTTP exception body,
+ * enumerable properties and serialisation. Only server code retaining this
+ * same exception instance can read it. */
+export function createAutopilotDiagnosticException(
+  reason: AutopilotDiagnosticReason,
+  response: { code: 'workspace_autopilot_invalid_result' | 'workspace_autopilot_work_artifact_required'; message: string },
+): ServiceUnavailableException {
+  const error = new ServiceUnavailableException(response);
+  if (AUTOPILOT_DIAGNOSTIC_REASONS.includes(reason)) INTERNAL_DIAGNOSTIC_REASONS.set(error, reason);
+  return error;
+}
+
+export function getAutopilotDiagnosticReason(error: unknown): AutopilotDiagnosticReason | undefined {
+  return error instanceof Error ? INTERNAL_DIAGNOSTIC_REASONS.get(error) : undefined;
+}
+
 export function workspaceWorkOutputKind(template: WorkspaceTemplate, contract?: WorkspaceWorkContract): WorkspaceWorkOutputKind {
   if (contract) return WORK_OUTPUT_BY_INTENT[contract.taskIntent];
   if (template === 'academic-research') return 'SOURCED_RESEARCH_DRAFT';
@@ -67,11 +105,14 @@ export function parseAutopilotOutput(raw: string): WorkspaceAutopilotOutput {
   try {
     parsed = JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
   } catch {
-    throw new ServiceUnavailableException({ code: 'workspace_autopilot_invalid_result', message: 'The Professor result could not be verified. Your work is saved.' });
+    return invalidOutput('PARSE_INVALID_JSON');
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return invalidOutput();
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return invalidOutput('PARSE_ROOT_NOT_OBJECT');
   const value = parsed as Record<string, unknown>;
-  if (typeof value.text !== 'string' || !value.text.trim() || value.text.length > 20_000) return invalidOutput();
+  if (value.text === undefined) return invalidOutput('PARSE_TEXT_MISSING');
+  if (typeof value.text !== 'string') return invalidOutput('PARSE_TEXT_INVALID_TYPE');
+  if (!value.text.trim()) return invalidOutput('PARSE_TEXT_EMPTY');
+  if (value.text.length > 20_000) return invalidOutput('PARSE_TEXT_TOO_LONG');
   const result: WorkspaceAutopilotOutput = { text: value.text.trim() };
   if (value.workOutputKind !== undefined) {
     result.workOutputKind = canonicalWorkOutputKind(value.workOutputKind);
@@ -81,60 +122,60 @@ export function parseAutopilotOutput(raw: string): WorkspaceAutopilotOutput {
     const review = value.taskFulfillment as Record<string, unknown>;
     if (!review || typeof review !== 'object' || typeof review.fulfilled !== 'boolean'
       || typeof review.contractMatchesTask !== 'boolean' || !['entire-task', 'current-section'].includes(review.scope as string)
-      || !Array.isArray(review.criterionReviews) || review.criterionReviews.length > 100) return invalidOutput();
+      || !Array.isArray(review.criterionReviews) || review.criterionReviews.length > 100) return invalidOutput('PARSE_TASK_FULFILLMENT_INVALID');
     result.taskFulfillment = {
       fulfilled: review.fulfilled, contractMatchesTask: review.contractMatchesTask,
       scope: review.scope as 'entire-task' | 'current-section',
       criterionReviews: review.criterionReviews.map((item) => {
         if (!item || typeof item.criterionId !== 'string' || item.criterionId.length > 128 || typeof item.fulfilled !== 'boolean'
           || (item.excerpt !== undefined && (typeof item.excerpt !== 'string' || item.excerpt.length > 8_000))
-          || (item.reason !== undefined && (typeof item.reason !== 'string' || item.reason.length > 2_000))) return invalidOutput();
+          || (item.reason !== undefined && (typeof item.reason !== 'string' || item.reason.length > 2_000))) return invalidOutput('PARSE_CRITERION_REVIEW_INVALID');
         return { criterionId: item.criterionId, fulfilled: item.fulfilled,
           ...(item.excerpt ? { excerpt: item.excerpt } : {}), ...(item.reason ? { reason: item.reason } : {}) };
       }),
     };
     for (const key of ['citationLabels', 'uncoveredRequirements'] as const) {
       if (review[key] !== undefined) {
-        if (!Array.isArray(review[key]) || review[key].length > 100 || review[key].some((item) => typeof item !== 'string' || item.length > 2_000)) return invalidOutput();
+        if (!Array.isArray(review[key]) || review[key].length > 100 || review[key].some((item) => typeof item !== 'string' || item.length > 2_000)) return invalidOutput('PARSE_REVIEW_LIST_INVALID');
         result.taskFulfillment[key] = review[key] as string[];
       }
     }
   }
   if (value.workEvidence !== undefined) {
-    if (!Array.isArray(value.workEvidence) || value.workEvidence.length > 100) return invalidOutput();
+    if (!Array.isArray(value.workEvidence) || value.workEvidence.length > 100) return invalidOutput('PARSE_WORK_EVIDENCE_INVALID');
     result.workEvidence = value.workEvidence.map((item) => {
       if (!item || typeof item !== 'object' || typeof item.requirement !== 'string' || typeof item.excerpt !== 'string'
-        || !item.requirement.trim() || !item.excerpt.trim() || item.requirement.length > 2_000 || item.excerpt.length > 8_000) return invalidOutput();
+        || !item.requirement.trim() || !item.excerpt.trim() || item.requirement.length > 2_000 || item.excerpt.length > 8_000) return invalidOutput('PARSE_WORK_EVIDENCE_ITEM_INVALID');
       return { requirement: item.requirement.trim(), excerpt: item.excerpt.trim() };
     });
   }
   for (const key of ['draft', 'needsInput', 'deconstruction'] as const) {
     if (value[key] !== undefined) {
-      if (typeof value[key] !== 'string' || value[key].length > 40_000) return invalidOutput();
+      if (typeof value[key] !== 'string' || value[key].length > 40_000) return invalidOutput('PARSE_TEXT_FIELD_INVALID');
       if (value[key].trim()) result[key] = value[key].trim();
     }
   }
   for (const key of ['issues', 'checkedPlanItemIds'] as const) {
     if (value[key] !== undefined) {
-      if (!Array.isArray(value[key]) || value[key].length > 100 || value[key].some((item) => typeof item !== 'string' || item.length > 2_000)) return invalidOutput();
+      if (!Array.isArray(value[key]) || value[key].length > 100 || value[key].some((item) => typeof item !== 'string' || item.length > 2_000)) return invalidOutput('PARSE_LIST_FIELD_INVALID');
       result[key] = [...new Set((value[key] as string[]).map((item) => item.trim()).filter(Boolean))];
     }
   }
   if (value.briefFields !== undefined) {
-    if (!value.briefFields || typeof value.briefFields !== 'object' || Array.isArray(value.briefFields)) return invalidOutput();
+    if (!value.briefFields || typeof value.briefFields !== 'object' || Array.isArray(value.briefFields)) return invalidOutput('PARSE_BRIEF_FIELDS_INVALID');
     const fields: NonNullable<WorkspaceAutopilotOutput['briefFields']> = {};
     for (const field of WORKSPACE_BRIEF_FIELDS) {
       const entry = (value.briefFields as Record<string, unknown>)[field];
       if (entry === undefined) continue;
-      if (typeof entry !== 'string' || entry.length > 8_000) return invalidOutput();
+      if (typeof entry !== 'string' || entry.length > 8_000) return invalidOutput('PARSE_BRIEF_FIELD_INVALID');
       if (entry.trim()) fields[field] = entry.trim();
     }
     result.briefFields = fields;
   }
   if (value.plan !== undefined) {
-    if (!Array.isArray(value.plan) || value.plan.length > 100) return invalidOutput();
+    if (!Array.isArray(value.plan) || value.plan.length > 100) return invalidOutput('PARSE_PLAN_INVALID');
     result.plan = value.plan.map((item) => {
-      if (!item || typeof item !== 'object' || typeof item.title !== 'string' || !item.title.trim() || item.title.length > 500) return invalidOutput();
+      if (!item || typeof item !== 'object' || typeof item.title !== 'string' || !item.title.trim() || item.title.length > 500) return invalidOutput('PARSE_PLAN_ITEM_INVALID');
       return { title: item.title.trim(), ...(WORKSPACE_STEP_IDS.includes(item.stepId) ? { stepId: item.stepId } : {}) };
     });
   }
@@ -152,29 +193,35 @@ export function assertAutopilotWorkArtifact(output: WorkspaceAutopilotOutput, te
 } = {}): WorkspaceWorkContract {
   const contract = validateAutopilotWorkContract(context.contract ?? output.workContract, template, instructions, context.plan);
   const body = output.draft?.trim();
-  if (!body || output.workOutputKind !== contract.outputKind || !output.workEvidence?.length) return invalidWorkArtifact();
+  if (!body) return invalidWorkArtifact('WORK_DRAFT_MISSING');
+  if (output.workOutputKind !== contract.outputKind) return invalidWorkArtifact('WORK_OUTPUT_KIND_MISMATCH');
+  if (!output.workEvidence?.length) return invalidWorkArtifact('WORK_EVIDENCE_MISSING');
   const source = normalizedWorkText(instructions);
   const artifact = normalizedWorkText(body);
   // An exact task command is not its transformation. Genuine reproduction or
   // an extract from separately supplied material remains a valid candidate.
   if (contract.operation !== 'reproduce' && artifact === source
-    && !normalizedWorkText(context.sourceContext ?? '').includes(artifact)) return invalidWorkArtifact();
+    && !normalizedWorkText(context.sourceContext ?? '').includes(artifact)) return invalidWorkArtifact('WORK_EXACT_INSTRUCTION_ECHO');
   for (const evidence of output.workEvidence) {
     const requirement = normalizedWorkText(evidence.requirement);
     const excerpt = normalizedWorkText(evidence.excerpt);
-    if (!requirement || !excerpt || !source.includes(requirement) || !artifact.includes(excerpt)) return invalidWorkArtifact();
+    if (!requirement || !source.includes(requirement)) return invalidWorkArtifact('WORK_EVIDENCE_REQUIREMENT_UNANCHORED');
+    if (!excerpt || !artifact.includes(excerpt)) return invalidWorkArtifact('WORK_EVIDENCE_DRAFT_EXCERPT_UNANCHORED');
   }
   if (contract.criteria.some((criterion) => criterion.required && !output.workEvidence!.some((evidence) => (
     normalizedWorkText(evidence.requirement) === normalizedWorkText(criterion.requirement)
-  )))) return invalidWorkArtifact();
+  )))) return invalidWorkArtifact('WORK_REQUIRED_CRITERION_EVIDENCE_MISSING');
   if (contract.sourceRequirement === 'cited-evidence') {
     const labels = new Set((context.citations ?? []).map((item) => item.citationLabel));
     const referenced = [...body.matchAll(/\[(W\d+)\]/g)].map((item) => item[1]!);
-    if (!context.sourceContext?.trim() || !referenced.length || referenced.some((label) => !labels.has(label))) return invalidWorkArtifact();
+    if (!context.sourceContext?.trim()) return invalidWorkArtifact('WORK_SOURCE_CONTEXT_MISSING');
+    if (!referenced.length) return invalidWorkArtifact('WORK_SOURCE_CITATION_MISSING');
+    if (referenced.some((label) => !labels.has(label))) return invalidWorkArtifact('WORK_SOURCE_CITATION_UNKNOWN');
   }
   if (contract.sourceRequirement === 'provided-content') {
     const excerpt = normalizedWorkText(contract.sourceExcerpt ?? '');
-    if (!excerpt || ![context.sourceMaterial ?? instructions, context.sourceContext ?? ''].some((value) => normalizedWorkText(value).includes(excerpt))) return invalidWorkArtifact();
+    if (!excerpt) return invalidWorkArtifact('WORK_SOURCE_EXCERPT_MISSING');
+    if (![context.sourceMaterial ?? instructions, context.sourceContext ?? ''].some((value) => normalizedWorkText(value).includes(excerpt))) return invalidWorkArtifact('WORK_SOURCE_EXCERPT_UNANCHORED');
   }
   return contract;
 }
@@ -188,19 +235,19 @@ export function workContractFingerprint(contract: WorkspaceWorkContract): string
 }
 
 export function validateAutopilotWorkContract(value: WorkspaceWorkContract | undefined, template: WorkspaceTemplate, instructions: string, plan: readonly WorkspacePlanItem[] = []): WorkspaceWorkContract {
-  if (!value) return invalidWorkArtifact();
+  if (!value) return invalidWorkArtifact('WORK_CONTRACT_MISSING');
   const contract = parseWorkContract(value);
   const source = normalizedWorkText(instructions);
-  if (!source || contract.criteria.some((item) => !source.includes(normalizedWorkText(item.requirement)))
-    || !contract.criteria.some((item) => item.required)
-    || contract.outputKind !== WORK_OUTPUT_BY_INTENT[contract.taskIntent]
-    || (contract.taskIntent === 'academic-section' && contract.scope !== 'current-section')
-    || (contract.taskIntent === 'scientific-article' && contract.scope !== 'current-section')
-    || (contract.taskIntent === 'research-task' && contract.sourceRequirement !== 'cited-evidence')
-    || (contract.taskIntent === 'article-summary' && (contract.operation !== 'transform' || contract.sourceRequirement === 'none'))
-    || (contract.sourceRequirement === 'provided-content' && !contract.sourceExcerpt?.trim())) return invalidWorkArtifact();
+  if (!source) return invalidWorkArtifact('WORK_INSTRUCTIONS_MISSING');
+  if (contract.criteria.some((item) => !source.includes(normalizedWorkText(item.requirement)))) return invalidWorkArtifact('WORK_CRITERION_NOT_IN_INSTRUCTIONS');
+  if (!contract.criteria.some((item) => item.required)) return invalidWorkArtifact('WORK_REQUIRED_CRITERION_MISSING');
+  if (contract.outputKind !== WORK_OUTPUT_BY_INTENT[contract.taskIntent]) return invalidWorkArtifact('WORK_CONTRACT_KIND_INTENT_MISMATCH');
+  if ((contract.taskIntent === 'academic-section' || contract.taskIntent === 'scientific-article') && contract.scope !== 'current-section') return invalidWorkArtifact('WORK_CONTRACT_SCOPE_MISMATCH');
+  if (contract.taskIntent === 'research-task' && contract.sourceRequirement !== 'cited-evidence') return invalidWorkArtifact('WORK_RESEARCH_SOURCE_REQUIREMENT_INVALID');
+  if (contract.taskIntent === 'article-summary' && (contract.operation !== 'transform' || contract.sourceRequirement === 'none')) return invalidWorkArtifact('WORK_SUMMARY_CONTRACT_INVALID');
+  if (contract.sourceRequirement === 'provided-content' && !contract.sourceExcerpt?.trim()) return invalidWorkArtifact('WORK_SOURCE_EXCERPT_MISSING');
   const section = contract.scope === 'current-section' ? plan.find((item) => !item.completed) : undefined;
-  if (contract.scope === 'current-section' && !section) return invalidWorkArtifact();
+  if (contract.scope === 'current-section' && !section) return invalidWorkArtifact('WORK_SECTION_PLAN_MISSING');
   return { ...contract, instructionFingerprint: workProductionFingerprint(instructions),
     ...(section ? { sectionPlanItemId: section.id } : {}) };
 }
@@ -228,29 +275,30 @@ export function taskFulfillmentIssues(output: WorkspaceAutopilotOutput, contract
   return [...new Set(issues)];
 }
 
-function canonicalWorkOutputKind(value: unknown): WorkspaceWorkOutputKind {
+function canonicalWorkOutputKind(value: unknown, reason: AutopilotDiagnosticReason = 'PARSE_WORK_OUTPUT_KIND_INVALID'): WorkspaceWorkOutputKind {
   const canonical = typeof value === 'string' ? LEGACY_WORK_OUTPUT_KINDS[value] ?? value : undefined;
-  return WORKSPACE_WORK_OUTPUT_KINDS.includes(canonical as WorkspaceWorkOutputKind) ? canonical as WorkspaceWorkOutputKind : invalidOutput();
+  return WORKSPACE_WORK_OUTPUT_KINDS.includes(canonical as WorkspaceWorkOutputKind) ? canonical as WorkspaceWorkOutputKind : invalidOutput(reason);
 }
 
 function parseWorkContract(value: unknown): WorkspaceWorkContract {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return invalidOutput();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return invalidOutput('PARSE_CONTRACT_NOT_OBJECT');
   const item = value as Record<string, unknown>;
-  if (item.version !== 1 || !WORKSPACE_WORK_INTENTS.includes(item.taskIntent as WorkspaceWorkContract['taskIntent'])
-    || !['produce', 'transform', 'reproduce'].includes(item.operation as string)
-    || !['entire-task', 'current-section'].includes(item.scope as string)
-    || !['none', 'provided-content', 'cited-evidence'].includes(item.sourceRequirement as string)
-    || typeof item.task !== 'string' || !item.task.trim() || item.task.length > 4_000
-    || (item.sourceExcerpt !== undefined && (typeof item.sourceExcerpt !== 'string' || item.sourceExcerpt.length > 8_000))
-    || !Array.isArray(item.criteria) || !item.criteria.length || item.criteria.length > 100) return invalidOutput();
+  if (item.version !== 1) return invalidOutput('PARSE_CONTRACT_VERSION_INVALID');
+  if (!WORKSPACE_WORK_INTENTS.includes(item.taskIntent as WorkspaceWorkContract['taskIntent'])) return invalidOutput('PARSE_CONTRACT_INTENT_INVALID');
+  if (!['produce', 'transform', 'reproduce'].includes(item.operation as string)) return invalidOutput('PARSE_CONTRACT_OPERATION_INVALID');
+  if (!['entire-task', 'current-section'].includes(item.scope as string)) return invalidOutput('PARSE_CONTRACT_SCOPE_INVALID');
+  if (!['none', 'provided-content', 'cited-evidence'].includes(item.sourceRequirement as string)) return invalidOutput('PARSE_CONTRACT_SOURCE_REQUIREMENT_INVALID');
+  if (typeof item.task !== 'string' || !item.task.trim() || item.task.length > 4_000) return invalidOutput('PARSE_CONTRACT_TASK_INVALID');
+  if (item.sourceExcerpt !== undefined && (typeof item.sourceExcerpt !== 'string' || item.sourceExcerpt.length > 8_000)) return invalidOutput('PARSE_CONTRACT_SOURCE_EXCERPT_INVALID');
+  if (!Array.isArray(item.criteria) || !item.criteria.length || item.criteria.length > 100) return invalidOutput('PARSE_CONTRACT_CRITERIA_INVALID');
   const criteria = item.criteria.map((criterion) => {
     if (!criterion || typeof criterion.id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(criterion.id)
       || typeof criterion.requirement !== 'string' || !criterion.requirement.trim() || criterion.requirement.length > 2_000
-      || typeof criterion.required !== 'boolean') return invalidOutput();
+      || typeof criterion.required !== 'boolean') return invalidOutput('PARSE_CONTRACT_CRITERION_INVALID');
     return { id: criterion.id, requirement: criterion.requirement.trim(), required: criterion.required };
   });
-  if (new Set(criteria.map((criterion) => criterion.id)).size !== criteria.length) return invalidOutput();
-  return { version: 1, taskIntent: item.taskIntent as WorkspaceWorkContract['taskIntent'], outputKind: canonicalWorkOutputKind(item.outputKind),
+  if (new Set(criteria.map((criterion) => criterion.id)).size !== criteria.length) return invalidOutput('PARSE_CONTRACT_CRITERION_ID_DUPLICATE');
+  return { version: 1, taskIntent: item.taskIntent as WorkspaceWorkContract['taskIntent'], outputKind: canonicalWorkOutputKind(item.outputKind, 'PARSE_CONTRACT_OUTPUT_KIND_INVALID'),
     operation: item.operation as WorkspaceWorkContract['operation'], scope: item.scope as WorkspaceWorkContract['scope'],
     task: item.task.trim(), criteria, sourceRequirement: item.sourceRequirement as WorkspaceWorkContract['sourceRequirement'],
     ...(typeof item.sourceExcerpt === 'string' && item.sourceExcerpt.trim() ? { sourceExcerpt: item.sourceExcerpt.trim() } : {}),
@@ -288,13 +336,13 @@ function requestsProceduralArtifact(instructions: string): boolean {
   return /\b(?:redige[rz]?|ecri(?:s|re|vez)|cree[rz]?|produi(?:s|re|sez)|donne[rz]?|fourni(?:s|r|ssez)|prepare[rz]?|write|create|produce|provide|give|draft|prepare)\s+(?:[\p{L}'-]+\s+){0,5}(?:procedure|guide|protocole|protocol|instructions|tutorial|mode\s+d'emploi|methode|method)\b/u.test(text);
 }
 
-function invalidWorkArtifact(): never {
-  throw new ServiceUnavailableException({
+function invalidWorkArtifact(internalDiagnosticReason: AutopilotDiagnosticReason): never {
+  throw createAutopilotDiagnosticException(internalDiagnosticReason, {
     code: 'workspace_autopilot_work_artifact_required',
     message: 'The Professor returned instructions instead of a verified work draft. Your existing work is saved.',
   });
 }
 
-function invalidOutput(): never {
-  throw new ServiceUnavailableException({ code: 'workspace_autopilot_invalid_result', message: 'The Professor result could not be verified. Your work is saved.' });
+function invalidOutput(internalDiagnosticReason: AutopilotDiagnosticReason): never {
+  throw createAutopilotDiagnosticException(internalDiagnosticReason, { code: 'workspace_autopilot_invalid_result', message: 'The Professor result could not be verified. Your work is saved.' });
 }

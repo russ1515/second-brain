@@ -5,6 +5,9 @@ const test = require('node:test');
 const {
   autopilotProfessorDirective,
   assertAutopilotWorkArtifact,
+  AUTOPILOT_DIAGNOSTIC_REASONS,
+  createAutopilotDiagnosticException,
+  getAutopilotDiagnosticReason,
   parseAutopilotOutput,
   taskFulfillmentIssues,
   validateAutopilotWorkContract,
@@ -300,4 +303,155 @@ test('Universal task contracts cannot erase required criteria or substitute an u
     { ...PHYSICS_CONTRACT, outputKind: 'SUMMARY_DRAFT' },
     { ...PHYSICS_CONTRACT, criteria: [PHYSICS_CONTRACT.criteria[0], PHYSICS_CONTRACT.criteria[0]] },
   ]) assert.throws(() => validateAutopilotWorkContract(contract, 'assignment', PHYSICS_INSTRUCTIONS, CURRENT_PLAN));
+});
+
+function assertDiagnostic(action, expected, publicCode = 'workspace_autopilot_invalid_result') {
+  assert.throws(action, (error) => {
+    assert.equal(error.getStatus(), 503);
+    assert.equal(error.getResponse().code, publicCode);
+    assert.equal(getAutopilotDiagnosticReason(error), expected);
+    assert.ok(AUTOPILOT_DIAGNOSTIC_REASONS.includes(expected));
+    assert.deepEqual(Object.keys(error.getResponse()).sort(), ['code', 'message']);
+    assert.equal(Object.hasOwn(error, 'internalDiagnosticReason'), false);
+    assert.doesNotMatch(JSON.stringify(error), new RegExp(expected));
+    assert.doesNotMatch(JSON.stringify(error.getResponse()), /SECRET_FIXTURE|private learner passage/);
+    return true;
+  });
+}
+
+test('Runtime parser reports the precise normalization or JSON shape failure without returning the raw content', () => {
+  assertDiagnostic(() => parseAutopilotOutput('SECRET_FIXTURE { invalid'), 'PARSE_INVALID_JSON');
+  for (const root of [null, [], true, 17, 'SECRET_FIXTURE']) {
+    assertDiagnostic(() => parseAutopilotOutput(JSON.stringify(root)), 'PARSE_ROOT_NOT_OBJECT');
+  }
+  for (const [value, expected] of [
+    [{ draft: 'private learner passage' }, 'PARSE_TEXT_MISSING'],
+    [{ text: 3 }, 'PARSE_TEXT_INVALID_TYPE'],
+    [{ text: '  ' }, 'PARSE_TEXT_EMPTY'],
+    [{ text: 'a'.repeat(20_001) }, 'PARSE_TEXT_TOO_LONG'],
+    [{ text: 'Result', workOutputKind: 'SECRET_FIXTURE' }, 'PARSE_WORK_OUTPUT_KIND_INVALID'],
+    [{ text: 'Result', workEvidence: {} }, 'PARSE_WORK_EVIDENCE_INVALID'],
+    [{ text: 'Result', workEvidence: [{ requirement: 'private learner passage' }] }, 'PARSE_WORK_EVIDENCE_ITEM_INVALID'],
+    [{ text: 'Result', draft: {} }, 'PARSE_TEXT_FIELD_INVALID'],
+    [{ text: 'Result', issues: {} }, 'PARSE_LIST_FIELD_INVALID'],
+    [{ text: 'Result', briefFields: [] }, 'PARSE_BRIEF_FIELDS_INVALID'],
+    [{ text: 'Result', briefFields: { subject: 2 } }, 'PARSE_BRIEF_FIELD_INVALID'],
+    [{ text: 'Result', plan: {} }, 'PARSE_PLAN_INVALID'],
+    [{ text: 'Result', plan: [{ title: '' }] }, 'PARSE_PLAN_ITEM_INVALID'],
+    [{ text: 'Result', taskFulfillment: {} }, 'PARSE_TASK_FULFILLMENT_INVALID'],
+  ]) assertDiagnostic(() => parseAutopilotOutput(JSON.stringify(value)), expected);
+  const normalized = parseAutopilotOutput(`  \`\`\`json\n${JSON.stringify(artifact())}\n\`\`\`  `);
+  assert.equal(normalized.draft, PHYSICS_DRAFT);
+  assert.equal(normalized.workOutputKind, 'ANSWER_DRAFT');
+  assert.equal(getAutopilotDiagnosticReason(new Error('SECRET_FIXTURE')), undefined);
+});
+
+test('Runtime diagnostic reasons remain server-private and cannot be forged through an HTTP response property', () => {
+  const error = createAutopilotDiagnosticException('WORK_CONTRACT_MISSING', {
+    code: 'workspace_autopilot_work_artifact_required', message: 'Your work is saved.',
+  });
+  assert.equal(getAutopilotDiagnosticReason(error), 'WORK_CONTRACT_MISSING');
+  assert.deepEqual(error.getResponse(), {
+    code: 'workspace_autopilot_work_artifact_required', message: 'Your work is saved.',
+  });
+  assert.doesNotMatch(JSON.stringify(error), /WORK_CONTRACT_MISSING|internalDiagnosticReason/);
+  const forged = new (require('@nestjs/common').ServiceUnavailableException)({
+    code: 'workspace_autopilot_invalid_result', message: 'Your work is saved.',
+    internalDiagnosticReason: 'PARSE_INVALID_JSON',
+  });
+  assert.equal(getAutopilotDiagnosticReason(forged), undefined);
+  assert.equal(getAutopilotDiagnosticReason(JSON.parse(JSON.stringify(error))), undefined);
+});
+
+test('Runtime contract parser distinguishes absent fields, malformed criteria and invalid canonical kinds', () => {
+  const badContracts = [
+    [null, 'PARSE_CONTRACT_NOT_OBJECT'],
+    [{ ...PHYSICS_CONTRACT, version: 2 }, 'PARSE_CONTRACT_VERSION_INVALID'],
+    [{ ...PHYSICS_CONTRACT, taskIntent: 'SECRET_FIXTURE' }, 'PARSE_CONTRACT_INTENT_INVALID'],
+    [{ ...PHYSICS_CONTRACT, operation: 'SECRET_FIXTURE' }, 'PARSE_CONTRACT_OPERATION_INVALID'],
+    [{ ...PHYSICS_CONTRACT, scope: 'SECRET_FIXTURE' }, 'PARSE_CONTRACT_SCOPE_INVALID'],
+    [{ ...PHYSICS_CONTRACT, sourceRequirement: 'SECRET_FIXTURE' }, 'PARSE_CONTRACT_SOURCE_REQUIREMENT_INVALID'],
+    [{ ...PHYSICS_CONTRACT, task: '' }, 'PARSE_CONTRACT_TASK_INVALID'],
+    [{ ...PHYSICS_CONTRACT, sourceExcerpt: {} }, 'PARSE_CONTRACT_SOURCE_EXCERPT_INVALID'],
+    [{ ...PHYSICS_CONTRACT, criteria: [] }, 'PARSE_CONTRACT_CRITERIA_INVALID'],
+    [{ ...PHYSICS_CONTRACT, criteria: [{ id: 'criterion', requirement: 'private learner passage' }] }, 'PARSE_CONTRACT_CRITERION_INVALID'],
+    [{ ...PHYSICS_CONTRACT, criteria: [PHYSICS_CONTRACT.criteria[0], PHYSICS_CONTRACT.criteria[0]] }, 'PARSE_CONTRACT_CRITERION_ID_DUPLICATE'],
+    [{ ...PHYSICS_CONTRACT, outputKind: 'SECRET_FIXTURE' }, 'PARSE_CONTRACT_OUTPUT_KIND_INVALID'],
+  ];
+  for (const [workContract, expected] of badContracts) {
+    assertDiagnostic(() => parseAutopilotOutput(JSON.stringify(artifact({ workContract }))), expected);
+  }
+});
+
+test('Runtime WORK structural diagnostic preserves rejection gates and never guesses a semantic method-only reason', () => {
+  const check = (output, expected, context = {}, instructions = PHYSICS_INSTRUCTIONS) => {
+    assertDiagnostic(() => assertAutopilotWorkArtifact(output, 'assignment', instructions, context), expected, 'workspace_autopilot_work_artifact_required');
+  };
+  check(artifact({ workContract: undefined }), 'WORK_CONTRACT_MISSING');
+  check(artifact({ draft: '' }), 'WORK_DRAFT_MISSING');
+  check(artifact({ workOutputKind: 'SCIENTIFIC_DRAFT' }), 'WORK_OUTPUT_KIND_MISMATCH');
+  check(artifact({ workEvidence: [] }), 'WORK_EVIDENCE_MISSING');
+  check(artifact({ draft: PHYSICS_INSTRUCTIONS }), 'WORK_EXACT_INSTRUCTION_ECHO');
+  check(artifact({ workEvidence: [{ requirement: 'SECRET_FIXTURE', excerpt: PHYSICS_DRAFT }] }), 'WORK_EVIDENCE_REQUIREMENT_UNANCHORED');
+  check(artifact({ workEvidence: [{ requirement: '2 kg', excerpt: 'private learner passage' }] }), 'WORK_EVIDENCE_DRAFT_EXCERPT_UNANCHORED');
+  check(artifact({ workEvidence: [artifact().workEvidence[0]] }), 'WORK_REQUIRED_CRITERION_EVIDENCE_MISSING');
+  check(artifact(), 'WORK_INSTRUCTIONS_MISSING', {}, '');
+  check(artifact({ workContract: { ...PHYSICS_CONTRACT, criteria: [{ id: 'unrelated', requirement: 'SECRET_FIXTURE', required: true }] } }), 'WORK_CRITERION_NOT_IN_INSTRUCTIONS');
+  check(artifact({ workContract: { ...PHYSICS_CONTRACT, criteria: PHYSICS_CONTRACT.criteria.map((item) => ({ ...item, required: false })) } }), 'WORK_REQUIRED_CRITERION_MISSING');
+  check(artifact({ workContract: { ...PHYSICS_CONTRACT, outputKind: 'SUMMARY_DRAFT' } }), 'WORK_CONTRACT_KIND_INTENT_MISMATCH');
+
+  // Lexically anchored advice can be structurally well formed. Semantic rejection
+  // belongs to the existing VERIFICATION verdict, never a fabricated parser reason.
+  const methodDraft = 'Pour calculer, tu devrais identifier les données puis choisir une formule.';
+  const method = artifact({
+    draft: methodDraft, workContract: contractFor('Calculer le résultat.'),
+    workEvidence: [{ requirement: 'Calculer le résultat.', excerpt: methodDraft }],
+  });
+  assert.doesNotThrow(() => assertAutopilotWorkArtifact(method, 'assignment', 'Calculer le résultat.'));
+  assert.deepEqual(taskFulfillmentIssues({ taskFulfillment: {
+    fulfilled: false, contractMatchesTask: true, scope: 'entire-task',
+    criterionReviews: [{ criterionId: 'required-task', fulfilled: false, reason: 'Only a method; no requested result.' }],
+  } }, method.workContract, methodDraft), ['task-not-fulfilled', 'task-criterion-unfulfilled']);
+});
+
+test('Runtime WORK diagnostics distinguish missing sources, unknown citations and unanchored provided content', () => {
+  const research = UNIVERSAL_TASKS.find((item) => item.taskIntent === 'research-task');
+  const output = universalArtifact(research);
+  const check = (candidate, expected, context) => assertDiagnostic(
+    () => assertAutopilotWorkArtifact(candidate, research.template, research.instructions, context),
+    expected, 'workspace_autopilot_work_artifact_required',
+  );
+  check(output, 'WORK_SOURCE_CONTEXT_MISSING', { citations: [SOURCE_CITATION] });
+  const withoutCitation = {
+    ...output, draft: output.draft.replace(/\[W1\]/g, ''),
+    workEvidence: output.workEvidence.map((item) => ({ ...item, excerpt: item.excerpt.replace(/\[W1\]/g, '') })),
+  };
+  check(withoutCitation, 'WORK_SOURCE_CITATION_MISSING', { sourceContext: SOURCE_CONTEXT, citations: [SOURCE_CITATION] });
+  check(output, 'WORK_SOURCE_CITATION_UNKNOWN', { sourceContext: SOURCE_CONTEXT, citations: [] });
+  const summary = UNIVERSAL_TASKS.find((item) => item.taskIntent === 'article-summary');
+  const summaryOutput = universalArtifact(summary);
+  assertDiagnostic(() => assertAutopilotWorkArtifact({ ...summaryOutput, workContract: { ...summaryOutput.workContract, sourceExcerpt: 'private learner passage' } },
+    summary.template, summary.instructions, { sourceContext: SOURCE_CONTEXT }), 'WORK_SOURCE_EXCERPT_UNANCHORED', 'workspace_autopilot_work_artifact_required');
+});
+
+test('Runtime valid fixtures traverse raw normalization, parse and validator without changing all eight canonical kinds', () => {
+  const seenKinds = new Set();
+  const assignment = parseAutopilotOutput(`\`\`\`json\n${JSON.stringify(artifact())}\n\`\`\``);
+  assert.doesNotThrow(() => assertAutopilotWorkArtifact(assignment, 'assignment', PHYSICS_INSTRUCTIONS));
+  seenKinds.add(assignment.workOutputKind);
+  for (const fixture of UNIVERSAL_TASKS) {
+    const expected = universalArtifact(fixture);
+    const output = parseAutopilotOutput(`\`\`\`json\n${JSON.stringify(expected)}\n\`\`\``);
+    const validated = assertAutopilotWorkArtifact(output, fixture.template, fixture.instructions, {
+      sourceContext: fixture.sourceContext || '', citations: fixture.citations || [], plan: CURRENT_PLAN,
+    });
+    assert.equal(output.workOutputKind, fixture.outputKind);
+    assert.equal(output.draft, fixture.draft);
+    assert.equal(validated.outputKind, fixture.outputKind);
+    seenKinds.add(output.workOutputKind);
+  }
+  assert.deepEqual([...seenKinds].sort(), [
+    'ANSWER_DRAFT', 'SUMMARY_DRAFT', 'SOURCED_RESEARCH_DRAFT', 'CURRENT_ACADEMIC_SECTION_DRAFT',
+    'ARGUMENTATIVE_DRAFT', 'SCIENTIFIC_DRAFT', 'REPORT_DRAFT', 'INTENT_MATCHED_DRAFT',
+  ].sort());
 });

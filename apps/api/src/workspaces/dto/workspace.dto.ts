@@ -39,6 +39,7 @@ import {
   WORKSPACE_PROFESSOR_PHASES,
   WORKSPACE_TEMPLATES,
   WORKSPACE_AUTOPILOT_ACTIONS,
+  WORKSPACE_WORK_INTENTS,
 } from '@second-brain/shared';
 
 export class CreateWorkspaceDto implements CreateWorkspaceRequest {
@@ -71,6 +72,9 @@ export class CreateWorkspaceDto implements CreateWorkspaceRequest {
 
   @IsOptional() @IsBoolean()
   autopilotConsent?: boolean;
+
+  @IsOptional() @IsIn(WORKSPACE_WORK_INTENTS)
+  workIntent?: CreateWorkspaceRequest['workIntent'];
 }
 
 export class WorkspaceAutopilotDto implements WorkspaceAutopilotRequest {
@@ -85,6 +89,9 @@ export class WorkspaceAutopilotDto implements WorkspaceAutopilotRequest {
 
   @IsOptional() @IsBoolean()
   consent?: boolean;
+
+  @IsOptional() @IsIn(WORKSPACE_WORK_INTENTS)
+  workIntent?: WorkspaceAutopilotRequest['workIntent'];
 }
 
 export class UpdateWorkspaceDto implements UpdateWorkspaceRequest {

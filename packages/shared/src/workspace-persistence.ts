@@ -3,7 +3,7 @@ import type { WorkspaceMessage, WorkspaceMode } from './document';
 import type { ExperienceContext } from './context';
 import type { WorkspaceToolState } from './workspace-tools';
 import type { WorkspaceCompletionState } from './workspace-completion';
-import type { WorkspaceAutopilotOutput, WorkspaceAutopilotState } from './workspace-autopilot';
+import type { WorkspaceAutopilotOutput, WorkspaceAutopilotState, WorkspaceWorkIntent } from './workspace-autopilot';
 
 /** Target persistence contract. Lot 0 does not add a workspace database model. */
 export type WorkspaceProjectStatus = 'active' | 'paused' | 'completed' | 'archived';
@@ -435,6 +435,8 @@ export interface CreateWorkspaceRequest {
   brief?: WorkspaceBrief;
   initialContent?: string;
   autopilotConsent?: boolean;
+  /** Explicit semantic intent, not inferred from a container shell label. */
+  workIntent?: WorkspaceWorkIntent;
 }
 
 export interface UpdateWorkspaceRequest {

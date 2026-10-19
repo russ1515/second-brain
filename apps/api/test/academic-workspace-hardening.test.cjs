@@ -2300,7 +2300,8 @@ test('Targeted run grant enforces its smaller prompt ceiling before provider use
 });
 
 async function universalWorkFixture(fixture, options = {}) {
-  const harness = createHarness();
+  const config = options.config ?? {};
+  const harness = createHarness({ config });
   const proposed = {
     version: 1, taskIntent: fixture.taskIntent, outputKind: fixture.outputKind,
     operation: fixture.operation, scope: fixture.scope || 'entire-task', task: fixture.instructions,
@@ -2345,6 +2346,7 @@ async function universalWorkFixture(fixture, options = {}) {
   const workspace = await harness.service.create('owner', request({
     requestId: 'universal-work-create', title: fixture.name, template: fixture.template,
     objective: '', autopilotConsent: true,
+    ...(options.workIntent ? { workIntent: options.workIntent } : {}),
     brief: { version: 1, fields: {
       subject: 'Technical task', userInstructions: fixture.instructions, requirements: fixture.instructions,
       context: fixture.instructions, deliverable: fixture.instructions,
@@ -2354,7 +2356,7 @@ async function universalWorkFixture(fixture, options = {}) {
     sources: options.sources ?? (sourceContext ? [{ kind: 'document', id: 'document-owner' }] : []),
     ...(options.plan ? { plan: options.plan } : {}),
   }));
-  return { ...harness, workspace, proposed };
+  return { ...harness, workspace, proposed, config };
 }
 
 for (const [index, fixture] of UNIVERSAL_TASKS.entries()) {
@@ -2496,13 +2498,24 @@ test('Universal finalization refuses a formerly successful review after the real
   }
 });
 
-test('Universal WORK interprets an older run in its existing WORK turn without replaying Comprehension or Method', async () => {
+test('Universal WORK restores an explicit older intent before its existing WORK turn without replaying Comprehension or Method', async () => {
   const fixture = UNIVERSAL_TASKS[0];
   const { service, state, workspace: initial } = await universalWorkFixture(fixture);
   let workspace = initial;
   for (let step = 0; step < 2; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `legacy-interpret-prepare-${step}`);
   delete state.workspaces[0].progress.workflow.autopilot.workContract;
   workspace = await service.get('owner', workspace.id);
+  workspace = await autopilotCommand(service, workspace, 'step', 'legacy-missing-context-no-spend');
+  assert.equal(autopilotState(workspace).status, 'PAUSED_ERROR');
+  assert.equal(state.llmCalls, 2);
+  workspace = await autopilotCommand(service, workspace, 'resume', 'legacy-explicit-context', { workIntent: fixture.taskIntent });
+  const responder = state.llmResponder;
+  state.llmResponder = (...args) => {
+    const output = JSON.parse(responder(...args));
+    output.workEvidence = state.workspaces[0].progress.workflow.autopilot.workContract.criteria
+      .map((item) => ({ requirement: item.requirement, excerpt: fixture.draft }));
+    return JSON.stringify(output);
+  };
   const request = { requestId: 'legacy-interpret-work-once', expectedRevision: workspace.autosaveRevision, action: 'step' };
   workspace = await service.autopilot('owner', workspace.id, request);
   assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
@@ -2511,7 +2524,7 @@ test('Universal WORK interprets an older run in its existing WORK turn without r
   assert.equal(state.llmCalls, 3);
   const replay = await service.autopilot('owner', workspace.id, request);
   assert.equal(replay.draft.content, fixture.draft);
-  assert.equal(autopilotState(replay).aiSteps, 3);
+  assert.equal(autopilotState(replay).aiSteps, 4, 'The rejected pre-provider command stays counted; resume never resets the bounded run');
   assert.equal(state.llmCalls, 3, 'An older run never incurs a second classification turn or command replay');
 });
 
@@ -2544,8 +2557,15 @@ test('Universal WORK safely pauses and clears an old paid cache, then permits on
   assert.equal(autopilotState(workspace).pendingResult, undefined);
   assert.deepEqual(state.workspaces[0].assistantHistory, retainedHistory);
   assert.equal(state.llmCalls, 3);
-  workspace = await autopilotCommand(service, workspace, 'resume', 'legacy-cache-explicit-retry');
+  workspace = await autopilotCommand(service, workspace, 'resume', 'legacy-cache-explicit-retry', { workIntent: 'assignment-exercise' });
   assert.equal(state.llmCalls, 3);
+  const responder = state.llmResponder;
+  state.llmResponder = (...args) => {
+    const output = JSON.parse(responder(...args));
+    output.workEvidence = state.workspaces[0].progress.workflow.autopilot.workContract.criteria
+      .map((item) => ({ requirement: item.requirement, excerpt: PHYSICS_WORK_DRAFT }));
+    return JSON.stringify(output);
+  };
   workspace = await autopilotCommand(service, workspace, 'step', 'legacy-cache-new-work-turn');
   assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
   assert.equal(autopilotState(workspace).aiSteps, 4);
@@ -2595,4 +2615,137 @@ test('Universal finalization revalidates actual AW-6 evidence when a collection 
   assert.equal(workspace.status, 'active');
   assert.equal(workspace.completion.snapshots.length, 0);
   assert.equal(state.llmCalls, 4, 'A changed cited document is detected before the final provider call');
+});
+
+const RUNTIME_ASSIGNMENT = {
+  name: 'technical price calculation', template: 'assignment', taskIntent: 'assignment-exercise', outputKind: 'ANSWER_DRAFT', operation: 'produce',
+  instructions: 'Calcule le prix total de trois cahiers à 4 euros et un livre à 7 euros. Donne le calcul et la conclusion.',
+  requirements: ['prix total', 'le calcul', 'la conclusion'],
+  draft: 'Les cahiers coûtent 3 × 4 = 12 euros. Avec le livre : 12 + 7 = 19 euros. La somme totale à payer est donc 19 euros.',
+  excerpts: ['La somme totale à payer est donc 19 euros.', '3 × 4 = 12 euros', 'La somme totale à payer est donc 19 euros.'],
+};
+
+for (const fixture of [RUNTIME_ASSIGNMENT, ...UNIVERSAL_TASKS.filter((item) => [
+  'article-summary', 'argumentative-essay', 'research-task', 'academic-section',
+].includes(item.taskIntent))]) {
+  test(`Runtime intent remains present from capture through WORK: ${fixture.taskIntent}`, async () => {
+    const { service, state, workspace: initial } = await universalWorkFixture(fixture, { workIntent: fixture.taskIntent });
+    const trace = [];
+    const responder = state.llmResponder;
+    state.llmResponder = (messages, options, current) => {
+      const row = current.workspaces[0];
+      const phase = row.progress.workflow.professor.currentPhase;
+      trace.push({ workspaceId: row.id, phase, intent: row.progress.workflow.autopilot.workIntent,
+        expected: options.jsonSchema.schema.properties.workContract.properties.outputKind.enum });
+      return responder(messages, options, current);
+    };
+    let workspace = initial;
+    assert.equal(autopilotState(workspace).workIntent, fixture.taskIntent);
+    assert.equal(workspace.professor.currentPhase, 'CAPTURE');
+    for (let step = 0; step < 3; step++) {
+      workspace = await autopilotCommand(service, workspace, 'step', `runtime-${fixture.taskIntent}-${step}`);
+      assert.equal(autopilotState(workspace).workIntent, fixture.taskIntent);
+      assert.equal(autopilotState(workspace).workContract.taskIntent, fixture.taskIntent);
+      assert.equal(autopilotState(workspace).workContract.outputKind, fixture.outputKind);
+    }
+    assert.deepEqual(trace.map((item) => item.phase), ['COMPREHENSION', 'METHOD', 'WORK']);
+    assert.ok(trace.every((item) => item.workspaceId === workspace.id && item.intent === fixture.taskIntent
+      && item.expected.length === 1 && item.expected[0] === fixture.outputKind));
+    assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
+    assert.equal(workspace.draft.content, fixture.draft);
+    assert.equal(state.llmCalls, 3, 'No separate classification or repair provider call');
+    assert.equal((await service.get('owner', workspace.id)).draft.content, fixture.draft);
+  });
+}
+
+test('Runtime C/M cannot silently advance without their work contract', async () => {
+  for (const missingAt of ['COMPREHENSION', 'METHOD']) {
+    const { service, state, workspace: initial } = await universalWorkFixture(RUNTIME_ASSIGNMENT, {
+      workIntent: 'assignment-exercise',
+      transformOutput(output, phase) { if (phase === missingAt) delete output.workContract; return output; },
+    });
+    let workspace = initial;
+    if (missingAt === 'METHOD') workspace = await autopilotCommand(service, workspace, 'step', 'runtime-present-c');
+    workspace = await autopilotCommand(service, workspace, 'step', `runtime-missing-${missingAt}`);
+    assert.equal(workspace.professor.currentPhase, missingAt);
+    assert.equal(autopilotState(workspace).status, 'PAUSED_ERROR');
+    assert.equal(autopilotState(workspace).workIntent, 'assignment-exercise');
+    assert.equal(workspace.professor.evidence.some((item) => item.phase === missingAt), false);
+    assert.equal(workspace.draft.content, '');
+    assert.equal(state.llmCalls, missingAt === 'METHOD' ? 2 : 1);
+  }
+});
+
+test('Runtime WORK refuses a missing context before provider and explicit resume restores only context', async () => {
+  const { service, state, workspace: initial } = await universalWorkFixture(RUNTIME_ASSIGNMENT, { workIntent: 'assignment-exercise' });
+  let workspace = initial;
+  workspace = await autopilotCommand(service, workspace, 'step', 'runtime-context-c');
+  workspace = await autopilotCommand(service, workspace, 'step', 'runtime-context-m');
+  delete state.workspaces[0].progress.workflow.autopilot.workContract; // Legacy data simulation in the in-memory fixture only.
+  workspace = await autopilotCommand(service, workspace, 'step', 'runtime-context-missing');
+  assert.equal(workspace.professor.currentPhase, 'WORK');
+  assert.equal(autopilotState(workspace).status, 'PAUSED_ERROR');
+  assert.equal(state.llmCalls, 2);
+  const before = structuredClone(workspace);
+  workspace = await autopilotCommand(service, workspace, 'resume', 'runtime-context-explicit', { workIntent: 'assignment-exercise' });
+  assert.equal(workspace.professor.currentPhase, 'WORK');
+  assert.equal(workspace.autosaveRevision, before.autosaveRevision);
+  assert.equal(autopilotState(workspace).aiSteps, autopilotState(before).aiSteps);
+  assert.equal(autopilotState(workspace).maxAiSteps, autopilotState(before).maxAiSteps);
+  assert.equal(autopilotState(workspace).workContract.outputKind, 'ANSWER_DRAFT');
+  assert.equal(autopilotState(workspace).workContract.origin, 'explicit-intent');
+  assert.deepEqual(workspace.professor.evidence, before.professor.evidence);
+  assert.equal(workspace.draft.content, '');
+  assert.equal(state.llmCalls, 2);
+  const responder = state.llmResponder;
+  state.llmResponder = (...args) => {
+    const output = JSON.parse(responder(...args));
+    output.workEvidence = state.workspaces[0].progress.workflow.autopilot.workContract.criteria
+      .map((item) => ({ requirement: item.requirement, excerpt: RUNTIME_ASSIGNMENT.draft }));
+    return JSON.stringify(output);
+  };
+  workspace = await autopilotCommand(service, workspace, 'step', 'runtime-context-work');
+  assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
+  assert.equal(workspace.draft.content, RUNTIME_ASSIGNMENT.draft);
+  assert.equal(state.llmCalls, 3);
+  assert.equal(workspace.brief.fields.userInstructions, RUNTIME_ASSIGNMENT.instructions);
+});
+
+test('Runtime explicit intent cannot be changed by a step, replay, foreign user or conflicting resume', async () => {
+  const { service, state, workspace: initial } = await universalWorkFixture(RUNTIME_ASSIGNMENT, { workIntent: 'assignment-exercise' });
+  await assert.rejects(autopilotCommand(service, initial, 'step', 'runtime-intent-on-step', { workIntent: 'report' }), (error) => httpStatus(error) === 400);
+  await assert.rejects(service.autopilot('foreign', initial.id, { requestId: 'runtime-foreign-intent', expectedRevision: initial.autosaveRevision, action: 'resume', workIntent: 'assignment-exercise' }), (error) => httpStatus(error) === 404);
+  let workspace = await autopilotCommand(service, initial, 'pause', 'runtime-intent-pause');
+  await assert.rejects(autopilotCommand(service, workspace, 'resume', 'runtime-intent-conflict', { workIntent: 'report' }), (error) => httpStatus(error) === 409);
+  assert.equal(state.llmCalls, 0);
+  assert.equal(autopilotState(await service.get('owner', initial.id)).workIntent, 'assignment-exercise');
+});
+
+test('Runtime WORK diagnostic captures parser rejection privately and never persists provider raw output', async () => {
+  const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-work-diagnostic-integration-'));
+  fs.chmodSync(directory, 0o700);
+  const { service, state, config, workspace: initial } = await universalWorkFixture(RUNTIME_ASSIGNMENT, { workIntent: 'assignment-exercise' });
+  let workspace = await autopilotCommand(service, initial, 'step', 'runtime-diagnostic-c');
+  workspace = await autopilotCommand(service, workspace, 'step', 'runtime-diagnostic-m');
+  const requestId = 'autopilot-test-runtime-diagnostic-work';
+  config.WORKSPACE_WORK_DIAGNOSTIC_SCOPE = JSON.stringify({ version: 1, ownerId: 'owner', workspaceId: workspace.id,
+    runId: autopilotState(workspace).runId, requestId, directory, includePreview: true, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  state.llmResponder = () => 'not JSON; password="technical-password-must-not-survive"';
+  workspace = await service.autopilot('owner', workspace.id, { requestId, action: 'step', expectedRevision: workspace.autosaveRevision });
+  assert.equal(autopilotState(workspace).status, 'PAUSED_ERROR');
+  const files = fs.readdirSync(directory);
+  assert.equal(files.length, 1);
+  const proof = JSON.parse(fs.readFileSync(path.join(directory, files[0]), 'utf8'));
+  assert.equal(proof.trace.intent, 'assignment-exercise');
+  assert.equal(proof.expectedArtifactType, 'ANSWER_DRAFT');
+  assert.equal(proof.parserResult, 'FAIL');
+  assert.equal(proof.validatorResult, 'NOT_RUN');
+  assert.equal(proof.rejectReasonCode, 'PARSE_INVALID_JSON');
+  assert.ok(proof.rawTextLength > 0);
+  assert.ok(!JSON.stringify(proof).includes('technical-password-must-not-survive'));
+  assert.ok(!JSON.stringify(workspace).includes('technical-password-must-not-survive'));
+  assert.equal(workspace.draft.content, '');
+  assert.equal(workspace.professor.evidence.some((item) => item.phase === 'WORK'), false);
+  assert.equal(state.llmCalls, 3);
 });
