@@ -7,6 +7,7 @@ const {
   assertAutopilotWorkArtifact,
   AUTOPILOT_DIAGNOSTIC_REASONS,
   createAutopilotDiagnosticException,
+  criterionEvidenceMatrix,
   getAutopilotDiagnosticReason,
   parseAutopilotOutput,
   taskFulfillmentIssues,
@@ -76,9 +77,9 @@ test('WORK selects eight canonical contracts from the actual task instead of tre
     const contract = contractFor(PHYSICS_INSTRUCTIONS, { taskIntent, outputKind });
     assert.equal(workspaceWorkOutputKind(template, contract), outputKind);
     const directive = autopilotProfessorDirective('WORK', template, contract);
-    assert.match(directive, /Exception for verbatim source metadata/);
-    assert.match(directive, /workEvidence\.requirement must remain in the exact language and words of the supplied instructions/);
-    assert.match(directive, /workEvidence\.excerpt in the exact words of draft/);
+    assert.match(directive, /criterionId must remain the exact supplied ID/);
+    assert.match(directive, /Equivalent criterion wording is associated by stable ID/);
+    assert.match(directive, /workEvidence\.excerpt must remain in the exact words of draft/);
     assert.match(directive, /text and draft still use the learner locale/);
   }
 });
@@ -400,14 +401,15 @@ test('Runtime WORK structural diagnostic preserves rejection gates and never gue
   check(artifact({ workContract: { ...PHYSICS_CONTRACT, criteria: PHYSICS_CONTRACT.criteria.map((item) => ({ ...item, required: false })) } }), 'WORK_REQUIRED_CRITERION_MISSING');
   check(artifact({ workContract: { ...PHYSICS_CONTRACT, outputKind: 'SUMMARY_DRAFT' } }), 'WORK_CONTRACT_KIND_INTENT_MISMATCH');
 
-  // Lexically anchored advice can be structurally well formed. Semantic rejection
-  // belongs to the existing VERIFICATION verdict, never a fabricated parser reason.
+  // The known commentary guard rejects advice-only production before persistence.
+  // It is not a universal correctness grader: existing verification still judges
+  // actual task fulfillment and examination restrictions.
   const methodDraft = 'Pour calculer, tu devrais identifier les données puis choisir une formule.';
   const method = artifact({
     draft: methodDraft, workContract: contractFor('Calculer le résultat.'),
     workEvidence: [{ requirement: 'Calculer le résultat.', excerpt: methodDraft }],
   });
-  assert.doesNotThrow(() => assertAutopilotWorkArtifact(method, 'assignment', 'Calculer le résultat.'));
+  check(method, 'WORK_COMMENTARY_ONLY', {}, 'Calculer le résultat.');
   assert.deepEqual(taskFulfillmentIssues({ taskFulfillment: {
     fulfilled: false, contractMatchesTask: true, scope: 'entire-task',
     criterionReviews: [{ criterionId: 'required-task', fulfilled: false, reason: 'Only a method; no requested result.' }],
@@ -454,4 +456,160 @@ test('Runtime valid fixtures traverse raw normalization, parse and validator wit
     'ANSWER_DRAFT', 'SUMMARY_DRAFT', 'SOURCED_RESEARCH_DRAFT', 'CURRENT_ACADEMIC_SECTION_DRAFT',
     'ARGUMENTATIVE_DRAFT', 'SCIENTIFIC_DRAFT', 'REPORT_DRAFT', 'INTENT_MATCHED_DRAFT',
   ].sort());
+});
+
+// These are explicitly synthetic transport regressions. The former provider
+// response was not retained in full and is never reconstructed here.
+function identifiedArtifact(overrides = {}) {
+  const output = artifact();
+  return { ...output, workEvidence: output.workEvidence.map((evidence, index) => ({
+    ...evidence, criterionId: output.workContract.criteria[index].id,
+    requirement: `Equivalent description of criterion ${index + 1}`,
+  })), ...overrides };
+}
+
+test('Stable criterion IDs associate equivalent requirement wording while every excerpt stays in the actual produced draft', () => {
+  const output = parseAutopilotOutput(JSON.stringify(identifiedArtifact()));
+  assert.doesNotThrow(() => assertAutopilotWorkArtifact(output, 'assignment', PHYSICS_INSTRUCTIONS));
+  const rows = criterionEvidenceMatrix(output, output.workContract, PHYSICS_INSTRUCTIONS);
+  assert.equal(rows.length, PHYSICS_CONTRACT.criteria.length);
+  assert.ok(rows.every((row) => row.status === 'PASS' && row.evidence[0].association === 'ID'));
+  assert.ok(rows.every((row) => row.evidence[0].requirementAnchored === false && row.evidence[0].excerptAnchored === true));
+
+  const unknown = identifiedArtifact({ workEvidence: [{ criterionId: 'not-in-contract', requirement: 'Equivalent description', excerpt: PHYSICS_DRAFT }] });
+  assertDiagnostic(() => assertAutopilotWorkArtifact(unknown, 'assignment', PHYSICS_INSTRUCTIONS),
+    'WORK_EVIDENCE_CRITERION_UNKNOWN', 'workspace_autopilot_work_artifact_required');
+  const falseQuotation = identifiedArtifact();
+  falseQuotation.workEvidence[0].excerpt = 'A result not contained in the real draft.';
+  assertDiagnostic(() => assertAutopilotWorkArtifact(falseQuotation, 'assignment', PHYSICS_INSTRUCTIONS),
+    'WORK_EVIDENCE_DRAFT_EXCERPT_UNANCHORED', 'workspace_autopilot_work_artifact_required');
+});
+
+test('Stable IDs accept unit, mathematical notation, Markdown and natural conclusion variants without a physics-specific equivalence table', () => {
+  const replacements = (value) => value.replaceAll('Ec', 'E_k').replaceAll('mv²', 'm v^2').replaceAll('25 J', '25 joules').replaceAll('# Conclusion', '');
+  const output = identifiedArtifact();
+  output.draft = replacements(output.draft);
+  output.workEvidence = output.workEvidence.map((evidence) => ({ ...evidence, excerpt: replacements(evidence.excerpt) }));
+  assert.doesNotThrow(() => assertAutopilotWorkArtifact(parseAutopilotOutput(JSON.stringify(output)), 'assignment', PHYSICS_INSTRUCTIONS));
+  assert.ok(criterionEvidenceMatrix(output, output.workContract, PHYSICS_INSTRUCTIONS).every((row) => row.status === 'PASS'));
+
+  // Identity matches semantics; quotations still prove provenance. No numeric
+  // answer, variable-name equivalence or unit-conversion heuristic is invented.
+  const alteredQuotation = { ...output, workEvidence: output.workEvidence.map((evidence, index) => index === 3 ? { ...evidence, excerpt: '25 J' } : evidence) };
+  assertDiagnostic(() => assertAutopilotWorkArtifact(alteredQuotation, 'assignment', PHYSICS_INSTRUCTIONS),
+    'WORK_EVIDENCE_DRAFT_EXCERPT_UNANCHORED', 'workspace_autopilot_work_artifact_required');
+  assert.match(output.draft, /25 joules/);
+  assert.match(output.draft, /E_k = 1\/2 m v\^2/);
+  assert.doesNotMatch(output.draft, /# Conclusion/);
+});
+
+test('Stable ID association never grants a missing mandatory criterion and preserves the legacy association gate', () => {
+  const partial = identifiedArtifact();
+  partial.workEvidence = partial.workEvidence.slice(0, -1);
+  const matrix = criterionEvidenceMatrix(partial, partial.workContract, PHYSICS_INSTRUCTIONS);
+  assert.deepEqual(matrix.filter((row) => row.status === 'MISSING').map((row) => row.criterionId), ['physics-3']);
+  assert.deepEqual(matrix.at(-1).evidence, []);
+  assertDiagnostic(() => assertAutopilotWorkArtifact(partial, 'assignment', PHYSICS_INSTRUCTIONS),
+    'WORK_REQUIRED_CRITERION_EVIDENCE_MISSING', 'workspace_autopilot_work_artifact_required');
+
+  // A legacy response without IDs must retain its old exact criterion identity.
+  const legacy = artifact();
+  legacy.workEvidence = legacy.workEvidence.map((evidence, index) => index === 3 ? { ...evidence, requirement: '5 m' } : evidence);
+  assertDiagnostic(() => assertAutopilotWorkArtifact(legacy, 'assignment', PHYSICS_INSTRUCTIONS),
+    'WORK_REQUIRED_CRITERION_EVIDENCE_MISSING', 'workspace_autopilot_work_artifact_required');
+});
+
+function classifiedFixture() {
+  const instructions = 'Réponds à la question. Ajoute une conclusion. Utilise une source si disponible. Tu peux proposer une variante. Ton concis.';
+  const draft = 'La réponse traite la question posée. En somme, le résultat répond au besoin annoncé.';
+  const workContract = contractFor(instructions, { criteria: [
+    { id: 'answer', requirement: 'Réponds à la question.', required: true, classification: 'REQUIRED', condition: 'NONE' },
+    { id: 'closing', requirement: 'Ajoute une conclusion.', required: true, classification: 'FORMAT', condition: 'NONE' },
+    { id: 'source', requirement: 'Utilise une source si disponible.', required: true, classification: 'CONDITIONAL', condition: 'SOURCE_AVAILABLE' },
+    { id: 'variant', requirement: 'Tu peux proposer une variante.', required: false, classification: 'OPTIONAL', condition: 'NONE' },
+    { id: 'tone', requirement: 'Ton concis.', required: true, classification: 'STYLE', condition: 'NONE' },
+  ] });
+  const output = { text: 'Le brouillon de test est enregistré.', draft, workOutputKind: 'ANSWER_DRAFT', workContract,
+    workEvidence: [
+      { criterionId: 'answer', requirement: 'Answer the question', excerpt: 'La réponse traite la question posée.' },
+      { criterionId: 'closing', requirement: 'Natural closing paragraph', excerpt: 'En somme, le résultat répond au besoin annoncé.' },
+      { criterionId: 'tone', requirement: 'Concise phrasing', excerpt: 'La réponse traite la question posée.' },
+    ] };
+  return { instructions, output };
+}
+
+test('Criterion matrix distinguishes required, explicit format, optional and unavailable source-conditional criteria', () => {
+  const { instructions, output } = classifiedFixture();
+  const context = { sourceContext: '', citations: [] };
+  const parsed = parseAutopilotOutput(JSON.stringify(output));
+  assert.doesNotThrow(() => assertAutopilotWorkArtifact(parsed, 'assignment', instructions, context));
+  const rows = criterionEvidenceMatrix(parsed, parsed.workContract, instructions, context);
+  assert.deepEqual(rows.map((row) => [row.criterionId, row.type, row.applicable, row.status]), [
+    ['answer', 'REQUIRED', true, 'PASS'], ['closing', 'FORMAT', true, 'PASS'],
+    ['source', 'CONDITIONAL', false, 'NOT_APPLICABLE'], ['variant', 'OPTIONAL', false, 'NOT_APPLICABLE'],
+    ['tone', 'STYLE', true, 'PASS'],
+  ]);
+  const missingFormat = { ...parsed, workEvidence: parsed.workEvidence.slice(0, 1) };
+  assertDiagnostic(() => assertAutopilotWorkArtifact(missingFormat, 'assignment', instructions, context),
+    'WORK_REQUIRED_CRITERION_EVIDENCE_MISSING', 'workspace_autopilot_work_artifact_required');
+});
+
+test('Conditional applicability is server-derived, unknown fails closed and available sources restore the obligation', () => {
+  const { instructions, output } = classifiedFixture();
+  output.workContract.criteria[2].applicable = false;
+  const parsed = parseAutopilotOutput(JSON.stringify(output));
+  assert.equal(parsed.workContract.criteria[2].applicable, undefined, 'a provider cannot certify applicability');
+  const unknown = criterionEvidenceMatrix(parsed, parsed.workContract, instructions);
+  assert.equal(unknown[2].status, 'UNKNOWN');
+  assertDiagnostic(() => assertAutopilotWorkArtifact(parsed, 'assignment', instructions),
+    'WORK_CRITERION_APPLICABILITY_UNKNOWN', 'workspace_autopilot_work_artifact_required');
+  assertDiagnostic(() => assertAutopilotWorkArtifact(parsed, 'assignment', instructions, { sourceAvailable: true }),
+    'WORK_REQUIRED_CRITERION_EVIDENCE_MISSING', 'workspace_autopilot_work_artifact_required');
+  assert.doesNotThrow(() => assertAutopilotWorkArtifact(parsed, 'assignment', instructions, { sourceAvailable: false }));
+  const unresolved = { ...parsed, workContract: { ...parsed.workContract, criteria: parsed.workContract.criteria.map((criterion) => criterion.id === 'source' ? { ...criterion, condition: 'UNRESOLVED' } : criterion) } };
+  assertDiagnostic(() => assertAutopilotWorkArtifact(unresolved, 'assignment', instructions, { sourceAvailable: false }),
+    'WORK_CRITERION_APPLICABILITY_UNKNOWN', 'workspace_autopilot_work_artifact_required');
+});
+
+test('Existing verification uses the same conditional applicability and never requires an unavailable optional source', () => {
+  const { output } = classifiedFixture();
+  const review = { taskFulfillment: { fulfilled: true, contractMatchesTask: true, scope: 'entire-task',
+    criterionReviews: output.workEvidence.map((evidence) => ({ criterionId: evidence.criterionId, fulfilled: true, excerpt: evidence.excerpt })) } };
+  assert.deepEqual(taskFulfillmentIssues(review, output.workContract, output.draft, [], { sourceAvailable: false }), []);
+  assert.ok(taskFulfillmentIssues(review, output.workContract, output.draft, [], { sourceAvailable: true }).includes('task-criterion-unfulfilled'));
+  assert.ok(taskFulfillmentIssues(review, output.workContract, output.draft).includes('task-criterion-applicability-unknown'));
+});
+
+test('Known method-only, prompt-rephrasing and partial productions remain rejected with stable criterion IDs', () => {
+  const method = identifiedArtifact();
+  method.draft = 'Tu devrais expliquer les notions. Tu devrais présenter les formules. Tu devrais calculer le résultat puis vérifier les unités. Tu devrais conclure.';
+  method.workEvidence = method.workEvidence.map((evidence) => ({ ...evidence, excerpt: method.draft }));
+  assertDiagnostic(() => assertAutopilotWorkArtifact(method, 'assignment', PHYSICS_INSTRUCTIONS),
+    'WORK_COMMENTARY_ONLY', 'workspace_autopilot_work_artifact_required');
+  const rephrased = identifiedArtifact();
+  rephrased.draft = 'Le devoir demande de présenter les notions. Le devoir demande les formules. Le devoir demande un calcul et une explication. Le devoir demande une conclusion.';
+  rephrased.workEvidence = rephrased.workEvidence.map((evidence) => ({ ...evidence, excerpt: rephrased.draft }));
+  assertDiagnostic(() => assertAutopilotWorkArtifact(rephrased, 'assignment', PHYSICS_INSTRUCTIONS),
+    'WORK_COMMENTARY_ONLY', 'workspace_autopilot_work_artifact_required');
+  const partial = identifiedArtifact();
+  partial.workEvidence = partial.workEvidence.slice(0, 2);
+  assertDiagnostic(() => assertAutopilotWorkArtifact(partial, 'assignment', PHYSICS_INSTRUCTIONS),
+    'WORK_REQUIRED_CRITERION_EVIDENCE_MISSING', 'workspace_autopilot_work_artifact_required');
+  assert.doesNotThrow(() => assertAutopilotWorkArtifact(identifiedArtifact(), 'assignment', PHYSICS_INSTRUCTIONS));
+});
+
+test('Malformed or contradictory criterion classification and evidence IDs cannot weaken the parser', () => {
+  for (const criterion of [
+    { ...PHYSICS_CONTRACT.criteria[0], classification: 'OPTIONAL', required: true },
+    { ...PHYSICS_CONTRACT.criteria[0], classification: 'REQUIRED', required: false },
+    { ...PHYSICS_CONTRACT.criteria[0], classification: 'CONDITIONAL', condition: 'SOURCE_AVAILABLE', required: false },
+    { ...PHYSICS_CONTRACT.criteria[0], classification: 'FORMAT', required: false },
+    { ...PHYSICS_CONTRACT.criteria[0], classification: 'STYLE', required: false },
+    { ...PHYSICS_CONTRACT.criteria[0], classification: 'SECRET_FIXTURE' },
+  ]) assertDiagnostic(() => parseAutopilotOutput(JSON.stringify(artifact({ workContract: { ...PHYSICS_CONTRACT, criteria: [criterion] } }))), 'PARSE_CONTRACT_CRITERION_CLASSIFICATION_INVALID');
+  for (const condition of ['SECRET_FIXTURE', 'SOURCE_AVAILABLE']) {
+    const criterion = { ...PHYSICS_CONTRACT.criteria[0], classification: 'REQUIRED', condition };
+    assertDiagnostic(() => parseAutopilotOutput(JSON.stringify(artifact({ workContract: { ...PHYSICS_CONTRACT, criteria: [criterion] } }))), 'PARSE_CONTRACT_CRITERION_CONDITION_INVALID');
+  }
+  assertDiagnostic(() => parseAutopilotOutput(JSON.stringify(identifiedArtifact({ workEvidence: [{ criterionId: '', requirement: 'Description', excerpt: PHYSICS_DRAFT }] }))), 'PARSE_WORK_EVIDENCE_ITEM_INVALID');
 });

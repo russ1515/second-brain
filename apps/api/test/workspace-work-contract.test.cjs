@@ -7,6 +7,8 @@ const {
   workContractFromIntent,
   workContractResponseSchema,
   workOutputKindForIntent,
+  prepareWorkContractCriteria,
+  resolveWorkCriteriaApplicability,
 } = require('../dist/workspaces/workspace-work-contract.js');
 const {
   assertAutopilotWorkArtifact,
@@ -41,7 +43,7 @@ for (const item of cases) {
         text: 'Prepared.', workContract: contract, issues: [], needsInput: '',
         ...(phase === 'WORK' ? {
           draft: item.draft, workOutputKind: item.type,
-          workEvidence: contract.criteria.map((criterion) => ({ requirement: criterion.requirement, excerpt: item.draft })),
+          workEvidence: contract.criteria.map((criterion) => ({ criterionId: criterion.id, requirement: criterion.requirement, excerpt: item.draft })),
         } : { briefFields: {}, plan: [] }),
       }));
       assert.equal(normalized.workContract.taskIntent, item.intent);
@@ -92,16 +94,17 @@ test('summary never substitutes the request itself for source material', () => {
   assert.equal(provided.sourceExcerpt, 'The room is open every Saturday.');
 });
 
-function assertStrictSchema(schema) {
+function assertStrictSchema(schema, isRoot = true) {
   assert.notEqual(schema.type, 'null');
-  assert.equal(schema.anyOf, undefined);
+  if (isRoot) assert.equal(schema.anyOf, undefined);
+  if (schema.anyOf) schema.anyOf.forEach((variant) => assertStrictSchema(variant, false));
   assert.equal(schema.allOf, undefined);
   if (schema.type === 'object') {
     assert.equal(schema.additionalProperties, false);
     assert.deepEqual(schema.required.slice().sort(), Object.keys(schema.properties).sort());
-    Object.values(schema.properties).forEach(assertStrictSchema);
+    Object.values(schema.properties).forEach((property) => assertStrictSchema(property, false));
   }
-  if (schema.items) assertStrictSchema(schema.items);
+  if (schema.items) assertStrictSchema(schema.items, false);
 }
 
 test('C/M/WORK use strict existing Responses schemas with no optional object keys or null sentinels', () => {
@@ -144,4 +147,108 @@ test('known WORK schema pins type/intent but does not bypass existing artifact v
   assert.throws(() => assertAutopilotWorkArtifact(response(''), item.template, item.task, { contract, plan }));
   assert.throws(() => assertAutopilotWorkArtifact(response(item.task), item.template, item.task, { contract, plan }));
   assert.throws(() => assertAutopilotWorkArtifact(response(item.draft, 'REPORT_DRAFT'), item.template, item.task, { contract, plan }));
+});
+
+test('bootstrap uses obligation-field provenance and never promotes a title or test context', () => {
+  // Captured request structure only: this is NOT reconstructed provider output.
+  const brief = { version: 1, fields: {
+    userInstructions: 'Calculate the price of three notebooks and one book. Include the calculation and conclusion.',
+    requirements: 'Calculate the total price and state the amount to pay.',
+    deliverable: 'A detailed calculation and conclusion in euros.',
+    subject: 'Price calculation — short exercise',
+    context: 'Technical account used only for validation.',
+  } };
+  const objective = 'Find the total cost with calculation and conclusion.';
+  const canonical = [brief.fields.userInstructions, brief.fields.requirements, brief.fields.deliverable,
+    objective, brief.fields.subject, brief.fields.context].join('\n\n');
+  const contract = workContractFromIntent('assignment-exercise', 'assignment', canonical, plan, { brief, objective, sourceAvailable: false });
+  assert.deepEqual(contract.criteria.map((criterion) => criterion.originField),
+    ['userInstructions', 'requirements', 'deliverable', 'objective']);
+  assert.equal(contract.criteria.length, 4);
+  assert.ok(contract.criteria.every((criterion) => criterion.required && criterion.classification === 'REQUIRED'));
+  assert.ok(!contract.criteria.some((criterion) => [brief.fields.subject, brief.fields.context].includes(criterion.requirement)));
+  const { createHash } = require('node:crypto');
+  assert.equal(contract.instructionFingerprint, createHash('sha256').update(canonical).digest('hex'));
+  const titleOnly = { version: 1, fields: { subject: 'Title only', context: 'Context only' } };
+  assert.throws(() => workContractFromIntent('general', 'other', 'Title only\n\nContext only', plan, { brief: titleOnly, objective: '' }));
+});
+
+test('provenance exclusion does not discard a genuine obligation merely repeated as the title', () => {
+  const text = 'Calculate the total price.';
+  const brief = { version: 1, fields: { userInstructions: text, subject: text } };
+  const contract = workContractFromIntent('assignment-exercise', 'assignment', `${text}\n\n${text}`, plan, { brief, objective: '' });
+  assert.equal(contract.criteria.length, 1);
+  assert.equal(contract.criteria[0].originField, 'userInstructions');
+  assert.equal(contract.criteria[0].required, true);
+});
+
+test('bounded autonomous source conditions are conditional, never unconditionally mandatory', () => {
+  for (const sentence of ['Utilise une source si elle est disponible dans ma bibliothèque.', 'Use a source if available.']) {
+    const instructions = `Calculate the total price. ${sentence}`;
+    const unavailable = workContractFromIntent('assignment-exercise', 'assignment', instructions, plan, { sourceAvailable: false });
+    assert.equal(unavailable.criteria.length, 2);
+    assert.equal(unavailable.criteria[0].required, true);
+    const conditional = unavailable.criteria[1];
+    assert.equal(conditional.classification, 'CONDITIONAL');
+    assert.equal(conditional.condition, 'SOURCE_AVAILABLE');
+    assert.equal(conditional.required, true);
+    assert.equal(conditional.applicable, false);
+    const available = resolveWorkCriteriaApplicability(unavailable, true).criteria[1];
+    assert.equal(available.required, true);
+    assert.equal(available.applicable, true);
+    const unknown = resolveWorkCriteriaApplicability(unavailable).criteria[1];
+    assert.equal(unknown.required, true);
+    assert.equal(unknown.applicable, 'UNKNOWN');
+  }
+});
+
+test('ambiguous conditional conjunctions are retained and UNKNOWN rather than waived', () => {
+  const instructions = 'Compute the total. Use a source if available and explain all calculation steps.';
+  const contract = workContractFromIntent('assignment-exercise', 'assignment', instructions, plan, { sourceAvailable: false });
+  const conditional = contract.criteria.find((criterion) => criterion.classification === 'CONDITIONAL');
+  assert.ok(conditional);
+  assert.equal(conditional.condition, 'UNRESOLVED');
+  assert.equal(conditional.applicable, 'UNKNOWN');
+  assert.equal(conditional.required, true);
+  assert.match(conditional.requirement, /explain all calculation steps/);
+});
+
+test('OPTIONAL can be omitted but explicit FORMAT and STYLE remain blocking when required', () => {
+  const instructions = 'Compute the total.\n\nOptional: add a second example.\n\nFormat: include an introduction and a conclusion.\n\nStyle: use accessible wording.';
+  const contract = workContractFromIntent('assignment-exercise', 'assignment', instructions, plan, { sourceAvailable: false });
+  assert.deepEqual(contract.criteria.map((criterion) => [criterion.classification, criterion.required]),
+    [['REQUIRED', true], ['OPTIONAL', false], ['FORMAT', true], ['STYLE', true]]);
+  const optional = contract.criteria[1];
+  assert.equal(optional.applicable, false);
+  const contradictory = { ...contract, criteria: [{ ...optional, required: true }] };
+  assert.throws(() => resolveWorkCriteriaApplicability(contradictory, false));
+  assert.throws(() => resolveWorkCriteriaApplicability({ ...contract, criteria: [{ ...contract.criteria[0], required: false }] }, false));
+});
+
+test('server applicability ignores a supplied false flag and validates obligation anchors', () => {
+  const brief = { version: 1, fields: { userInstructions: 'Use a source if available.', requirements: 'Compute the total.' } };
+  const instructions = `${brief.fields.userInstructions}\n\n${brief.fields.requirements}`;
+  const contract = workContractFromIntent('assignment-exercise', 'assignment', instructions, plan, { brief, objective: '', sourceAvailable: false });
+  const prepared = prepareWorkContractCriteria({ ...contract, criteria: contract.criteria.map((criterion) => ({ ...criterion, applicable: false })) }, brief, '', true);
+  assert.equal(prepared.criteria[0].applicable, true);
+  assert.equal(prepared.criteria[0].required, true);
+  assert.equal(prepared.criteria[1].applicable, true);
+  assert.equal(prepared.criteria[1].required, true);
+  assert.throws(() => prepareWorkContractCriteria({ ...contract, criteria: [{ id: 'invented', requirement: 'Only technical context.', required: true }] }, brief, '', false));
+});
+
+test('known WORK schema binds evidence by ID and pins classification without accepting applicability from the provider', () => {
+  const contract = workContractFromIntent('assignment-exercise', 'assignment', 'Compute the total. Use a source if available.', plan, { sourceAvailable: false });
+  const schema = workContractResponseSchema('WORK', contract).schema;
+  assertStrictSchema(schema);
+  assert.ok(schema.properties.workEvidence.items.required.includes('criterionId'));
+  assert.deepEqual(schema.properties.workEvidence.items.properties.criterionId.enum, contract.criteria.map((criterion) => criterion.id));
+  const variants = schema.properties.workContract.properties.criteria.items.anyOf;
+  assert.equal(variants.length, contract.criteria.length);
+  for (const [index, variant] of variants.entries()) {
+    assert.deepEqual(variant.properties.id.enum, [contract.criteria[index].id]);
+    assert.deepEqual(variant.properties.classification.enum, [contract.criteria[index].classification]);
+    assert.deepEqual(variant.properties.required.enum, [contract.criteria[index].required]);
+    assert.equal(variant.properties.applicable, undefined);
+  }
 });

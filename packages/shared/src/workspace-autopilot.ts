@@ -22,6 +22,27 @@ export const WORKSPACE_WORK_INTENTS = [
 ] as const;
 export type WorkspaceWorkIntent = (typeof WORKSPACE_WORK_INTENTS)[number];
 
+export const WORKSPACE_WORK_CRITERION_CLASSES = ['REQUIRED', 'OPTIONAL', 'CONDITIONAL', 'STYLE', 'FORMAT'] as const;
+export type WorkspaceWorkCriterionClass = (typeof WORKSPACE_WORK_CRITERION_CLASSES)[number];
+export const WORKSPACE_WORK_CRITERION_CONDITIONS = ['NONE', 'SOURCE_AVAILABLE', 'UNRESOLVED'] as const;
+export type WorkspaceWorkCriterionCondition = (typeof WORKSPACE_WORK_CRITERION_CONDITIONS)[number];
+export const WORKSPACE_WORK_CRITERION_ORIGINS = [
+  'userInstructions', 'institutionInstructions', 'requirements', 'deliverable', 'objective',
+  'canonicalInstructions', 'UNSPECIFIED',
+] as const;
+export type WorkspaceWorkCriterionOrigin = (typeof WORKSPACE_WORK_CRITERION_ORIGINS)[number];
+export interface WorkspaceWorkCriterion {
+  id: string;
+  requirement: string;
+  required: boolean;
+  /** Optional on historical contracts; absence retains their required flag. */
+  classification?: WorkspaceWorkCriterionClass;
+  condition?: WorkspaceWorkCriterionCondition;
+  /** Server-derived from actual capabilities. Provider values are ignored. */
+  applicable?: boolean | 'UNKNOWN';
+  originField?: WorkspaceWorkCriterionOrigin;
+}
+
 /** Versioned interpretation of the actual task, not another Workspace engine. */
 export interface WorkspaceWorkContract {
   version: 1;
@@ -30,7 +51,7 @@ export interface WorkspaceWorkContract {
   operation: 'produce' | 'transform' | 'reproduce';
   scope: 'entire-task' | 'current-section';
   task: string;
-  criteria: Array<{ id: string; requirement: string; required: boolean }>;
+  criteria: WorkspaceWorkCriterion[];
   sourceRequirement: 'none' | 'provided-content' | 'cited-evidence';
   /** Exact source material, not a substituted instruction or fabricated text. */
   sourceExcerpt?: string;
@@ -69,7 +90,8 @@ export interface WorkspaceAutopilotOutput {
   draft?: string;
   /** The produced content, not a description of a proposed future answer. */
   workOutputKind?: WorkspaceWorkOutputKind;
-  workEvidence?: Array<{ requirement: string; excerpt: string }>;
+  /** New structured turns bind by ID; legacy source-text associations remain readable. */
+  workEvidence?: Array<{ criterionId?: string; requirement: string; excerpt: string }>;
   workContract?: WorkspaceWorkContract;
   taskFulfillment?: WorkspaceTaskFulfillment;
   /** Set by server validation only; never accepted from provider/client JSON. */

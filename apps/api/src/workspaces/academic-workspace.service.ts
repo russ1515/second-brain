@@ -120,8 +120,9 @@ import {
   workContractFingerprint,
   getAutopilotDiagnosticReason,
   createAutopilotDiagnosticException,
+  criterionEvidenceMatrix,
 } from './workspace-autopilot';
-import { workContractFromIntent, workContractResponseSchema, workOutputKindForIntent } from './workspace-work-contract';
+import { workContractFromIntent, workContractResponseSchema, workOutputKindForIntent, prepareWorkContractCriteria } from './workspace-work-contract';
 import { writePrivateWorkspaceWorkDiagnostic, type WorkspaceWorkDiagnosticInput } from './workspace-work-diagnostics';
 
 const MAX_ASSISTANT_HISTORY = 30;
@@ -433,10 +434,11 @@ export class AcademicWorkspaceService {
           state.workIntent = request.workIntent;
           // An explicit task intent can restore a missing legacy orchestration
           // contract without inventing evidence, moving phase or resetting usage.
-          if (!state.workContract && professor.currentPhase === 'WORK') {
+          if ((!state.workContract || state.workContract.origin === 'explicit-intent') && professor.currentPhase === 'WORK') {
+            const brief = progress.workflow?.brief ?? emptyWorkspaceBrief();
             state.workContract = { ...workContractFromIntent(request.workIntent, row.template as WorkspaceTemplate,
-              this.workInstructions(progress.workflow?.brief ?? emptyWorkspaceBrief(), row.objective),
-              fromJson<WorkspacePlanItem[]>(row.plan, [])), origin: 'explicit-intent' };
+              this.workInstructions(brief, row.objective), fromJson<WorkspacePlanItem[]>(row.plan, []),
+              { brief, objective: row.objective, sourceAvailable: fromJson<WorkspaceSourceReference[]>(row.sources, []).length ? undefined : false }), origin: 'explicit-intent' };
           }
         }
         state = { ...state, status: 'RUNNING', consent: state.consent ?? { version: 1, grantedAt: now }, errorCode: undefined, reason: undefined };
@@ -721,7 +723,9 @@ export class AcademicWorkspaceService {
           ...(item.stepId ? { stepId: item.stepId } : {}),
         }))) : undefined;
         const workContract = proposedContract ? {
-          ...validateAutopilotWorkContract(proposedContract, row.template as WorkspaceTemplate, this.workInstructions(brief, row.objective), plan ?? existingPlan),
+          ...prepareWorkContractCriteria(validateAutopilotWorkContract(proposedContract, row.template as WorkspaceTemplate,
+            this.workInstructions(brief, row.objective), plan ?? existingPlan), brief, row.objective,
+          fromJson<WorkspaceSourceReference[]>(row.sources, []).length ? undefined : false),
           origin: existingContract?.origin ?? (phase === 'COMPREHENSION' ? 'comprehension' as const : 'method' as const),
         } : undefined;
         return { state: { ...state, ...(workContract ? { workContract, workIntent: workContract.taskIntent } : {}) }, ...(briefChanged ? { brief } : {}), ...(plan ? { plan } : {}) };
@@ -764,7 +768,9 @@ export class AcademicWorkspaceService {
     } else if (phase === 'VERIFICATION') {
       const contract = currentAutopilot.workContract?.instructionFingerprint === workProductionFingerprint(this.workInstructions(workspace.brief, workspace.objective)) ? currentAutopilot.workContract : undefined;
       if (!contract || !output.taskFulfillment) return this.finishAutopilot(userId, id, execution, 'NEEDS_INPUT', 'STOP_AUTOPILOT_REVIEW_REQUIRED', 'task-verification-missing');
-      const taskIssues = taskFulfillmentIssues(output, contract, workspace.draft.content, reply.citations ?? []);
+      const taskIssues = taskFulfillmentIssues(output, contract, workspace.draft.content, reply.citations ?? [], {
+        sourceAvailable: workspace.sources.length ? undefined : false,
+      });
       const semanticIssues = [...(output.issues ?? []), ...taskIssues];
       const ids = new Set(workspace.plan.map((item) => item.id));
       if ((output.checkedPlanItemIds ?? []).some((item) => !ids.has(item))) {
@@ -2984,6 +2990,8 @@ export class AcademicWorkspaceService {
       query: sourceQuery,
       limit: 10,
     });
+    const sourceAvailable = Boolean(sourceResolution.usedContext && sourceResolution.context.trim() && sourceResolution.citations.length);
+    if (internal && workContract) workContract = prepareWorkContractCriteria(workContract, brief, row.objective, sourceAvailable);
     const recheckingDraftSources = internal && ['VERIFICATION', 'FINALIZATION'].includes(professor.currentPhase);
     const draftCitations = recheckingDraftSources
       ? this.autopilotDraftCitations(history, storedAutopilot.runId).filter((recorded) => sourceResolution.citations.some((current) => (
@@ -3024,6 +3032,8 @@ export class AcademicWorkspaceService {
         `Learner and institution brief:\n${this.briefContext(brief)}`,
         internal ? 'The original userInstructions and institutionInstructions above are authoritative; derived brief fields never weaken or replace them.' : '',
         internal && workContract ? `Recorded work contract (not certification; verify against all original instructions):\n${JSON.stringify(workContract)}` : '',
+        internal && professor.currentPhase === 'WORK' && workContract
+          ? 'Before returning, check every required applicable criterion internally. Associate evidence by its exact criterionId, with a verbatim passage from the actual draft. Descriptions may use equivalent wording, formulas or units; do not change the recorded criteria, invent evidence, or substitute a method for the requested artifact. Do not turn optional, unavailable conditional, title or contextual metadata into mandatory output. Keep this checklist internal.' : '',
         internal && storedAutopilot.workIntent ? `Explicit orchestration intent: ${storedAutopilot.workIntent}. Expected work output: ${workOutputKindForIntent(storedAutopilot.workIntent)}. Preserve this intent; the shell remains a scaffold, not an instruction to change the task.` : '',
         internal && storedAutopilot.reason ? `Recorded verification feedback:\n${storedAutopilot.reason}` : '',
         recheckingDraftSources ? `Source citations recorded with the produced draft and re-resolved by AW-6 (preserve their identities):\n${JSON.stringify(draftCitations)}` : '',
@@ -3086,13 +3096,25 @@ export class AcademicWorkspaceService {
       if (internal) {
         const normalizedText = this.sourceEngine.validateReply(replyContent, professor.currentPhase === 'VERIFICATION' ? draftCitations : sourceResolution.citations).content;
         const diagnostic: Omit<WorkspaceWorkDiagnosticInput, 'trace'> = { providerResponse: response,
-          rawText: response.text, normalizedText, parserResult: 'NOT_RUN', validatorResult: 'NOT_RUN', rejectReasonCode: 'NONE' };
+          rawText: response.text, normalizedText, parserResult: 'NOT_RUN', validatorResult: 'NOT_RUN', rejectReasonCode: 'NONE',
+          technicalEvidence: { userInstructions: brief.fields.userInstructions ?? row.objective,
+            canonicalInstructions: instructions,
+            criteriaExtraction: (workContract?.criteria ?? []).map((criterion) => ({ id: criterion.id,
+              type: criterion.classification ?? (criterion.required ? 'REQUIRED' : 'OPTIONAL'), text: criterion.requirement,
+              required: criterion.required, applicable: criterion.applicable, condition: criterion.condition, originField: criterion.originField })),
+            criteriaMatrix: workContract ? criterionEvidenceMatrix({ text: '' }, workContract, instructions, { sourceAvailable }) : [],
+          } };
         let output: WorkspaceAutopilotOutput;
         try {
           output = parseAutopilotOutput(normalizedText);
           diagnostic.parserResult = 'PASS';
+          Object.assign(diagnostic.technicalEvidence!, { parsedOutput: output,
+            workEvidence: output.workEvidence ?? [], draftCandidate: output.draft ?? '',
+            criteriaMatrix: workContract ? criterionEvidenceMatrix(output, workContract, instructions, { sourceAvailable }) : [],
+          });
           if (['COMPREHENSION', 'METHOD'].includes(professor.currentPhase) && !output.needsInput) {
-            const proposed = validateAutopilotWorkContract(output.workContract, template, instructions, plan);
+            const proposed = prepareWorkContractCriteria(validateAutopilotWorkContract(output.workContract, template, instructions, plan),
+              brief, row.objective, sourceAvailable);
             const expectedIntent = workContract?.taskIntent ?? storedAutopilot.workIntent;
             if (expectedIntent && proposed.taskIntent !== expectedIntent) {
               throw createAutopilotDiagnosticException('WORK_CONTRACT_KIND_INTENT_MISMATCH', { code: 'workspace_autopilot_invalid_result',
@@ -3109,13 +3131,15 @@ export class AcademicWorkspaceService {
             }
             if (returnedContract.criteria.length !== workContract!.criteria.length || workContract!.criteria.some((criterion) => (
               !returnedContract.criteria.some((returned) => returned.id === criterion.id
-                && returned.requirement === criterion.requirement && returned.required === criterion.required)
+                && returned.requirement === criterion.requirement && returned.required === criterion.required
+                && (returned.classification ?? (returned.required ? 'REQUIRED' : 'OPTIONAL')) === (criterion.classification ?? (criterion.required ? 'REQUIRED' : 'OPTIONAL'))
+                && (returned.condition ?? 'NONE') === (criterion.condition ?? 'NONE'))
             ))) {
               throw createAutopilotDiagnosticException('WORK_REQUIRED_CRITERION_MISSING', { code: 'workspace_autopilot_work_artifact_required',
                 message: 'The work result must preserve the task criteria. Your work is saved.' });
             }
             const validatedContract = assertAutopilotWorkArtifact(output, template, instructions, {
-              contract: workContract, sourceContext: sourceResolution.context, sourceMaterial: capturedMaterial || instructions, citations: sourceResolution.citations, plan,
+              contract: workContract, sourceContext: sourceResolution.context, sourceMaterial: capturedMaterial || instructions, citations: sourceResolution.citations, sourceAvailable, plan,
             });
             output.workContract = { ...validatedContract, origin: workContract?.origin ?? 'legacy-work' };
             output.workArtifactValidated = true;
@@ -3131,7 +3155,7 @@ export class AcademicWorkspaceService {
         }
         if (professor.currentPhase === 'VERIFICATION' && output.taskFulfillment) {
           replyCitations = draftCitations.filter((citation) => output.taskFulfillment!.citationLabels?.includes(citation.citationLabel));
-          if (workContract && !taskFulfillmentIssues(output, workContract, row.draftContent, replyCitations).length) {
+          if (workContract && !taskFulfillmentIssues(output, workContract, row.draftContent, replyCitations, { sourceAvailable }).length) {
             output.taskFulfillment.reviewedDraftFingerprint = workProductionFingerprint(row.draftContent);
           }
         }

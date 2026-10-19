@@ -2749,3 +2749,66 @@ test('Runtime WORK diagnostic captures parser rejection privately and never pers
   assert.equal(workspace.professor.evidence.some((item) => item.phase === 'WORK'), false);
   assert.equal(state.llmCalls, 3);
 });
+
+test('Instrumented criteria repair uses normal resume without rewriting an older failed result or run limits', async () => {
+  const { service, state, workspace: initial } = await universalWorkFixture(RUNTIME_ASSIGNMENT, { workIntent: 'assignment-exercise' });
+  let workspace = await autopilotCommand(service, initial, 'step', 'criteria-repair-c');
+  workspace = await autopilotCommand(service, workspace, 'step', 'criteria-repair-m');
+  workspace = await autopilotCommand(service, workspace, 'pause', 'criteria-repair-pause');
+  const stored = state.workspaces[0].progress.workflow.autopilot;
+  stored.workContract.origin = 'explicit-intent';
+  stored.workContract.criteria.push({ id: 'old-context', requirement: state.workspaces[0].progress.workflow.brief.fields.subject, required: true });
+  const before = await service.get('owner', workspace.id);
+  const oldHistory = structuredClone(state.workspaces[0].assistantHistory);
+  workspace = await autopilotCommand(service, before, 'resume', 'criteria-repair-resume', { workIntent: 'assignment-exercise' });
+  const contract = autopilotState(workspace).workContract;
+  assert.equal(contract.criteria.some(item => item.id === 'old-context'), false);
+  assert.ok(contract.criteria.every(item => !['subject', 'context'].includes(item.originField)));
+  assert.equal(contract.criteria.some(item => item.requirement === RUNTIME_ASSIGNMENT.instructions), true);
+  assert.equal(autopilotState(workspace).runId, autopilotState(before).runId);
+  assert.equal(autopilotState(workspace).aiSteps, autopilotState(before).aiSteps);
+  assert.equal(autopilotState(workspace).maxAiSteps, autopilotState(before).maxAiSteps);
+  assert.equal(workspace.autosaveRevision, before.autosaveRevision);
+  assert.equal(workspace.professor.currentPhase, before.professor.currentPhase);
+  assert.equal(workspace.brief.fields.userInstructions, before.brief.fields.userInstructions);
+  assert.deepEqual(state.workspaces[0].assistantHistory, oldHistory);
+  assert.equal(state.llmCalls, 2);
+});
+
+test('Instrumented real-shaped WORK rejection retains full technical evidence and exact per-criterion cause privately', async () => {
+  const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-work-full-integration-'));
+  fs.chmodSync(directory, 0o700);
+  const { service, state, config, workspace: initial } = await universalWorkFixture(RUNTIME_ASSIGNMENT, { workIntent: 'assignment-exercise' });
+  let workspace = await autopilotCommand(service, initial, 'step', 'full-evidence-c');
+  workspace = await autopilotCommand(service, workspace, 'step', 'full-evidence-m');
+  const requestId = 'autopilot-test-full-evidence-work';
+  config.WORKSPACE_WORK_DIAGNOSTIC_SCOPE = JSON.stringify({ version: 1, ownerId: 'owner', workspaceId: workspace.id,
+    runId: autopilotState(workspace).runId, requestId, directory, fullTechnicalEvidence: true,
+    expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  const responder = state.llmResponder;
+  let providerText;
+  state.llmResponder = (...args) => {
+    const output = JSON.parse(responder(...args));
+    output.workEvidence = [];
+    providerText = JSON.stringify(output);
+    return providerText;
+  };
+  workspace = await service.autopilot('owner', workspace.id, { requestId, action: 'step', expectedRevision: workspace.autosaveRevision });
+  assert.equal(autopilotState(workspace).status, 'PAUSED_ERROR');
+  const files = fs.readdirSync(directory);
+  assert.equal(files.length, 1);
+  const artifact = JSON.parse(fs.readFileSync(path.join(directory, files[0]), 'utf8'));
+  assert.equal(artifact.technicalEvidence.providerText, providerText);
+  assert.equal(artifact.technicalEvidence.normalizedText, providerText);
+  assert.equal(artifact.technicalEvidence.userInstructions, RUNTIME_ASSIGNMENT.instructions);
+  assert.equal(artifact.technicalEvidence.draftCandidate, RUNTIME_ASSIGNMENT.draft);
+  assert.equal(artifact.technicalEvidence.parsedOutput.workOutputKind, 'ANSWER_DRAFT');
+  assert.ok(artifact.technicalEvidence.criteriaMatrix.every(item => item.status === 'MISSING'));
+  assert.equal(artifact.parserResult, 'PASS');
+  assert.equal(artifact.validatorResult, 'FAIL');
+  assert.equal(artifact.rejectReasonCode, 'WORK_EVIDENCE_MISSING');
+  assert.equal(workspace.draft.content, '');
+  assert.equal(JSON.stringify(workspace).includes('technicalEvidence'), false);
+  assert.equal(state.llmCalls, 3);
+});

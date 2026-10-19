@@ -17,6 +17,24 @@ const INPUT = {
   parserResult: 'PASS', validatorResult: 'PASS', rejectReasonCode: 'NONE',
 };
 
+function completeTechnicalInput(overrides = {}) {
+  const instructions = 'Produce a faithful short technical summary of the supplied text.';
+  const draft = 'A verified technical fixture. '.repeat(100);
+  const criterion = { id: 'required-1', requirement: instructions, required: true,
+    classification: 'REQUIRED', condition: 'NONE', applicable: true, originField: 'userInstructions' };
+  const workEvidence = [{ criterionId: 'required-1', requirement: instructions, excerpt: 'A verified technical fixture.' }];
+  const output = { text: 'Technical fixture result.', draft, workOutputKind: 'SUMMARY_DRAFT', workEvidence };
+  const rawText = JSON.stringify(output);
+  return {
+    ...INPUT, rawText, normalizedText: rawText,
+    technicalEvidence: { userInstructions: instructions, canonicalInstructions: `User instructions:\n${instructions}`, criteriaExtraction: [criterion],
+      criteriaMatrix: [{ criterionId: 'required-1', type: 'REQUIRED', text: instructions, required: true, applicable: true,
+        evidence: [{ index: 0, ...workEvidence[0], association: 'ID', requirementAnchored: true, excerptAnchored: true }], status: 'PASS' }],
+      parsedOutput: output, workEvidence, draftCandidate: draft },
+    ...overrides,
+  };
+}
+
 async function fixture(t, overrides = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'sb-work-diagnostic-'));
   await chmod(directory, 0o700);
@@ -131,6 +149,106 @@ test('precise allowlisted parser rejection is retained safely instead of being d
   assert.equal(artifact.validatorResult, 'NOT_REACHED');
   assert.doesNotMatch(body, /stack|ServiceUnavailableException|not-json/);
   assert.equal(getAutopilotDiagnosticReason(new Error('private raw error')), undefined);
+});
+
+test('full technical evidence is opt-in and retains safe provider text beyond preview with exact criteria matrix and candidate', async (t) => {
+  const input = completeTechnicalInput();
+  assert.ok(input.rawText.length > 1500);
+  const defaultFixture = await fixture(t);
+  const defaultResult = await writePrivateWorkspaceWorkDiagnostic(defaultFixture.config, SCOPE, input);
+  const ordinary = JSON.parse(await readFile(join(defaultFixture.directory, defaultResult.fileName), 'utf8'));
+  assert.equal(ordinary.fullTextRetained, false);
+  assert.equal(ordinary.technicalEvidence, undefined);
+  const full = await fixture(t, { fullTechnicalEvidence: true });
+  const result = await writePrivateWorkspaceWorkDiagnostic(full.config, SCOPE, input);
+  assert.equal(result.status, 'WRITTEN');
+  const evidence = JSON.parse(await readFile(join(full.directory, result.fileName), 'utf8'));
+  assert.equal(evidence.fullTextRetained, true);
+  assert.equal(evidence.privacy.fidelity, 'EXACT');
+  assert.equal(evidence.privacy.redacted, false);
+  assert.equal(evidence.technicalEvidence.providerRepresentation, 'response.text');
+  assert.equal(evidence.technicalEvidence.providerText, input.rawText);
+  assert.equal(evidence.technicalEvidence.normalizedText, input.normalizedText);
+  for (const field of ['userInstructions', 'canonicalInstructions', 'criteriaExtraction', 'criteriaMatrix', 'parsedOutput', 'workEvidence', 'draftCandidate']) {
+    assert.deepEqual(evidence.technicalEvidence[field], input.technicalEvidence[field]);
+  }
+  if (process.platform !== 'win32') assert.equal((await stat(join(full.directory, result.fileName))).mode & 0o777, 0o600);
+  assert.equal((await writePrivateWorkspaceWorkDiagnostic(full.config, SCOPE, input)).status, 'WRITE_FAILED');
+});
+
+test('full evidence redacts secret-like material and foreign data with explicit non-exact fidelity flags', async (t) => {
+  const { directory, config } = await fixture(t, { fullTechnicalEvidence: true });
+  const input = completeTechnicalInput();
+  const dummyKey = ['sk-', 'dummySecretForTechnicalRedaction12345'].join('');
+  input.rawText += `\npassword=technical-private-password\n${dummyKey}\nforeign.person@example.test`;
+  input.normalizedText = input.rawText;
+  input.technicalEvidence.parsedOutput = { ...input.technicalEvidence.parsedOutput,
+    arbitraryHeaders: { authorization: 'private-other-user-token' },
+    foreignUserData: { email: 'foreign.person@example.test' } };
+  input.technicalEvidence.draftCandidate += `\n${dummyKey}`;
+  const result = await writePrivateWorkspaceWorkDiagnostic(config, SCOPE, input);
+  assert.equal(result.status, 'WRITTEN');
+  const body = await readFile(join(directory, result.fileName), 'utf8');
+  const evidence = JSON.parse(body);
+  assert.equal(evidence.fullTextRetained, false);
+  assert.equal(evidence.privacy.fidelity, 'REDACTED');
+  assert.equal(evidence.privacy.redacted, true);
+  assert.ok(evidence.privacy.redactionFields.includes('providerText'));
+  assert.ok(evidence.privacy.omittedFields.includes('parsedOutput.[omitted]'));
+  assert.doesNotMatch(body, /technical-private-password|dummySecretForTechnical|foreign\.person|private-other-user-token|arbitraryHeaders|foreignUserData/);
+  assert.ok(!evidence.privacy.redactionFields.some((field) => field.includes(dummyKey)));
+});
+
+test('full evidence enforces four-hour TTL, exact request, WORK phase, complete input and bounded sizes', async (t) => {
+  const { directory, config } = await fixture(t, { fullTechnicalEvidence: true });
+  const input = completeTechnicalInput();
+  const overTtl = JSON.stringify({ ...JSON.parse(config), expiresAt: new Date(Date.now() + 5 * 60 * 60_000).toISOString() });
+  assert.equal((await writePrivateWorkspaceWorkDiagnostic(overTtl, SCOPE, input)).status, 'UNSAFE_CONFIG');
+  assert.equal((await writePrivateWorkspaceWorkDiagnostic(config, { ...SCOPE, requestId: 'foreign-request' }, input)).status, 'SCOPE_MISMATCH');
+  assert.equal((await writePrivateWorkspaceWorkDiagnostic(config, SCOPE, { ...input, trace: { ...input.trace, currentPhase: 'METHOD' } })).status, 'SCOPE_MISMATCH');
+  assert.equal((await writePrivateWorkspaceWorkDiagnostic(config, SCOPE, { ...input, technicalEvidence: undefined })).status, 'WRITE_FAILED');
+  assert.equal((await writePrivateWorkspaceWorkDiagnostic(config, SCOPE, { ...input, rawText: 'x'.repeat(128_001) })).status, 'WRITE_FAILED');
+  const oversized = { ...input, rawText: 'a'.repeat(128_000), normalizedText: 'b'.repeat(128_000),
+    technicalEvidence: { ...input.technicalEvidence, userInstructions: 'c'.repeat(128_000), draftCandidate: 'd'.repeat(128_000) } };
+  assert.equal((await writePrivateWorkspaceWorkDiagnostic(config, SCOPE, oversized)).status, 'WRITE_FAILED');
+  assert.deepEqual(await readdir(directory), []);
+});
+
+test('full evidence keeps rejected candidate and failed criterion matrix without granting validation', async (t) => {
+  const { directory, config } = await fixture(t, { fullTechnicalEvidence: true });
+  const input = completeTechnicalInput({ validatorResult: 'FAIL', rejectReasonCode: 'WORK_REQUIRED_CRITERION_EVIDENCE_MISSING' });
+  input.technicalEvidence.criteriaMatrix[0].evidence = [];
+  input.technicalEvidence.criteriaMatrix[0].status = 'MISSING';
+  input.technicalEvidence.criteriaMatrix[0].reasonCode = 'WORK_REQUIRED_CRITERION_EVIDENCE_MISSING';
+  const result = await writePrivateWorkspaceWorkDiagnostic(config, SCOPE, input);
+  const evidence = JSON.parse(await readFile(join(directory, result.fileName), 'utf8'));
+  assert.equal(evidence.validatorResult, 'FAIL');
+  assert.equal(evidence.rejectReasonCode, 'WORK_REQUIRED_CRITERION_EVIDENCE_MISSING');
+  assert.deepEqual(evidence.technicalEvidence.criteriaMatrix, input.technicalEvidence.criteriaMatrix);
+  assert.equal(evidence.technicalEvidence.draftCandidate, input.technicalEvidence.draftCandidate);
+  assert.equal(evidence.fullTextRetained, true);
+  assert.equal(evidence.privacy.fidelity, 'EXACT');
+});
+
+test('full mode preserves canonical long technical IDs, artifact types and server fingerprints exactly', async (t) => {
+  const { directory, config } = await fixture(t, { fullTechnicalEvidence: true });
+  const input = completeTechnicalInput();
+  const criterionId = 'required-technical-long-criterion-identifier-without-secret';
+  input.technicalEvidence.criteriaExtraction[0].id = criterionId;
+  input.technicalEvidence.criteriaMatrix[0].criterionId = criterionId;
+  input.technicalEvidence.workEvidence[0].criterionId = criterionId;
+  input.technicalEvidence.parsedOutput.workContract = { version: 1, taskIntent: 'article-summary', outputKind: 'SUMMARY_DRAFT',
+    operation: 'transform', scope: 'entire-task', task: 'Summarise the supplied technical fixture.',
+    criteria: input.technicalEvidence.criteriaExtraction, sourceRequirement: 'provided-content', instructionFingerprint: 'a'.repeat(64) };
+  input.rawText = JSON.stringify(input.technicalEvidence.parsedOutput);
+  input.normalizedText = input.rawText;
+  const result = await writePrivateWorkspaceWorkDiagnostic(config, SCOPE, input);
+  const evidence = JSON.parse(await readFile(join(directory, result.fileName), 'utf8'));
+  assert.equal(evidence.fullTextRetained, true);
+  assert.equal(evidence.privacy.fidelity, 'EXACT');
+  assert.equal(evidence.technicalEvidence.providerText, input.rawText);
+  assert.equal(evidence.technicalEvidence.parsedOutput.workContract.instructionFingerprint, 'a'.repeat(64));
+  assert.equal(evidence.technicalEvidence.workEvidence[0].criterionId, criterionId);
 });
 
 test('expired, overbroad, malformed and oversized configs fail closed without a file', async (t) => {
