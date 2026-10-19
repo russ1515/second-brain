@@ -105,7 +105,13 @@ import { accountDataLockKey } from '../common/account-data-lock';
 import { WorkspaceSourceEngineService } from './workspace-source-engine.service';
 import { LearnerPassportService } from '../onboarding/learner-passport.service';
 import { selectStrategy, strategyDirective } from '../tutor/teaching-strategy';
-import { autopilotProfessorDirective, parseAutopilotOutput } from './workspace-autopilot';
+import {
+  assertAutopilotWorkArtifact,
+  autopilotProfessorDirective,
+  isCommentaryOnlyWorkDraft,
+  parseAutopilotOutput,
+  workspaceWorkOutputKind,
+} from './workspace-autopilot';
 
 const MAX_ASSISTANT_HISTORY = 30;
 const MAX_PROFESSOR_TRANSITIONS = 40;
@@ -533,7 +539,10 @@ export class AcademicWorkspaceService {
     const cachedReply = pending?.phase === phase && pending.phaseSequence === workspace.professor.phaseSequence && pending.revision === workspace.autosaveRevision
       ? workspace.assistantHistory.find((entry) => entry.id === pending.replyId && entry.autopilot?.runId === execution.runId)
       : undefined;
-    const automaticTool = !cachedReply && (phase === 'WORK' || phase === 'COACHING') && workspace.draft.content.trim()
+    if (phase === 'COACHING' && isCommentaryOnlyWorkDraft(workspace.draft.content, this.workInstructions(workspace.brief, workspace.objective))) {
+      return this.finishAutopilot(userId, id, execution, 'PAUSED_ERROR', 'workspace_autopilot_work_artifact_required');
+    }
+    const automaticTool = !cachedReply && phase === 'COACHING' && workspace.draft.content.trim()
       ? workspaceToolsFor(workspaceShellFromTemplate(workspace.template), phase).find((tool) => tool.operationType === 'TRANSFORM' && !tool.requiresSources)
       : undefined;
     let reply = cachedReply;
@@ -553,7 +562,9 @@ export class AcademicWorkspaceService {
       expectedPhase: phase,
       expectedRevision: workspace.autosaveRevision,
       action: phase === 'METHOD' ? 'structure' : phase === 'VERIFICATION' ? 'check-coherence' : 'explain',
-      message: 'Continue the explicitly consented bounded preparation for the current phase.',
+      message: phase === 'WORK'
+        ? `Produce the actual requested ${workspaceWorkOutputKind(workspace.template)} artifact in draft now, not advice, intake or a description of future work.`
+        : 'Continue the explicitly consented bounded preparation for the current phase.',
     }, execution)).reply;
     const output = reply.autopilot?.output;
     if (!output) return this.finishAutopilot(userId, id, execution, 'NEEDS_INPUT', 'workspace_autopilot_source_required');
@@ -563,6 +574,11 @@ export class AcademicWorkspaceService {
     execution.expectedRevision = workspace.autosaveRevision;
     const alreadyApplied = Boolean(this.autopilotState(workspace.progress).pendingResult?.applied);
     if (output.needsInput) return this.finishAutopilot(userId, id, execution, 'NEEDS_INPUT', 'workspace_autopilot_clarification_required', output.needsInput);
+    if (phase === 'WORK' && !output.workArtifactValidated) {
+      // Retained turns from the previous contract cannot become new WORK proof
+      // or mutate the draft on resume. Existing data remains intact.
+      return this.finishAutopilot(userId, id, execution, 'PAUSED_ERROR', 'workspace_autopilot_work_artifact_required');
+    }
 
     if (phase === 'COMPREHENSION' || phase === 'METHOD') {
       if (!alreadyApplied) workspace = await this.changeAutopilot(userId, id, (row, progress, state) => {
@@ -598,8 +614,16 @@ export class AcademicWorkspaceService {
       } else if (!alreadyApplied) workspace = await this.changeAutopilot(userId, id, (row, progress, state) => {
         const plan = fromJson<WorkspacePlanItem[]>(row.plan, []);
         const brief = progress.workflow?.brief ?? emptyWorkspaceBrief();
-        // Preserve learner text; bounded contributions are appended, never silently erased.
-        const content = [row.draftContent.trim(), output.draft!.trim()].filter(Boolean).join('\n\n');
+        const originalInstructions = this.workInstructions(brief, row.objective);
+        const knownAutomaticDraft = fromJson<WorkspaceAssistantHistoryEntry[]>(row.assistantHistory, []).some((entry) => (
+          entry.autopilot?.output.draft?.trim() === row.draftContent.trim()
+        ));
+        const replaceKnownCommentary = phase === 'WORK' && knownAutomaticDraft
+          && isCommentaryOnlyWorkDraft(row.draftContent, originalInstructions);
+        // Only an identified automatic non-artifact can be replaced. Unknown
+        // learner content is preserved exactly; the checkpoint preserves both.
+        const content = replaceKnownCommentary ? output.draft!.trim()
+          : [row.draftContent, output.draft!.trim()].filter((part) => part.trim()).join('\n\n');
         if (content.length > 200_000) throw new BadRequestException('Workspace content is too large.');
         return { state: { ...state,
           ...(longForm ? { sectionPlanItemId: plan.find((item) => !item.completed)?.id } : {}),
@@ -671,6 +695,14 @@ export class AcademicWorkspaceService {
     if (Buffer.byteLength(JSON.stringify(messages), 'utf8') > this.autopilotLimit('WORKSPACE_AUTOPILOT_MAX_PROMPT_BYTES', 60_000, 2_000, 120_000)) {
       throw new BadRequestException({ code: 'STOP_AUTOPILOT_REVIEW_REQUIRED', message: 'This bounded Professor step requires a smaller section. Your work is saved.' });
     }
+  }
+
+  private workInstructions(brief: WorkspaceBrief, objective: string): string {
+    return [
+      brief.fields.userInstructions, brief.fields.institutionInstructions,
+      brief.fields.requirements, brief.fields.deliverable, objective,
+      brief.fields.subject, brief.fields.context, brief.fields.researchQuestion,
+    ].filter((part) => part?.trim()).join('\n\n');
   }
 
   async update(userId: string, id: string, request: UpdateWorkspaceRequest): Promise<PersistentWorkspace> {
@@ -2779,12 +2811,14 @@ export class AcademicWorkspaceService {
       const currentSection = plan.find((item) => !item.completed) ?? plan.at(-1);
       const prompt = [
         `Professor phase: ${professor.currentPhase}.`,
-        `Action requested: ${action}.`,
+        `Action requested: ${internal && professor.currentPhase === 'WORK' ? 'PRODUCE_WORK_ARTIFACT' : action}.`,
         request.message?.trim() ? `Learner request: ${request.message.trim()}` : '',
         request.selectedText?.trim() ? `Selected passage:\n${request.selectedText.trim()}` : '',
         `Workspace type: ${template}.`,
         `Workspace objective: ${row.objective || 'Not specified'}.`,
-        currentSection ? `Current section: ${currentSection.id}: ${currentSection.title}.` : 'No current section.',
+        internal && professor.currentPhase === 'WORK' && !['memoire', 'tfc', 'article', 'academic-research'].includes(template)
+          ? `WORK execution scope: produce the actual requested ${workspaceWorkOutputKind(template)} for the complete supplied task. The historical plan is context, not the content to produce; an administrative instruction-analysis heading is not the current artifact.`
+          : currentSection ? `Current section: ${currentSection.id}: ${currentSection.title}.` : 'No current section.',
         `Learner and institution brief:\n${this.briefContext(brief)}`,
         `Current plan:\n${plan.map((item) => `- [${item.completed ? 'x' : ' '}] ${item.id}: ${item.title}`).join('\n') || 'No plan yet.'}`,
         `Current draft:\n${row.draftContent.slice(0, 12_000)}`,
@@ -2836,6 +2870,10 @@ export class AcademicWorkspaceService {
       }
       if (internal) {
         const output = parseAutopilotOutput(this.sourceEngine.validateReply(replyContent, sourceResolution.citations).content);
+        if (professor.currentPhase === 'WORK' && !output.needsInput) {
+          assertAutopilotWorkArtifact(output, template, [this.workInstructions(brief, row.objective), sourceResolution.context].filter(Boolean).join('\n\n'));
+          output.workArtifactValidated = true;
+        }
         replyContent = [output.text, output.deconstruction].filter(Boolean).join('\n\n');
         // This metadata comes only from the validated server/provider result.
         requestMetadataAutopilot = { runId: internal.runId, output };
@@ -2900,6 +2938,7 @@ export class AcademicWorkspaceService {
           ? { ...item, status: 'completed' as const, updatedAt: completedAt, replyId: generated.reply.id }
           : item),
         evidence: generated.providerSucceeded && generated.reply.content
+          && (operation.phase !== 'WORK' || !generated.reply.autopilot || generated.reply.autopilot.output.workArtifactValidated === true)
           ? [
               ...persisted.evidence,
               {

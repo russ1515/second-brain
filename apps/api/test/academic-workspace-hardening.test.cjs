@@ -1288,6 +1288,25 @@ function autopilotState(workspace) {
   return workspace.progress.workflow.autopilot;
 }
 
+const PHYSICS_WORK_DRAFT = '# Introduction\n\n'
+  + 'Kinetic energy: it is associated with the motion of an object. Potential energy is associated with its position or configuration. '
+  + 'For gravitational potential energy, the chosen reference height determines the numerical value.\n\n'
+  + '# Method\n\n'
+  + 'The kinetic-energy relation is Ec = 1/2 mv². Gravitational potential energy is Ep = mgh, where g is gravitational acceleration and h is height. '
+  + 'The supplied data are m = 2 kg and v = 5 m/s. Substituting these data into the first relation gives a result in joules.\n\n'
+  + '# Calculation\n\n'
+  + 'v² = (5 m/s)² = 25 m²/s². Ec = 1/2 × 2 kg × 25 m²/s² = 25 J. '
+  + 'For potential energy, height is not supplied, so no numerical value is asserted.\n\n'
+  + '# Conclusion\n\n'
+  + 'The object has 25 J of kinetic energy. This calculation concerns motion; potential energy instead depends on position or configuration. '
+  + 'The missing height remains an explicit limit rather than an invented input.';
+
+const WORK_KIND_BY_TEMPLATE = {
+  assignment: 'ANSWER_DRAFT', memoire: 'CURRENT_SECTION_DRAFT', tfc: 'CURRENT_SECTION_DRAFT',
+  dissertation: 'ARGUMENTATIVE_DRAFT', article: 'SCIENTIFIC_SECTION_DRAFT', report: 'REPORT_SECTION_DRAFT',
+  other: 'ADAPTIVE_DRAFT', 'academic-research': 'ADAPTIVE_DRAFT',
+};
+
 function autopilotReply(_messages, _options, state) {
   const row = state.workspaces.at(-1);
   const phase = row.progress.workflow.professor.currentPhase;
@@ -1306,9 +1325,12 @@ function autopilotReply(_messages, _options, state) {
     ];
   }
   if (phase === 'WORK' || phase === 'COACHING') {
-    output.draft = 'Kinetic energy: E = 1/2 mv² = 1/2 × 2 × 5² = 25 J. '
-      + 'Potential energy is mgh; height is not supplied, so no numerical value is asserted. '
-      + 'The method is to identify units, substitute values, and verify the conclusion.';
+    output.draft = PHYSICS_WORK_DRAFT;
+    output.workOutputKind = WORK_KIND_BY_TEMPLATE[row.template];
+    output.workEvidence = [{
+      requirement: row.progress.workflow.brief.fields.requirements || row.progress.workflow.brief.fields.userInstructions || row.progress.workflow.brief.fields.subject,
+      excerpt: 'Kinetic energy: it is associated with the motion of an object.',
+    }];
   }
   if (phase === 'VERIFICATION') output.checkedPlanItemIds = row.plan.map((item) => item.id);
   if (phase === 'FINALIZATION') output.deconstruction = 'We identified the formula, substituted measured inputs, verified 25 J, and kept the unavailable height explicit.';
@@ -1841,4 +1863,199 @@ test('Autopilot still pauses for genuinely essential clarification without movin
   assert.equal(state.llmCalls, 1);
   await assert.rejects(autopilotCommand(service, workspace, 'step', 'essential-cannot-force-next'), (error) => httpStatus(error) === 409);
   assert.equal(state.llmCalls, 1);
+});
+
+test('WORK production saves the usable physics artifact in the revisioned editable draft and preserves instructions', async () => {
+  const instructions = 'Explain kinetic and potential energy, their formulas, and compute kinetic energy for 2 kg at 5 m/s with method and conclusion.';
+  const { service, state, workspace: created } = await autopilotFixture({}, {
+    autopilotConsent: true,
+    brief: { version: 1, fields: { subject: 'University physics', requirements: instructions, userInstructions: instructions } },
+  });
+  let workspace = created;
+  for (let step = 0; step < 2; step += 1) {
+    workspace = await autopilotCommand(service, workspace, 'step', `work-production-prepare-${step}`);
+    assert.equal(workspace.draft.content, '', 'Comprehension and Method are not an answer draft');
+  }
+  const beforeWork = workspace.autosaveRevision;
+  workspace = await autopilotCommand(service, workspace, 'step', 'work-production-artifact');
+  assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
+  assert.equal(workspace.draft.content, PHYSICS_WORK_DRAFT);
+  assert.equal(workspace.autosaveRevision, beforeWork + 1);
+  assert.equal(workspace.brief.fields.userInstructions, instructions);
+  assert.equal(workspace.brief.fields.requirements, instructions);
+  assert.match(workspace.draft.content, /Ec = 1\/2 × 2 kg × 25 m²\/s² = 25 J/);
+  assert.equal(state.llmCalls, 3);
+  const resumed = await service.get('owner', workspace.id);
+  assert.equal(resumed.draft.content, PHYSICS_WORK_DRAFT);
+  assert.equal(resumed.autosaveRevision, workspace.autosaveRevision);
+  const editedContent = `${resumed.draft.content}\n\nLearner-confirmed annotation.`;
+  const saved = await service.autosave('owner', resumed.id, {
+    workspaceId: resumed.id, expectedRevision: resumed.autosaveRevision,
+    draft: { format: 'markdown', content: editedContent },
+  });
+  assert.equal(saved.revision, resumed.autosaveRevision + 1);
+  assert.equal((await service.get('owner', resumed.id)).draft.content, editedContent);
+  assert.equal((await service.get('owner', resumed.id)).brief.fields.userInstructions, instructions);
+});
+
+test('WORK production replaces only identified automatic legacy commentary, preserves unknown learner text and supports undo', async () => {
+  // Exact observed output retained in deliverables/autopilot-v1-20261019/delivery-proof.json.
+  const legacyDraft = 'The assignment asks for explanations of kinetic and potential energy along with their formulas. '
+    + 'For kinetic energy, calculate the energy of a 2 kg mass moving at 5 m/s, including the calculation steps, units, and a concluding statement. '
+    + 'For potential energy, provide only the formula Ep = mgh without performing any calculation, since the height is not given. '
+    + 'The instructions stress the importance of not inventing missing data, ensuring accuracy and scientific rigor by working strictly with the provided information. '
+    + 'The draft will present clear explanations, the kinetic energy calculation, and the potential energy formula, followed by a brief explanation of the approach.';
+  for (const knownAutomatic of [true, false]) {
+    const { service, state, workspace: created } = await autopilotFixture({}, { initialContent: legacyDraft });
+    let workspace = await autopilotCommand(service, created, 'start', `work-legacy-start-${knownAutomatic}`, { consent: true });
+    for (let step = 0; step < 2; step += 1) {
+      workspace = await autopilotCommand(service, workspace, 'step', `work-legacy-prepare-${knownAutomatic}-${step}`);
+    }
+    const originalRequirements = workspace.brief.fields.requirements;
+    if (knownAutomatic) {
+      // Reconstruct only a persisted pre-hotfix history entry in the in-memory harness.
+      // An exact historical automatic draft is evidence of provenance, not permission to overwrite a learner edit.
+      const row = state.workspaces[0];
+      row.assistantHistory.push({
+        ...row.assistantHistory.at(-1), id: 'legacy-automatic-description',
+        content: 'Earlier automatic descriptive output.',
+        autopilot: { runId: 'legacy-automatic-run', output: { text: 'Earlier automatic descriptive output.', draft: legacyDraft } },
+      });
+    }
+    workspace = await autopilotCommand(service, workspace, 'step', `work-legacy-produce-${knownAutomatic}`);
+    assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
+    assert.equal(workspace.draft.content, knownAutomatic ? PHYSICS_WORK_DRAFT : `${legacyDraft}\n\n${PHYSICS_WORK_DRAFT}`);
+    assert.equal(workspace.brief.fields.requirements, originalRequirements);
+    assert.equal(state.llmCalls, 3);
+    workspace = await autopilotCommand(service, workspace, 'pause', `work-legacy-pause-${knownAutomatic}`);
+    const phaseBeforeUndo = workspace.professor.currentPhase;
+    workspace = await autopilotCommand(service, workspace, 'undo', `work-legacy-undo-${knownAutomatic}`);
+    assert.equal(workspace.draft.content, legacyDraft, 'Undo restores the exact saved text in both provenance cases');
+    assert.equal(workspace.professor.currentPhase, phaseBeforeUndo, 'Undo does not invent a new Professor transition');
+    assert.equal(workspace.plan.some((item) => item.completed), false);
+    assert.equal(workspace.brief.fields.requirements, originalRequirements);
+    assert.equal(autopilotState(workspace).status, 'PAUSED');
+    assert.equal(state.llmCalls, 3, 'Undo never calls the provider');
+  }
+});
+
+test('WORK production rejects descriptive or method-only draft fields before evidence, application or phase advance', async () => {
+  const candidates = [
+    'Le devoir demande une introduction, une explication des notions, les formules des énergies et un calcul avec les données. '
+      + 'Le résultat attendu comporte une méthode et une conclusion. Ce travail devra montrer la distinction entre mouvement et position, '
+      + 'puis appliquer la formule aux valeurs indiquées dans la consigne.',
+    'Tu devrais expliquer le sujet. Tu devrais donner les formules. Tu devrais relever les données. '
+      + 'Tu devrais choisir la relation appropriée, remplacer les variables et effectuer le calcul. '
+      + 'Tu devrais ensuite contrôler les unités et présenter une conclusion dans une réponse organisée.',
+  ];
+  for (const [index, draft] of candidates.entries()) {
+    const { service, state, workspace: created } = await autopilotFixture();
+    const responder = state.llmResponder;
+    state.llmResponder = (...args) => {
+      const output = JSON.parse(responder(...args));
+      if (state.workspaces[0].progress.workflow.professor.currentPhase === 'WORK') {
+        output.draft = draft;
+        output.workEvidence = [{ requirement: 'method and conclusion', excerpt: draft.slice(0, 100) }];
+      }
+      return JSON.stringify(output);
+    };
+    let workspace = await autopilotCommand(service, created, 'start', `work-invalid-start-${index}`, { consent: true });
+    for (let step = 0; step < 3; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `work-invalid-${index}-${step}`);
+    assert.ok(['PAUSED_ERROR', 'NEEDS_INPUT'].includes(autopilotState(workspace).status));
+    assert.equal(workspace.professor.currentPhase, 'WORK');
+    assert.equal(workspace.draft.content, '');
+    assert.equal(workspace.professor.evidence.some((item) => item.phase === 'WORK'), false);
+    assert.equal(workspace.plan.some((item) => item.completed), false);
+    assert.equal(state.llmCalls, 3);
+    await assert.rejects(service.transition('owner', workspace.id, {
+      requestId: `work-invalid-no-verification-${index}`, expectedPhase: 'WORK', requestedPhase: 'VERIFICATION',
+      expectedRevision: workspace.autosaveRevision,
+    }), (error) => httpStatus(error) === 400);
+    await assert.rejects(service.finalize('owner', workspace.id, {
+      requestId: `work-invalid-no-finalization-${index}`, expectedRevision: workspace.autosaveRevision,
+    }), (error) => httpStatus(error) === 400);
+  }
+});
+
+test('WORK production uses compare-and-swap and never overwrites a learner autosave completed during generation', async () => {
+  const { service, state, workspace: created } = await autopilotFixture();
+  let workspace = await autopilotCommand(service, created, 'start', 'work-cas-start', { consent: true });
+  for (let step = 0; step < 2; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `work-cas-${step}`);
+  const instructions = workspace.brief.fields.requirements;
+  let release;
+  state.llmBarrier = new Promise((resolve) => { release = resolve; });
+  const pending = autopilotCommand(service, workspace, 'step', 'work-cas-generation');
+  while (state.llmCalls < 3) await new Promise((resolve) => setImmediate(resolve));
+  await service.autosave('owner', workspace.id, {
+    workspaceId: workspace.id, expectedRevision: workspace.autosaveRevision,
+    draft: { format: 'markdown', content: 'The learner saved a newer answer while the provider was working.' },
+  });
+  release();
+  await pending;
+  workspace = await service.get('owner', workspace.id);
+  assert.equal(workspace.draft.content, 'The learner saved a newer answer while the provider was working.');
+  assert.equal(workspace.brief.fields.requirements, instructions);
+  assert.equal(workspace.professor.currentPhase, 'WORK');
+  assert.equal(autopilotState(workspace).status, 'PAUSED_ERROR');
+  assert.equal(state.llmCalls, 3);
+});
+
+test('WORK production reaches Verification with the real draft and AW-7 coaches that draft rather than a plan description', async () => {
+  const { service, state, workspace: created } = await autopilotFixture();
+  const responder = state.llmResponder;
+  let verificationCount = 0;
+  state.llmResponder = (...args) => {
+    const output = JSON.parse(responder(...args));
+    if (state.workspaces[0].progress.workflow.professor.currentPhase === 'VERIFICATION' && verificationCount++ === 0) {
+      output.issues = ['Clarify the final units statement while preserving the actual calculation.'];
+    }
+    return JSON.stringify(output);
+  };
+  let workspace = await autopilotCommand(service, created, 'start', 'work-aw7-start', { consent: true });
+  for (let step = 0; step < 3; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `work-aw7-${step}`);
+  const draftBeforeCheck = workspace.draft.content;
+  assert.match(draftBeforeCheck, /25 J/);
+  workspace = await autopilotCommand(service, workspace, 'step', 'work-aw7-verify');
+  assert.equal(workspace.professor.currentPhase, 'COACHING');
+  const verificationPrompt = state.llmMessages[3].find((message) => message.role === 'user').content;
+  assert.ok(verificationPrompt.includes(`Current draft:\n${draftBeforeCheck}`));
+  assert.match(verificationPrompt, /25 J/);
+  workspace = await autopilotCommand(service, workspace, 'step', 'work-aw7-coach');
+  const coachingPrompt = state.llmMessages.at(-1).find((message) => message.role === 'user').content;
+  assert.match(coachingPrompt, /Workspace tool:/);
+  assert.ok(coachingPrompt.includes(draftBeforeCheck));
+  assert.match(coachingPrompt, /25 J/);
+  assert.ok(workspace.progress.workflow.tools.operations.some((operation) => operation.status === 'applied'));
+  assert.match(workspace.draft.content, /25 J/);
+  assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
+});
+
+test('WORK production contract leaves manual Work explanations as commentary without automatically writing an answer', async () => {
+  const { service, state } = createHarness();
+  let workspace = await service.create('owner', request({ requestId: 'work-manual-create' }));
+  const move = async (requestedPhase, suffix) => {
+    await service.transition('owner', workspace.id, {
+      requestId: `work-manual-transition-${suffix}`, expectedPhase: workspace.professor.currentPhase,
+      requestedPhase, expectedRevision: workspace.autosaveRevision,
+    });
+    workspace = await service.get('owner', workspace.id);
+  };
+  await move('COMPREHENSION', 'from-capture');
+  for (const [phase, action] of [['COMPREHENSION', 'explain'], ['METHOD', 'structure']]) {
+    await service.assist('owner', workspace.id, {
+      requestId: `work-manual-explain-${phase.toLowerCase()}`, expectedPhase: phase,
+      expectedRevision: workspace.autosaveRevision, action, message: 'Give guidance only; do not write the answer.',
+    });
+    await move(phase === 'COMPREHENSION' ? 'METHOD' : 'WORK', phase.toLowerCase());
+  }
+  state.llmResponse = 'Tu peux choisir une méthode, relever les données et rédiger ton propre calcul.';
+  const reply = await service.assist('owner', workspace.id, {
+    requestId: 'work-manual-commentary', expectedPhase: 'WORK', expectedRevision: workspace.autosaveRevision,
+    action: 'explain', message: 'Explain without drafting for me.',
+  });
+  assert.equal(reply.reply.content, state.llmResponse);
+  workspace = await service.get('owner', workspace.id);
+  assert.equal(workspace.draft.content, '');
+  assert.equal(autopilotState(workspace).status, 'IDLE');
+  assert.equal(workspace.professor.currentPhase, 'WORK');
 });

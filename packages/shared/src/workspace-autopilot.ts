@@ -10,6 +10,12 @@ export type WorkspaceAutopilotAction = (typeof WORKSPACE_AUTOPILOT_ACTIONS)[numb
 export type WorkspaceAutopilotStatus =
   | 'IDLE' | 'RUNNING' | 'PAUSED' | 'PAUSED_ERROR' | 'NEEDS_INPUT' | 'COMPLETED' | 'STOPPED';
 
+export const WORKSPACE_WORK_OUTPUT_KINDS = [
+  'ANSWER_DRAFT', 'CURRENT_SECTION_DRAFT', 'ARGUMENTATIVE_DRAFT',
+  'SCIENTIFIC_SECTION_DRAFT', 'REPORT_SECTION_DRAFT', 'ADAPTIVE_DRAFT',
+] as const;
+export type WorkspaceWorkOutputKind = (typeof WORKSPACE_WORK_OUTPUT_KINDS)[number];
+
 export interface WorkspaceAutopilotRequest {
   requestId: string;
   expectedRevision: number;
@@ -24,6 +30,11 @@ export interface WorkspaceAutopilotOutput {
   briefFields?: WorkspaceBrief['fields'];
   plan?: Array<{ title: string; stepId?: WorkspacePlanItem['stepId'] }>;
   draft?: string;
+  /** The produced content, not a description of a proposed future answer. */
+  workOutputKind?: WorkspaceWorkOutputKind;
+  workEvidence?: Array<{ requirement: string; excerpt: string }>;
+  /** Set by server validation only; never accepted from provider/client JSON. */
+  workArtifactValidated?: true;
   checkedPlanItemIds?: string[];
   issues?: string[];
   needsInput?: string;
