@@ -210,7 +210,7 @@ function createHarness(options = {}) {
     },
   };
   return {
-    service: new AcademicWorkspaceService(prisma, llm, sourceEngine, undefined, {
+    service: new AcademicWorkspaceService(prisma, llm, sourceEngine, options.learnerPassport, {
       get: (key) => options.config?.[key],
     }),
     state,
@@ -1780,4 +1780,65 @@ test('Autopilot preserves long captured instructions exactly and stops an oversi
       assert.equal(state.llmCalls, 0);
     }
   }
+});
+
+test('Autopilot places its consented orchestration directive after strategy and Passport while manual pedagogy remains unchanged', async () => {
+  const { strategyDirective, selectStrategy } = require('../dist/tutor/teaching-strategy.js');
+  const { autopilotProfessorDirective } = require('../dist/workspaces/workspace-autopilot.js');
+  const passport = {
+    learningPreferences: ['visual'], ageBand: null,
+    directive: 'PASSPORT_TEST_SENTINEL: preserve all examination restrictions and the real academic rubric.',
+  };
+  const learnerPassport = { tutorContext: async () => passport };
+  const expectedStrategy = strategyDirective(selectStrategy({
+    subject: 'University physics', isLanguage: false, mastery: null,
+    learningStyle: passport.learningPreferences.join(' '), ageBand: passport.ageBand,
+  }).strategy);
+  const automatic = await autopilotFixture({ learnerPassport });
+  let workspace = await autopilotCommand(automatic.service, automatic.workspace, 'start', 'priority-auto-start', { consent: true });
+  workspace = await autopilotCommand(automatic.service, workspace, 'step', 'priority-auto-step');
+  const system = automatic.state.llmMessages[0].find((message) => message.role === 'system').content;
+  const directive = autopilotProfessorDirective('COMPREHENSION', 'assignment');
+  assert.ok(system.includes(expectedStrategy), 'Autopilot must reuse the existing teacher strategy');
+  assert.ok(system.includes(passport.directive), 'Passport and examination restrictions remain present');
+  assert.ok(system.endsWith(directive), 'Consent-specific orchestration must be the final system instruction');
+  assert.ok(system.lastIndexOf(directive) > system.indexOf(expectedStrategy));
+  assert.ok(system.lastIndexOf(directive) > system.indexOf(passport.directive));
+  assert.match(directive, /override ONLY optional pedagogical intake/);
+  assert.match(directive, /Do not put optional prior-knowledge, confidence, preference or understanding questions in needsInput/);
+  assert.match(directive, /priority NEVER overrides mandatory examination conditions/);
+  assert.equal(workspace.professor.currentPhase, 'METHOD');
+
+  const manual = await autopilotFixture({ learnerPassport });
+  manual.state.llmResponder = null;
+  await manual.service.assist('owner', manual.workspace.id, {
+    requestId: 'autopilot-priority-manual-turn', action: 'explain',
+    expectedPhase: 'CAPTURE', expectedRevision: manual.workspace.autosaveRevision,
+    message: 'Explain this task in the existing guided manual mode.',
+  });
+  const manualSystem = manual.state.llmMessages[0].find((message) => message.role === 'system').content;
+  assert.ok(manualSystem.includes(expectedStrategy), 'Manual strategy and pedagogical arc must not be rewritten');
+  assert.ok(manualSystem.includes(passport.directive));
+  assert.ok(!manualSystem.includes(directive), 'Manual mode cannot inherit consent-specific Autopilot overrides');
+  assert.equal(autopilotState(await manual.service.get('owner', manual.workspace.id)).status, 'IDLE');
+});
+
+test('Autopilot still pauses for genuinely essential clarification without moving past comprehension', async () => {
+  const clarification = 'Which measured height is required by the supplied numerical potential-energy question?';
+  const { service, state, workspace: created } = await autopilotFixture({
+    llmResponder: () => JSON.stringify({
+      text: 'The requested numerical potential energy cannot be computed from mass alone.',
+      needsInput: clarification,
+    }),
+  });
+  let workspace = await autopilotCommand(service, created, 'start', 'essential-start', { consent: true });
+  workspace = await autopilotCommand(service, workspace, 'step', 'essential-step');
+  assert.equal(autopilotState(workspace).status, 'NEEDS_INPUT');
+  assert.equal(autopilotState(workspace).errorCode, 'workspace_autopilot_clarification_required');
+  assert.equal(autopilotState(workspace).reason, clarification);
+  assert.equal(workspace.professor.currentPhase, 'COMPREHENSION');
+  assert.equal(workspace.draft.content, '');
+  assert.equal(state.llmCalls, 1);
+  await assert.rejects(autopilotCommand(service, workspace, 'step', 'essential-cannot-force-next'), (error) => httpStatus(error) === 409);
+  assert.equal(state.llmCalls, 1);
 });

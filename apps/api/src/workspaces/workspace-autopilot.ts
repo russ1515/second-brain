@@ -18,6 +18,9 @@ export function autopilotProfessorDirective(phase: WorkspaceProfessorPhase, temp
   return [
     'The learner explicitly consented to reversible Professor Autopilot preparation of this Workspace draft.',
     'This is a bounded operation of the existing Professor. Preserve all safety, examination and academic-integrity restrictions.',
+    'Autopilot execution priority: override ONLY optional pedagogical intake, warm-up, prior-knowledge checks, preference questions and comprehension check-ins from the general teaching strategy. The supplied task is already the intake; proceed with its bounded preparation.',
+    'Do not put optional prior-knowledge, confidence, preference or understanding questions in needsInput. Omit needsInput when the supplied instructions contain enough information to perform the current step.',
+    'This priority NEVER overrides mandatory examination conditions, assessment assistance restrictions, academic integrity, safety, or explicit learner and institution requirements. Use needsInput for a genuinely indispensable missing fact, source, consent or ambiguous direction; never invent the missing information.',
     task[phase] ?? 'Explain the current task without claiming it is complete.',
     'Return exactly one JSON object, no Markdown fence: {"text":"visible pedagogical explanation", "briefFields":{}, "plan":[{"title":"step"}], "draft":"usable section or draft when requested", "checkedPlanItemIds":[], "issues":[], "needsInput":"only a necessary clarification", "deconstruction":"final retrospective when requested"}. Omit inapplicable fields.',
     'All prose must use the learner locale. Never fabricate sources, approvals, progress or completed actions. Translate neither supplied IDs nor citation labels.',
