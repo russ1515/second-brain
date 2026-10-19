@@ -11,10 +11,45 @@ export type WorkspaceAutopilotStatus =
   | 'IDLE' | 'RUNNING' | 'PAUSED' | 'PAUSED_ERROR' | 'NEEDS_INPUT' | 'COMPLETED' | 'STOPPED';
 
 export const WORKSPACE_WORK_OUTPUT_KINDS = [
-  'ANSWER_DRAFT', 'CURRENT_SECTION_DRAFT', 'ARGUMENTATIVE_DRAFT',
-  'SCIENTIFIC_SECTION_DRAFT', 'REPORT_SECTION_DRAFT', 'ADAPTIVE_DRAFT',
+  'ANSWER_DRAFT', 'SUMMARY_DRAFT', 'SOURCED_RESEARCH_DRAFT', 'CURRENT_ACADEMIC_SECTION_DRAFT',
+  'ARGUMENTATIVE_DRAFT', 'SCIENTIFIC_DRAFT', 'REPORT_DRAFT', 'INTENT_MATCHED_DRAFT',
 ] as const;
 export type WorkspaceWorkOutputKind = (typeof WORKSPACE_WORK_OUTPUT_KINDS)[number];
+
+export const WORKSPACE_WORK_INTENTS = [
+  'assignment-exercise', 'article-summary', 'research-task', 'academic-section',
+  'argumentative-essay', 'scientific-article', 'report', 'general',
+] as const;
+export type WorkspaceWorkIntent = (typeof WORKSPACE_WORK_INTENTS)[number];
+
+/** Versioned interpretation of the actual task, not another Workspace engine. */
+export interface WorkspaceWorkContract {
+  version: 1;
+  taskIntent: WorkspaceWorkIntent;
+  outputKind: WorkspaceWorkOutputKind;
+  operation: 'produce' | 'transform' | 'reproduce';
+  scope: 'entire-task' | 'current-section';
+  task: string;
+  criteria: Array<{ id: string; requirement: string; required: boolean }>;
+  sourceRequirement: 'none' | 'provided-content' | 'cited-evidence';
+  /** Exact source material, not a substituted instruction or fabricated text. */
+  sourceExcerpt?: string;
+  sectionPlanItemId?: string;
+  /** Computed by the server; provider/client fingerprints are ignored. */
+  instructionFingerprint?: string;
+  origin?: 'comprehension' | 'method' | 'legacy-work';
+}
+
+export interface WorkspaceTaskFulfillment {
+  fulfilled: boolean;
+  contractMatchesTask: boolean;
+  scope: WorkspaceWorkContract['scope'];
+  criterionReviews: Array<{ criterionId: string; fulfilled: boolean; excerpt?: string; reason?: string }>;
+  citationLabels?: string[];
+  uncoveredRequirements?: string[];
+  /** Computed only after the existing verification turn passes validation. */
+  reviewedDraftFingerprint?: string;
+}
 
 export interface WorkspaceAutopilotRequest {
   requestId: string;
@@ -33,6 +68,8 @@ export interface WorkspaceAutopilotOutput {
   /** The produced content, not a description of a proposed future answer. */
   workOutputKind?: WorkspaceWorkOutputKind;
   workEvidence?: Array<{ requirement: string; excerpt: string }>;
+  workContract?: WorkspaceWorkContract;
+  taskFulfillment?: WorkspaceTaskFulfillment;
   /** Set by server validation only; never accepted from provider/client JSON. */
   workArtifactValidated?: true;
   checkedPlanItemIds?: string[];
@@ -87,6 +124,8 @@ export interface WorkspaceAutopilotState {
   receipts: WorkspaceAutopilotReceipt[];
   /** Preserves a bounded exception for this exact run, without resetting usage. */
   stepGrant?: WorkspaceAutopilotStepGrant;
+  workContract?: WorkspaceWorkContract;
+  workReview?: { draftFingerprint: string; contractFingerprint: string; instructionFingerprint: string; sourceFingerprint: string; replyId: string };
   errorCode?: string;
   reason?: string;
   /** Long-form work is evaluated one server-selected plan section at a time. */

@@ -6,6 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { AcademicWorkspaceService } = require('../dist/workspaces/academic-workspace.service.js');
 const { LlmService } = require('../dist/llm/llm.service.js');
+const { UNIVERSAL_TASKS } = require('./fixtures/workspace-universal-fixtures.cjs');
 const {
   WORKSPACE_TEMPLATES,
   workspaceProgressFromPlan,
@@ -1302,15 +1303,38 @@ const PHYSICS_WORK_DRAFT = '# Introduction\n\n'
   + 'The missing height remains an explicit limit rather than an invented input.';
 
 const WORK_KIND_BY_TEMPLATE = {
-  assignment: 'ANSWER_DRAFT', memoire: 'CURRENT_SECTION_DRAFT', tfc: 'CURRENT_SECTION_DRAFT',
-  dissertation: 'ARGUMENTATIVE_DRAFT', article: 'SCIENTIFIC_SECTION_DRAFT', report: 'REPORT_SECTION_DRAFT',
-  other: 'ADAPTIVE_DRAFT', 'academic-research': 'ADAPTIVE_DRAFT',
+  assignment: 'ANSWER_DRAFT', memoire: 'CURRENT_ACADEMIC_SECTION_DRAFT', tfc: 'CURRENT_ACADEMIC_SECTION_DRAFT',
+  dissertation: 'ARGUMENTATIVE_DRAFT', article: 'SCIENTIFIC_DRAFT', report: 'REPORT_DRAFT',
+  other: 'INTENT_MATCHED_DRAFT', 'academic-research': 'CURRENT_ACADEMIC_SECTION_DRAFT',
 };
+
+function fixtureWorkContract(row, overrides = {}) {
+  const existing = row.progress.workflow.autopilot?.workContract;
+  const fields = row.progress.workflow.brief.fields;
+  const instruction = fields.requirements || fields.userInstructions || row.objective || fields.subject;
+  const kind = WORK_KIND_BY_TEMPLATE[row.template];
+  const intents = {
+    ANSWER_DRAFT: 'assignment-exercise', CURRENT_ACADEMIC_SECTION_DRAFT: 'academic-section',
+    ARGUMENTATIVE_DRAFT: 'argumentative-essay', SCIENTIFIC_DRAFT: 'scientific-article',
+    REPORT_DRAFT: 'report', INTENT_MATCHED_DRAFT: 'general',
+  };
+  return {
+    version: 1, taskIntent: intents[kind], outputKind: kind, operation: 'produce',
+    scope: ['memoire', 'tfc', 'article', 'academic-research'].includes(row.template) ? 'current-section' : 'entire-task',
+    task: instruction.slice(0, 2_000),
+    criteria: [{ id: 'fixture-required-criterion', requirement: instruction.slice(0, 2_000), required: true }],
+    sourceRequirement: 'none',
+    ...existing,
+    ...overrides,
+  };
+}
 
 function autopilotReply(_messages, _options, state) {
   const row = state.workspaces.at(-1);
   const phase = row.progress.workflow.professor.currentPhase;
   const output = { text: `Verified technical ${phase.toLowerCase()} explanation.` };
+  const contract = fixtureWorkContract(row);
+  if (['COMPREHENSION', 'METHOD', 'WORK'].includes(phase)) output.workContract = contract;
   if (phase === 'COMPREHENSION') {
     output.briefFields = {
       subject: 'Kinetic and potential energy',
@@ -1326,13 +1350,24 @@ function autopilotReply(_messages, _options, state) {
   }
   if (phase === 'WORK' || phase === 'COACHING') {
     output.draft = PHYSICS_WORK_DRAFT;
-    output.workOutputKind = WORK_KIND_BY_TEMPLATE[row.template];
+    output.workOutputKind = contract.outputKind;
     output.workEvidence = [{
       requirement: row.progress.workflow.brief.fields.requirements || row.progress.workflow.brief.fields.userInstructions || row.progress.workflow.brief.fields.subject,
       excerpt: 'Kinetic energy: it is associated with the motion of an object.',
     }];
   }
-  if (phase === 'VERIFICATION') output.checkedPlanItemIds = row.plan.map((item) => item.id);
+  if (phase === 'VERIFICATION') {
+    output.checkedPlanItemIds = row.plan.map((item) => item.id);
+    output.taskFulfillment = {
+      fulfilled: true, contractMatchesTask: true, scope: contract.scope,
+      criterionReviews: contract.criteria.map((criterion) => ({
+        criterionId: criterion.id, fulfilled: true,
+        excerpt: row.draftContent.includes('Kinetic energy: it is associated with the motion of an object.')
+          ? 'Kinetic energy: it is associated with the motion of an object.' : row.draftContent.slice(0, 200),
+      })),
+      citationLabels: (state.sourceResolution?.citations || []).filter((citation) => row.draftContent.includes(`[${citation.citationLabel}]`)).map((citation) => citation.citationLabel),
+    };
+  }
   if (phase === 'FINALIZATION') output.deconstruction = 'We identified the formula, substituted measured inputs, verified 25 J, and kept the unavailable height explicit.';
   return JSON.stringify(output);
 }
@@ -1624,7 +1659,7 @@ test('Autopilot verification refuses invented plan IDs and cannot manufacture co
   const { service, state, workspace: created } = await autopilotFixture();
   let workspace = await autopilotCommand(service, created, 'start', 'bad-ids-start', { consent: true });
   for (let step = 0; step < 3; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `bad-ids-${step}`);
-  state.llmResponder = () => JSON.stringify({ text: 'Invalid verification result', checkedPlanItemIds: ['not-a-real-plan-id'] });
+  state.llmResponder = (...args) => JSON.stringify({ ...JSON.parse(autopilotReply(...args)), text: 'Invalid verification result', checkedPlanItemIds: ['not-a-real-plan-id'] });
   workspace = await autopilotCommand(service, workspace, 'step', 'bad-ids-verify');
   assert.equal(autopilotState(workspace).status, 'PAUSED_ERROR');
   assert.equal(autopilotState(workspace).errorCode, 'workspace_autopilot_invalid_verification');
@@ -1639,7 +1674,7 @@ test('Autopilot missing verified plan work stays unfinished instead of filling c
   let workspace = await autopilotCommand(service, created, 'start', 'incomplete-start', { consent: true });
   for (let step = 0; step < 3; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `incomplete-${step}`);
   const verifiedId = workspace.plan[0].id;
-  state.llmResponder = () => JSON.stringify({ text: 'Only the first section was verified.', checkedPlanItemIds: [verifiedId], issues: ['Remaining sections are absent.'] });
+  state.llmResponder = (...args) => JSON.stringify({ ...JSON.parse(autopilotReply(...args)), text: 'Only the first section was verified.', checkedPlanItemIds: [verifiedId] });
   workspace = await autopilotCommand(service, workspace, 'step', 'incomplete-verify');
   assert.equal(autopilotState(workspace).status, 'NEEDS_INPUT');
   assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
@@ -1939,7 +1974,7 @@ test('WORK production replaces only identified automatic legacy commentary, pres
   }
 });
 
-test('WORK production rejects descriptive or method-only draft fields before evidence, application or phase advance', async () => {
+test('WORK production rejects missing required criterion evidence before publication, application or phase advance', async () => {
   const candidates = [
     'Le devoir demande une introduction, une explication des notions, les formules des énergies et un calcul avec les données. '
       + 'Le résultat attendu comporte une méthode et une conclusion. Ce travail devra montrer la distinction entre mouvement et position, '
@@ -2262,4 +2297,302 @@ test('Targeted run grant enforces its smaller prompt ceiling before provider use
   assert.equal(workspace.draft.content, '');
   assert.equal(state.llmCalls, 0);
   assert.equal(config.WORKSPACE_AUTOPILOT_MAX_PROMPT_BYTES, 60_000);
+});
+
+async function universalWorkFixture(fixture, options = {}) {
+  const harness = createHarness();
+  const proposed = {
+    version: 1, taskIntent: fixture.taskIntent, outputKind: fixture.outputKind,
+    operation: fixture.operation, scope: fixture.scope || 'entire-task', task: fixture.instructions,
+    criteria: fixture.requirements.map((requirement, index) => ({ id: `universal-${index}`, requirement, required: true })),
+    sourceRequirement: fixture.sourceRequirement || 'none',
+    ...(fixture.sourceContext ? { sourceExcerpt: fixture.sourceContext } : {}),
+  };
+  const sourceContext = options.withoutSources ? '' : fixture.sourceContext || '';
+  if (sourceContext) {
+    const citations = (fixture.citations?.length ? fixture.citations : [{ citationLabel: 'W1' }]).map((citation) => ({
+      ...citation, sourceType: 'document', sourceId: 'document-owner', documentId: 'document-owner',
+      title: 'Owned technical test source', snippet: sourceContext, relevance: 1,
+    }));
+    harness.state.sourceResolution = {
+      query: 'Technical task source', usedContext: true, context: sourceContext, citations,
+      sources: [{ kind: 'document', id: 'document-owner', title: 'Owned technical test source', availability: 'available' }],
+    };
+  }
+  harness.state.llmResponder = (_messages, _generateOptions, state) => {
+    const row = state.workspaces[0];
+    const phase = row.progress.workflow.professor.currentPhase;
+    const workContract = row.progress.workflow.autopilot.workContract || proposed;
+    const output = { text: `Technical ${phase.toLowerCase()} response.` };
+    if (['COMPREHENSION', 'METHOD', 'WORK'].includes(phase)) output.workContract = workContract;
+    if (phase === 'METHOD') output.plan = fixture.requirements.map((requirement) => ({ title: requirement, stepId: 'draft' }));
+    if (phase === 'WORK') {
+      output.draft = fixture.draft;
+      output.workOutputKind = fixture.outputKind;
+      output.workEvidence = fixture.requirements.map((requirement, index) => ({ requirement, excerpt: fixture.excerpts[index] }));
+    }
+    if (phase === 'VERIFICATION') {
+      output.checkedPlanItemIds = row.plan.map((item) => item.id);
+      output.taskFulfillment = {
+        fulfilled: true, contractMatchesTask: true, scope: workContract.scope,
+        criterionReviews: workContract.criteria.map((criterion, index) => ({ criterionId: criterion.id, fulfilled: true, excerpt: fixture.excerpts[index] })),
+        citationLabels: (harness.state.sourceResolution?.citations || []).filter((citation) => row.draftContent.includes(`[${citation.citationLabel}]`)).map((citation) => citation.citationLabel),
+      };
+    }
+    if (phase === 'FINALIZATION') output.deconstruction = 'The captured task was interpreted, drafted and checked against its actual required criteria.';
+    return JSON.stringify(options.transformOutput ? options.transformOutput(output, phase, state) : output);
+  };
+  const workspace = await harness.service.create('owner', request({
+    requestId: 'universal-work-create', title: fixture.name, template: fixture.template,
+    objective: '', autopilotConsent: true,
+    brief: { version: 1, fields: {
+      subject: 'Technical task', userInstructions: fixture.instructions, requirements: fixture.instructions,
+      context: fixture.instructions, deliverable: fixture.instructions,
+      researchQuestion: 'What does the supplied technical task require?',
+      methodology: 'Follow the supplied instructions without inventing evidence.',
+    } },
+    sources: options.sources ?? (sourceContext ? [{ kind: 'document', id: 'document-owner' }] : []),
+    ...(options.plan ? { plan: options.plan } : {}),
+  }));
+  return { ...harness, workspace, proposed };
+}
+
+for (const [index, fixture] of UNIVERSAL_TASKS.entries()) {
+  test(`Universal task flow persists ${fixture.name} through the existing Professor`, async () => {
+    const { service, state, workspace: initial } = await universalWorkFixture(fixture);
+    let workspace = initial;
+    const starterPlan = workspace.plan;
+    for (let step = 0; step < 4; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `universal-${index}-${step}`);
+    const current = autopilotState(workspace);
+    assert.equal(current.workContract.taskIntent, fixture.taskIntent);
+    assert.equal(current.workContract.outputKind, fixture.outputKind);
+    assert.equal(current.workContract.scope, fixture.scope || 'entire-task');
+    assert.equal(workspace.draft.content, fixture.draft);
+    assert.equal(workspace.brief.fields.userInstructions, fixture.instructions);
+    assert.equal(state.llmCalls, 4, 'Classification and verification reuse the existing C/M/W/V calls');
+    assert.equal(current.aiSteps, 4);
+    if (fixture.scope === 'current-section') {
+      assert.equal(workspace.plan.length, starterPlan.length);
+      assert.equal(workspace.plan.filter((item) => item.completed).length, 1);
+      assert.equal(workspace.status, 'active');
+      assert.equal(workspace.completion.snapshots.length, 0);
+      assert.notEqual(workspace.professor.currentPhase, 'FINALIZATION');
+    } else {
+      assert.equal(workspace.plan.length, fixture.requirements.length);
+      assert.equal(workspace.professor.currentPhase, 'FINALIZATION');
+      assert.ok(current.workReview?.draftFingerprint);
+    }
+    if (fixture.taskIntent === 'article-summary') {
+      assert.equal(workspace.template, 'article');
+      assert.equal(current.workContract.scope, 'entire-task', 'An article container does not turn a summary into full IMRAD production');
+      assert.ok(workspace.plan.every((item) => !item.id.startsWith('template:')));
+      assert.match(state.llmMessages[2].at(-1).content, /SUMMARY_DRAFT/);
+      assert.doesNotMatch(state.llmMessages[2].at(-1).content, /Current section:/);
+    }
+    const restored = await service.get('owner', workspace.id);
+    assert.equal(restored.draft.content, fixture.draft);
+    assert.deepEqual(autopilotState(restored).workContract, current.workContract);
+  });
+}
+
+test('Universal article summary preserves an explicit custom plan instead of replacing it with a starter or IMRAD plan', async () => {
+  const fixture = UNIVERSAL_TASKS[0];
+  const customPlan = [
+    { id: 'learner-summary-1', title: 'My explicit source summary', order: 0, completed: false, stepId: 'draft' },
+    { id: 'learner-summary-2', title: 'My explicit source limitations', order: 1, completed: false, stepId: 'draft' },
+  ];
+  const { service, workspace: initial } = await universalWorkFixture(fixture, { plan: customPlan });
+  let workspace = initial;
+  for (let step = 0; step < 3; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `summary-custom-${step}`);
+  assert.deepEqual(workspace.plan, customPlan);
+  assert.equal(workspace.draft.content, fixture.draft);
+  assert.equal(autopilotState(workspace).workContract.outputKind, 'SUMMARY_DRAFT');
+});
+
+test('Universal sourced research without authorized evidence stops before another provider call and publishes no WORK proof', async () => {
+  const fixture = UNIVERSAL_TASKS.find((item) => item.taskIntent === 'research-task');
+  const { service, state, workspace: initial } = await universalWorkFixture(fixture, { withoutSources: true });
+  let workspace = initial;
+  for (let step = 0; step < 3 && autopilotState(workspace).status === 'RUNNING'; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `research-no-sources-${step}`);
+  assert.ok(['NEEDS_INPUT', 'PAUSED_ERROR'].includes(autopilotState(workspace).status));
+  assert.equal(autopilotState(workspace).errorCode, 'workspace_autopilot_source_required');
+  assert.equal(workspace.draft.content, '');
+  assert.equal(workspace.professor.evidence.some((item) => item.phase === 'WORK'), false);
+  assert.ok(state.llmCalls <= 2, 'Missing evidence never starts a new research/provider loop');
+  assert.notEqual(workspace.professor.currentPhase, 'FINALIZATION');
+  assert.equal(workspace.completion.snapshots.length, 0);
+});
+
+test('Universal verification blocks a structurally valid but off-task draft through its actual verdict, not lexical grading', async () => {
+  const fixture = UNIVERSAL_TASKS[0];
+  const { service, state, workspace: initial } = await universalWorkFixture(fixture, {
+    transformOutput(output, phase) {
+      if (phase === 'WORK') {
+        output.draft = 'Les mots avantage, limite et pompe solaire sont présents dans ce texte. Il traite pourtant du classement de mots, pas du résumé des faits du document.';
+        output.workEvidence = fixture.requirements.map((requirement) => ({ requirement, excerpt: output.draft }));
+      }
+      if (phase === 'VERIFICATION') {
+        output.taskFulfillment.fulfilled = false;
+        output.taskFulfillment.criterionReviews = output.taskFulfillment.criterionReviews.map((review) => ({ criterionId: review.criterionId, fulfilled: false, reason: 'The draft lists keywords but does not summarize the source.' }));
+      }
+      return output;
+    },
+  });
+  let workspace = initial;
+  for (let step = 0; step < 3; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `offtask-before-review-${step}`);
+  assert.equal(workspace.professor.currentPhase, 'VERIFICATION', 'Structural acceptance is not advertised as universal semantic grading');
+  workspace = await autopilotCommand(service, workspace, 'step', 'offtask-actual-review');
+  assert.notEqual(workspace.professor.currentPhase, 'FINALIZATION');
+  assert.equal(autopilotState(workspace).workReview, undefined);
+  assert.equal(workspace.plan.some((item) => item.completed), false);
+  assert.equal(workspace.completion.snapshots.length, 0);
+  assert.equal(state.llmCalls, 4);
+});
+
+test('Universal verification cannot finalize absent criteria, an incomplete contract or evidence from another draft', async () => {
+  const fixture = UNIVERSAL_TASKS[0];
+  for (const variant of ['missing-review', 'empty-criteria', 'unfulfilled', 'bad-excerpt', 'incomplete-contract']) {
+    const { service, workspace: initial } = await universalWorkFixture(fixture, {
+      transformOutput(output, phase) {
+        if (phase !== 'VERIFICATION') return output;
+        if (variant === 'missing-review') delete output.taskFulfillment;
+        if (variant === 'empty-criteria') output.taskFulfillment.criterionReviews = [];
+        if (variant === 'unfulfilled') output.taskFulfillment.criterionReviews[0].fulfilled = false;
+        if (variant === 'bad-excerpt') output.taskFulfillment.criterionReviews[0].excerpt = 'This excerpt comes from a different draft.';
+        if (variant === 'incomplete-contract') { output.taskFulfillment.contractMatchesTask = false; output.taskFulfillment.uncoveredRequirements = ['A required source limitation was omitted.']; }
+        return output;
+      },
+    });
+    let workspace = initial;
+    for (let step = 0; step < 4; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `review-${variant}-${step}`);
+    assert.notEqual(workspace.professor.currentPhase, 'FINALIZATION', variant);
+    assert.equal(autopilotState(workspace).workReview, undefined, variant);
+    assert.equal(workspace.completion.snapshots.length, 0, variant);
+  }
+});
+
+test('Universal finalization refuses a formerly successful review after the real draft or original instructions changed', async () => {
+  const fixture = UNIVERSAL_TASKS[0];
+  for (const change of ['draft', 'instructions']) {
+    const { service, state, workspace: initial } = await universalWorkFixture(fixture);
+    let workspace = initial;
+    for (let step = 0; step < 4; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `review-before-edit-${change}-${step}`);
+    assert.equal(workspace.professor.currentPhase, 'FINALIZATION');
+    assert.ok(autopilotState(workspace).workReview);
+    if (change === 'draft') await service.autosave('owner', workspace.id, {
+      workspaceId: workspace.id, expectedRevision: workspace.autosaveRevision,
+      draft: { format: 'markdown', content: `${workspace.draft.content}\n\nA later learner change requires another review.` },
+    });
+    else await service.update('owner', workspace.id, {
+      expectedRevision: workspace.autosaveRevision,
+      brief: { version: 1, fields: { ...workspace.brief.fields, userInstructions: `${fixture.instructions} Ajoute désormais une troisième limite.` } },
+    });
+    workspace = await service.get('owner', workspace.id);
+    workspace = await autopilotCommand(service, workspace, 'step', `review-stale-finalization-${change}`);
+    assert.equal(autopilotState(workspace).status, 'NEEDS_INPUT');
+    assert.equal(workspace.completion.snapshots.length, 0);
+    assert.equal(workspace.status, 'active');
+    assert.equal(state.llmCalls, 4, 'A stale review is detected before another provider call');
+  }
+});
+
+test('Universal WORK interprets an older run in its existing WORK turn without replaying Comprehension or Method', async () => {
+  const fixture = UNIVERSAL_TASKS[0];
+  const { service, state, workspace: initial } = await universalWorkFixture(fixture);
+  let workspace = initial;
+  for (let step = 0; step < 2; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `legacy-interpret-prepare-${step}`);
+  delete state.workspaces[0].progress.workflow.autopilot.workContract;
+  workspace = await service.get('owner', workspace.id);
+  const request = { requestId: 'legacy-interpret-work-once', expectedRevision: workspace.autosaveRevision, action: 'step' };
+  workspace = await service.autopilot('owner', workspace.id, request);
+  assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
+  assert.equal(workspace.draft.content, fixture.draft);
+  assert.equal(autopilotState(workspace).workContract.taskIntent, 'article-summary');
+  assert.equal(state.llmCalls, 3);
+  const replay = await service.autopilot('owner', workspace.id, request);
+  assert.equal(replay.draft.content, fixture.draft);
+  assert.equal(autopilotState(replay).aiSteps, 3);
+  assert.equal(state.llmCalls, 3, 'An older run never incurs a second classification turn or command replay');
+});
+
+test('Universal WORK safely pauses and clears an old paid cache, then permits only a later explicit new WORK command', async () => {
+  const { service, state, workspace: initial } = await autopilotFixture({}, { autopilotConsent: true });
+  let workspace = initial;
+  for (let step = 0; step < 2; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `legacy-cache-prepare-${step}`);
+  let release;
+  state.llmBarrier = new Promise((resolve) => { release = resolve; });
+  const pending = autopilotCommand(service, workspace, 'step', 'legacy-cache-paid-work');
+  while (state.llmCalls < 3) await new Promise((resolve) => setImmediate(resolve));
+  workspace = await service.get('owner', workspace.id);
+  await autopilotCommand(service, workspace, 'pause', 'legacy-cache-pause');
+  release();
+  await pending;
+  const row = state.workspaces[0];
+  const stored = row.progress.workflow.autopilot;
+  const cached = row.assistantHistory.find((entry) => entry.id === stored.pendingResult.replyId);
+  delete stored.workContract;
+  delete cached.autopilot.output.workContract;
+  cached.autopilot.output.workArtifactValidated = true;
+  const retainedHistory = structuredClone(row.assistantHistory);
+  workspace = await service.get('owner', workspace.id);
+  workspace = await autopilotCommand(service, workspace, 'resume', 'legacy-cache-resume');
+  workspace = await autopilotCommand(service, workspace, 'step', 'legacy-cache-no-rebill');
+  assert.ok(['PAUSED_ERROR', 'NEEDS_INPUT'].includes(autopilotState(workspace).status));
+  assert.equal(workspace.professor.currentPhase, 'WORK');
+  assert.equal(workspace.draft.content, '');
+  assert.equal(autopilotState(workspace).aiSteps, 3);
+  assert.equal(autopilotState(workspace).pendingResult, undefined);
+  assert.deepEqual(state.workspaces[0].assistantHistory, retainedHistory);
+  assert.equal(state.llmCalls, 3);
+  workspace = await autopilotCommand(service, workspace, 'resume', 'legacy-cache-explicit-retry');
+  assert.equal(state.llmCalls, 3);
+  workspace = await autopilotCommand(service, workspace, 'step', 'legacy-cache-new-work-turn');
+  assert.equal(workspace.professor.currentPhase, 'VERIFICATION');
+  assert.equal(autopilotState(workspace).aiSteps, 4);
+  assert.match(workspace.draft.content, /25 J/);
+  assert.equal(state.llmCalls, 4, 'Only the explicit later command can reserve one new turn');
+});
+
+test('Universal sourced WORK cannot persist invented citations after AW-6 removes the unknown labels', async () => {
+  const fixture = UNIVERSAL_TASKS.find((item) => item.taskIntent === 'research-task');
+  const { service, state, workspace: initial } = await universalWorkFixture(fixture, {
+    transformOutput(output, phase) {
+      if (phase === 'WORK') {
+        output.draft = output.draft.replace(/W1/g, 'W99');
+        output.workEvidence = output.workEvidence.map((item) => ({ ...item, excerpt: item.excerpt.replace(/W1/g, 'W99') }));
+      }
+      return output;
+    },
+  });
+  let workspace = initial;
+  for (let step = 0; step < 3; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `universal-forged-source-${step}`);
+  assert.equal(workspace.draft.content, '');
+  assert.equal(workspace.professor.evidence.some((item) => item.phase === 'WORK'), false);
+  assert.equal(workspace.assistantHistory.some((entry) => /W99/.test(entry.content)), false);
+  assert.notEqual(workspace.professor.currentPhase, 'VERIFICATION');
+  assert.equal(state.llmCalls, 3);
+});
+
+test('Universal finalization revalidates actual AW-6 evidence when a collection keeps its id but its cited document changes', async () => {
+  const fixture = UNIVERSAL_TASKS.find((item) => item.taskIntent === 'research-task');
+  const { service, state, workspace: initial } = await universalWorkFixture(fixture, { sources: [{ kind: 'collection', id: 'collection-owner' }] });
+  let workspace = initial;
+  for (let step = 0; step < 4; step += 1) workspace = await autopilotCommand(service, workspace, 'step', `collection-review-${step}`);
+  assert.equal(workspace.professor.currentPhase, 'FINALIZATION');
+  const originalReferences = structuredClone(workspace.sources);
+  const originalDraft = workspace.draft.content;
+  state.sourceResolution = {
+    query: 'Technical task source', usedContext: true,
+    context: 'A different owned document has replaced the previously cited evidence in this collection.',
+    // AW-6 labels are request-scoped: W1 can now refer to B instead of A.
+    citations: [{ sourceType: 'document', sourceId: 'document-b', documentId: 'document-b', title: 'Another technical source', citationLabel: 'W1', snippet: 'Different evidence from document B.', relevance: 1 }],
+    sources: [{ kind: 'collection', id: 'collection-owner', availability: 'available' }],
+  };
+  workspace = await autopilotCommand(service, workspace, 'step', 'collection-changed-before-finalization');
+  assert.deepEqual(workspace.sources, originalReferences);
+  assert.equal(workspace.draft.content, originalDraft);
+  assert.ok(['NEEDS_INPUT', 'PAUSED_ERROR'].includes(autopilotState(workspace).status));
+  assert.equal(workspace.status, 'active');
+  assert.equal(workspace.completion.snapshots.length, 0);
+  assert.equal(state.llmCalls, 4, 'A changed cited document is detected before the final provider call');
 });

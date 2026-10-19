@@ -6,6 +6,8 @@ const {
   autopilotProfessorDirective,
   assertAutopilotWorkArtifact,
   parseAutopilotOutput,
+  taskFulfillmentIssues,
+  validateAutopilotWorkContract,
   workspaceWorkOutputKind,
 } = require('../dist/workspaces/workspace-autopilot.js');
 
@@ -25,11 +27,26 @@ const PHYSICS_DRAFT = '# Introduction\n\n'
   + '# Conclusion\n\n'
   + 'L’objet possède 25 J d’énergie cinétique. Le mouvement détermine ici cette énergie, tandis que l’énergie potentielle dépend de la position ou de la configuration.';
 
+function contractFor(instructions, overrides = {}) {
+  return {
+    version: 1, taskIntent: 'assignment-exercise', outputKind: 'ANSWER_DRAFT', operation: 'produce',
+    scope: 'entire-task', task: instructions,
+    criteria: [{ id: 'required-task', requirement: instructions, required: true }],
+    sourceRequirement: 'none',
+    ...overrides,
+  };
+}
+
+const PHYSICS_CONTRACT = contractFor(PHYSICS_INSTRUCTIONS, {
+  criteria: ['énergie cinétique', 'énergie potentielle', '2 kg', '5 m/s'].map((requirement, index) => ({ id: `physics-${index}`, requirement, required: true })),
+});
+
 function artifact(overrides = {}) {
   return {
     text: 'Le brouillon contient les définitions, formules, unités, calcul et conclusion demandés.',
     draft: PHYSICS_DRAFT,
     workOutputKind: 'ANSWER_DRAFT',
+    workContract: PHYSICS_CONTRACT,
     workEvidence: [
       { requirement: 'énergie cinétique', excerpt: 'L’énergie cinétique est liée au mouvement d’un objet.' },
       { requirement: 'énergie potentielle', excerpt: 'L’énergie potentielle est liée à sa position ou à sa configuration.' },
@@ -40,17 +57,22 @@ function artifact(overrides = {}) {
   };
 }
 
-test('WORK maps the existing templates onto six distinct output contracts without another engine', () => {
-  const expected = {
-    assignment: 'ANSWER_DRAFT', memoire: 'CURRENT_SECTION_DRAFT', tfc: 'CURRENT_SECTION_DRAFT',
-    dissertation: 'ARGUMENTATIVE_DRAFT', article: 'SCIENTIFIC_SECTION_DRAFT', report: 'REPORT_SECTION_DRAFT',
-    other: 'ADAPTIVE_DRAFT', 'academic-research': 'ADAPTIVE_DRAFT',
-  };
-  assert.equal(new Set(Object.values(expected)).size, 6);
-  for (const [template, kind] of Object.entries(expected)) {
-    assert.equal(workspaceWorkOutputKind(template), kind);
-    assert.doesNotThrow(() => assertAutopilotWorkArtifact(artifact({ workOutputKind: kind }), template, PHYSICS_INSTRUCTIONS));
-    const directive = autopilotProfessorDirective('WORK', template);
+test('WORK selects eight canonical contracts from the actual task instead of treating the template as the intention', () => {
+  const expected = [
+    ['assignment', 'assignment-exercise', 'ANSWER_DRAFT'],
+    ['article', 'article-summary', 'SUMMARY_DRAFT'],
+    ['other', 'research-task', 'SOURCED_RESEARCH_DRAFT'],
+    ['memoire', 'academic-section', 'CURRENT_ACADEMIC_SECTION_DRAFT'],
+    ['dissertation', 'argumentative-essay', 'ARGUMENTATIVE_DRAFT'],
+    ['article', 'scientific-article', 'SCIENTIFIC_DRAFT'],
+    ['report', 'report', 'REPORT_DRAFT'],
+    ['other', 'general', 'INTENT_MATCHED_DRAFT'],
+  ];
+  assert.equal(new Set(expected.map((entry) => entry[2])).size, 8);
+  for (const [template, taskIntent, outputKind] of expected) {
+    const contract = contractFor(PHYSICS_INSTRUCTIONS, { taskIntent, outputKind });
+    assert.equal(workspaceWorkOutputKind(template, contract), outputKind);
+    const directive = autopilotProfessorDirective('WORK', template, contract);
     assert.match(directive, /Exception for verbatim source metadata/);
     assert.match(directive, /workEvidence\.requirement must remain in the exact language and words of the supplied instructions/);
     assert.match(directive, /workEvidence\.excerpt in the exact words of draft/);
@@ -58,7 +80,7 @@ test('WORK maps the existing templates onto six distinct output contracts withou
   }
 });
 
-test('WORK accepts the real physics answer, not a predefined production answer', () => {
+test('WORK preserves the physics answer as a non-regression fixture, not a universal production answer key', () => {
   const output = parseAutopilotOutput(JSON.stringify(artifact({ workArtifactValidated: true })));
   assert.equal(output.workArtifactValidated, undefined, 'provider JSON cannot certify its own artifact');
   assert.doesNotThrow(() => assertAutopilotWorkArtifact(output, 'assignment', PHYSICS_INSTRUCTIONS));
@@ -73,11 +95,14 @@ test('WORK accepts the real physics answer, not a predefined production answer',
       + 'Un réseau étendu relie plusieurs zones distantes. Internet est un ensemble de réseaux interconnectés. '
       + 'La distinction porte sur l’étendue et l’interconnexion ; elle ne permet pas, à elle seule, de déduire un débit ou un coût précis.',
     workEvidence: [{ requirement: 'réseau local', excerpt: 'Un réseau local relie des équipements sur une zone limitée' }],
+    workContract: contractFor('Explique un réseau local et un réseau étendu avec un exemple.', {
+      criteria: [{ id: 'network', requirement: 'réseau local', required: true }],
+    }),
   });
   assert.doesNotThrow(() => assertAutopilotWorkArtifact(unrelated, 'assignment', 'Explique un réseau local et un réseau étendu avec un exemple.'));
 });
 
-test('WORK rejects rephrasing, advice and method-only drafts even when a correct kind and literal evidence are supplied', () => {
+test('WORK rejects incomplete criterion evidence even when a rephrasing or advice draft declares the correct kind', () => {
   const invalidDrafts = [
     'Le devoir demande de distinguer les deux énergies, de présenter les formules et de calculer le cas fourni. '
       + 'Le travail attendu comprend une introduction, une méthode, un calcul et une conclusion. '
@@ -113,7 +138,7 @@ test('WORK rejects a missing draft, wrong shell kind and unsupported evidence an
   const invalid = [
     artifact({ draft: undefined }),
     artifact({ draft: '' }),
-    artifact({ workOutputKind: 'SCIENTIFIC_SECTION_DRAFT' }),
+    artifact({ workOutputKind: 'SCIENTIFIC_DRAFT' }),
     artifact({ workEvidence: [] }),
     artifact({ workEvidence: [{ requirement: 'An instruction never supplied by the learner', excerpt: 'Ec = 1/2 × 2 × 25 = 25 J.' }] }),
     artifact({ workEvidence: [{ requirement: '2 kg', excerpt: 'A passage not found in the draft.' }] }),
@@ -121,7 +146,7 @@ test('WORK rejects a missing draft, wrong shell kind and unsupported evidence an
   for (const output of invalid) assert.throws(() => assertAutopilotWorkArtifact(output, 'assignment', PHYSICS_INSTRUCTIONS));
 });
 
-test('WORK rejects an unrelated greeting even with a valid shape and literal evidence', () => {
+test('WORK rejects a greeting whose evidence does not cover the required task criteria', () => {
   const draft = 'Bonjour ! Je suis heureux de t’accompagner dans ton apprentissage. Tu peux revenir lorsque tu le souhaites.';
   const output = artifact({
     draft,
@@ -139,9 +164,13 @@ test('WORK accepts an imperative procedure when the learner explicitly requested
     + '4. Ferme les fichiers puis utilise l’éjection sûre du système avant de débrancher le disque.\n'
     + '5. Si la vérification échoue, conserve les originaux et recommence seulement la copie concernée.';
   for (const template of ['assignment', 'other']) {
+    const workContract = contractFor(instructions, {
+      taskIntent: 'general', outputKind: 'INTENT_MATCHED_DRAFT',
+      criteria: [{ id: 'safe-copy', requirement: 'vérification', required: true }],
+    });
     const output = artifact({
       draft,
-      workOutputKind: workspaceWorkOutputKind(template),
+      workOutputKind: workContract.outputKind, workContract,
       workEvidence: [{ requirement: 'vérification', excerpt: 'Ouvre plusieurs fichiers copiés et compare leur taille avec les originaux pour vérifier la copie.' }],
     });
     assert.doesNotThrow(() => assertAutopilotWorkArtifact(output, template, instructions));
@@ -156,8 +185,119 @@ test('WORK accepts short factual, numerical and cross-script answers without a s
   ]) {
     const output = artifact({
       draft: fixture.draft,
+      workContract: contractFor(fixture.instructions, { criteria: [{ id: 'short-answer', requirement: fixture.requirement, required: true }] }),
       workEvidence: [{ requirement: fixture.requirement, excerpt: fixture.draft }],
     });
     assert.doesNotThrow(() => assertAutopilotWorkArtifact(output, 'assignment', fixture.instructions));
   }
+});
+
+const { SOURCE_CONTEXT, SOURCE_CITATION, CURRENT_PLAN, UNIVERSAL_TASKS } = require('./fixtures/workspace-universal-fixtures.cjs');
+
+function universalArtifact(fixture) {
+  const criteria = fixture.requirements.map((requirement, index) => ({ id: `criterion-${index}`, requirement, required: true }));
+  const workContract = contractFor(fixture.instructions, {
+    taskIntent: fixture.taskIntent, outputKind: fixture.outputKind, operation: fixture.operation,
+    scope: fixture.scope || 'entire-task', sourceRequirement: fixture.sourceRequirement || 'none', criteria,
+    ...(fixture.sourceContext ? { sourceExcerpt: fixture.sourceContext } : {}),
+    ...(fixture.scope === 'current-section' ? { sectionPlanItemId: CURRENT_PLAN[0].id } : {}),
+  });
+  return artifact({
+    text: 'Le livrable demandé est enregistré dans le brouillon.', draft: fixture.draft,
+    workOutputKind: fixture.outputKind, workContract,
+    workEvidence: fixture.requirements.map((requirement, index) => ({ requirement, excerpt: fixture.excerpts[index] })),
+  });
+}
+
+for (const fixture of UNIVERSAL_TASKS) {
+  test(`Universal WORK accepts ${fixture.name}`, () => {
+    const output = universalArtifact(fixture);
+    const context = { contract: output.workContract, sourceContext: fixture.sourceContext || '', citations: fixture.citations || [], plan: CURRENT_PLAN };
+    assert.doesNotThrow(() => validateAutopilotWorkContract(output.workContract, fixture.template, fixture.instructions, CURRENT_PLAN));
+    assert.doesNotThrow(() => assertAutopilotWorkArtifact(output, fixture.template, fixture.instructions, context));
+    const review = {
+      taskFulfillment: {
+        fulfilled: true, contractMatchesTask: true, scope: output.workContract.scope,
+        criterionReviews: output.workContract.criteria.map((criterion, index) => ({ criterionId: criterion.id, fulfilled: true, excerpt: fixture.excerpts[index] })),
+        citationLabels: (fixture.citations || []).map((citation) => citation.citationLabel),
+      },
+    };
+    assert.deepEqual(taskFulfillmentIssues(review, output.workContract, fixture.draft, fixture.citations || []), []);
+  });
+}
+
+test('Universal WORK sourced research refuses missing evidence and invented labels instead of becoming an unsourced answer', () => {
+  const fixture = UNIVERSAL_TASKS.find((item) => item.taskIntent === 'research-task');
+  const output = universalArtifact(fixture);
+  assert.throws(() => assertAutopilotWorkArtifact(output, fixture.template, fixture.instructions, { contract: output.workContract, citations: [], sourceContext: '' }));
+  const forged = {
+    ...output, draft: output.draft.replace(/W1/g, 'W99'),
+    workEvidence: output.workEvidence.map((item) => ({ ...item, excerpt: item.excerpt.replace(/W1/g, 'W99') })),
+  };
+  assert.throws(() => assertAutopilotWorkArtifact(forged, fixture.template, fixture.instructions, { contract: output.workContract, citations: [SOURCE_CITATION], sourceContext: SOURCE_CONTEXT }));
+});
+
+test('Universal WORK distinguishes a faithful source excerpt from an instruction echo', () => {
+  const fixture = UNIVERSAL_TASKS[0];
+  const output = universalArtifact(fixture);
+  const draft = `${SOURCE_CONTEXT} [W1]`;
+  const extractive = {
+    ...output, draft,
+    workEvidence: fixture.requirements.map((requirement) => ({ requirement, excerpt: SOURCE_CONTEXT })),
+  };
+  assert.doesNotThrow(() => assertAutopilotWorkArtifact(extractive, fixture.template, fixture.instructions, {
+    contract: output.workContract, citations: [SOURCE_CITATION],
+    sourceContext: `${SOURCE_CONTEXT} Le document présente ensuite des variantes techniques non nécessaires au résumé demandé.`,
+  }));
+  const echoed = { ...extractive, draft: fixture.instructions, workEvidence: fixture.requirements.map((requirement) => ({ requirement, excerpt: fixture.instructions })) };
+  assert.throws(() => assertAutopilotWorkArtifact(echoed, fixture.template, fixture.instructions, {
+    contract: output.workContract, citations: [SOURCE_CITATION], sourceContext: SOURCE_CONTEXT,
+  }));
+  for (const contract of [
+    { ...output.workContract, sourceExcerpt: undefined },
+    { ...output.workContract, sourceExcerpt: 'An excerpt not present in any authorized input.' },
+  ]) assert.throws(() => assertAutopilotWorkArtifact({ ...output, workContract: contract }, fixture.template, fixture.instructions, {
+    contract, citations: [SOURCE_CITATION], sourceContext: SOURCE_CONTEXT,
+  }));
+});
+
+test('Universal WORK verification rejects absent, mismatched or false criterion reviews despite lexical evidence', () => {
+  const fixture = UNIVERSAL_TASKS[0];
+  const output = universalArtifact(fixture);
+  const good = {
+    fulfilled: true, contractMatchesTask: true, scope: output.workContract.scope,
+    criterionReviews: output.workContract.criteria.map((criterion, index) => ({ criterionId: criterion.id, fulfilled: true, excerpt: fixture.excerpts[index] })),
+  };
+  for (const taskFulfillment of [
+    undefined, { ...good, contractMatchesTask: false }, { ...good, fulfilled: false },
+    { ...good, criterionReviews: [] },
+    { ...good, scope: 'current-section' },
+    { ...good, criterionReviews: good.criterionReviews.map((review) => ({ ...review, fulfilled: false })) },
+    { ...good, criterionReviews: good.criterionReviews.map((review) => ({ ...review, excerpt: 'A sentence not present in this draft.' })) },
+    { ...good, criterionReviews: [...good.criterionReviews, { criterionId: 'invented-id', fulfilled: true, excerpt: fixture.excerpts[0] }] },
+  ]) assert.ok(taskFulfillmentIssues({ taskFulfillment }, output.workContract, fixture.draft, fixture.citations).length > 0);
+});
+
+test('Universal WORK parses canonical kinds and legacy aliases without accepting server proof fields from a provider', () => {
+  for (const [legacy, canonical] of [
+    ['CURRENT_SECTION_DRAFT', 'CURRENT_ACADEMIC_SECTION_DRAFT'], ['SCIENTIFIC_SECTION_DRAFT', 'SCIENTIFIC_DRAFT'],
+    ['REPORT_SECTION_DRAFT', 'REPORT_DRAFT'], ['ADAPTIVE_DRAFT', 'INTENT_MATCHED_DRAFT'],
+  ]) assert.equal(parseAutopilotOutput(JSON.stringify(artifact({ workOutputKind: legacy }))).workOutputKind, canonical);
+  const output = parseAutopilotOutput(JSON.stringify(artifact({
+    workArtifactValidated: true, workContract: { ...PHYSICS_CONTRACT, instructionFingerprint: 'forged' },
+    taskFulfillment: { fulfilled: true, contractMatchesTask: true, scope: 'entire-task', criterionReviews: [], reviewedDraftFingerprint: 'forged' },
+  })));
+  assert.equal(output.workArtifactValidated, undefined);
+  assert.equal(output.workContract.instructionFingerprint, undefined);
+  assert.equal(output.taskFulfillment.reviewedDraftFingerprint, undefined);
+});
+
+test('Universal task contracts cannot erase required criteria or substitute an unrelated instruction', () => {
+  for (const contract of [
+    { ...PHYSICS_CONTRACT, criteria: [] },
+    { ...PHYSICS_CONTRACT, criteria: PHYSICS_CONTRACT.criteria.map((item) => ({ ...item, required: false })) },
+    { ...PHYSICS_CONTRACT, criteria: [{ id: 'unrelated', requirement: 'A condition never present in this task.', required: true }] },
+    { ...PHYSICS_CONTRACT, outputKind: 'SUMMARY_DRAFT' },
+    { ...PHYSICS_CONTRACT, criteria: [PHYSICS_CONTRACT.criteria[0], PHYSICS_CONTRACT.criteria[0]] },
+  ]) assert.throws(() => validateAutopilotWorkContract(contract, 'assignment', PHYSICS_INSTRUCTIONS, CURRENT_PLAN));
 });
