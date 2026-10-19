@@ -124,6 +124,7 @@ import {
 } from './workspace-autopilot';
 import { workContractFromIntent, workContractResponseSchema, workOutputKindForIntent, prepareWorkContractCriteria } from './workspace-work-contract';
 import { writePrivateWorkspaceWorkDiagnostic, type WorkspaceWorkDiagnosticInput } from './workspace-work-diagnostics';
+import { bindVerificationEvidence } from './workspace-verification-evidence';
 
 const MAX_ASSISTANT_HISTORY = 30;
 const MAX_PROFESSOR_TRANSITIONS = 40;
@@ -770,6 +771,7 @@ export class AcademicWorkspaceService {
       if (!contract || !output.taskFulfillment) return this.finishAutopilot(userId, id, execution, 'NEEDS_INPUT', 'STOP_AUTOPILOT_REVIEW_REQUIRED', 'task-verification-missing');
       const taskIssues = taskFulfillmentIssues(output, contract, workspace.draft.content, reply.citations ?? [], {
         sourceAvailable: workspace.sources.length ? undefined : false,
+        draftRevision: workspace.autosaveRevision,
       });
       const semanticIssues = [...(output.issues ?? []), ...taskIssues];
       const ids = new Set(workspace.plan.map((item) => item.id));
@@ -3154,9 +3156,16 @@ export class AcademicWorkspaceService {
           await this.recordWorkDiagnostic(row, professor.currentPhase, storedAutopilot, request.requestId, diagnostic);
         }
         if (professor.currentPhase === 'VERIFICATION' && output.taskFulfillment) {
+          // Only Verification proof binding changes here. The provider verdict,
+          // prompt, WORK artifact and authoritative phase transitions stay intact.
+          if (workContract && storedAutopilot.workContract) output = bindVerificationEvidence(output, storedAutopilot.workContract, {
+            draft: row.draftContent, revision: row.autosaveRevision, runId: internal.runId, history,
+          });
           replyCitations = draftCitations.filter((citation) => output.taskFulfillment!.citationLabels?.includes(citation.citationLabel));
-          if (workContract && !taskFulfillmentIssues(output, workContract, row.draftContent, replyCitations, { sourceAvailable }).length) {
-            output.taskFulfillment.reviewedDraftFingerprint = workProductionFingerprint(row.draftContent);
+          if (workContract && !taskFulfillmentIssues(output, workContract, row.draftContent, replyCitations, {
+            sourceAvailable, draftRevision: row.autosaveRevision,
+          }).length) {
+            output.taskFulfillment!.reviewedDraftFingerprint = workProductionFingerprint(row.draftContent);
           }
         }
         replyContent = [output.text, output.deconstruction].filter(Boolean).join('\n\n');

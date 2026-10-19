@@ -1,7 +1,8 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import type { WorkspaceAutopilotOutput, WorkspaceProfessorPhase, WorkspaceTemplate, WorkspaceWorkOutputKind, WorkspaceWorkContract, WorkspacePlanItem, WorkspaceSourceCitation } from '@second-brain/shared';
+import type { WorkspaceAutopilotOutput, WorkspaceDraftEvidenceAnchor, WorkspaceProfessorPhase, WorkspaceTemplate, WorkspaceWorkOutputKind, WorkspaceWorkContract, WorkspacePlanItem, WorkspaceSourceCitation } from '@second-brain/shared';
 import { WORKSPACE_BRIEF_FIELDS, WORKSPACE_STEP_IDS, WORKSPACE_WORK_OUTPUT_KINDS, WORKSPACE_WORK_INTENTS, WORKSPACE_WORK_CRITERION_CLASSES, workspaceShellFromTemplate } from '@second-brain/shared';
+import { validateVerificationAnchors } from './workspace-verification-evidence';
 
 const WORK_OUTPUT_BY_INTENT: Record<WorkspaceWorkContract['taskIntent'], WorkspaceWorkOutputKind> = {
   'assignment-exercise': 'ANSWER_DRAFT', 'article-summary': 'SUMMARY_DRAFT',
@@ -133,9 +134,27 @@ export function parseAutopilotOutput(raw: string): WorkspaceAutopilotOutput {
       criterionReviews: review.criterionReviews.map((item) => {
         if (!item || typeof item.criterionId !== 'string' || item.criterionId.length > 128 || typeof item.fulfilled !== 'boolean'
           || (item.excerpt !== undefined && (typeof item.excerpt !== 'string' || item.excerpt.length > 8_000))
-          || (item.reason !== undefined && (typeof item.reason !== 'string' || item.reason.length > 2_000))) return invalidOutput('PARSE_CRITERION_REVIEW_INVALID');
+          || (item.reason !== undefined && (typeof item.reason !== 'string' || item.reason.length > 2_000))
+          || (item.status !== undefined && !['SATISFIED', 'PARTIAL', 'MISSING', 'INVALID_EVIDENCE'].includes(item.status))) return invalidOutput('PARSE_CRITERION_REVIEW_INVALID');
+        // Verification-only provenance. Parsing never certifies these offsets:
+        // the server binds/validates them against its owner-scoped draft next.
+        let evidenceAnchors: WorkspaceDraftEvidenceAnchor[] | undefined;
+        if (item.evidenceAnchors !== undefined) {
+          if (!Array.isArray(item.evidenceAnchors) || item.evidenceAnchors.length > 8) return invalidOutput('PARSE_CRITERION_REVIEW_INVALID');
+          evidenceAnchors = item.evidenceAnchors.map((anchor: Record<string, unknown>) => {
+            if (!anchor || typeof anchor !== 'object' || anchor.source !== 'draft'
+              || !Number.isSafeInteger(anchor.revision) || !Number.isSafeInteger(anchor.startOffset) || !Number.isSafeInteger(anchor.endOffset)
+              || typeof anchor.excerpt !== 'string' || anchor.excerpt.length > 8_000
+              || typeof anchor.draftFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(anchor.draftFingerprint)) return invalidOutput('PARSE_CRITERION_REVIEW_INVALID');
+            return { source: 'draft' as const, revision: anchor.revision as number,
+              startOffset: anchor.startOffset as number, endOffset: anchor.endOffset as number,
+              excerpt: anchor.excerpt, draftFingerprint: anchor.draftFingerprint };
+          });
+        }
         return { criterionId: item.criterionId, fulfilled: item.fulfilled,
-          ...(item.excerpt ? { excerpt: item.excerpt } : {}), ...(item.reason ? { reason: item.reason } : {}) };
+          ...(item.excerpt ? { excerpt: item.excerpt } : {}), ...(item.reason ? { reason: item.reason } : {}),
+          ...(item.status !== undefined ? { status: item.status } : {}),
+          ...(evidenceAnchors !== undefined ? { evidenceAnchors } : {}) };
       }),
     };
     for (const key of ['citationLabels', 'uncoveredRequirements'] as const) {
@@ -193,6 +212,8 @@ export interface CriterionEvidenceContext {
   citations?: readonly WorkspaceSourceCitation[];
   /** Supplied only by the server's owner-scoped AW-6 resolution. */
   sourceAvailable?: boolean;
+  /** Verification only: the actual persisted revision, never provider input. */
+  draftRevision?: number;
 }
 
 export interface CriterionEvidenceRow {
@@ -345,12 +366,19 @@ export function taskFulfillmentIssues(output: WorkspaceAutopilotOutput, contract
   const issues: string[] = [];
   if (!review.contractMatchesTask || review.uncoveredRequirements?.length) issues.push('task-contract-does-not-cover-instructions');
   if (!review.fulfilled || review.scope !== contract.scope) issues.push('task-not-fulfilled');
+  if (context.draftRevision !== undefined && (review.evidenceSource !== 'PERSISTED_DRAFT'
+    || review.draftRevision !== context.draftRevision || review.draftFingerprint !== workProductionFingerprint(draft))) issues.push('task-evidence-invalid');
   const ids = new Set(contract.criteria.map((item) => item.id));
   const reviewed = new Set<string>();
   for (const item of review.criterionReviews) {
     if (!ids.has(item.criterionId) || reviewed.has(item.criterionId)) issues.push('task-criterion-invalid');
     reviewed.add(item.criterionId);
-    if (item.fulfilled && (!item.excerpt?.trim() || !normalizedWorkText(draft).includes(normalizedWorkText(item.excerpt)))) issues.push('task-evidence-invalid');
+    if (item.fulfilled) {
+      if (context.draftRevision !== undefined || item.evidenceAnchors !== undefined) {
+        if (item.status !== 'SATISFIED' || context.draftRevision === undefined
+          || !validateVerificationAnchors(draft, context.draftRevision, item.evidenceAnchors)) issues.push('task-evidence-invalid');
+      } else if (!item.excerpt?.trim() || !normalizedWorkText(draft).includes(normalizedWorkText(item.excerpt))) issues.push('task-evidence-invalid');
+    }
   }
   for (const criterion of contract.criteria) {
     const applicable = criterionApplicability(criterion, context);
@@ -359,7 +387,8 @@ export function taskFulfillmentIssues(output: WorkspaceAutopilotOutput, contract
       issues.push('task-criterion-applicability-unknown');
       continue;
     }
-    if (!review.criterionReviews.some((item) => item.criterionId === criterion.id && item.fulfilled)) issues.push('task-criterion-unfulfilled');
+    if (!review.criterionReviews.some((item) => item.criterionId === criterion.id && item.fulfilled
+      && (item.status === undefined || item.status === 'SATISFIED'))) issues.push('task-criterion-unfulfilled');
   }
   const labels = new Set(citations.map((item) => item.citationLabel));
   if (review.citationLabels?.some((label) => !labels.has(label))) issues.push('task-citation-invalid');

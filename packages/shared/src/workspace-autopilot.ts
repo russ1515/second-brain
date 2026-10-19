@@ -65,11 +65,38 @@ export interface WorkspaceTaskFulfillment {
   fulfilled: boolean;
   contractMatchesTask: boolean;
   scope: WorkspaceWorkContract['scope'];
-  criterionReviews: Array<{ criterionId: string; fulfilled: boolean; excerpt?: string; reason?: string }>;
+  criterionReviews: Array<{
+    criterionId: string;
+    fulfilled: boolean;
+    /** Historical verifier quotation; not canonical evidence on its own. */
+    excerpt?: string;
+    reason?: string;
+    status?: WorkspaceVerificationCriterionStatus;
+    evidenceAnchors?: WorkspaceDraftEvidenceAnchor[];
+    evidenceOrigin?: 'VERIFIER_QUOTE' | 'VALIDATED_WORK_INDEX';
+  }>;
   citationLabels?: string[];
   uncoveredRequirements?: string[];
   /** Computed only after the existing verification turn passes validation. */
   reviewedDraftFingerprint?: string;
+  /** Server-derived provenance; never trusted from a provider response. */
+  evidenceSource?: 'PERSISTED_DRAFT';
+  draftRevision?: number;
+  draftFingerprint?: string;
+}
+
+export const WORKSPACE_VERIFICATION_CRITERION_STATUSES = ['SATISFIED', 'PARTIAL', 'MISSING', 'INVALID_EVIDENCE'] as const;
+export type WorkspaceVerificationCriterionStatus = (typeof WORKSPACE_VERIFICATION_CRITERION_STATUSES)[number];
+
+/** Offsets use JavaScript UTF-16 code units in the exact persisted draft. */
+export interface WorkspaceDraftEvidenceAnchor {
+  source: 'draft';
+  revision: number;
+  startOffset: number;
+  endOffset: number;
+  /** Exact contiguous persisted substring, not a synthetic or normalized quote. */
+  excerpt: string;
+  draftFingerprint: string;
 }
 
 export interface WorkspaceAutopilotRequest {
