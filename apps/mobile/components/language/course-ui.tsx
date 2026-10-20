@@ -16,6 +16,7 @@ import { LANGUAGE_MASTERY_PILLARS } from '@second-brain/shared';
 import { Badge, Button, Card, Progress } from '../ds/core';
 import { useTokens } from '../../lib/design/theme';
 import { useRlleCopy } from '../../lib/language-rll-i18n';
+import { languagePlacementLevelLabel } from '../../lib/language-placement-presentation';
 import type { RlleCourseLoad, RlleMissionCatalogItem } from '../../lib/language-rll-client';
 
 type CurriculumItem = RlleCurriculumUnit | RlleCurriculumUnitTemplate;
@@ -44,7 +45,7 @@ export function CourseEntryCard({
     <Card elevated style={{ gap: spacing.md, borderColor: c.aiAccent }} testID="language-course-entry">
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }}>
         <Badge label={copy('rlle.ui.badge')} tone="ai" />
-        <Badge label={`${live?.level.declared ?? profile.cefrLevel} · ${copy('rlle.ui.course.level.declared')}`} tone="info" />
+        <Badge label={languagePlacementLevelLabel(live?.placement ?? profile.placement, copy, live?.level.declared ?? profile.cefrLevel, live?.status === 'not-started')} tone="info" />
       </View>
       <Text accessibilityRole="header" style={[typography.h2, { color: c.textPrimary }]}>{title}</Text>
       <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{copy('rlle.ui.hub.courseDetail')}</Text>

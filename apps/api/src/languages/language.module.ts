@@ -17,6 +17,8 @@ import { LanguageMasteryAttemptController } from './language-mastery-attempt.con
 import { LanguageMasteryAttemptService } from './language-mastery-attempt.service';
 import { LanguageAcousticMasteryController } from './language-acoustic-mastery.controller';
 import { LanguageAcousticMasteryService } from './language-acoustic-mastery.service';
+import { LanguagePlacementService } from './language-placement.service';
+import { LanguagePlacementController } from './language-placement.controller';
 
 /** Language engine (Phase 5, Educational Engine): the professional language
  *  teacher. It orchestrates rather than duplicates — vocabulary is ordinary
@@ -36,6 +38,7 @@ import { LanguageAcousticMasteryService } from './language-acoustic-mastery.serv
     LanguageController,
     LanguageMasteryAttemptController,
     LanguageAcousticMasteryController,
+    LanguagePlacementController,
   ],
   providers: [
     LanguageService,
@@ -47,6 +50,7 @@ import { LanguageAcousticMasteryService } from './language-acoustic-mastery.serv
     RealLifeLanguageService,
     LanguageMasteryAttemptService,
     LanguageAcousticMasteryService,
+    LanguagePlacementService,
   ],
   exports: [LanguageService, RealLifeLanguageService, LanguageMasteryAttemptService],
 })

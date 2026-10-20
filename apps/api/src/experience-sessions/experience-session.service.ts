@@ -48,6 +48,7 @@ const RESERVED_CLIENT_IDEMPOTENCY_PREFIXES = [
   'tutor:',
   'lesson:',
   'language-conversation:',
+  'language-placement:',
 ] as const;
 
 const LINK_KEYS: readonly (keyof ExperienceSessionLinks)[] = [
@@ -96,6 +97,8 @@ export class ExperienceSessionService {
     if (
       request.type === 'tutor' ||
       request.type === 'language' ||
+      request.intent === 'language-placement' ||
+      request.intent === 'language-course' ||
       request.links?.tutorSessionId ||
       request.links?.lessonId
     ) {
@@ -128,6 +131,12 @@ export class ExperienceSessionService {
     request: UpdateExperienceSessionRequest,
   ): Promise<ExperienceSession> {
     const existing = await this.requireOwned(userId, id);
+    // Placement evidence and the course cursor are written only by Langues.
+    // A generic JSON patch must not fabricate a diagnostic or bypass its gate.
+    if (existing.intent === 'language-course' || existing.intent === 'language-placement'
+      || request.intent === 'language-course' || request.intent === 'language-placement') {
+      throw new BadRequestException('Language diagnostic and course state are managed by the language service.');
+    }
     if (existing.type === 'workspace' || existing.workspaceRef) {
       throw new BadRequestException(
         'Workspace experience sessions must be updated by the workspace service.',

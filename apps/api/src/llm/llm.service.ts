@@ -223,6 +223,11 @@ export class LlmService {
     if (operation === 'classification') {
       return { timeoutMs: 8_000, retries: 0, backoffMs: 250, maxOutputTokens: 96 };
     }
+    // A diagnostic round has a durable owner-scoped claim. Never multiply a
+    // paid attempt automatically; an explicit retry reuses that same scope.
+    if (operation === 'language-placement') {
+      return { timeoutMs: 25_000, retries: 0, backoffMs: 0, maxOutputTokens: 2_000 };
+    }
     // The internal Copilot is explicitly bounded and never retried
     // automatically: an administrator can decide whether to ask again.
     if (operation === 'admin-copilot') {
@@ -390,6 +395,7 @@ export class LlmService {
 
   /** Stable Cost Center feature keys; raw operation names stay only in metadata. */
   private costFeatureFor(operation: string): string {
+    if (operation === 'language-placement') return 'LANGUAGE_TEXT';
     if (operation === 'tutor') return 'TUTOR_TEXT';
     if (operation === 'admin-copilot') return 'ADMIN_COPILOT';
     if (operation === 'language-content' || operation === 'language-writing' || operation === 'language-skills' || operation === 'language-grading' || operation === 'language-tutor' || operation === 'conversation') return 'LANGUAGE_TEXT';

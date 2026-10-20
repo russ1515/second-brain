@@ -12,20 +12,19 @@ const languages = read('apps/mobile/app/languages/index.tsx');
 const course = read('apps/mobile/app/languages/[id]/course/index.tsx');
 const courseUi = read('apps/mobile/components/language/course-ui.tsx');
 const brain = read('apps/mobile/app/(tabs)/brain.tsx');
+const brainGrid = read('apps/mobile/components/brain/language-bulletin-grid.tsx');
 const brainBulletins = read('apps/mobile/lib/brain-language-bulletins.ts');
 const revision = read('apps/mobile/app/revision.tsx');
 
-test('profile creation starts the real course with one stable operation key', () => {
+test('profile creation preserves its goal and opens placement before any first course generation', () => {
   assert.match(languages, /const created = await api<LanguageProfileSummary>\('\/languages'/);
   assert.match(languages, /await saveActiveLanguage\(user\.id, created\.id\)/);
-  assert.match(languages, /await startRlleCourse\(created\.id, \{/);
-  assert.match(languages, /startFrom: 'declared-level'/);
-  assert.match(languages, /targetLevel: created\.cefrLevel/);
+  assert.doesNotMatch(languages, /startRlleCourse/);
   assert.match(languages, /goal: requestedGoal/);
-  assert.match(languages, /idempotencyKey: `mobile-course:\$\{created\.id\}:profile-goal`/);
   assert.doesNotMatch(languages, /goalDomain: 'general'/);
   assert.match(languages, /router\.push\(`\/languages\/\$\{encodeURIComponent\(created\.id\)\}\/course`/);
-  assert.match(languages, /course\?generation=failed/);
+  assert.match(course, /<LanguagePlacementPanel/);
+  assert.match(course, /placement\?\.status === 'complete'/);
   assert.doesNotMatch(languages, /DELETE[\s\S]{0,300}created\.id/);
   assert.match(languages, /testID="language-course-goal"/);
   assert.match(languages, /testID="language-generate-course"/);
@@ -66,8 +65,9 @@ test('Brain aggregates all language bulletins and preserves an explicit profile 
   assert.match(brainBulletins, /profiles\.map/);
   assert.match(brainBulletins, /dependencies\.loadCourse\(profile\.id\)/);
   assert.match(brain, /enabled: Boolean\(user\)/);
-  assert.match(brain, /languageCourses\.data\?\.items\.map/);
-  assert.match(brain, /bulletins=\{course\.course\.masteryBulletins\}/);
+  assert.match(brain, /<BrainLanguageBulletinGrid entries=\{languageCourses\.data\?\.items \?\? \[\]\}/);
+  assert.match(brainGrid, /LanguageMasteryBulletinCard/);
+  assert.match(brainGrid, /masteryBulletins/);
   assert.match(course, /bulletin\.notions\.some/);
   assert.match(course, /\/revision\?languageProfileId=\$\{profile\.id\}/);
   assert.match(course, /\/brain\?languageProfileId=\$\{profile\.id\}/);

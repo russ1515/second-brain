@@ -5,6 +5,7 @@ import type { LessonView } from './lesson';
 import type { TutorSessionDetail } from './tutor';
 import type { ActionDestination } from './next-best-action';
 import type { SupportedLanguageCode } from './languages';
+import type { LanguagePlacementSummary } from './language-placement';
 
 /** The seven teaching modes from the Educational Engine spec. */
 export type LanguageMode =
@@ -67,6 +68,8 @@ export interface LanguageProfileSummary {
   /** Existing CEFR is self-declared until a real assessment explicitly says otherwise. */
   cefrLevelSource: 'declared';
   evaluatedCefrLevel: CefrLevel | null;
+  /** Initial diagnostic, not a lesson/module mastery or CEFR certificate. */
+  placement?: LanguagePlacementSummary | null;
   createdAt: string;
   updatedAt: string;
 }

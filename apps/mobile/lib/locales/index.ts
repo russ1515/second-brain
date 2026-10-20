@@ -58,6 +58,7 @@ import './learning-data-control-africa-v1';
 import './global-path-v1';
 import './language-mastery-v1';
 import './teaching-language-v1';
+import './language-placement-v1';
 import './workspace-capture-v1';
 import './workspace-orchestrator-v1';
 import './workspace-shells-v1';

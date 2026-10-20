@@ -129,6 +129,7 @@ import {
   type StoredRlleTargetedRemediationEvidence,
 } from './language-mastery-progression';
 import type { UploadedFileLike } from '../documents/extraction/text-extraction.service';
+import { LanguagePlacementService } from './language-placement.service';
 import {
   CEFR_RANK,
   inferGoalDomain,
@@ -154,6 +155,9 @@ const MAX_AUTONOMY_ATTEMPTS_PER_UNIT = 8;
 
 interface StoredCourseState {
   schemaVersion: typeof STATE_VERSION;
+  /** Set only on new, diagnostically placed courses; legacy mode behavior is
+   * preserved while new teaching difficulty follows the observed curriculum. */
+  placementEntryLevel?: CefrLevel;
   startLevel: CefrLevel;
   level: RlleCourseView['level'];
   goal: string | null;
@@ -204,6 +208,7 @@ export class RealLifeLanguageService {
     private readonly config: ConfigService,
     private readonly speech: SpeechService,
     private readonly masteryAttempts: LanguageMasteryAttemptService,
+    private readonly placement: LanguagePlacementService,
   ) {}
 
   async course(userId: string, profileId: string): Promise<RlleCourseView> {
@@ -226,6 +231,7 @@ export class RealLifeLanguageService {
     let view = {
       ...this.toCourseView(profile, session, state, reconciled.nextMasteryTarget),
       masteryBulletins: await this.projectMasteryBulletins(userId, profile, state),
+      placement: await this.coursePlacement(userId, profile.id, state),
       // FSRS due state can change in Review without mutating the course session,
       // so the projected NBA is recalculated on read from current facts.
       nextBestAction: await this.nextAction(userId, profile, state),
@@ -278,8 +284,11 @@ export class RealLifeLanguageService {
     }
 
     const declared = this.cefr(profile.cefrLevel);
-    const startLevel: CefrLevel = request.startFrom === 'zero' ? 'A1' : declared;
-    const targetLevel = request.targetLevel ?? declared;
+    // Existing courses above resume unchanged. A fresh path starts from an
+    // observed diagnostic, not a self-estimated profile value or a zero toggle.
+    const diagnostic = await this.placement.requireCoursePlacement(userId, profileId);
+    const startLevel = diagnostic.globalLevel === 'PRE_A1' ? 'A1' : diagnostic.globalLevel;
+    const targetLevel = request.targetLevel ?? startLevel;
     if (CEFR_RANK[targetLevel] < CEFR_RANK[startLevel]) {
       throw new BadRequestException('The target CEFR level cannot be below the course starting level.');
     }
@@ -291,10 +300,14 @@ export class RealLifeLanguageService {
     }
     const state: StoredCourseState = {
       schemaVersion: STATE_VERSION,
+      placementEntryLevel: startLevel,
       startLevel,
       level: {
         declared,
-        estimated: null,
+        estimated: diagnostic.globalLevel === 'PRE_A1' ? null : {
+          level: diagnostic.globalLevel, evidenceCount: 4,
+          measuredAt: diagnostic.completedAt!, source: 'placement',
+        },
         evaluated: null,
         target: targetLevel,
       },
@@ -420,7 +433,7 @@ export class RealLifeLanguageService {
                 ...promptRoles,
                 language: profile.language,
                 nativeLanguage: profile.nativeLanguage,
-                mode: profile.mode as LanguageMode,
+                mode: state.placementEntryLevel ? lessonDifficulty(unit.level) : profile.mode as LanguageMode,
                 goal: state.goal,
                 cefrLevel: unit.level,
                 immersionIntensity: state.immersionIntensity,
@@ -3488,7 +3501,18 @@ export class RealLifeLanguageService {
     return {
       ...this.toCourseView(profile, session, state, nextMasteryTarget),
       masteryBulletins: await this.projectMasteryBulletins(userId, profile, state),
+      placement: await this.coursePlacement(userId, profile.id, state),
     };
+  }
+
+  private async coursePlacement(userId: string, profileId: string, state: StoredCourseState) {
+    // Historical courses retain their existing display and remain resumable.
+    // Newly placed courses expose the independent observed diagnostic, never
+    // relabel their declared/default CEFR as an evaluated certificate.
+    if (!state.placementEntryLevel) return null;
+    const placement = await this.placement.get(userId, profileId);
+    const { policyVersion, status, round, selfEstimate, globalLevel, productLevel, completedAt, skills } = placement;
+    return { policyVersion, status, round, selfEstimate, globalLevel, productLevel, completedAt, skills };
   }
 
   /** Reconcile the append-only mastery journal before returning a mutation

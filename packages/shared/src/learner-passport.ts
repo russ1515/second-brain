@@ -58,6 +58,8 @@ export interface LearnerPassportDeclared {
 }
 
 export interface LearnerPassportLanguageProgress {
+  /** Placement observations are diagnostic, never a mastery/certification. */
+  placement?: import('./language-placement').LanguagePlacementSummary | null;
   profileId: string;
   language: string;
   languageCode: SupportedLanguageCode | null;

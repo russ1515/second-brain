@@ -35,6 +35,8 @@ import {
 import { LearnerProfileService } from '../concepts/learner-profile.service';
 import { isValidTimezone } from '../journey/local-time';
 import { PrismaService } from '../prisma/prisma.service';
+import { placementSessionsInclude, projectLanguagePlacementSummaries, type LanguagePlacementSummary,
+  type PlacementSessionRow } from '../languages/language-placement-projection';
 
 const AGE_BANDS = new Set(['under12', '12to15', '16to18', '18to25', '25to40', 'over40']);
 const CEFR = new Set<string>(CEFR_LEVELS);
@@ -68,6 +70,8 @@ type LanguageRow = {
   _count: { lessons: number; tutorSessions: number };
   lessons: Array<{ createdAt: Date }>;
   tutorSessions: Array<{ updatedAt: Date }>;
+  experienceSessions?: PlacementSessionRow[];
+  placement?: LanguagePlacementSummary | null;
   masteryAttempts?: Array<{
     targetId: string;
     cefrLevel: string;
@@ -322,6 +326,11 @@ export class LearnerPassportService {
     }
     if (options.includeLanguageLearningContext && base.languages.length) {
       lines.push(`Active learning languages and declared levels: ${base.languages.slice(0, 5).map((row) => `${this.promptValue(row.language)}=${this.cefr(row.cefrLevel) ?? 'unassessed'}`).join(', ')}. Increase immersion only from these recorded levels or real observed evidence.`);
+      for (const row of base.languages.slice(0, 5)) {
+        if (row.placement?.status === 'complete') {
+          lines.push(`Observed language diagnostic: ${this.promptValue(row.language)}=${row.placement.globalLevel}; skills ${row.placement.skills.filter((skill) => skill.round === row.placement!.round).map((skill) => `${skill.skill}=${skill.level ?? 'not-evaluable'}`).join(', ')}. This is a placement diagnostic, not a verified mastery or acoustic certificate.`);
+        }
+      }
     }
     if (includeAdaptiveSignals && base.dna?.maturity && Array.isArray(base.dna.traits)) {
       const traits = (base.dna.traits as unknown[])
@@ -361,12 +370,14 @@ export class LearnerPassportService {
           lessons: { select: { createdAt: true }, orderBy: { createdAt: 'desc' as const }, take: 1 },
           tutorSessions: { select: { updatedAt: true }, orderBy: { updatedAt: 'desc' as const }, take: 1 },
           masteryAttempts: this.passportMasteryAttemptsInclude(),
+          experienceSessions: placementSessionsInclude,
         }
       : {
           _count: { select: { lessons: true, tutorSessions: true } },
           lessons: { select: { createdAt: true }, take: 0 },
           tutorSessions: { select: { updatedAt: true }, take: 0 },
           masteryAttempts: this.passportMasteryAttemptsInclude(),
+          experienceSessions: placementSessionsInclude,
         };
     const [onboarding, profile, languages, dna] = await Promise.all([
       this.prisma.onboardingProfile.findUnique({ where: { userId } }),
@@ -381,10 +392,11 @@ export class LearnerPassportService {
         select: { traits: true, maturity: true, interactions: true, updatedAt: true },
       }),
     ]);
+    const placements = await projectLanguagePlacementSummaries(this.prisma, userId, languages);
     return {
       onboarding,
       profile,
-      languages: languages as unknown as LanguageRow[],
+      languages: languages.map((language) => ({ ...language, placement: placements.get(language.id) ?? null })) as unknown as LanguageRow[],
       dna,
     };
   }
@@ -513,6 +525,8 @@ export class LearnerPassportService {
       // including acoustic proof, plus five verified pillar exams) can project
       // an evaluated CEFR level into the Learner Passport.
       evaluatedLevel,
+      // An observed diagnostic is not a verified five-pillar CEFR certificate.
+      placement: row.placement ?? null,
       goal: this.text(row.goal, 300),
       lessonCount: row._count.lessons,
       sessionCount: row._count.tutorSessions,

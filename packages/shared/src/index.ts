@@ -37,6 +37,7 @@ export * from './language-mastery';
 export * from './language-mastery-bulletin';
 export * from './language-oral-capability';
 export * from './language-mastery-map';
+export * from './language-placement';
 export * from './learn-orchestration';
 export * from './languages';
 export * from './learner-profile';

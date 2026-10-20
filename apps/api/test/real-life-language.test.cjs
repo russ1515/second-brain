@@ -147,7 +147,7 @@ function harness(options = {}) {
   const languages = {
     requireOwned: async (userId, id) => {
       if (userId !== profile.userId || id !== profile.id) throw new Error('not found');
-      return profile;
+      return { ...profile, ...(options.profile ?? {}) };
     },
     promptRoles: async () => ({
       interfaceLanguage: 'fr', supportLanguage: 'fr', targetLanguage: 'English',
@@ -457,6 +457,15 @@ function harness(options = {}) {
         };
       },
     },
+    { get: async () => ({
+      policyVersion: shared.LANGUAGE_PLACEMENT_POLICY_VERSION,
+      status: 'complete', round: 1, selfEstimate: 'unknown', globalLevel: options.placementLevel ?? 'A1',
+      productLevel: shared.placementProductLevel(options.placementLevel ?? 'A1'),
+      completedAt: '2026-10-20T12:00:00.000Z', skills: [],
+    }), requireCoursePlacement: async () => {
+      if (options.rejectPlacement) throw new Error('LANGUAGE_PLACEMENT_REQUIRED');
+      return { globalLevel: options.placementLevel ?? 'A1', completedAt: '2026-10-20T12:00:00.000Z' };
+    } },
   );
   if (!options.useRealActivationGate) {
     service.strictMasteryAvailable = () => options.strictMastery !== false;
@@ -566,7 +575,8 @@ test('course from zero keeps the complete A1→B1 spine and distinguishes declar
     startFrom: 'zero', targetLevel: 'B1', goalDomain: 'work',
   });
   assert.equal(result.course.level.declared, 'B1');
-  assert.equal(result.course.level.estimated, null);
+  assert.deepEqual(result.course.level.estimated, { level: 'A1', evidenceCount: 4,
+    measuredAt: '2026-10-20T12:00:00.000Z', source: 'placement' });
   assert.equal(result.course.level.evaluated, null);
   assert.equal(result.course.level.target, 'B1');
   assert.deepEqual([...new Set(result.course.units.map((unit) => unit.level))], ['A1', 'A2', 'B1']);
@@ -778,13 +788,53 @@ test('authored mastery supplements are injected into the existing unit generatio
   assert.match(directive, /independent-basic-writing/);
 });
 
-test('an advanced course starts at the declared level and never silently replays A1', async () => {
-  const { service } = harness();
+test('a course starts at the observed B1 placement and never silently replays A1', async () => {
+  const { service } = harness({ placementLevel: 'B1' });
   const result = await service.startCourse('user-1', 'language-1', {
     startFrom: 'declared-level', targetLevel: 'C1', goalDomain: 'work',
   });
   assert.deepEqual([...new Set(result.course.units.map((unit) => unit.level))], ['B1', 'B2', 'C1']);
   assert.equal(result.course.units.some((unit) => unit.level === 'A1'), false);
+});
+
+test('declared advanced C2 never overrides the observed A1 course teaching strategy', async () => {
+  const { service, lessonGenerations } = harness({ profile: { cefrLevel: 'C2', mode: 'advanced' }, placementLevel: 'A1' });
+  const result = await service.startCourse('user-1', 'language-1', { startFrom: 'declared-level', goalDomain: 'general' });
+  assert.equal(result.course.level.declared, 'C2');
+  assert.equal(result.course.currentLesson.level, 'A1');
+  assert.equal(result.session.currentStep.metadata.rlleCourse.placementEntryLevel, 'A1');
+  assert.equal(lessonGenerations[0][1].level, 'beginner');
+  assert.equal(result.course.placement.globalLevel, 'A1');
+  assert.equal(result.course.placement.productLevel, 'BEGINNER');
+  const { languageSystemPrompt } = require('../dist/languages/language-modes.js');
+  const beginner = languageSystemPrompt({ interfaceLanguage: 'fr', supportLanguage: 'fr', targetLanguage: 'English',
+    language: 'English', nativeLanguage: 'French', mode: 'beginner', goal: 'Work internationally',
+    cefrLevel: 'A1', immersionIntensity: 'guided', correctionIntensity: 'balanced' });
+  assert.ok(lessonGenerations[0][2].directive.startsWith(beginner), 'new course uses the existing beginner Professor policy');
+});
+
+test('PRE_A1 diagnostic opens the A1 entry curriculum without claiming estimated A1', async () => {
+  const { service } = harness({ placementLevel: 'PRE_A1' });
+  const result = await service.startCourse('user-1', 'language-1', { startFrom: 'declared-level' });
+  assert.equal(result.course.currentLesson.level, 'A1');
+  assert.equal(result.course.level.estimated, null);
+  assert.equal(result.course.level.evaluated, null);
+  assert.equal(result.course.placement.globalLevel, 'PRE_A1');
+  assert.equal(result.course.placement.productLevel, 'BEGINNER');
+});
+
+test('missing placement blocks only a fresh course; persisted historical course resumes unchanged', async () => {
+  const blocked = harness({ rejectPlacement: true });
+  await assert.rejects(blocked.service.startCourse('user-1', 'language-1', { startFrom: 'zero', targetLevel: 'A1' }), /LANGUAGE_PLACEMENT_REQUIRED/);
+  assert.equal(blocked.lessonGenerations.length, 0);
+  const existing = harness();
+  const first = await existing.service.startCourse('user-1', 'language-1', { startFrom: 'zero', targetLevel: 'A1' });
+  delete existing.sessions.get(first.session.id).currentStep.metadata.rlleCourse.placementEntryLevel;
+  existing.service.placement.requireCoursePlacement = async () => { throw new Error('must not place an existing course'); };
+  const resumed = await existing.service.startCourse('user-1', 'language-1', { startFrom: 'zero', targetLevel: 'A1' });
+  assert.equal(resumed.session.id, first.session.id);
+  assert.equal(resumed.course.currentLesson.lessonId, first.course.currentLesson.lessonId);
+  assert.equal(existing.lessonGenerations.length, 1);
 });
 
 test('course access remains strictly scoped to the owning language profile', async () => {
@@ -822,7 +872,9 @@ test('course preferences remain user-controlled without replacing course progres
 });
 
 test('a paused World Mission resumes the same Tutor context and keeps its repair continuity', async () => {
-  const { service, sessions, conversationStarts } = harness();
+  // This fixture starts directly at the B1 experience/story unit; its former
+  // self-declared B1 must now be backed by the equivalent placement result.
+  const { service, sessions, conversationStarts } = harness({ placementLevel: 'B1' });
   await service.startCourse('user-1', 'language-1', {
     startFrom: 'declared-level', targetLevel: 'B1', goalDomain: 'general',
   });

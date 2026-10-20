@@ -83,6 +83,12 @@ function deletionFixture({ sharedDeck = false } = {}) {
         return { count: 1 };
       },
     },
+    assessment: {
+      deleteMany: async (args) => {
+        calls.push(['placement-assessment-delete', args]);
+        return { count: 1 };
+      },
+    },
     reviewable: {
       deleteMany: async (args) => {
         calls.push(['reviewable-delete', args]);
@@ -188,6 +194,11 @@ test('language deletion delegates linked learning purges, deletes the profile an
   assert.ok(fixture.calls.some((event) => event[0] === 'mastery-purge'
     && event[1] === fixture.userId && event[2] === fixture.profileId));
   assert.ok(fixture.calls.some(([event]) => event === 'profile-delete'));
+  assert.deepEqual(fixture.calls.find(([event]) => event === 'placement-assessment-delete'),
+    ['placement-assessment-delete', { where: { userId: fixture.userId,
+      questions: { path: ['languagePlacement', 'profileId'], equals: fixture.profileId },
+      masteryCreationKey: { startsWith: 'language-placement:' },
+    } }]);
   assert.deepEqual(
     fixture.calls.find(([event]) => event === 'reviewable-delete'),
     ['reviewable-delete', {

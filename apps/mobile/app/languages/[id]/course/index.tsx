@@ -12,6 +12,7 @@ import {
   type ImmersionIntensity,
   type LanguageCorrectionIntensity,
   type LanguageProfileDetail,
+  type LanguagePlacementView,
   type RlleCourseView,
   type RlleCurriculumUnit,
   type RlleCurriculumUnitTemplate,
@@ -22,9 +23,11 @@ import { Page, PageHeader, ResponsiveSplit, Section } from '../../../../componen
 import { SmartErrorState, SmartLoadingState } from '../../../../components/ds/states';
 import { ContextBar } from '../../../../components/context/context-bar';
 import { CurriculumMap, DimensionProgress, LanguageMasteryBulletins, LevelSummary, RecoveryPanel } from '../../../../components/language/course-ui';
+import { LanguagePlacementPanel } from '../../../../components/language/placement-panel';
 import { useTokens } from '../../../../lib/design/theme';
 import { actionDestinationHref } from '../../../../lib/action-destination';
 import { useRlleCopy } from '../../../../lib/language-rll-i18n';
+import { languagePlacementLevelLabel } from '../../../../lib/language-placement-presentation';
 import {
   loadLanguageProfile,
   loadRlleCourse,
@@ -34,8 +37,6 @@ import {
   updateRlleCoursePreferences,
   type RlleCourseLoad,
 } from '../../../../lib/language-rll-client';
-
-const START_POINTS = ['zero', 'declared-level'] as const;
 
 export default function LanguageCourseScreen() {
   const params = useLocalSearchParams<{ id: string | string[]; generation?: string | string[] }>();
@@ -48,6 +49,7 @@ export default function LanguageCourseScreen() {
   const [courseLoad, setCourseLoad] = useState<RlleCourseLoad | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [placement, setPlacement] = useState<LanguagePlacementView | null>(null);
 
   const load = useCallback(async () => {
     if (!profileId) return;
@@ -65,6 +67,7 @@ export default function LanguageCourseScreen() {
   }, [profileId]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setPlacement(null); }, [profileId]);
 
   if (!profile || !courseLoad) {
     if (error) return <SmartErrorState detail={error} retryable onRetry={() => void load()} />;
@@ -122,7 +125,7 @@ export default function LanguageCourseScreen() {
           eyebrow={copy('rlle.ui.course.eyebrow')}
           title={copy('rlle.ui.course.title', { language: profile.language })}
           description={copy('rlle.ui.course.subtitle')}
-          action={<Badge label={`${profile.cefrLevel} · ${copy('rlle.ui.cefr')}`} tone="info" />}
+          action={<Badge label={languagePlacementLevelLabel(course?.placement ?? placement ?? profile.placement, copy, profile.cefrLevel, course?.status === 'not-started')} tone="info" />}
         />
         {error ? <SmartErrorState detail={error} retryable onRetry={() => void load()} /> : null}
         {courseLoad.kind === 'preview' ? <Alert tone="warning" title={copy('rlle.ui.hub.courseUnavailable')} detail={copy('rlle.ui.course.offline')} /> : null}
@@ -136,7 +139,12 @@ export default function LanguageCourseScreen() {
         {course?.experienceSession ? <ContextBar items={course.experienceSession.activeContexts.items} /> : null}
 
         {course?.status === 'not-started' ? (
-          <StartCourseCard profile={profile} onStarted={(next) => setCourseLoad({ kind: 'live', course: next })} />
+          <View style={{ gap: spacing.md }}>
+            <LanguagePlacementPanel key={profile.id} profileId={profile.id} onPlacement={setPlacement} />
+            {placement?.status === 'complete' ? (
+              <StartCourseCard profile={profile} placement={placement} onStarted={(next) => setCourseLoad({ kind: 'live', course: next })} />
+            ) : null}
+          </View>
         ) : null}
 
         {course && course.status !== 'not-started' ? (
@@ -223,13 +231,14 @@ export default function LanguageCourseScreen() {
   );
 }
 
-function StartCourseCard({ profile, onStarted }: { profile: LanguageProfileDetail; onStarted: (course: RlleCourseView) => void }) {
+function StartCourseCard({ profile, placement, onStarted }: { profile: LanguageProfileDetail; placement: LanguagePlacementView; onStarted: (course: RlleCourseView) => void }) {
   const { copy } = useRlleCopy();
   const { colors: c, spacing, typography } = useTokens();
-  const [startFrom, setStartFrom] = useState<(typeof START_POINTS)[number]>('declared-level');
-  const [targetLevel, setTargetLevel] = useState<CefrLevel>(profile.cefrLevel);
+  // PRE_A1 is preserved as the diagnostic result; the existing curriculum starts
+  // at A1. This display mapping never classifies the learner or grants mastery.
+  const startLevel: CefrLevel = placement.globalLevel === 'PRE_A1' || !placement.globalLevel ? 'A1' : placement.globalLevel;
+  const [targetLevel, setTargetLevel] = useState<CefrLevel>(startLevel);
   const [goalDomain, setGoalDomain] = useState<RlleGoalDomain>('general');
-  const startLevel = startFrom === 'zero' ? 'A1' : profile.cefrLevel;
   const [immersion, setImmersion] = useState<ImmersionIntensity>(
     defaultImmersionForLevel(startLevel),
   );
@@ -248,13 +257,13 @@ function StartCourseCard({ profile, onStarted }: { profile: LanguageProfileDetai
     setError(null);
     try {
       const response = await startRlleCourse(profile.id, {
-        startFrom,
+        startFrom: 'declared-level',
         targetLevel: effectiveTargetLevel,
         goalDomain,
         ...(profile.goal ? { goal: profile.goal } : {}),
         immersionIntensity: immersion,
         correctionIntensity: correction,
-        idempotencyKey: `mobile-course:${profile.id}:${startFrom}:${effectiveTargetLevel}:${goalDomain}`,
+        idempotencyKey: `mobile-course:${profile.id}:placement:${effectiveTargetLevel}:${goalDomain}`,
       });
       onStarted(response.course);
     } catch (cause) {
@@ -268,8 +277,6 @@ function StartCourseCard({ profile, onStarted }: { profile: LanguageProfileDetai
     <Card elevated style={{ gap: spacing.md, borderColor: c.aiAccent }} testID="rll-start-course">
       <Text accessibilityRole="header" style={[typography.h2, { color: c.textPrimary }]}>{copy('rlle.ui.course.notStarted')}</Text>
       <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{copy('rlle.ui.course.notStartedDetail')}</Text>
-      <SegmentedControl options={START_POINTS} value={startFrom} onChange={setStartFrom} labelFor={(value) => copy(value === 'zero' ? 'rlle.ui.course.startZero' : 'rlle.ui.course.startDeclared')} />
-      {startFrom === 'declared-level' ? <Alert tone="info" title={copy('rlle.ui.course.declaredWarning', { level: profile.cefrLevel })} /> : null}
       <View style={{ gap: spacing.xs }}>
         <Text style={[typography.label, { color: c.textMuted }]}>{copy('rlle.ui.course.targetLevel')}</Text>
         <SegmentedControl

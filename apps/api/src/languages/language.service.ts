@@ -24,6 +24,7 @@ import { immersionRatio } from './language-modes';
 import { LearningDataDeletionService } from '../experience-sessions/learning-data-deletion.service';
 import { accountDataLockKey } from '../common/account-data-lock';
 import { LanguageMasteryAttemptService } from './language-mastery-attempt.service';
+import { placementSessionsInclude, projectLanguagePlacementSummaries, type PlacementSessionRow } from './language-placement-projection';
 
 /** Per-language state for the learner. Vocabulary is not a new SRS: each profile
  *  owns an ordinary Deck whose cards ride the existing FSRS engine. */
@@ -88,6 +89,7 @@ export class LanguageService {
         _count: { select: { tutorSessions: true, lessons: true } },
         tutorSessions: { select: { updatedAt: true }, orderBy: { updatedAt: 'desc' }, take: 1 },
         lessons: { select: { createdAt: true }, orderBy: { createdAt: 'desc' }, take: 1 },
+        experienceSessions: placementSessionsInclude,
       },
     });
     const deckIds = profiles.map((profile) => profile.vocabDeckId).filter((id): id is string => !!id);
@@ -97,17 +99,18 @@ export class LanguageService {
     ]) : [[], []];
     const totalByDeck = new Map(totals.map((row) => [row.deckId, row._count._all]));
     const dueByDeck = new Map(due.map((row) => [row.deckId, row._count._all]));
-    return profiles.map((profile) => this.toSummary(profile, {
+    const placements = await projectLanguagePlacementSummaries(this.prisma, userId, profiles);
+    return profiles.map((profile) => ({ ...this.toSummary(profile, {
       vocabCount: profile.vocabDeckId ? totalByDeck.get(profile.vocabDeckId) ?? 0 : 0,
       vocabDue: profile.vocabDeckId ? dueByDeck.get(profile.vocabDeckId) ?? 0 : 0,
       lessonCount: profile._count.lessons,
       sessionCount: profile._count.tutorSessions,
       lastActivityAt: this.latestDate(profile.tutorSessions[0]?.updatedAt, profile.lessons[0]?.createdAt),
-    }));
+    }), placement: placements.get(profile.id) ?? null }));
   }
 
   async get(userId: string, id: string): Promise<LanguageProfileDetail> {
-    const profile = await this.requireOwned(userId, id);
+    const profile = await this.requireOwned(userId, id, true);
     const [vocabCount, vocabDue, lessonCount, sessionCount, lastSession, lastLesson] = await Promise.all([
       this.countVocab(userId, profile.vocabDeckId),
       this.countVocabDue(userId, profile.vocabDeckId),
@@ -116,8 +119,10 @@ export class LanguageService {
       this.prisma.tutorSession.findFirst({ where: { userId, languageProfileId: id }, orderBy: { updatedAt: 'desc' }, select: { updatedAt: true } }),
       this.prisma.lesson.findFirst({ where: { userId, languageProfileId: id }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
     ]);
+    const placements = await projectLanguagePlacementSummaries(this.prisma, userId, [profile]);
     return {
       ...this.toSummary(profile, { vocabCount, vocabDue, lessonCount, sessionCount, lastActivityAt: this.latestDate(lastSession?.updatedAt, lastLesson?.createdAt) }),
+      placement: placements.get(profile.id) ?? null,
       immersionRatio:
         profile.mode === 'immersion' ? immersionRatio(profile.cefrLevel) : null,
     };
@@ -195,6 +200,13 @@ export class LanguageService {
         if (remainingLessons + remainingTutors + remainingSessions > 0) return false;
 
         await tx.learningCompletion.deleteMany({ where: { userId, languageProfileId: id } });
+        // Placement assessments intentionally have no lesson FK. Purge their
+        // owner/profile-scoped canonical rows before deleting the profile;
+        // AssessmentSubmission follows the existing cascade.
+        await tx.assessment.deleteMany({ where: { userId,
+          questions: { path: ['languagePlacement', 'profileId'], equals: id },
+          masteryCreationKey: { startsWith: 'language-placement:' },
+        } });
         await tx.reviewable.deleteMany({
           where: {
             userId,
@@ -232,9 +244,10 @@ export class LanguageService {
   }
 
   /** Load an owned profile, or 404. Shared with the other language services. */
-  async requireOwned(userId: string, id: string): Promise<LanguageProfile> {
+  async requireOwned(userId: string, id: string, includePlacement = false): Promise<LanguageProfile & { experienceSessions?: PlacementSessionRow[] }> {
     const profile = await this.prisma.languageProfile.findUnique({
       where: { id },
+      ...(includePlacement ? { include: { experienceSessions: placementSessionsInclude } } : {}),
     });
     if (!profile || profile.userId !== userId) {
       throw new NotFoundException('Language profile not found.');

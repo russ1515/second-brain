@@ -358,6 +358,8 @@ export interface RlleNextMasteryTarget {
 }
 
 export interface RlleCourseView {
+  /** Initial diagnostic is kept apart from subsequent 90% mastery proofs. */
+  placement?: import('./language-placement').LanguagePlacementSummary | null;
   profileId: string;
   languageCode: SupportedLanguageCode;
   level: RlleLevelState;

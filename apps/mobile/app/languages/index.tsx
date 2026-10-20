@@ -2,13 +2,11 @@ import { useCallback, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import {
-  CEFR_LEVELS,
   LANGUAGE_TEACHING_SOURCES,
   LANGUAGE_MODES,
   SUPPORTED_LANGUAGES,
   languageNextAction,
   toSupportedLanguage,
-  type CefrLevel,
   type ExperienceSession,
   type ExperienceSessionPage,
   type LanguageMode,
@@ -33,7 +31,8 @@ import { LanguageBadge, LanguageSelector } from '../../components/ds/language';
 import { Page, PageHeader, ResponsiveSplit, Section } from '../../components/ds/layout';
 import { SmartEmptyState, SmartErrorState, SmartLoadingState } from '../../components/ds/states';
 import { CourseEntryCard } from '../../components/language/course-ui';
-import { loadRlleCourse, startRlleCourse, type RlleCourseLoad } from '../../lib/language-rll-client';
+import { loadRlleCourse, type RlleCourseLoad } from '../../lib/language-rll-client';
+import { languagePlacementLevelLabel } from '../../lib/language-placement-presentation';
 
 export default function LanguagesScreen() {
   const { user, offline, setInterfaceLanguage } = useAuth();
@@ -50,7 +49,6 @@ export default function LanguagesScreen() {
   const [teachingSource, setTeachingSource] = useState<LanguageTeachingSource>('interface');
   const [interfaceLocaleSaving, setInterfaceLocaleSaving] = useState(false);
   const [mode, setMode] = useState<LanguageMode>('beginner');
-  const [level, setLevel] = useState<CefrLevel>('A1');
   const [goal, setGoal] = useState('');
   const [creating, setCreating] = useState(false);
   const [savingTeachingSource, setSavingTeachingSource] = useState(false);
@@ -185,7 +183,9 @@ export default function LanguagesScreen() {
           ...(nativeCode ? { nativeLanguage: nativeCode } : {}),
           teachingLanguageSource: teachingSource,
           mode,
-          cefrLevel: level,
+          // Compatibility value only; the server's diagnostic, not this
+          // declared baseline, determines the first course's starting level.
+          cefrLevel: 'A1',
           ...(requestedGoal ? { goal: requestedGoal } : {}),
         },
       });
@@ -193,20 +193,9 @@ export default function LanguagesScreen() {
       activeIdRef.current = created.id;
       setActiveId(created.id);
       setGoal('');
-      try {
-        await startRlleCourse(created.id, {
-          startFrom: 'declared-level',
-          targetLevel: created.cefrLevel,
-          ...(requestedGoal ? { goal: requestedGoal } : {}),
-          idempotencyKey: `mobile-course:${created.id}:profile-goal`,
-        });
-        router.push(`/languages/${encodeURIComponent(created.id)}/course` as never);
-      } catch {
-        // The language profile is intentionally kept: course creation can be
-        // retried from its own screen without losing the learner's choices.
-        await load().catch(() => undefined);
-        router.push(`/languages/${encodeURIComponent(created.id)}/course?generation=failed` as never);
-      }
+      // A declared CEFR level is not diagnostic evidence. Keep the profile and
+      // goal, then establish the starting level before generating a first course.
+      router.push(`/languages/${encodeURIComponent(created.id)}/course` as never);
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
@@ -267,7 +256,7 @@ export default function LanguagesScreen() {
                         <Text accessibilityRole="header" style={[typography.h2, { color: c.textPrimary }]}>{active.language}</Text>
                         <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{active.goal || t('languages11.goal.empty')}</Text>
                       </View>
-                      <Badge label={`${active.cefrLevel} · ${t('languages11.level.declared')}`} tone="info" />
+                      <Badge label={languagePlacementLevelLabel(course?.kind === 'live' ? course.course.placement ?? active.placement : active.placement, (key) => t(key as TranslationKey), active.cefrLevel, course?.kind === 'live' && course.course.status === 'not-started')} tone="info" />
                     </View>
                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
                       <Metric value={active.vocabCount} label={t('languages11.metric.words')} />
@@ -378,10 +367,9 @@ export default function LanguagesScreen() {
                       : `${t('onb.languages.interface')} · ${SUPPORTED_LANGUAGES[locale as SupportedLanguageCode]?.name ?? locale}`}
                   />
                   <Text style={[typography.caption, { color: c.textMuted }]}>{t('rlle.ui.teachingLanguage.detail')}</Text>
-                  <SegmentedControl options={CEFR_LEVELS} value={level} onChange={setLevel} />
                   <SegmentedControl options={LANGUAGE_MODES.slice(0, 3)} value={mode} onChange={setMode} labelFor={(value) => t(`langmode.${value}` as TranslationKey)} />
                   <Input testID="language-course-goal" label={t('languages11.goal.label')} value={goal} onChangeText={setGoal} placeholder={t('languages11.goal.placeholder')} maxLength={300} />
-                  <Button testID="language-generate-course" label={t('rlle.ui.course.notStarted')} loading={creating} disabled={interfaceLocaleSaving} onPress={() => void create()} />
+                  <Button testID="language-generate-course" label={t('placement.ui.start' as TranslationKey)} loading={creating} disabled={interfaceLocaleSaving} onPress={() => void create()} />
                 </Card>
               ) : null}
               {profiles && profiles.length > 1 ? (
