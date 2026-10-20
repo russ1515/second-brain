@@ -103,7 +103,7 @@ import {
   renderWorkspaceMarkdown,
 } from '@second-brain/shared';
 import { localeDirective, resolveLocale } from '../common/learning-locale';
-import { LlmService } from '../llm/llm.service';
+import { LlmService, type LlmServerAcceptanceContext } from '../llm/llm.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { accountDataLockKey } from '../common/account-data-lock';
 import { WorkspaceSourceEngineService } from './workspace-source-engine.service';
@@ -125,6 +125,15 @@ import {
 import { workContractFromIntent, workContractResponseSchema, workOutputKindForIntent, prepareWorkContractCriteria } from './workspace-work-contract';
 import { writePrivateWorkspaceWorkDiagnostic, type WorkspaceWorkDiagnosticInput } from './workspace-work-diagnostics';
 import { bindVerificationEvidence } from './workspace-verification-evidence';
+import {
+  activeAcceptanceAllowance,
+  activateAcceptanceAllowance,
+  parseAcceptanceAllowance,
+  reconcileAcceptanceAllowances,
+  reserveAcceptanceAllowance,
+  settleAcceptanceAllowance,
+  WorkspaceAcceptanceAllowanceError,
+} from './workspace-acceptance-allowance';
 
 const MAX_ASSISTANT_HISTORY = 30;
 const MAX_PROFESSOR_TRANSITIONS = 40;
@@ -195,6 +204,16 @@ interface AutopilotExecution {
   requestId: string;
   /** Changes from the existing Professor/tool are guarded in the transaction. */
   expectedRevision?: number;
+  /** Server-selected private acceptance window, never an HTTP request field. */
+  acceptanceRunId?: string;
+}
+
+interface AcceptanceCostReservation {
+  context: LlmServerAcceptanceContext;
+  model: string;
+  pricingVersionId: string;
+  inputTokenCap: number;
+  outputTokenCap: number;
 }
 
 interface AutopilotRunGrantConfig {
@@ -398,7 +417,10 @@ export class AcademicWorkspaceService {
       }
       if (row.autosaveRevision !== request.expectedRevision) this.throwWorkspaceRevisionConflict();
       const now = new Date().toISOString();
-      let state = { ...current };
+      const phaseScope = { ownerId: userId, workspaceId: id, runId: current.runId,
+        phase: this.professorState(row, progress).currentPhase, now };
+      const acceptanceConfig = this.scopedAcceptanceConfig();
+      let state = reconcileAcceptanceAllowances({ ...current }, acceptanceConfig, phaseScope);
       if (state.activeRequest && Date.now() - Date.parse(state.activeRequest.createdAt) > PROFESSOR_PENDING_LEASE_MS) {
         state = this.endAutopilotRequest(state, 'PAUSED_ERROR', 'workspace_autopilot_interrupted');
       }
@@ -409,13 +431,17 @@ export class AcademicWorkspaceService {
         const phase = this.professorState(row, progress).currentPhase;
         const professor = this.professorState(row, progress);
         const cached = this.autopilotCachedReply(row, state, professor);
-        if (state.aiSteps >= state.maxAiSteps && phase !== 'DECONSTRUCTION' && !cached) {
+        const allowance = state.aiSteps >= state.maxAiSteps && phase !== 'DECONSTRUCTION' && !cached
+          ? activeAcceptanceAllowance(state, acceptanceConfig, phaseScope) : undefined;
+        if (state.aiSteps >= state.maxAiSteps && phase !== 'DECONSTRUCTION' && !cached && !allowance) {
           return { state: { ...state, status: 'NEEDS_INPUT', errorCode: 'STOP_AUTOPILOT_REVIEW_REQUIRED', reason: 'step-limit' } };
         }
-        execution = { workspaceId: id, runId: state.runId, requestId: request.requestId };
-        state.activeRequest = { requestId: request.requestId, status: 'pending', phase, revision: row.autosaveRevision, createdAt: now };
+        execution = { workspaceId: id, runId: state.runId, requestId: request.requestId,
+          ...(allowance ? { acceptanceRunId: allowance.acceptanceRunId } : {}) };
+        state.activeRequest = { requestId: request.requestId, status: 'pending', phase, revision: row.autosaveRevision, createdAt: now,
+          ...(allowance ? { acceptanceRunId: allowance.acceptanceRunId } : {}) };
         // Consumed before the external call, including failures and timeouts.
-        if (phase !== 'DECONSTRUCTION' && !cached) state.aiSteps += 1;
+        if (phase !== 'DECONSTRUCTION' && !cached && !allowance) state.aiSteps += 1;
       } else if (request.action === 'pause' || request.action === 'stop') {
         state.status = request.action === 'pause' ? 'PAUSED' : 'STOPPED';
       } else if (request.action === 'start' || request.action === 'resume') {
@@ -425,8 +451,14 @@ export class AcademicWorkspaceService {
         // Only an authenticated, revision-checked resume may consume the private
         // grant. GET/start/step and client JSON can never raise a run's ceiling.
         if (request.action === 'resume') state = this.withAutopilotRunGrant(state, id, request.requestId, row.autosaveRevision, now);
+        if (request.action === 'resume' && acceptanceConfig && acceptanceConfig.ownerId === userId
+          && acceptanceConfig.workspaceId === id && acceptanceConfig.runId === state.runId) {
+          state = this.acceptanceGuard(() => activateAcceptanceAllowance(state, acceptanceConfig, phaseScope, request.requestId));
+        }
         const professor = this.professorState(row, progress);
-        if (state.aiSteps >= state.maxAiSteps && professor.currentPhase !== 'DECONSTRUCTION' && !this.autopilotCachedReply(row, state, professor)) throw new ConflictException({ code: 'STOP_AUTOPILOT_REVIEW_REQUIRED', message: 'The bounded Professor run needs your review.' });
+        if (state.aiSteps >= state.maxAiSteps && professor.currentPhase !== 'DECONSTRUCTION'
+          && !this.autopilotCachedReply(row, state, professor)
+          && !activeAcceptanceAllowance(state, acceptanceConfig, phaseScope)) throw new ConflictException({ code: 'STOP_AUTOPILOT_REVIEW_REQUIRED', message: 'The bounded Professor run needs your review.' });
         if (request.workIntent) {
           if ((state.workIntent && state.workIntent !== request.workIntent)
             || (state.workContract && state.workContract.taskIntent !== request.workIntent)) {
@@ -484,6 +516,123 @@ export class AcademicWorkspaceService {
   private autopilotLimit(name: string, fallback: number, min: number, max: number): number {
     const value = Number(this.config?.get(name) ?? process.env[name] ?? fallback);
     return Number.isSafeInteger(value) ? Math.max(min, Math.min(value, max)) : fallback;
+  }
+
+  private scopedAcceptanceConfig() {
+    return parseAcceptanceAllowance(this.config?.get('WORKSPACE_SCOPED_ACCEPTANCE_ALLOWANCE')
+      ?? process.env.WORKSPACE_SCOPED_ACCEPTANCE_ALLOWANCE, new Date());
+  }
+
+  private acceptanceGuard<T>(run: () => T): T {
+    try { return run(); } catch (error) {
+      if (error instanceof WorkspaceAcceptanceAllowanceError) {
+        throw new ConflictException({ code: error.code, message: 'This scoped acceptance window is unavailable.' });
+      }
+      throw error;
+    }
+  }
+
+  /** Reserve a conservative technical ceiling, not another commercial quota.
+   * Only the already-authenticated, exact-run execution can reach this seam. */
+  private async reserveAutopilotAcceptanceCost(userId: string, row: AcademicWorkspace,
+    professor: WorkspaceProfessorState, execution: AutopilotExecution | undefined,
+    messages: readonly LLMMessage[], outputTokenCap: number): Promise<AcceptanceCostReservation | undefined> {
+    if (!execution?.acceptanceRunId) return undefined;
+    const config = this.scopedAcceptanceConfig();
+    const provider = this.llm.activeProvider;
+    const model = this.config?.get<string>('llm.model');
+    const promptBytes = Buffer.byteLength(JSON.stringify(messages), 'utf8');
+    if (!config || config.acceptanceRunId !== execution.acceptanceRunId || config.ownerId !== userId
+      || config.workspaceId !== row.id || config.runId !== execution.runId
+      || provider !== config.provider || typeof model !== 'string' || !model || model !== config.model
+      || !['VERIFICATION', 'FINALIZATION'].includes(professor.currentPhase)
+      || !Number.isSafeInteger(outputTokenCap) || outputTokenCap < 1 || outputTokenCap > 1_500
+      || promptBytes > 50_000) {
+      throw new ConflictException({ code: 'workspace_acceptance_not_authorized' });
+    }
+    // Select the same active exact-model version as the cost ledger, then
+    // require USD. Wildcard, missing and unknown costs never
+    // create a zero-dollar allowance. Byte fallback plus message overhead is
+    // deliberately more conservative than a language-specific token estimate.
+    const at = new Date();
+    const pricing = await this.prisma.providerPricingVersion.findFirst({ where: {
+      provider, model, status: 'ACTIVE', effectiveFrom: { lte: at },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+    }, orderBy: { effectiveFrom: 'desc' } });
+    if (!pricing?.inputTokenPrice || pricing.currency !== 'USD' || !pricing.outputTokenPrice || pricing.cachedInputTokenPrice == null
+      || pricing.inputTokenPrice.lt(0) || pricing.outputTokenPrice.lte(0) || pricing.cachedInputTokenPrice.lt(0)) {
+      throw new ConflictException({ code: 'workspace_acceptance_pricing_required' });
+    }
+    const inputTokenCap = promptBytes + 2_048;
+    const upper = Prisma.Decimal.max(pricing.inputTokenPrice, pricing.cachedInputTokenPrice ?? 0)
+      .mul(inputTokenCap).add(pricing.outputTokenPrice.mul(outputTokenCap))
+      .toFixed(12, Prisma.Decimal.ROUND_CEIL);
+    const operationId = `aw-acceptance:${createHash('sha256').update(JSON.stringify([
+      userId, row.id, execution.runId, execution.acceptanceRunId, execution.requestId,
+    ])).digest('hex')}`;
+    await this.changeAutopilot(userId, row.id, (current, progress, state) => {
+      const phase = this.professorState(current, progress);
+      if (current.autosaveRevision !== row.autosaveRevision || phase.currentPhase !== professor.currentPhase
+        || phase.phaseSequence !== professor.phaseSequence
+        || state.activeRequest?.acceptanceRunId !== execution.acceptanceRunId) this.throwWorkspaceRevisionConflict();
+      const scope = { ownerId: userId, workspaceId: row.id, runId: execution.runId,
+        phase: phase.currentPhase, now: new Date() };
+      const freshConfig = this.scopedAcceptanceConfig();
+      if (!freshConfig || freshConfig.acceptanceRunId !== config.acceptanceRunId
+        || freshConfig.model !== model || freshConfig.provider !== provider) {
+        throw new ConflictException({ code: 'workspace_acceptance_not_authorized' });
+      }
+      return { state: this.acceptanceGuard(() => reserveAcceptanceAllowance(state, freshConfig, scope, execution.requestId, operationId, upper)) };
+    }, execution);
+    return { model, pricingVersionId: pricing.id, inputTokenCap, outputTokenCap,
+      context: { operationId, userId, requestId: execution.requestId, acceptanceRunId: execution.acceptanceRunId,
+        requiredPricingVersionId: pricing.id,
+        workspaceId: row.id, autopilotRunId: execution.runId, phase: professor.currentPhase as 'VERIFICATION' | 'FINALIZATION' } };
+  }
+
+  /** The immutable existing cost ledger is authoritative. Unknown/timeout or
+   * incomplete accounting keeps the full ceiling held and closes the window. */
+  private async settleAutopilotAcceptanceCost(userId: string, id: string, execution: AutopilotExecution,
+    reservation: AcceptanceCostReservation): Promise<void> {
+    let result: { state: 'SETTLED' | 'UNKNOWN' | 'NOT_CALLED'; actualCostUsd?: string; ledgerOperationId?: string } = { state: 'UNKNOWN' };
+    try {
+      const operation = await this.prisma.providerUsageOperation.findUnique({
+        where: { idempotencyKey: reservation.context.operationId }, include: { attempts: true },
+      });
+      const metadata = operation?.metadata as Record<string, unknown> | undefined;
+      if (operation?.userId === userId && operation.requestId === execution.requestId
+        && operation.feature === 'ACADEMIC_WORKSPACE' && operation.resource === 'ACADEMIC_AI'
+        && metadata && metadata.acceptanceRunId === reservation.context.acceptanceRunId && metadata.workspaceId === id
+        && metadata.autopilotRunId === execution.runId && metadata.phase === reservation.context.phase) {
+        if (operation.status === 'BLOCKED' && operation.attempts.length === 0) {
+          result = { state: 'NOT_CALLED', actualCostUsd: '0', ledgerOperationId: operation.id };
+        } else if (operation.status === 'SUCCEEDED' && operation.quotaReservationId && operation.attempts.length === 1) {
+          const attempt = operation.attempts[0]!;
+          const usage = [attempt.inputTokens, attempt.cachedInputTokens, attempt.outputTokens];
+          if (attempt.status === 'SUCCEEDED' && attempt.attemptNumber === 1 && attempt.costStatus === 'MEASURED'
+            && attempt.provider === 'openai' && attempt.model === reservation.model
+            && attempt.pricingVersionId === reservation.pricingVersionId && attempt.referenceAmountUsd !== null
+            && attempt.referenceAmountUsd.gte(0)
+            && usage.every(value => Number.isSafeInteger(value) && Number(value) >= 0)
+            && Number(attempt.inputTokens) + Number(attempt.cachedInputTokens) <= reservation.inputTokenCap
+            && Number(attempt.outputTokens) <= reservation.outputTokenCap) {
+            result = { state: 'SETTLED', actualCostUsd: attempt.referenceAmountUsd.toFixed(12), ledgerOperationId: operation.id };
+          }
+        }
+      }
+    } catch { /* No guessed price, release or provider retry on ledger failure. */ }
+    await this.changeAutopilot(userId, id, (_row, _progress, state) => {
+      if (state.runId !== execution.runId) throw new ConflictException({ code: 'workspace_acceptance_run_conflict' });
+      return { state: this.acceptanceGuard(() => settleAcceptanceAllowance(state, reservation.context.acceptanceRunId, execution.requestId, result, new Date())) };
+    });
+    if (result.state !== 'SETTLED') throw new ConflictException({ code: 'workspace_acceptance_cost_unsettled' });
+    // A ledger amount unexpectedly above the reservation is retained as UNKNOWN
+    // by the pure settlement guard; never continue the pedagogical execution.
+    const fresh = await this.get(userId, id);
+    const window = fresh.progress.workflow?.autopilot?.acceptanceAllowances?.find(item => item.acceptanceRunId === execution.acceptanceRunId);
+    if (window?.reservations.find(item => item.requestId === execution.requestId)?.state !== 'SETTLED') {
+      throw new ConflictException({ code: 'workspace_acceptance_cost_unsettled' });
+    }
   }
 
   private privateAutopilotRunGrant(): AutopilotRunGrantConfig | undefined {
@@ -601,6 +750,10 @@ export class AcademicWorkspaceService {
       if (internal) this.assertAutopilotExecution(progress, internal);
       if (internal?.expectedRevision !== undefined && row.autosaveRevision !== internal.expectedRevision) this.throwWorkspaceRevisionConflict();
       const result = change(row, progress, this.autopilotState(progress, row.id));
+      result.state = reconcileAcceptanceAllowances(result.state, this.scopedAcceptanceConfig(), {
+        ownerId: userId, workspaceId: id, runId: result.state.runId,
+        phase: this.professorState(row, progress).currentPhase, now: new Date(),
+      });
       const plan = result.plan ?? fromJson<WorkspacePlanItem[]>(row.plan, []);
       const brief = result.brief ?? progress.workflow?.brief ?? emptyWorkspaceBrief();
       const contentChanged = result.draft !== undefined || result.plan !== undefined || result.brief !== undefined;
@@ -3077,15 +3230,23 @@ export class AcademicWorkspaceService {
         { role: 'user' as const, content: prompt },
       ];
       if (internal) this.assertAutopilotPromptBudget(messages, progress, row.id);
-      const response = await this.llm.generate(messages, { temperature: 0.25, operation: 'workspace-assistant',
-        maxOutputTokens: internal && professor.currentPhase === 'WORK' ? 2_000 : 1_500,
-        ...(internal ? { jsonSchema: workContractResponseSchema(professor.currentPhase, workContract, storedAutopilot.workIntent) } : {}),
-      }).catch(async (error: unknown) => {
-        if (internal) await this.recordWorkDiagnostic(row, professor.currentPhase, storedAutopilot, request.requestId, {
-          parserResult: 'NOT_REACHED', validatorResult: 'NOT_REACHED', rejectReasonCode: 'PROVIDER_FAILED',
+      const maxOutputTokens = internal && professor.currentPhase === 'WORK' ? 2_000 : 1_500;
+      const acceptance = await this.reserveAutopilotAcceptanceCost(userId, row, professor, internal, messages, maxOutputTokens);
+      let response: Awaited<ReturnType<LlmService['generate']>>;
+      try {
+        response = await this.llm.generate(messages, { temperature: 0.25, operation: 'workspace-assistant',
+          maxOutputTokens,
+          ...(acceptance ? { model: acceptance.model } : {}),
+          ...(internal ? { jsonSchema: workContractResponseSchema(professor.currentPhase, workContract, storedAutopilot.workIntent) } : {}),
+        }, acceptance?.context).catch(async (error: unknown) => {
+          if (internal) await this.recordWorkDiagnostic(row, professor.currentPhase, storedAutopilot, request.requestId, {
+            parserResult: 'NOT_REACHED', validatorResult: 'NOT_REACHED', rejectReasonCode: 'PROVIDER_FAILED',
+          });
+          throw error;
         });
-        throw error;
-      });
+      } finally {
+        if (acceptance && internal) await this.settleAutopilotAcceptanceCost(userId, row.id, internal, acceptance);
+      }
       providerSucceeded = true;
       if (sourceResolution.usedContext) {
         const validated = this.sourceEngine.validateReply(response.text, sourceResolution.citations);

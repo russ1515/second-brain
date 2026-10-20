@@ -49,6 +49,10 @@ export interface ProviderMeteringInput {
   units: number;
   metadata?: SafeMetadata;
   operationId?: string;
+  /** Fail closed for private acceptance calls: never use contextless/legacy metering. */
+  requireAttribution?: { userId: string; requestId: string };
+  /** Private acceptance quote pin; checked at the real provider-attempt boundary. */
+  requiredPricingVersionId?: string;
   measure?: (result: unknown) => ProviderUsageMeasurement;
   /** Derive the actual commercial units from the successful provider result.
    * The value can only release part of the pre-call reservation, never exceed
@@ -116,20 +120,36 @@ export class ProviderMeteringService {
     return this.executeWithAttempts(input, (runner) => runner.attempt(operation));
   }
 
+  /** Check before a caller's own in-flight deduplication as well as ledger entry. */
+  assertRequiredAttribution(required: NonNullable<ProviderMeteringInput['requireAttribution']>): void {
+    const current = this.context.current();
+    if (!current?.userId || current.userId !== required.userId
+      || current.requestId !== required.requestId || !this.hasSprint4Ledger()) {
+      throw new ConflictException({ code: 'scoped_acceptance_attribution_required', message: 'The scoped acceptance call requires an authenticated cost ledger.' });
+    }
+  }
+
   /** Use for retry/fallback-aware callers. Every runner.attempt is durable. */
   executeWithAttempts<T>(
     input: ProviderMeteringInput,
     operation: (runner: ProviderAttemptRunner) => Promise<T>,
   ): Promise<T> {
     const current = this.context.current();
+    if (input.requireAttribution) this.assertRequiredAttribution(input.requireAttribution);
+    if (input.requiredPricingVersionId !== undefined && (!input.requireAttribution
+      || typeof input.requiredPricingVersionId !== 'string' || !/^[A-Za-z0-9_.:-]{1,160}$/.test(input.requiredPricingVersionId))) {
+      throw new ConflictException({ code: 'scoped_acceptance_pricing_required', message: 'The scoped acceptance call requires an attributable price quote.' });
+    }
     const operationId = input.operationId ?? this.context.nextOperationId(input.provider, input.resource);
     // No AsyncLocalStorage context means startup/unit work, not request traffic.
     // A request with no user remains visible below as unattributed usage.
     if (!current || !operationId) return operation({ attempt: (call) => call() });
-    const active = this.inFlight.get(operationId) as Promise<T> | undefined;
+    const inFlightKey = input.requireAttribution
+      ? JSON.stringify([operationId, current.userId, current.requestId, input.metadata, input.requiredPricingVersionId]) : operationId;
+    const active = this.inFlight.get(inFlightKey) as Promise<T> | undefined;
     if (active) return active;
-    const run = this.run(input, operationId, operation).finally(() => this.inFlight.delete(operationId));
-    this.inFlight.set(operationId, run);
+    const run = this.run(input, operationId, operation).finally(() => this.inFlight.delete(inFlightKey));
+    this.inFlight.set(inFlightKey, run);
     return run;
   }
 
@@ -152,10 +172,16 @@ export class ProviderMeteringService {
       });
       const runner: ProviderAttemptRunner = {
         attempt: async <R>(call: () => Promise<R>, override: ProviderAttemptInput = {}) => {
-          attemptNumber += 1;
           const provider = cleanIdentifier(override.provider ?? input.provider) ?? 'unknown';
           const model = cleanIdentifier(override.model ?? input.model);
           const startedAt = new Date();
+          if (input.requiredPricingVersionId !== undefined) {
+            const pricing = await this.findPricing(provider, model, startedAt);
+            if (!pricing || pricing.id !== input.requiredPricingVersionId || pricing.currency.toUpperCase() !== 'USD') {
+              throw new ConflictException({ code: 'scoped_acceptance_pricing_changed', message: 'The scoped acceptance price quote is no longer applicable.' });
+            }
+          }
+          attemptNumber += 1;
           const attempt = await this.prisma.providerUsageAttempt.create({
             data: {
               operationId: opened!.id,

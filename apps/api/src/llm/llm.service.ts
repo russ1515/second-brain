@@ -1,4 +1,4 @@
-import { Injectable, Optional, ServiceUnavailableException } from '@nestjs/common';
+import { ConflictException, Injectable, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import type {
@@ -17,6 +17,18 @@ import type { QuotaResource } from '@prisma/client';
 interface OpenAiProviderGateConfiguration {
   enabled?: boolean;
   maxOutputTokens?: number;
+}
+
+/** Private server-to-server attribution, never a provider option or public DTO. */
+export interface LlmServerAcceptanceContext {
+  operationId: string;
+  userId: string;
+  requestId: string;
+  acceptanceRunId: string;
+  workspaceId: string;
+  autopilotRunId: string;
+  requiredPricingVersionId: string;
+  phase: 'VERIFICATION' | 'FINALIZATION' | 'DECONSTRUCTION';
 }
 
 /**
@@ -53,20 +65,56 @@ export class LlmService {
   generate(
     messages: LLMMessage[],
     options?: LLMGenerateOptions,
+    serverContext?: LlmServerAcceptanceContext,
   ): Promise<LLMGenerateResult> {
     const provider = this.orchestrator.pickProvider();
     const bounded = this.boundedOptions(options, false, provider.name);
-    const key = this.requestKey(provider, messages, bounded);
     const operation = bounded.operation ?? 'general';
+    if (serverContext !== undefined) {
+      this.assertAcceptanceContext(serverContext, bounded, provider.name);
+      // Even a de-duplicated request must prove its actual authenticated scope.
+      this.metering!.assertRequiredAttribution({ userId: serverContext.userId, requestId: serverContext.requestId });
+    }
+    const ordinaryKey = this.requestKey(provider, messages, bounded);
+    const key = serverContext
+      ? createHash('sha256').update(JSON.stringify([ordinaryKey, serverContext.operationId, serverContext.userId,
+        serverContext.requestId, serverContext.acceptanceRunId, serverContext.workspaceId, serverContext.autopilotRunId,
+        serverContext.phase, serverContext.requiredPricingVersionId])).digest('hex')
+      : ordinaryKey;
     return this.deduplicate(key, () => this.metering?.executeWithAttempts(
       {
         provider: provider.name, model: bounded.model, feature: this.costFeatureFor(operation),
         resource: this.resourceFor(operation), units: 1,
-        metadata: { operation, source: operation === 'admin-copilot' ? 'ADMIN_COPILOT' : undefined },
+        metadata: { operation, source: operation === 'admin-copilot' ? 'ADMIN_COPILOT' : undefined,
+          ...(serverContext ? {
+            acceptanceRunId: serverContext.acceptanceRunId, workspaceId: serverContext.workspaceId,
+            autopilotRunId: serverContext.autopilotRunId, phase: serverContext.phase,
+          } : {}),
+        },
+        ...(serverContext ? {
+          operationId: serverContext.operationId,
+          requiredPricingVersionId: serverContext.requiredPricingVersionId,
+          requireAttribution: { userId: serverContext.userId, requestId: serverContext.requestId },
+        } : {}),
         measure: (result) => this.llmMeasurement(result),
       },
       (attempts) => this.execute(provider, operation, () => provider.generate(messages, bounded), attempts),
     ) ?? this.execute(provider, operation, () => provider.generate(messages, bounded)));
+  }
+
+  private assertAcceptanceContext(context: LlmServerAcceptanceContext, options: LLMGenerateOptions, provider: string): void {
+    const identifier = (value: unknown): value is string => typeof value === 'string'
+      && /^[A-Za-z0-9_.:-]{1,160}$/.test(value);
+    if (!context || !this.metering || provider !== 'openai' || options.operation !== 'workspace-assistant'
+      || !identifier(context.operationId) || !identifier(context.userId) || !identifier(context.requestId)
+      || !identifier(context.acceptanceRunId) || !identifier(context.workspaceId) || !identifier(context.autopilotRunId)
+      || !identifier(context.requiredPricingVersionId)
+      || !['VERIFICATION', 'FINALIZATION', 'DECONSTRUCTION'].includes(context.phase)
+      || typeof options.model !== 'string' || !options.model.trim()
+      || !Number.isSafeInteger(options.maxOutputTokens) || options.maxOutputTokens! < 1 || options.maxOutputTokens! > 1_500
+      || this.policy(options.operation, provider).retries !== 0) {
+      throw new ConflictException({ code: 'scoped_acceptance_attribution_required', message: 'The scoped acceptance call requires complete server attribution.' });
+    }
   }
 
   /** Only call when `supportsVision` is true. */

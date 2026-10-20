@@ -155,6 +155,45 @@ export interface WorkspaceAutopilotStepGrant {
   appliedAt: string;
 }
 
+/** Private, server-authorized acceptance accounting; never a learner quota. */
+export interface WorkspaceAcceptanceAllowanceReservation {
+  requestId: string;
+  operationId: string;
+  phase: 'VERIFICATION' | 'FINALIZATION' | 'DECONSTRUCTION';
+  state: 'RESERVED' | 'SETTLED' | 'UNKNOWN' | 'NOT_CALLED';
+  /** Decimal USD strings avoid rounding a technical spending ceiling. */
+  upperCostUsd: string;
+  actualCostUsd?: string;
+  ledgerOperationId?: string;
+  reservedAt: string;
+  settledAt?: string;
+}
+
+export interface WorkspaceAcceptanceAllowanceWindow {
+  version: 1;
+  acceptanceRunId: string;
+  ownerId: string;
+  workspaceId: string;
+  runId: string;
+  expectedHistoricalAiSteps: number;
+  expectedHistoricalMaxAiSteps: number;
+  authorizedAt: string;
+  expiresAt: string;
+  maxCalls: number;
+  maxCostUsd: string;
+  allowedPhases: Array<'VERIFICATION' | 'FINALIZATION' | 'DECONSTRUCTION'>;
+  provider: 'openai';
+  model: string;
+  testOnly: true;
+  configFingerprint: string;
+  authorizationRequestId: string;
+  activatedAt: string;
+  updatedAt: string;
+  closedAt?: string;
+  status: 'ACTIVE' | 'EXHAUSTED' | 'EXPIRED' | 'REVOKED' | 'COMPLETED' | 'FAILED';
+  reservations: WorkspaceAcceptanceAllowanceReservation[];
+}
+
 /** Additive metadata in the existing progress JSON, never a second phase machine. */
 export interface WorkspaceAutopilotState {
   version: 1;
@@ -171,10 +210,14 @@ export interface WorkspaceAutopilotState {
     phase: WorkspaceProfessorPhase;
     revision: number;
     createdAt: string;
+    /** Server-selected private acceptance window, never learner input. */
+    acceptanceRunId?: string;
   };
   receipts: WorkspaceAutopilotReceipt[];
   /** Preserves a bounded exception for this exact run, without resetting usage. */
   stepGrant?: WorkspaceAutopilotStepGrant;
+  /** Append-only private acceptance windows; historical counters are unchanged. */
+  acceptanceAllowances?: WorkspaceAcceptanceAllowanceWindow[];
   workContract?: WorkspaceWorkContract;
   /** Explicit typed orchestration context; never inferred from shell alone. */
   workIntent?: WorkspaceWorkIntent;
