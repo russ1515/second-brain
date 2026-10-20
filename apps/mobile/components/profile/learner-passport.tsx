@@ -11,6 +11,8 @@ import { Badge, Button, Card } from '../ds/core';
 import { LanguageBadge } from '../ds/language';
 import { useRlleCopy } from '../../lib/language-rll-i18n';
 import { LANGUAGE_PRODUCT_LEVEL_COPY } from '../../lib/language-placement-presentation';
+import { LanguageLearningPassportSummary } from '../language/learning-core';
+import { hasCompleteLanguageCoreCatalogue } from '../../lib/language-learning-core-presentation';
 
 const AGE_KEY = {
   under12: 'onb.age.under12',
@@ -137,6 +139,7 @@ export function LearnerPassportCard({
                 </Text>
               ) : null}
               <Text style={{ color: c.textSecondary, fontSize: 12 }}>{copy('placement.ui.nextAction')}</Text>
+              {hasCompleteLanguageCoreCatalogue(item, placement) ? <LanguageLearningPassportSummary profileId={item.profileId} /> : null}
             </View>
           ) : null}
           </View>

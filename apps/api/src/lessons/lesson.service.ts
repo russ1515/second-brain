@@ -88,6 +88,21 @@ const LANGUAGE_MASTERY_EXERCISE_PROMPT = [
   'just to reach ten items.',
 ].join(' ');
 
+const LANGUAGE_CORE_LESSON_DIRECTIVE = [
+  'For this post-placement lesson ONLY, replace the generic 4-6 mixed exercise rule.',
+  'Teach the exact server-authored lesson objective at its CEFR level; never invent a new curriculum order.',
+  'Write a substantial progressive explanation (at least 600 characters, not two short paragraphs),',
+  'at least three worked examples from simple to varied/contextual use and 3-5 guided practice prompts.',
+  'Return exactly ten distinct independent multiple-choice exercises, each with type=qcm,',
+  '3-4 plausible unique options, answer copied verbatim from one option, and correction.',
+  'Each correction explains the mistake/rule, the correct form and another example.',
+  'Use the configured support language for every explanation, instruction and correction.',
+  'Use the target language for examples/expressions, with immediate support-language glosses.',
+  'Independent exercise prompts/options must not reveal answers through translations or hints.',
+  'Never claim acoustic pronunciation has been assessed from text. Oral teaching may use text practice.',
+  'For remediation change the explanation, situations and every exercise, targeting only the specified weaknesses.',
+].join(' ');
+
 /**
  * Steering supplied by other services (not by API clients).
  *
@@ -96,6 +111,9 @@ const LANGUAGE_MASTERY_EXERCISE_PROMPT = [
  * prompt-steering knob for no product reason.
  */
 export interface InternalLessonOptions {
+  /** Post-placement catalogue lesson. Uses the existing writer/persistence,
+   * not the unrelated ten-format acoustic mastery contract. Server-only. */
+  languageLearningCore?: boolean;
   /** Language profile this lesson belongs to (language engine). */
   languageProfileId?: string;
   /** Extra teaching directive appended to the system prompt (e.g. the language
@@ -173,7 +191,7 @@ export class LessonService {
       throw new BadRequestException('Conflicting language lesson generation keys.');
     }
     if (languageGenerationKey) {
-      if (!internal.languageMastery || !internal.languageProfileId) {
+      if ((!internal.languageMastery && !internal.languageLearningCore) || !internal.languageProfileId) {
         throw new BadRequestException('A language generation key requires an owned language profile.');
       }
       const existing = await this.prisma.lesson.findFirst({
@@ -184,7 +202,7 @@ export class LessonService {
     }
 
     // Ground the lesson in the learner's existing notes when available.
-    const context = await this.retrieveContext(userId, topic);
+    const context = internal.languageLearningCore ? '' : await this.retrieveContext(userId, topic);
     const teacherPreferences = await this.loadTeacherPreferences(userId);
     // "Difficulty auto-adapts — mastery down → simplify; mastery up → increase
     // complexity." An explicit level always wins. Turning automatic adaptation
@@ -213,6 +231,7 @@ export class LessonService {
       internal.languageMastery === true,
       internal.remediationBaselineExercises,
       internal.languageNotions,
+      internal.languageLearningCore === true,
     );
     const persist = async (tx: Prisma.TransactionClient, raw: RawLesson) => {
       const lockKey = accountDataLockKey(userId);
@@ -271,24 +290,29 @@ export class LessonService {
             lessonFlow: initialFlow,
           },
         },
-        resumeTarget: { kind: 'route', path: `/lesson/${createdLesson.id}` },
-        links: { lessonId: createdLesson.id },
+        resumeTarget: { kind: 'route', path: internal.languageLearningCore
+          ? `/languages/${internal.languageProfileId}/course` : `/lesson/${createdLesson.id}` },
+        links: { lessonId: createdLesson.id,
+          ...(internal.languageLearningCore ? { languageProfileId: internal.languageProfileId } : {}) },
       }, tx);
 
       // Keep the source document in the same owner-locked transaction as the
       // lesson and its experience wrapper. A concurrent permanent purge can
       // therefore observe either the whole graph or none of it, never an
       // orphan LESSON_AI document created after its lesson was removed.
-      const createdDoc = await this.documents.createFromTextInTransaction(userId, {
+      // Core lessons are already durable Lesson records. Do not leave a
+      // pending Document that boot recovery would later index (and bill)
+      // implicitly, even when no queue was started during this request.
+      const createdDoc = internal.languageLearningCore ? null : await this.documents.createFromTextInTransaction(userId, {
         title: `Lesson — ${topic}`.slice(0, 300),
-        content: this.assemblePlainText(topic, raw),
+        content: this.assemblePlainText(topic, internal.languageLearningCore ? { ...raw, exercises: [] } : raw),
         sourceRef: `lesson:${createdLesson.id}`,
         contentType: 'LESSON_AI',
       }, tx);
-      const linkedLesson = await tx.lesson.update({
+      const linkedLesson = createdDoc ? await tx.lesson.update({
         where: { id: createdLesson.id },
         data: { sourceDocumentId: createdDoc.id },
-      });
+      }) : createdLesson;
       return { lesson: linkedLesson, doc: createdDoc, experience: createdExperience };
     };
 
@@ -329,7 +353,10 @@ export class LessonService {
 
     // Workers must only see the generated document after its transaction has
     // committed. Their own durable status/error handling remains unchanged.
-    this.documents.queuePostCreateProcessing(doc.id);
+    // A bounded catalogue lesson must not trigger implicit paid embedding /
+    // extraction calls. Its owned source remains available for later explicit
+    // library processing; written learning does not require that enrichment.
+    if (doc) this.documents.queuePostCreateProcessing(doc.id);
 
     if (dto.goalTitle?.trim()) {
       await this.goals.create(userId, {
@@ -343,13 +370,13 @@ export class LessonService {
     // Flashcards and Reviewable rows are materialized only by the completion
     // service after every required step and a real evaluated attempt.
     const cardCount = 0;
-    if (conceptId) {
+    if (conceptId && doc) {
       await this.concepts
         .linkDocument(userId, conceptId, doc.id)
         .catch((e) => this.logger.warn('Learning operation failed.'));
     }
 
-    return this.toView({ ...lesson, sourceDocumentId: doc.id }, cardCount);
+    return this.toView({ ...lesson, sourceDocumentId: doc?.id ?? null }, cardCount);
   }
 
   async list(userId: string): Promise<LessonSummary[]> {
@@ -377,6 +404,15 @@ export class LessonService {
     return this.toView(lesson, cardCount);
   }
 
+  /** The catalogue owns its autonomous assessment. Legacy HTTP readers may
+   * show teaching content, never retrieve its unsubmitted answer battery. */
+  async getPublic(userId: string, id: string): Promise<LessonView> {
+    const lesson = await this.requireOwned(userId, id);
+    const view = await this.get(userId, id);
+    return lesson.masteryRemediationGenerationKey?.startsWith('language-core:')
+      ? { ...view, exercises: [] } : view;
+  }
+
   /** Server-authoritative guided navigation. The state lives on the existing
    * ExperienceSession so refresh/deep-link cannot unlock future steps. */
   async flow(userId: string, id: string): Promise<LessonFlowProgress> {
@@ -394,6 +430,9 @@ export class LessonService {
     stepKey: LessonFlowStepKey,
   ): Promise<LessonFlowProgress> {
     const lesson = await this.requireOwned(userId, id);
+    if (lesson.masteryRemediationGenerationKey?.startsWith('language-core:')) {
+      throw new BadRequestException('This lesson progresses automatically through its language assessment.');
+    }
     const session = await this.ensureFlowSession(userId, lesson);
     const flow = this.readFlow(session.currentStep?.metadata?.lessonFlow, lesson);
     if (flow.activeStepKey !== stepKey) {
@@ -709,6 +748,7 @@ export class LessonService {
     languageMastery = false,
     remediationBaselineExercises?: readonly LessonExercise[],
     languageNotions?: readonly { notionId: string; criterionId: string }[],
+    languageLearningCore = false,
   ): Promise<RawLesson> {
     if (languageMastery && !languageNotions?.length) {
       throw new UnprocessableEntityException(
@@ -729,7 +769,9 @@ export class LessonService {
           'Select notionIds only; criterionIds are attached authoritatively by the server.',
         ].join(' ')
       : '';
-    const baseSystem = languageMastery
+    const baseSystem = languageLearningCore
+      ? `${SYSTEM_PROMPT} ${LANGUAGE_CORE_LESSON_DIRECTIVE}`
+      : languageMastery
       ? `${SYSTEM_PROMPT} ${LANGUAGE_MASTERY_EXERCISE_PROMPT} ${notionDirective}`
       : SYSTEM_PROMPT;
     const system = directive ? `${baseSystem} ${directive}` : baseSystem;
@@ -747,8 +789,10 @@ export class LessonService {
         ],
         {
           temperature: 0.4,
-          operation: 'lesson',
-          ...(languageMastery
+          operation: languageLearningCore ? 'language-core-lesson' : 'lesson',
+          ...(languageLearningCore
+            ? { jsonSchema: this.languageCoreLessonJsonSchema() }
+            : languageMastery
             ? { jsonSchema: this.languageLessonJsonSchema(languageNotions ?? []) }
             : {}),
         },
@@ -760,7 +804,31 @@ export class LessonService {
         'The teacher is temporarily unavailable. Please try again shortly.',
       );
     }
-    return this.parseLesson(text, languageMastery, remediationBaselineExercises, languageNotions);
+    return this.parseLesson(text, languageMastery, remediationBaselineExercises, languageNotions, languageLearningCore);
+  }
+
+  private languageCoreLessonJsonSchema() {
+    const text = { type: 'string' };
+    const texts = { type: 'array', items: text };
+    return {
+      name: 'language_core_lesson', strict: true,
+      schema: {
+        type: 'object', additionalProperties: false,
+        required: ['objective', 'intro', 'explanation', 'examples', 'commonMisconceptions',
+          'questions', 'exercises', 'homework', 'summary', 'keyPoints', 'revisionSheet'],
+        properties: {
+          objective: text, intro: text, explanation: text, examples: texts,
+          commonMisconceptions: texts, questions: texts, homework: text,
+          summary: text, keyPoints: texts, revisionSheet: text,
+          exercises: { type: 'array', items: {
+            type: 'object', additionalProperties: false,
+            required: ['question', 'answer', 'type', 'options', 'correction'],
+            properties: { question: text, answer: text, type: { type: 'string', enum: ['qcm'] },
+              options: texts, correction: text },
+          } },
+        },
+      },
+    };
   }
 
   /** The provider guarantees the JSON envelope while the parser below remains
@@ -896,6 +964,7 @@ export class LessonService {
     languageMastery = false,
     remediationBaselineExercises?: readonly LessonExercise[],
     languageNotions?: readonly { notionId: string; criterionId: string }[],
+    languageLearningCore = false,
   ): RawLesson {
     const start = raw.indexOf('{');
     const end = raw.lastIndexOf('}');
@@ -949,15 +1018,19 @@ export class LessonService {
       exercises.length >= LANGUAGE_TRAINING_FORMATS.length &&
       LANGUAGE_TRAINING_FORMATS.every((format) =>
         exercises.some((exercise) => exercise.languageFormat === format));
+    const coreExerciseContract = exercises.length >= 10 && exercises.length <= 12
+      && exercises.every((exercise) => exercise.type === 'qcm' && Boolean(exercise.correction))
+      && new Set(exercises.map((exercise) => exercise.question.normalize('NFKC').trim().toLowerCase())).size === exercises.length;
     const coveredNotions = new Set(exercises.flatMap((exercise) => exercise.notionIds ?? []));
     const notionCoverageContract = !languageNotions?.length
       || languageNotions.every((notion) => coveredNotions.has(notion.notionId));
     const structurallyComplete =
       Boolean(objective && intro && explanation && summary && revisionSheet) &&
-      examples.length >= 1 &&
+      examples.length >= (languageLearningCore ? 3 : 1) &&
+      (!languageLearningCore || explanation.length >= 600) &&
       commonMisconceptions.length >= 1 &&
       questions.length >= 3 && questions.length <= 5 &&
-      (languageMastery
+      (languageLearningCore ? coreExerciseContract : languageMastery
         ? languageExerciseContract && notionCoverageContract
         : genericExerciseContract) &&
       keyPoints.length >= 3 && keyPoints.length <= 5;
@@ -966,7 +1039,7 @@ export class LessonService {
         'The teacher did not return a complete, usable lesson. Try again.',
       );
     }
-    if (languageMastery && remediationBaselineExercises) {
+    if ((languageMastery || languageLearningCore) && remediationBaselineExercises) {
       this.requireNovelRemediationExercises(exercises, remediationBaselineExercises);
     }
     return {
@@ -1060,6 +1133,8 @@ export class LessonService {
       question,
       answer,
       type,
+      ...(typeof e.correction === 'string' && e.correction.trim()
+        ? { correction: e.correction.trim() } : {}),
     };
     if (languageMastery) {
       if (!(LANGUAGE_TRAINING_FORMATS as readonly unknown[]).includes(e.languageFormat)) return null;

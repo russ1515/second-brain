@@ -58,6 +58,9 @@ export interface LearnerPassportDeclared {
 }
 
 export interface LearnerPassportLanguageProgress {
+  /** Same read-only projection of canonical lesson/module submissions as the
+   * language course. Never a second writable progress store. */
+  learningCore?: import('./language-learning-core').LanguageLearningCoreView | null;
   /** Placement observations are diagnostic, never a mastery/certification. */
   placement?: import('./language-placement').LanguagePlacementSummary | null;
   profileId: string;

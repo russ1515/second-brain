@@ -49,6 +49,8 @@ const RESERVED_CLIENT_IDEMPOTENCY_PREFIXES = [
   'lesson:',
   'language-conversation:',
   'language-placement:',
+  'language-core:',
+  'language-core-help:',
 ] as const;
 
 const LINK_KEYS: readonly (keyof ExperienceSessionLinks)[] = [
@@ -99,6 +101,8 @@ export class ExperienceSessionService {
       request.type === 'language' ||
       request.intent === 'language-placement' ||
       request.intent === 'language-course' ||
+      request.intent === 'language-learning-core' ||
+      request.intent === 'language-core-help' ||
       request.links?.tutorSessionId ||
       request.links?.lessonId
     ) {
@@ -133,8 +137,8 @@ export class ExperienceSessionService {
     const existing = await this.requireOwned(userId, id);
     // Placement evidence and the course cursor are written only by Langues.
     // A generic JSON patch must not fabricate a diagnostic or bypass its gate.
-    if (existing.intent === 'language-course' || existing.intent === 'language-placement'
-      || request.intent === 'language-course' || request.intent === 'language-placement') {
+    if (['language-course', 'language-placement', 'language-learning-core', 'language-core-help']
+      .some((intent) => existing.intent === intent || request.intent === intent)) {
       throw new BadRequestException('Language diagnostic and course state are managed by the language service.');
     }
     if (existing.type === 'workspace' || existing.workspaceRef) {

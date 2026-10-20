@@ -228,6 +228,14 @@ export class LlmService {
     if (operation === 'language-placement') {
       return { timeoutMs: 25_000, retries: 0, backoffMs: 0, maxOutputTokens: 2_000 };
     }
+    // The language core owns explicit, durable user requests. Never retry a
+    // paid generation/help request automatically or call on a navigation GET.
+    if (operation === 'language-core-lesson') {
+      return { timeoutMs: 45_000, retries: 0, backoffMs: 0, maxOutputTokens: 5_000 };
+    }
+    if (operation === 'language-core-help') {
+      return { timeoutMs: 25_000, retries: 0, backoffMs: 0, maxOutputTokens: 600 };
+    }
     // The internal Copilot is explicitly bounded and never retried
     // automatically: an administrator can decide whether to ask again.
     if (operation === 'admin-copilot') {
@@ -395,6 +403,7 @@ export class LlmService {
 
   /** Stable Cost Center feature keys; raw operation names stay only in metadata. */
   private costFeatureFor(operation: string): string {
+    if (operation === 'language-core-lesson' || operation === 'language-core-help') return 'LANGUAGE_TEXT';
     if (operation === 'language-placement') return 'LANGUAGE_TEXT';
     if (operation === 'tutor') return 'TUTOR_TEXT';
     if (operation === 'admin-copilot') return 'ADMIN_COPILOT';

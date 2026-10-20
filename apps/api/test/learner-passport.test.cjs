@@ -28,7 +28,7 @@ const {
 const updatedAt = new Date('2026-09-30T10:00:00.000Z');
 
 function readPrisma(overrides = {}, ageBand = '12to15') {
-  return {
+  const prisma = {
     onboardingProfile: {
       findUnique: async () => ({
         identity: {
@@ -76,6 +76,11 @@ function readPrisma(overrides = {}, ageBand = '12to15') {
     },
     ...overrides,
   };
+  // Legacy Passport fixtures have no post-placement core session. The new
+  // read-only projection must stay null, not manufacture new progress.
+  prisma.languageProfile.findFirst ??= async () => null;
+  prisma.experienceSession ??= { findFirst: async () => null };
+  return prisma;
 }
 
 test('GET projection keeps declared, observed and verified provenance separate', async () => {
@@ -94,6 +99,7 @@ test('GET projection keeps declared, observed and verified provenance separate',
   assert.equal(passport.observed.source, 'OBSERVED');
   assert.equal(passport.observed.learnerProfile, observed);
   assert.equal(passport.observed.languageProgress[0].evaluatedLevel, null);
+  assert.equal(passport.observed.languageProgress[0].learningCore, null);
   assert.equal(passport.observed.languageProgress[0].teachingLanguageSource, 'native');
   assert.equal(passport.observed.languageProgress[0].teachingLanguage, 'fr');
   assert.deepEqual(passport.verified, {

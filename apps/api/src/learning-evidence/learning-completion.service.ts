@@ -124,6 +124,7 @@ export class LearningCompletionService {
   async finalizeLesson(
     userId: string,
     input: FinalizeLessonCompletionInput,
+    internal: { skipOptionalCards?: boolean } = {},
   ): Promise<LearningCompletionView> {
     const lesson = await this.prisma.lesson.findFirst({
       where: { id: input.lessonId, userId },
@@ -133,6 +134,8 @@ export class LearningCompletionService {
         contentVersion: true,
         sourceDocumentId: true,
         conceptId: true,
+        languageProfileId: true,
+        masteryRemediationGenerationKey: true,
       },
     });
     if (!lesson) throw new NotFoundException('Lesson not found.');
@@ -143,6 +146,32 @@ export class LearningCompletionService {
         })
       : null;
     const evidence = await this.lessonEvidence(userId, lesson.id, lesson.contentVersion, input);
+    const coreLesson = lesson.masteryRemediationGenerationKey?.startsWith('language-core:') === true;
+    if (coreLesson) {
+      if (input.evidence.kind !== 'assessment_submission') {
+        throw new UnprocessableEntityException('Language catalogue mastery requires its full autonomous assessment.');
+      }
+      const submission = await this.prisma.assessmentSubmission.findFirst({
+        where: { id: input.evidence.id, userId, masteryGenerationStatus: 'ready' }, include: { assessment: true },
+      });
+      const payload = this.record(submission?.assessment.questions);
+      const scope = this.record(payload?.languageLearningCore);
+      const questions = payload?.questions;
+      if (!submission || scope?.version !== 1 || scope.scope !== 'lesson'
+        || scope.profileId !== lesson.languageProfileId || !Array.isArray(questions)
+        || questions.length < 10 || submission.assessment.lessonId !== lesson.id
+        || submission.assessment.contentVersion !== lesson.contentVersion) {
+        throw new UnprocessableEntityException('Canonical language catalogue assessment is missing or stale.');
+      }
+      const rubric = this.completeLanguageRubric(questions as unknown as StoredAssessmentQuestion[], submission.answers, submission.results);
+      if (rubric.rawScore < LANGUAGE_MASTERY_THRESHOLD) {
+        throw new UnprocessableEntityException('Language lesson mastery requires at least 90 percent before rounding.');
+      }
+      evidence.result.passed = true;
+      evidence.result.outcome = 'demonstrated';
+      evidence.result.score = rubric.rawScore;
+      evidence.criteria.forEach((criterion) => { criterion.met = true; });
+    }
     const goalIds = await this.resolveGoalIds(userId, input.goalIds, session?.id ?? null);
     const dimensions = this.dimensionScores(input.dimensions, [evidence.refId]);
     const provenance: LearningCompletionProvenance = {
@@ -172,6 +201,7 @@ export class LearningCompletionService {
           evidenceSource: evidence.prismaSource,
           evidenceRefId: evidence.refId,
           lessonId: lesson.id,
+          languageProfileId: coreLesson ? lesson.languageProfileId : undefined,
           experienceSessionId: session?.id,
           exerciseAttemptId: evidence.exerciseAttemptId,
           assessmentSubmissionId: evidence.assessmentSubmissionId,
@@ -224,12 +254,14 @@ export class LearningCompletionService {
         },
       });
     });
-    await this.publishLessonCards(
-      userId,
-      completion.id,
-      lesson.sourceDocumentId,
-      lesson.conceptId,
-    );
+    if (!internal.skipOptionalCards) {
+      await this.publishLessonCards(
+        userId,
+        completion.id,
+        lesson.sourceDocumentId,
+        lesson.conceptId,
+      );
+    }
     return this.toView(completion);
   }
 

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
@@ -99,6 +100,9 @@ export class AssessmentService {
     answer: string,
   ): Promise<SubmitAttemptResponse> {
     const lesson = await this.requireOwnedLesson(userId, lessonId);
+    if (lesson.masteryRemediationGenerationKey?.startsWith('language-core:')) {
+      throw new BadRequestException('Use the autonomous language-course assessment for this lesson.');
+    }
     const exercise = this.exerciseAt(lesson, exerciseIndex);
 
     const ctx: MarkContext = {

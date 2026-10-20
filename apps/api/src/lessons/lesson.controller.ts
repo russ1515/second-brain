@@ -62,7 +62,7 @@ export class LessonController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
   ): Promise<LessonView> {
-    return this.lessons.get(user.userId, id);
+    return this.lessons.getPublic(user.userId, id);
   }
 
   @Get(':id/flow')

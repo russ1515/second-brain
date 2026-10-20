@@ -10,6 +10,9 @@ export interface LessonExercise {
   question: string;
   /** Model answer (for 'qcm', the text of the correct option). */
   answer: string;
+  /** Teacher-authored explanation of the rule and a further example. Kept
+   * server-side until an autonomous language-core attempt is submitted. */
+  correction?: string;
   /** Defaults to 'exercise' for lessons generated before types existed. */
   type?: ExerciseType;
   /** Multiple-choice options — present only for 'qcm'. */

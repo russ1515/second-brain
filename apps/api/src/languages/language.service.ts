@@ -207,6 +207,13 @@ export class LanguageService {
           questions: { path: ['languagePlacement', 'profileId'], equals: id },
           masteryCreationKey: { startsWith: 'language-placement:' },
         } });
+        // Module/level examinations have no single Lesson FK. Their existing
+        // canonical submissions cascade here with the owned language profile;
+        // never leave reusable orphan evidence after a profile purge.
+        await tx.assessment.deleteMany({ where: { userId,
+          questions: { path: ['languageLearningCore', 'profileId'], equals: id },
+          masteryCreationKey: { startsWith: `language-core:${id}:` },
+        } });
         await tx.reviewable.deleteMany({
           where: {
             userId,

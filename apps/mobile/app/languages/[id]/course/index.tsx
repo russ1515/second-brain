@@ -24,6 +24,8 @@ import { SmartErrorState, SmartLoadingState } from '../../../../components/ds/st
 import { ContextBar } from '../../../../components/context/context-bar';
 import { CurriculumMap, DimensionProgress, LanguageMasteryBulletins, LevelSummary, RecoveryPanel } from '../../../../components/language/course-ui';
 import { LanguagePlacementPanel } from '../../../../components/language/placement-panel';
+import { LanguageLearningCore } from '../../../../components/language/learning-core';
+import { hasCompleteLanguageCoreCatalogue } from '../../../../lib/language-learning-core-presentation';
 import { useTokens } from '../../../../lib/design/theme';
 import { actionDestinationHref } from '../../../../lib/action-destination';
 import { useRlleCopy } from '../../../../lib/language-rll-i18n';
@@ -75,6 +77,22 @@ export default function LanguageCourseScreen() {
   }
 
   const course = courseLoad.kind === 'live' ? courseLoad.course : null;
+  // The accepted placement is immutable input. The learning catalogue is a
+  // distinct, owner-scoped server projection, not another placement attempt.
+  if (hasCompleteLanguageCoreCatalogue(profile, course?.placement ?? profile.placement)) {
+    return (
+      <ScrollView contentContainerStyle={{ paddingBottom: spacing.xxl }}>
+        <Page width="wide">
+          <PageHeader
+            eyebrow={copy('rlle.ui.course.eyebrow')}
+            title={copy('rlle.ui.course.title', { language: profile.language })}
+            action={<Badge label={languagePlacementLevelLabel(course?.placement ?? profile.placement, copy, profile.cefrLevel, false)} tone="info" />}
+          />
+          <LanguageLearningCore profileId={profile.id} />
+        </Page>
+      </ScrollView>
+    );
+  }
   const units = courseLoad.kind === 'live' ? courseLoad.course.units : courseLoad.units;
   const open = (href: string) => router.push(href as never);
   const openUnit = (unit: RlleCurriculumUnit | RlleCurriculumUnitTemplate) => {

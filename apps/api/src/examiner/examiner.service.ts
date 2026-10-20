@@ -60,6 +60,32 @@ interface StoredAssessmentPayload {
   questions: StoredQuestion[];
   languageMastery?: LanguageMasteryAssessmentMetadata;
   languagePlacement?: LanguagePlacementAssessmentMetadata;
+  languageLearningCore?: LanguageLearningCoreAssessmentMetadata;
+}
+
+/** Trusted scope for closed, lesson-authored questions. This is not a second
+ * grader: it uses the Examiner's canonical Assessment/Submission write boundary. */
+export interface LanguageLearningCoreAssessmentMetadata {
+  version: 1;
+  profileId: string;
+  sessionId: string;
+  catalogueVersion: string;
+  productLevel: string;
+  scope: 'lesson' | 'module' | 'level';
+  targetId: string;
+  variant: number;
+  sourceLessonIds: string[];
+  sourceContentVersions: number[];
+  questionLessonIds: string[];
+  supportLanguage: string;
+}
+
+export interface LanguageLearningCoreQuestion {
+  id: string;
+  prompt: string;
+  options: string[];
+  answerKey: string;
+  correction: string;
 }
 
 export interface LanguagePlacementAssessmentMetadata {
@@ -209,6 +235,88 @@ export class ExaminerService {
     private readonly prisma: PrismaService,
     private readonly llm: LlmService,
   ) {}
+
+  async seedLanguageLearningCore(userId: string, input: {
+    metadata: LanguageLearningCoreAssessmentMetadata;
+    questions: LanguageLearningCoreQuestion[];
+    lessonId?: string;
+    contentVersion?: number;
+    topic: string;
+    level: AssessmentDifficulty;
+  }): Promise<AssessmentView> {
+    const { metadata, questions } = input;
+    if (!questions.length || questions.length > 100 || new Set(questions.map((question) => question.id)).size !== questions.length || questions.some((q) =>
+      !q.id || !q.prompt || !q.correction || q.options.length < 2
+      || new Set(q.options).size !== q.options.length || !q.options.includes(q.answerKey))) {
+      throw new BadRequestException('This lesson has no valid closed assessment.');
+    }
+    const [profile, session, lessons] = await Promise.all([
+      this.prisma.languageProfile.findFirst({ where: { id: metadata.profileId, userId }, select: { id: true } }),
+      this.prisma.experienceSession.findFirst({ where: { id: metadata.sessionId, userId,
+        languageProfileId: metadata.profileId, intent: 'language-learning-core' }, select: { id: true } }),
+      this.prisma.lesson.findMany({ where: { userId, languageProfileId: metadata.profileId,
+        id: { in: metadata.sourceLessonIds } }, select: { id: true, contentVersion: true } }),
+    ]);
+    if (!profile || !session || lessons.length !== metadata.sourceLessonIds.length
+      || lessons.some((lesson) => lesson.contentVersion !== metadata.sourceContentVersions[metadata.sourceLessonIds.indexOf(lesson.id)])) {
+      throw new NotFoundException('Language learning assessment sources not found.');
+    }
+    const creationKey = `language-core:${metadata.profileId}:${metadata.productLevel}:${metadata.scope}:${metadata.targetId}:${metadata.variant}`;
+    const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    const teacherPolicy = resolveTeacherPolicy(await this.loadTeacherPreferences(userId), {
+      mode: 'exam', intent: 'assessment', difficulty: input.level, assessment: true,
+    });
+    const assessment = await this.prisma.assessment.upsert({
+      where: { userId_masteryCreationKey: { userId, masteryCreationKey: creationKey } },
+      create: { userId, type: 'mcq', topic: input.topic, title: input.topic.slice(0, 200), level: input.level,
+        lessonId: input.lessonId, contentVersion: input.contentVersion,
+        masteryCreationKey: creationKey, masteryCreationHash: hash, masteryGenerationStatus: 'ready',
+        questions: { version: 2, teacherPolicy, languageLearningCore: metadata,
+          questions: questions.map((question) => ({ id: question.id, prompt: question.prompt, format: 'mcq',
+            options: question.options, points: 1, answerKey: question.answerKey, rubric: question.correction })) } as unknown as Prisma.InputJsonValue,
+      }, update: {},
+    });
+    if (assessment.masteryCreationHash !== hash) throw new ConflictException('Assessment source changed for this version.');
+    return this.get(userId, assessment.id);
+  }
+
+  async submitLanguageLearningCore(userId: string, id: string, input: {
+    profileId: string; sessionId: string; answers: string[]; idempotencyKey: string;
+  }): Promise<AssessmentSubmissionView> {
+    const assessment = await this.requireOwned(userId, id);
+    const payload = this.readPayload(assessment.questions);
+    const scope = payload.languageLearningCore;
+    if (!scope || scope.profileId !== input.profileId || scope.sessionId !== input.sessionId) {
+      throw new NotFoundException('Language learning assessment not found.');
+    }
+    const questions = payload.questions;
+    if (!input.idempotencyKey?.trim() || input.answers.length !== questions.length
+      || input.answers.some((answer, index) => typeof answer !== 'string' || !answer.trim() || answer.length > 4000
+        || !questions[index]?.options?.includes(answer.trim()))) {
+      throw new BadRequestException('Answer each assessment item before submitting.');
+    }
+    // An assessment is a sealed attempt, not a mutable score. New remediation
+    // receives a different assessment. A changed replay cannot overwrite it.
+    const answers = input.answers.map((answer) => answer.trim());
+    const hash = createHash('sha256').update(JSON.stringify({ id, answers })).digest('hex');
+    const results: GradedAnswer[] = questions.map((question, index) => {
+      const correct = answers[index].normalize('NFKC') === question.answerKey.normalize('NFKC');
+      return { questionId: question.id, prompt: question.prompt, learnerAnswer: answers[index],
+        awarded: correct ? question.points : 0, max: question.points,
+        verdict: correct ? 'correct' : 'incorrect', why: question.rubric, how: question.rubric,
+        errorMade: correct ? null : question.rubric, howToAvoid: correct ? null : question.rubric };
+    });
+    const totals = this.assessmentResultTotals(results)!;
+    const row = await this.prisma.assessmentSubmission.upsert({
+      where: { userId_masterySubmissionKey: { userId, masterySubmissionKey: `language-core:${id}` } },
+      create: { userId, assessmentId: id, answers, score: totals.ratio * 100,
+        results: results as unknown as Prisma.InputJsonValue, summary: '', advice: '',
+        masterySubmissionKey: `language-core:${id}`, masterySubmissionHash: hash, masteryGenerationStatus: 'ready' },
+      update: {},
+    });
+    if (row.masterySubmissionHash !== hash) throw new ConflictException('This assessment was already submitted with different answers.');
+    return this.toSubmissionView(row);
+  }
 
   /** A diagnostic uses the same examiner, durable claims and metering as an
    * assessment, but never publishes mastery or derives CEFR from its score. */
@@ -853,6 +961,9 @@ export class ExaminerService {
     const payload = this.readPayload(assessment.questions);
     if (payload.languagePlacement) {
       throw new ConflictException('Placement submissions must use the language diagnostic flow.');
+    }
+    if (payload.languageLearningCore) {
+      throw new ConflictException('Language learning submissions must use the scoped learning flow.');
     }
     const teacherPolicy = payload.teacherPolicy ?? resolveTeacherPolicy(null, {
       mode: assessment.type === 'oral' ? 'oral_exam' : 'exam',
@@ -1614,12 +1725,13 @@ export class ExaminerService {
     teacherPolicy: TeacherPolicySnapshot | null;
     languageMastery: LanguageMasteryAssessmentMetadata | null;
     languagePlacement: LanguagePlacementAssessmentMetadata | null;
+    languageLearningCore: LanguageLearningCoreAssessmentMetadata | null;
   } {
     if (Array.isArray(value)) {
-      return { questions: value as StoredQuestion[], teacherPolicy: null, languageMastery: null, languagePlacement: null };
+      return { questions: value as StoredQuestion[], teacherPolicy: null, languageMastery: null, languagePlacement: null, languageLearningCore: null };
     }
     if (!value || typeof value !== 'object') {
-      return { questions: [], teacherPolicy: null, languageMastery: null, languagePlacement: null };
+      return { questions: [], teacherPolicy: null, languageMastery: null, languagePlacement: null, languageLearningCore: null };
     }
     const payload = value as Partial<StoredAssessmentPayload>;
     return {
@@ -1634,6 +1746,7 @@ export class ExaminerService {
         : null,
       languagePlacement: this.isLanguagePlacementMetadata(payload.languagePlacement)
         ? payload.languagePlacement : null,
+      languageLearningCore: payload.languageLearningCore?.version === 1 ? payload.languageLearningCore : null,
     };
   }
 
