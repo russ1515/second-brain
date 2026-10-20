@@ -15,7 +15,7 @@ test('public root is unconditional and learner home remains protected', () => {
 
   assert.match(tabsLayout, /if \(pathname === '\/'\) return <LandingPage \/>/);
   assert.doesNotMatch(tabsLayout, /featureFlags\.newLanding/);
-  assert.match(tabsLayout, /if \(!user\) return <Redirect href="\/login" \/>/);
+  assert.match(tabsLayout, /if \(!user\) return <Redirect href=\{\{ pathname: '\/login', params: \{ returnTo: pathname \} \}\} \/>/);
   assert.match(tabsLayout, /name="index"[\s\S]*?href: null/);
   assert.match(tabsLayout, /name="home"[\s\S]*?title: t\('tab\.home'\)/);
   assert.match(homeAlias, /HomeScreen as default/);

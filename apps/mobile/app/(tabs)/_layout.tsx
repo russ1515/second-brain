@@ -1,4 +1,5 @@
 import { Redirect, Tabs, usePathname } from 'expo-router';
+import type { ReactNode } from 'react';
 import { ScrollView, StyleSheet, Text } from 'react-native';
 import { useAuth } from '../../lib/auth-context';
 import { useI18n } from '../../lib/i18n';
@@ -17,10 +18,20 @@ function TabIcon({ emoji, color }: { emoji: string; color: string }) {
  * The five spaces.
  *
  * The auth + offline guard lives here rather than in each screen: it now gates
- * the whole classroom at once, and the tabs only mount for a signed-in learner
- * with a reachable API.
+ * each scene before its content mounts. The navigator itself must stay mounted
+ * during session restoration, otherwise Expo loses nested deep links such as
+ * `/profile` and resolves the tab group to its public index instead.
  */
 export default function TabsLayout() {
+  const pathname = usePathname();
+  return (
+    <SidebarProvider>
+      <Shell externallyManaged={newAppShellEnabledForPath(pathname)} />
+    </SidebarProvider>
+  );
+}
+
+function TabRouteGate({ children }: { children: ReactNode }) {
   const { user, loading, offline, onboarded, retry, logout } = useAuth();
   const { t } = useI18n();
   const pathname = usePathname();
@@ -48,42 +59,36 @@ export default function TabsLayout() {
     );
   }
 
-  if (!user) return <Redirect href="/login" />;
+  if (!user) return <Redirect href={{ pathname: '/login', params: { returnTo: pathname } }} />;
 
   // The Universal KYC gate (UI/UX Sprint 2): a signed-in learner who has not
   // finished onboarding is sent to build their space first. `onboarded === null`
   // (unknown / status check failed) deliberately falls through to the app so a
   // status hiccup never traps them out of the classroom.
-  if (onboarded === false) return <Redirect href="/onboarding" />;
+  if (onboarded === false) return <Redirect href={{ pathname: '/onboarding', params: { returnTo: pathname } }} />;
 
-  // Under the route-aware shell the root layout owns all navigation chrome.
-  // Keeping this decision path-based makes the legacy Tabs shell an immediate
-  // rollback for any route omitted from the rollout allowlist.
-  if (newAppShellEnabledForPath(pathname)) return <Shell externallyManaged />;
-
-  // Responsive App Shell: a permanent, collapsible sidebar on desktop (≥1024px),
-  // the bottom bar otherwise — same 5 spaces. The workspace offset is lifted into
-  // the shell so it always tracks the sidebar width and mirrors under RTL.
-  return (
-    <SidebarProvider>
-      <Shell />
-    </SidebarProvider>
-  );
+  return <>{children}</>;
 }
 
 function Shell({ externallyManaged = false }: { externallyManaged?: boolean }) {
   const { t } = useI18n();
+  const pathname = usePathname();
+  const { user, loading, offline, onboarded } = useAuth();
   const { width } = useResponsive();
   const rtl = useIsRTL();
   const { width: sidebarW } = useSidebar();
   const desktop = width >= 1024;
-  const sceneStyle = !externallyManaged && desktop
+  const routeCanUseCache = pathname === '/library' || pathname === '/brain';
+  const hideTabBar = externallyManaged || pathname === '/' || loading || !user
+    || onboarded === false || (offline && !routeCanUseCache);
+  const sceneStyle = !hideTabBar && desktop
     ? (rtl ? { paddingRight: sidebarW } : { paddingLeft: sidebarW })
     : undefined;
 
   return (
     <Tabs
-      tabBar={externallyManaged ? () => null : (props) => <ResponsiveTabBar {...props} />}
+      tabBar={hideTabBar ? () => null : (props) => <ResponsiveTabBar {...props} />}
+      screenLayout={({ children }) => <TabRouteGate>{children}</TabRouteGate>}
       screenOptions={{
         headerShown: false,
         sceneStyle,
