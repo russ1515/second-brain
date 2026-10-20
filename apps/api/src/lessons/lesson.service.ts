@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -129,6 +130,13 @@ export interface InternalLessonOptions {
   /** Exact failed battery used only to reject duplicate remediation items
    * before the generated lesson is persisted. */
   remediationBaselineExercises?: readonly LessonExercise[];
+  /** Persisted teaching content from the failed lesson. It is used only for
+   * exact normalized reuse detection, never to judge semantic quality. */
+  remediationBaselineContent?: {
+    explanation: string;
+    examples: readonly string[];
+    questions?: readonly string[];
+  };
   /** Durable server-only identity of the failed-exam remediation plan that
    * requested this lesson. It is never accepted from GenerateLessonDto. */
   masteryRemediationGenerationKey?: string;
@@ -232,6 +240,7 @@ export class LessonService {
       internal.remediationBaselineExercises,
       internal.languageNotions,
       internal.languageLearningCore === true,
+      internal.remediationBaselineContent,
     );
     const persist = async (tx: Prisma.TransactionClient, raw: RawLesson) => {
       const lockKey = accountDataLockKey(userId);
@@ -250,7 +259,7 @@ export class LessonService {
         });
         if (!profile) throw new BadRequestException('Language profile is no longer available.');
       }
-      const createdLesson = await tx.lesson.create({
+      const createdLesson = await this.guardLessonPersistence('persistence', () => tx.lesson.create({
         data: {
         userId,
         tutorSessionId: tutorSessionId ?? null,
@@ -271,12 +280,12 @@ export class LessonService {
         keyPoints: raw.keyPoints as unknown as Prisma.InputJsonValue,
         revisionSheet: raw.revisionSheet,
         },
-      });
+      }), internal.languageLearningCore === true);
 
       // Freeze the effective policy with the lesson. Corrections later in this
       // lesson must not silently change because Profile preferences were edited.
       const initialFlow = this.initialFlow(this.toView(createdLesson, 0));
-      const createdExperience = await this.experienceSessions.ensureLessonSession(userId, {
+      const createdExperience = await this.guardLessonPersistence('lesson-session', () => this.experienceSessions.ensureLessonSession(userId, {
         title: `Lesson — ${topic}`.slice(0, 300),
         intent: 'learn',
         inputModality: 'text',
@@ -294,7 +303,7 @@ export class LessonService {
           ? `/languages/${internal.languageProfileId}/course` : `/lesson/${createdLesson.id}` },
         links: { lessonId: createdLesson.id,
           ...(internal.languageLearningCore ? { languageProfileId: internal.languageProfileId } : {}) },
-      }, tx);
+      }, tx), internal.languageLearningCore === true);
 
       // Keep the source document in the same owner-locked transaction as the
       // lesson and its experience wrapper. A concurrent permanent purge can
@@ -316,7 +325,7 @@ export class LessonService {
       return { lesson: linkedLesson, doc: createdDoc, experience: createdExperience };
     };
 
-    const generated = languageGenerationKey
+    const generated = await this.guardLessonPersistence('persistence', async () => languageGenerationKey
       ? await this.prisma.$transaction(async (tx) => {
           // Only the server-authored remediation path holds this key-scoped
           // lock across the provider call. PostgreSQL releases the xact lock
@@ -344,7 +353,7 @@ export class LessonService {
           return {
             created: await this.prisma.$transaction(async (tx) => persist(tx, raw)),
           } as const;
-        })();
+        })(), internal.languageLearningCore === true);
 
     if ('existingLessonId' in generated) {
       return this.get(userId, generated.existingLessonId);
@@ -749,6 +758,7 @@ export class LessonService {
     remediationBaselineExercises?: readonly LessonExercise[],
     languageNotions?: readonly { notionId: string; criterionId: string }[],
     languageLearningCore = false,
+    remediationBaselineContent?: InternalLessonOptions['remediationBaselineContent'],
   ): Promise<RawLesson> {
     if (languageMastery && !languageNotions?.length) {
       throw new UnprocessableEntityException(
@@ -775,9 +785,9 @@ export class LessonService {
       ? `${SYSTEM_PROMPT} ${LANGUAGE_MASTERY_EXERCISE_PROMPT} ${notionDirective}`
       : SYSTEM_PROMPT;
     const system = directive ? `${baseSystem} ${directive}` : baseSystem;
-    let text: string;
+    let result: { text: string };
     try {
-      const result = await this.llm.generate(
+      result = await this.llm.generate(
         [
           { role: 'system', content: system },
           {
@@ -797,19 +807,34 @@ export class LessonService {
             : {}),
         },
       );
-      text = result.text;
     } catch (error) {
-      this.logger.error('Learning operation failed.');
-      throw new ServiceUnavailableException(
-        'The teacher is temporarily unavailable. Please try again shortly.',
-      );
+      throw this.lessonGenerationFailure('provider', 'PROVIDER_REQUEST_FAILED');
     }
-    return this.parseLesson(text, languageMastery, remediationBaselineExercises, languageNotions, languageLearningCore);
+    const text = result?.text;
+    if (languageLearningCore) this.lessonGenerationTrace('provider', 'PASS', {
+      textType: typeof text, textCharacters: typeof text === 'string' ? text.length : 0,
+    });
+    if (typeof text !== 'string' || !text.trim()) {
+      throw this.lessonGenerationFailure('adapter', 'PROVIDER_TEXT_MISSING', {
+        textType: typeof text,
+      });
+    }
+    if (languageLearningCore) this.lessonGenerationTrace('adapter', 'PASS', {
+      textCharacters: text.length,
+    });
+    return this.parseLesson(text, languageMastery, remediationBaselineExercises,
+      languageNotions, languageLearningCore, remediationBaselineContent);
   }
 
   private languageCoreLessonJsonSchema() {
-    const text = { type: 'string' };
-    const texts = { type: 'array', items: text };
+    // Mirror the parser's existing structural minima in Structured Outputs so
+    // a successful provider envelope cannot legally contain a one-line shell.
+    // Content semantics, answer matching and novelty remain server checked.
+    const text = { type: 'string', pattern: '\\S' };
+    const texts = (minimum: number, maximum?: number) => ({
+      type: 'array', items: text, minItems: minimum,
+      ...(maximum === undefined ? {} : { maxItems: maximum }),
+    });
     return {
       name: 'language_core_lesson', strict: true,
       schema: {
@@ -817,14 +842,15 @@ export class LessonService {
         required: ['objective', 'intro', 'explanation', 'examples', 'commonMisconceptions',
           'questions', 'exercises', 'homework', 'summary', 'keyPoints', 'revisionSheet'],
         properties: {
-          objective: text, intro: text, explanation: text, examples: texts,
-          commonMisconceptions: texts, questions: texts, homework: text,
-          summary: text, keyPoints: texts, revisionSheet: text,
-          exercises: { type: 'array', items: {
+          objective: text, intro: text,
+          explanation: { type: 'string', pattern: '^[\\s\\S]{600,}$' },
+          examples: texts(3), commonMisconceptions: texts(1), questions: texts(3, 5),
+          homework: { type: 'string' }, summary: text, keyPoints: texts(3, 5), revisionSheet: text,
+          exercises: { type: 'array', minItems: 10, maxItems: 12, items: {
             type: 'object', additionalProperties: false,
             required: ['question', 'answer', 'type', 'options', 'correction'],
             properties: { question: text, answer: text, type: { type: 'string', enum: ['qcm'] },
-              options: texts, correction: text },
+              options: texts(3, 4), correction: text },
           } },
         },
       },
@@ -965,17 +991,35 @@ export class LessonService {
     remediationBaselineExercises?: readonly LessonExercise[],
     languageNotions?: readonly { notionId: string; criterionId: string }[],
     languageLearningCore = false,
+    remediationBaselineContent?: InternalLessonOptions['remediationBaselineContent'],
   ): RawLesson {
-    const start = raw.indexOf('{');
-    const end = raw.lastIndexOf('}');
-    let parsed: Record<string, unknown> = {};
-    if (start !== -1 && end > start) {
-      try {
-        parsed = JSON.parse(raw.slice(start, end + 1));
-      } catch {
-        parsed = {};
-      }
+    if (typeof raw !== 'string' || !raw.trim()) {
+      throw this.lessonGenerationFailure('adapter', 'PROVIDER_TEXT_MISSING', { textType: typeof raw });
     }
+    // Strict core output is one JSON object, never an array whose first object
+    // is silently salvaged. Keep the legacy prose-envelope compatibility only
+    // for the unrelated generic lesson writer.
+    const json = raw.trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/iu, '$1').trim();
+    let root: unknown;
+    try {
+      root = JSON.parse(json);
+    } catch {
+      const start = raw.indexOf('{');
+      const end = raw.lastIndexOf('}');
+      if (!languageLearningCore && start !== -1 && end > start) {
+        try { root = JSON.parse(raw.slice(start, end + 1)); } catch { /* fail closed below */ }
+      }
+      if (root === undefined) throw this.lessonGenerationFailure('parser', 'INVALID_JSON', {
+        textCharacters: raw.length,
+      });
+    }
+    if (!root || typeof root !== 'object' || Array.isArray(root)) {
+      throw this.lessonGenerationFailure('parser', 'JSON_OBJECT_REQUIRED', {
+        rootType: root === null ? 'null' : Array.isArray(root) ? 'array' : typeof root,
+      });
+    }
+    const parsed = root as Record<string, unknown>;
+    if (languageLearningCore) this.lessonGenerationTrace('parser', 'PASS');
     const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
     const objective = str(parsed.objective);
     const intro = str(parsed.intro);
@@ -1024,23 +1068,68 @@ export class LessonService {
     const coveredNotions = new Set(exercises.flatMap((exercise) => exercise.notionIds ?? []));
     const notionCoverageContract = !languageNotions?.length
       || languageNotions.every((notion) => coveredNotions.has(notion.notionId));
-    const structurallyComplete =
-      Boolean(objective && intro && explanation && summary && revisionSheet) &&
-      examples.length >= (languageLearningCore ? 3 : 1) &&
-      (!languageLearningCore || explanation.length >= 600) &&
-      commonMisconceptions.length >= 1 &&
-      questions.length >= 3 && questions.length <= 5 &&
-      (languageLearningCore ? coreExerciseContract : languageMastery
-        ? languageExerciseContract && notionCoverageContract
-        : genericExerciseContract) &&
-      keyPoints.length >= 3 && keyPoints.length <= 5;
-    if (!structurallyComplete) {
-      throw new UnprocessableEntityException(
-        'The teacher did not return a complete, usable lesson. Try again.',
-      );
+    const reasons: string[] = [];
+    if (!objective) reasons.push('OBJECTIVE_REQUIRED');
+    if (!intro) reasons.push('INTRO_REQUIRED');
+    if (!explanation) reasons.push('EXPLANATION_REQUIRED');
+    if (!summary) reasons.push('SUMMARY_REQUIRED');
+    if (!revisionSheet) reasons.push('REVISION_SHEET_REQUIRED');
+    if (examples.length < (languageLearningCore ? 3 : 1)) reasons.push('WORKED_EXAMPLES_REQUIRED');
+    if (languageLearningCore && explanation.length < 600) reasons.push('EXPLANATION_TOO_SHORT');
+    if (commonMisconceptions.length < 1) reasons.push('MISCONCEPTION_CORRECTION_REQUIRED');
+    if (questions.length < 3 || questions.length > 5) reasons.push('GUIDED_PRACTICE_REQUIRED');
+    if (keyPoints.length < 3 || keyPoints.length > 5) reasons.push('KEY_POINTS_REQUIRED');
+    if (languageLearningCore) {
+      const distinctText = (values: readonly string[]) => new Set(values.map(value =>
+        value.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLowerCase())).size;
+      if (distinctText(examples) !== examples.length) reasons.push('DUPLICATE_WORKED_EXAMPLE');
+      if (distinctText(questions) !== questions.length) reasons.push('DUPLICATE_GUIDED_PROMPT');
+      if (!rawExercises.length) reasons.push('EXERCISES_REQUIRED');
+      if (rawExercises.length !== exercises.length) reasons.push('INVALID_EXERCISE_ITEM');
+      if (exercises.length < 10 || exercises.length > 12) reasons.push('EXERCISE_COUNT_INVALID');
+      if (exercises.some(exercise => exercise.type !== 'qcm')) reasons.push('QCM_EXERCISE_REQUIRED');
+      if (exercises.some(exercise => !exercise.correction)) reasons.push('EXERCISE_CORRECTION_REQUIRED');
+      if (new Set(exercises.map(exercise => exercise.question.normalize('NFKC').trim().toLowerCase())).size !== exercises.length) {
+        reasons.push('DUPLICATE_EXERCISE_PROMPT');
+      }
+      if (!coreExerciseContract) reasons.push('CORE_EXERCISE_CONTRACT_INVALID');
+      for (const key of ['examples', 'commonMisconceptions', 'questions', 'keyPoints'] as const) {
+        const values = parsed[key];
+        if (!Array.isArray(values) || values.some(value => typeof value !== 'string' || !value.trim())) {
+          reasons.push('INVALID_CONTENT_ARRAY_ITEM');
+        }
+      }
+      if (rawExercises.some(value => {
+        if (!value || typeof value !== 'object') return false;
+        const options = (value as Record<string, unknown>).options;
+        return Array.isArray(options) && (options.some(option => typeof option !== 'string' || !option.trim())
+          || new Set(options.map(option => typeof option === 'string' ? option.trim() : '')).size !== options.length);
+      })) reasons.push('INVALID_QCM_OPTIONS');
+    } else if (languageMastery ? !languageExerciseContract || !notionCoverageContract : !genericExerciseContract) {
+      reasons.push(languageMastery ? 'LANGUAGE_EXERCISE_CONTRACT_INVALID' : 'EXERCISE_CONTRACT_INVALID');
     }
+    const shape = {
+      explanationCharacters: explanation.length, exampleCount: examples.length,
+      guidedPracticeCount: questions.length, exerciseCount: rawExercises.length,
+      validExerciseCount: exercises.length, keyPointCount: keyPoints.length,
+    };
+    if (reasons.length) throw this.lessonGenerationFailure('content', reasons[0], shape, [...new Set(reasons)]);
+    if (languageLearningCore) this.lessonGenerationTrace('content', 'PASS', shape);
     if ((languageMastery || languageLearningCore) && remediationBaselineExercises) {
       this.requireNovelRemediationExercises(exercises, remediationBaselineExercises);
+    }
+    if (languageLearningCore && remediationBaselineContent) {
+      const normalize = (value: string) => value.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLowerCase();
+      // Stored explanations contain the appended misconception callouts.
+      // Compare the actual teaching body, not these supplementary callouts.
+      const previousExplanation = remediationBaselineContent.explanation.split(/\n\n> ⚠️ /u)[0];
+      if (normalize(explanation) === normalize(previousExplanation)) {
+        throw this.lessonGenerationFailure('content', 'REMEDIATION_EXPLANATION_REUSED', shape);
+      }
+      const previousExamples = new Set(remediationBaselineContent.examples.map(normalize));
+      if (examples.some(example => previousExamples.has(normalize(example)))) {
+        throw this.lessonGenerationFailure('content', 'REMEDIATION_EXAMPLES_REUSED', shape);
+      }
     }
     return {
       objective,
@@ -1060,6 +1149,60 @@ export class LessonService {
     };
   }
 
+  private lessonGenerationTrace(
+    stage: string,
+    status: 'PASS' | 'FAIL',
+    shape: Readonly<Record<string, string | number>> = {},
+    reason?: string,
+  ): void {
+    const trace = JSON.stringify({ event: 'lesson-generation', stage, status,
+      ...(reason ? { reason } : {}), shape });
+    if (status === 'FAIL') this.logger.error(trace);
+    else this.logger.log(trace);
+  }
+
+  /** Never expose exception messages or provider/user text. Only fixed stage /
+   * reason codes and numeric/type shape metadata cross this boundary. */
+  private lessonGenerationFailure(
+    stage: 'provider' | 'adapter' | 'parser' | 'content' | 'persistence' | 'lesson-session',
+    reason: string,
+    shape: Readonly<Record<string, string | number>> = {},
+    reasons: readonly string[] = [reason],
+  ): HttpException {
+    const invalidContent = stage === 'parser' || stage === 'content';
+    const code = stage === 'lesson-session' ? 'LESSON_SESSION_FAILED'
+      : `LESSON_${stage.toUpperCase()}_${invalidContent ? 'INVALID' : 'FAILED'}`;
+    this.lessonGenerationTrace(stage, 'FAIL', shape, reason);
+    const response = {
+      statusCode: invalidContent ? 422 : 503,
+      message: reason === 'REMEDIATION_EXERCISE_REUSED'
+        ? 'The remediation battery reused an existing or duplicate exercise.'
+        : reason === 'REMEDIATION_MINIMUM_NOT_MET'
+        ? 'The remediation battery must contain at least ten genuinely new exercises.'
+        : invalidContent
+        ? 'The teacher did not return a complete, usable lesson. Try again.'
+        : 'The teacher is temporarily unavailable. Please try again shortly.',
+      code, stage, reason, reasons, shape,
+    };
+    return invalidContent ? new UnprocessableEntityException(response) : new ServiceUnavailableException(response);
+  }
+
+  private async guardLessonPersistence<T>(
+    stage: 'persistence' | 'lesson-session',
+    operation: () => Promise<T>,
+    traceSuccess = false,
+  ): Promise<T> {
+    try {
+      const result = await operation();
+      if (traceSuccess) this.lessonGenerationTrace(stage, 'PASS');
+      return result;
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      throw this.lessonGenerationFailure(stage, stage === 'lesson-session'
+        ? 'LESSON_SESSION_CREATE_FAILED' : 'LESSON_TRANSACTION_FAILED');
+    }
+  }
+
   /** Deterministic novelty only: this deliberately does not claim that a new
    * string is pedagogically well targeted. It rejects exact/normalised reuse
    * of prompt plus essential exercise content and duplicate generated items. */
@@ -1072,16 +1215,13 @@ export class LessonService {
     for (const exercise of exercises) {
       const fingerprint = this.languageExerciseFingerprint(exercise);
       if (previous.has(fingerprint) || generated.has(fingerprint)) {
-        throw new UnprocessableEntityException(
-          'The remediation battery reused an existing or duplicate exercise.',
-        );
+        throw this.lessonGenerationFailure('content', 'REMEDIATION_EXERCISE_REUSED', {},
+          ['REMEDIATION_EXERCISE_REUSED']);
       }
       generated.add(fingerprint);
     }
     if (generated.size < LANGUAGE_REMEDIATION_MINIMUM_EXERCISES) {
-      throw new UnprocessableEntityException(
-        'The remediation battery must contain at least ten genuinely new exercises.',
-      );
+      throw this.lessonGenerationFailure('content', 'REMEDIATION_MINIMUM_NOT_MET');
     }
   }
 

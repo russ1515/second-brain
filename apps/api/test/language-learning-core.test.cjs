@@ -122,12 +122,32 @@ function coreSubmitFixture(ratio) {
   return { core, state, completions: () => completions, saves: () => saves };
 }
 
-for (const ratio of [0.89, 0.899, 0.9, 0.91]) {
+for (const ratio of [0.87, 0.89, 0.899, 0.9, 0.91, 0.93]) {
   test(`lesson raw threshold ${ratio} publishes only at >= 0.9`, async () => {
     const f = coreSubmitFixture(ratio);
     assert.deepEqual(await f.core.submit('owner', 'profile', 'target', ['answer'], 'key'), { preserved: true });
     assert.equal(f.completions(), ratio >= 0.9 ? 1 : 0);
     assert.equal(f.saves(), 1);
+  });
+}
+
+for (const percent of [87, 89, 89.9, 90, 91, 93]) {
+  test(`canonical examiner preserves raw ${percent} percent with a valid weighted rubric`, async () => {
+    const f = examinerFixture();
+    const assessment = await f.examiner.seedLanguageLearningCore('owner', f.input);
+    // Exercise the existing generic weighted rubric, not a new product rule.
+    // The actual core authoring contract remains ten equally weighted items.
+    const row = [...f.assessments.values()][0];
+    row.questions.questions.forEach((question, index) => {
+      question.points = index < 8 ? 100 : index === 8 ? percent * 10 - 800 : 1000 - percent * 10;
+    });
+    const graded = await f.examiner.submitLanguageLearningCore('owner', assessment.id, {
+      profileId: 'profile', sessionId: 'session', idempotencyKey: 'weighted',
+      answers: [...Array(9).fill('right'), 'wrong'],
+    });
+    assert.ok(Math.abs(graded.score - percent) < 1e-9);
+    assert.equal(f.examiner.assessmentResultTotals(graded.results).ratio >= 0.9, percent >= 90);
+    assert.equal(f.calls(), 0);
   });
 }
 

@@ -259,6 +259,119 @@ test('a restored teaching step shows actual explanation and retains the existing
   assert.equal(ui.byId('language-core-autonomous'), undefined);
 });
 
+test('the existing LessonView renders objective, detailed teaching, multiple examples and guided practice before autonomous assessment', async () => {
+  let current = { ...session(), teachingStep: 0, answers: [''] };
+  const props = { profileId: 'p1', session: current, lesson: definition(), busy: false,
+    onSession(next) { current = next; props.session = next; }, onError(error) { throw new Error(error); }, run() {} };
+  const ui = harness('LearningLesson', props, {
+    saveLanguageLearningAnswers: async (_profile, _target, answers, phase = 'assessment', teachingStep) => ({ ...current, answers, phase, ...(teachingStep == null ? {} : { teachingStep }) }),
+  });
+  const markdown = () => ui.nodes().filter((node) => node.type === 'Markdown').map((node) => node.props.text);
+  assert.deepEqual(markdown(), ['Identify letters', 'Introduction française']);
+  for (let next = 1; next <= 3; next += 1) {
+    ui.nodes().find((node) => node.type === 'Button' && node.props.label === 'onb.continue').props.onPress();
+    await ui.settle();
+    assert.deepEqual(ui.calls.at(-1), ['saveLanguageLearningAnswers', 'p1', 'lesson-1', [''], 'teaching', next]);
+    assert.equal(ui.byId('language-core-autonomous'), undefined);
+    assert.ok(ui.nodes().some((node) => typeof node.type === 'function' && node.type.name === 'LanguageLearningHelp'));
+    if (next === 1) assert.deepEqual(markdown(), ['Explication française détaillée']);
+    if (next === 2) assert.deepEqual(markdown(), ['A — exemple', 'B — exemple']);
+    if (next === 3) assert.deepEqual(markdown(), ['Explique la différence']);
+  }
+  ui.nodes().find((node) => node.type === 'Button' && node.props.label === 'rlle.ui.autonomy.start').props.onPress();
+  await ui.settle();
+  assert.deepEqual(ui.calls.at(-1), ['saveLanguageLearningAnswers', 'p1', 'lesson-1', ['']]);
+  assert.equal(current.phase, 'assessment');
+  assert.ok(ui.byId('language-core-autonomous'));
+  assert.deepEqual(markdown(), []);
+  assert.equal(ui.nodes().some((node) => typeof node.type === 'function' && node.type.name === 'LanguageLearningHelp'), false);
+  assert.equal(ui.calls.some((call) => /submit|startLanguage|askLanguage/.test(call[0])), false);
+  ui.cleanup();
+});
+
+test('a rejected explicit start keeps the free preview intact and never retries or manufactures lesson content', async () => {
+  const data = { ...session(), activeScope: null, activeTargetId: null, content: null, assessment: null, answers: [], core: { ...session().core, modules: [coreModule([definition('lesson-1', 'AVAILABLE')])] } };
+  const ui = harness('LanguageLearningCore', { profileId: 'p1', requestedModuleId: 'basics', requestedLessonId: 'lesson-1' }, {
+    loadLanguageLearningCore: async () => data,
+    startLanguageLearningLesson: async () => { throw Object.assign(new Error('localized failure'), { status: 502, payload: { code: 'LESSON_GENERATION_FAILED', message: 'not displayed by the client' } }); },
+  });
+  await ui.settle();
+  ui.byId('language-core-preview-start').props.onPress();
+  await ui.settle();
+  await ui.settle();
+  assert.ok(ui.byId('language-core-content-pending'));
+  assert.ok(ui.byId('language-core-preview-start'));
+  assert.equal(ui.nodes().some((node) => typeof node.type === 'function' && node.type.name === 'LearningLesson'), false);
+  assert.equal(ui.nodes().find((node) => node.type === 'SmartErrorState').props.detail, 'localized failure');
+  assert.deepEqual(ui.calls.map((call) => call[0]), ['loadLanguageLearningCore', 'startLanguageLearningLesson']);
+});
+
+test('failed and mastered submissions render the authoritative score, weak status and preserved resume projection without a manual completion', async () => {
+  const acquired = { ...definition('prior-lesson', 'MASTERED'), score: 0.95, bestScore: 0.98 };
+  for (const [score, status, nextStatus] of [[87, 'NEEDS_REMEDIATION', 'LOCKED'], [93, 'MASTERED', 'AVAILABLE']]) {
+    const currentLesson = { ...definition('lesson-1', status), score: score / 100, bestScore: score / 100, weakConcepts: score < 90 ? ['letter names'] : [] };
+    const nextLesson = { ...definition('lesson-2', nextStatus), title: 'Next concept' };
+    const data = { ...session(), phase: 'result', latestSubmission: {
+      id: `submission-${score}`, score, summary: 'Correction reçue du serveur', advice: 'Suite ciblée du serveur',
+      results: [{ questionId: 'q1', prompt: 'Actual exercise', learnerAnswer: 'B', awarded: score, max: 100, verdict: score < 90 ? 'incorrect' : 'correct', errorMade: score < 90 ? 'letter names' : null, why: 'Explication de la correction', how: null, howToAvoid: null }],
+    }, core: { ...session().core, modules: [coreModule([acquired, currentLesson, nextLesson])],
+      nextAction: { kind: score < 90 ? 'remediate-lesson' : 'start-lesson', moduleId: 'basics', lessonId: score < 90 ? 'lesson-1' : 'lesson-2' },
+    } };
+    // A fresh instance represents F5/reconnection: no local score or completion
+    // is reconstructed; the returned sealed submission/projection is rendered.
+    const core = harness('LanguageLearningCore', { profileId: 'p1', requestedModuleId: 'basics', requestedLessonId: 'lesson-1' }, { loadLanguageLearningCore: async () => data });
+    await core.settle();
+    const restored = core.nodes().find((node) => typeof node.type === 'function' && node.type.name === 'LearningLesson');
+    assert.equal(restored.props.session.latestSubmission.id, `submission-${score}`);
+    assert.equal(restored.props.lesson.status, status);
+    assert.deepEqual(core.calls, [['loadLanguageLearningCore', 'p1']]);
+    const result = harness('LearningLesson', { profileId: 'p1', session: restored.props.session, lesson: restored.props.lesson, busy: false, onSession() {}, onError(error) { throw new Error(error); }, run() {} });
+    assert.ok(result.byId('language-core-result'));
+    assert.ok(result.nodes().some((node) => node.type === 'Text' && (Array.isArray(node.props.children) ? node.props.children.join('') : node.props.children) === `${score}%`));
+    assert.equal(result.nodes().filter((node) => node.type === 'Button' && node.props.label === 'rlle.ui.remediation.start').length, score < 90 ? 1 : 0);
+    assert.equal(result.byId('language-core-autonomous'), undefined);
+    assert.deepEqual(result.calls, []);
+    assert.equal(data.core.modules[0].lessons[0].status, 'MASTERED');
+    assert.equal(data.core.modules[0].lessons[0].bestScore, 0.98);
+    assert.equal(data.core.modules[0].lessons[2].status, nextStatus);
+  }
+  assert.doesNotMatch(read('apps/mobile/components/language/learning-core.tsx'), /completeLesson|finalizeLesson|manualCompletion|score\s*>=\s*90/);
+});
+
+test('explicit remediation replaces the failed content/assessment key and restores only the new attempt answers', async () => {
+  const failedLesson = { ...definition('lesson-1', 'NEEDS_REMEDIATION'), score: 0.87, bestScore: 0.87, weakConcepts: ['letter names'] };
+  const failed = { ...session(), phase: 'result', latestSubmission: { id: 'failed-1', score: 87, summary: 'Correction', advice: 'Retravailler les noms des lettres', results: [] },
+    core: { ...session().core, modules: [coreModule([failedLesson])], nextAction: { kind: 'remediate-lesson', moduleId: 'basics', lessonId: 'lesson-1' } } };
+  const remedial = { ...session(), teachingStep: 0, phase: 'teaching', answers: [''], remediation: true,
+    content: { ...session().content, id: 'content-2', explanation: 'Nouvelle explication ciblée', examples: ['Nouvel exemple 1', 'Nouvel exemple 2'] },
+    assessment: { ...session().assessment, id: 'assessment-2', questions: [{ id: 'q2', prompt: 'New exercise', options: ['C', 'D'], points: 1 }] },
+    core: { ...failed.core, modules: [coreModule([{ ...failedLesson, status: 'IN_PROGRESS' }])] } };
+  const core = harness('LanguageLearningCore', { profileId: 'p1', requestedModuleId: 'basics', requestedLessonId: 'lesson-1' }, {
+    loadLanguageLearningCore: async () => failed,
+    startLanguageLearningRemediation: async () => remedial,
+  });
+  await core.settle();
+  const previous = core.nodes().find((node) => typeof node.type === 'function' && node.type.name === 'LearningLesson');
+  const result = harness('LearningLesson', { ...previous.props, lesson: failedLesson }, {
+    startLanguageLearningRemediation: async () => remedial,
+  });
+  result.nodes().find((node) => node.type === 'Button' && node.props.label === 'rlle.ui.remediation.start').props.onPress();
+  await result.settle();
+  await core.settle();
+  assert.deepEqual(result.calls[0].slice(0, 3), ['startLanguageLearningRemediation', 'p1', 'lesson-1']);
+  assert.equal(result.calls.length, 1);
+  const next = core.nodes().find((node) => typeof node.type === 'function' && node.type.name === 'LearningLesson');
+  assert.equal(next.props.session.content.id, 'content-2');
+  assert.equal(next.props.session.assessment.id, 'assessment-2');
+  assert.equal(next.props.session.latestSubmission, null);
+  assert.equal(next.props.session.phase, 'teaching');
+  assert.equal(next.props.session.teachingStep, 0);
+  assert.deepEqual(next.props.session.answers, ['']);
+  assert.equal(next.props.session.remediation, true);
+  assert.equal(failed.latestSubmission.score, 87);
+  assert.deepEqual(failed.answers, ['A']);
+});
+
 test('restored autonomous assessment keeps answers and hides explanation, answer keys and help', () => {
   const data = { ...session(), phase: 'assessment' };
   const ui = harness('LearningLesson', { profileId: 'p1', session: data, lesson: { id: 'lesson-1', status: 'IN_PROGRESS' }, busy: false, onSession() {}, onError() {}, run() {} });

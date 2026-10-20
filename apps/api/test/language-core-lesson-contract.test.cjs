@@ -25,11 +25,13 @@ function document() {
   };
 }
 
-function service(raw, observed = []) {
-  return new LessonService({}, { generate: async (messages, options) => {
+function service(raw, observed = [], traces = []) {
+  const lessons = new LessonService({}, { generate: async (messages, options) => {
     observed.push({ messages, options });
     return { text: JSON.stringify(raw) };
   } }, {}, {}, {}, {}, {}, {}, {}, {});
+  lessons.logger = { log: value => traces.push(value), error: value => traces.push(value), warn: () => {} };
+  return lessons;
 }
 
 test('core reuses the lesson writer with a bounded, no-retry operation and strict schema', async () => {
@@ -165,4 +167,244 @@ test('90 percent publishes canonical completion without hidden paid cards', asyn
   assert.equal(result.id, 'completion');
   assert.equal(f.written(), 1);
   assert.equal(f.paidPublication(), 0);
+});
+
+function expectedFailure(status, stage, reason) {
+  return error => {
+    assert.equal(error.getStatus(), status);
+    const response = error.getResponse();
+    assert.equal(response.stage, stage);
+    assert.ok(response.reasons.includes(reason), JSON.stringify(response));
+    assert.match(response.code, /^LESSON_[A-Z_]+$/);
+    return true;
+  };
+}
+
+test('core parser rejects malformed JSON and non-object roots without salvaging an array lesson', () => {
+  const lessons = service(document());
+  for (const raw of ['[', 'not-json', `untrusted prose ${JSON.stringify(document())}`]) {
+    assert.throws(() => lessons.parseLesson(raw, false, undefined, undefined, true),
+      expectedFailure(422, 'parser', 'INVALID_JSON'));
+  }
+  for (const raw of ['null', '[]', JSON.stringify([document()]), '42', '"text"']) {
+    assert.throws(() => lessons.parseLesson(raw, false, undefined, undefined, true),
+      expectedFailure(422, 'parser', 'JSON_OBJECT_REQUIRED'));
+  }
+  assert.equal(lessons.parseLesson(`\`\`\`json\n${JSON.stringify(document())}\n\`\`\``,
+    false, undefined, undefined, true).exercises.length, 10);
+});
+
+test('provider output adapter rejects missing text and redacts upstream errors without retry', async () => {
+  const observed = [], traces = [];
+  const lessons = service(undefined, observed, traces);
+  await assert.rejects(() => lessons.generateLesson('Private learner subject', '', {},
+    undefined, false, undefined, undefined, true), expectedFailure(503, 'adapter', 'PROVIDER_TEXT_MISSING'));
+  assert.equal(observed.length, 1);
+  assert.throws(() => lessons.parseLesson(undefined, false, undefined, undefined, true),
+    expectedFailure(503, 'adapter', 'PROVIDER_TEXT_MISSING'));
+  const marker = 'PRIVATE_UPSTREAM_ERROR_MUST_NOT_BE_LOGGED';
+  lessons.llm = { generate: async () => { throw new Error(marker); } };
+  await assert.rejects(() => lessons.generateLesson(marker, '', {},
+    undefined, false, undefined, undefined, true), error => {
+    expectedFailure(503, 'provider', 'PROVIDER_REQUEST_FAILED')(error);
+    assert(!JSON.stringify(error.getResponse()).includes(marker));
+    return true;
+  });
+  assert(!traces.join('\n').includes(marker));
+  assert(!traces.join('\n').includes('Private learner subject'));
+});
+
+test('core never silently discards malformed exercise items or QCM options', () => {
+  const lessons = service(document());
+  const raw = document();
+  raw.exercises.push({ type: 'qcm', question: 'Invalid extra', answer: 'Absent',
+    options: ['A', 'B', 'C'], correction: 'Explain' });
+  assert.throws(() => lessons.parseLesson(JSON.stringify(raw), false, undefined, undefined, true),
+    expectedFailure(422, 'content', 'INVALID_EXERCISE_ITEM'));
+  for (const options of [
+    ['Wrong 1', 'Correct 1', 'Distractor 1', 'Correct 1'],
+    ['Wrong 1', 'Correct 1', 'Distractor 1', ''],
+    ['Wrong 1', 'Correct 1', 'Distractor 1', 42],
+  ]) {
+    const duplicate = document(); duplicate.exercises[0].options = options;
+    assert.throws(() => lessons.parseLesson(JSON.stringify(duplicate), false, undefined, undefined, true),
+      expectedFailure(422, 'content', 'INVALID_QCM_OPTIONS'));
+  }
+});
+
+test('core reports precise content defects and keeps teaching separate from independent scoring', () => {
+  const cases = [
+    ['OBJECTIVE_REQUIRED', raw => { delete raw.objective; }],
+    ['WORKED_EXAMPLES_REQUIRED', raw => { raw.examples = []; }],
+    ['GUIDED_PRACTICE_REQUIRED', raw => { raw.questions = []; }],
+    ['EXERCISES_REQUIRED', raw => { raw.exercises = []; }],
+    ['EXERCISE_CORRECTION_REQUIRED', raw => { delete raw.exercises[2].correction; }],
+    ['INVALID_CONTENT_ARRAY_ITEM', raw => { raw.examples.push(null); }],
+    ['DUPLICATE_WORKED_EXAMPLE', raw => { raw.examples[1] = raw.examples[0]; }],
+    ['DUPLICATE_GUIDED_PROMPT', raw => { raw.questions[1] = raw.questions[0]; }],
+  ];
+  for (const [reason, mutate] of cases) {
+    const raw = document(); mutate(raw);
+    assert.throws(() => service(raw).parseLesson(JSON.stringify(raw), false, undefined, undefined, true),
+      expectedFailure(422, 'content', reason));
+  }
+  const traces = [];
+  const parsed = service(document(), [], traces).parseLesson(JSON.stringify(document()), false, undefined, undefined, true);
+  assert.equal(parsed.questions.length, 3);
+  assert.equal(parsed.exercises.length, 10);
+  assert.equal(Object.hasOwn(parsed, 'score'), false);
+  assert(!traces.join('\n').includes(document().objective));
+  assert(!traces.join('\n').includes(document().exercises[0].answer));
+});
+
+test('core remediation rejects reused teaching content as well as exercises', () => {
+  const original = document();
+  const lessons = service(original);
+  const baseline = lessons.parseLesson(JSON.stringify(original), false, undefined, undefined, true);
+  const retry = document(); retry.exercises.forEach(item => { item.question = `New situation: ${item.question}`; });
+  assert.throws(() => lessons.parseLesson(JSON.stringify(retry), false, original.exercises, undefined, true, baseline),
+    expectedFailure(422, 'content', 'REMEDIATION_EXPLANATION_REUSED'));
+  retry.explanation = 'A different explanation with another accessible situation and another rule contrast. '.repeat(12);
+  assert.throws(() => lessons.parseLesson(JSON.stringify(retry), false, original.exercises, undefined, true, baseline),
+    expectedFailure(422, 'content', 'REMEDIATION_EXAMPLES_REUSED'));
+  retry.examples = ['New worked example', 'Another fresh situation', 'Fresh contrasting case'];
+  assert.equal(lessons.parseLesson(JSON.stringify(retry), false, original.exercises, undefined, true, baseline).exercises.length, 10);
+});
+
+function generationFixture(failure) {
+  const state = { lessons: [], sessions: [], providerCalls: 0 };
+  const traces = [];
+  const tx = { $executeRaw: async () => {}, languageProfile: { findFirst: async () => ({ id: 'p' }) },
+    lesson: {
+      findFirst: async ({ where }) => state.lessons.find(row => row.userId === where.userId
+        && row.masteryRemediationGenerationKey === where.masteryRemediationGenerationKey) ?? null,
+      create: async ({ data }) => {
+        if (failure === 'write') throw new Error('PRIVATE_DATABASE_ERROR');
+        const row = { ...data, id: 'lesson', contentVersion: 1, sourceDocumentId: null,
+          createdAt: new Date(), updatedAt: new Date() };
+        state.lessons.push(row); return row;
+      },
+    } };
+  const prisma = { lesson: tx.lesson, $transaction: async operation => {
+    const before = structuredClone(state);
+    try {
+      const result = await operation(tx);
+      if (failure === 'commit') throw new Error('PRIVATE_TRANSACTION_ERROR');
+      return result;
+    } catch (error) {
+      state.lessons = before.lessons; state.sessions = before.sessions;
+      throw error;
+    }
+  } };
+  const lessons = new LessonService(prisma, { generate: async () => {
+    state.providerCalls++; return { text: JSON.stringify(document()) };
+  } }, { search: () => { throw new Error('Must not retrieve'); } }, {}, {}, {}, {
+    ensureLessonSession: async (_user, request) => {
+      if (failure === 'session') throw new Error('PRIVATE_SESSION_ERROR');
+      state.sessions.push(request); return { id: 'lesson-session' };
+    },
+  }, {}, {}, {});
+  lessons.logger = { log: value => traces.push(value), error: value => traces.push(value), warn: () => {} };
+  lessons.resolveTopic = async () => ({ topic: 'Alphabet' });
+  lessons.loadTeacherPreferences = async () => null;
+  lessons.toView = row => row;
+  lessons.get = async (_owner, id) => state.lessons.find(row => row.id === id);
+  const start = () => lessons.generate('u', { topic: 'Alphabet', language: 'English', level: 'beginner' },
+    { languageLearningCore: true, languageProfileId: 'p', languageGenerationKey: 'language-core:p:BEGINNER:alphabet:0' });
+  return { start, state, traces };
+}
+
+test('provider fixture → parser → persisted lesson and session is idempotent, without paid enrichment', async () => {
+  const fixture = generationFixture();
+  const lesson = await fixture.start();
+  assert.equal(lesson.exercises.length, 10);
+  assert.ok(lesson.exercises.every(item => item.correction));
+  assert.equal(fixture.state.lessons.length, 1);
+  assert.equal(fixture.state.sessions.length, 1);
+  assert.equal(fixture.state.sessions[0].links.lessonId, lesson.id);
+  assert.equal((await fixture.start()).id, lesson.id);
+  assert.equal(fixture.state.providerCalls, 1);
+  assert.equal(fixture.state.lessons.length, 1);
+  assert.equal(fixture.state.sessions.length, 1);
+  assert.ok(fixture.traces.some(value => JSON.parse(value).stage === 'lesson-session'));
+});
+
+test('write, session and commit failures roll back the graph and report only safe precise stages', async () => {
+  for (const failure of ['write', 'session', 'commit']) {
+    const fixture = generationFixture(failure);
+    await assert.rejects(fixture.start, expectedFailure(503,
+      failure === 'session' ? 'lesson-session' : 'persistence',
+      failure === 'session' ? 'LESSON_SESSION_CREATE_FAILED' : 'LESSON_TRANSACTION_FAILED'));
+    assert.equal(fixture.state.lessons.length, 0);
+    assert.equal(fixture.state.sessions.length, 0);
+    assert.equal(fixture.state.providerCalls, 1);
+    assert(!fixture.traces.join('\n').includes('PRIVATE_'));
+  }
+});
+
+// Pure fixture validator for the exact JSON Schema subset emitted here, not a
+// second application contract/validator. No provider or dependency is needed.
+function schemaAcceptsFixture(schema, value) {
+  if (schema.enum && !schema.enum.includes(value)) return false;
+  if (schema.type === 'string') return typeof value === 'string'
+    && (!schema.pattern || new RegExp(schema.pattern, 'u').test(value));
+  if (schema.type === 'array') return Array.isArray(value)
+    && (schema.minItems === undefined || value.length >= schema.minItems)
+    && (schema.maxItems === undefined || value.length <= schema.maxItems)
+    && value.every(item => schemaAcceptsFixture(schema.items, item));
+  if (schema.type === 'object') return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && (schema.required || []).every(key => Object.hasOwn(value, key))
+    && (schema.additionalProperties !== false || Object.keys(value).every(key => Object.hasOwn(schema.properties, key)))
+    && Object.entries(schema.properties).every(([key, child]) => !Object.hasOwn(value, key) || schemaAcceptsFixture(child, value[key]));
+  throw new Error('Unsupported test schema keyword/type');
+}
+
+test('core schema closes the proven provider-envelope/parser cardinality gap', () => {
+  const lessons = service(document());
+  const schema = lessons.languageCoreLessonJsonSchema().schema;
+  // Before this alignment every string/array below had only type/items; retain
+  // the unchanged required fields, enums and additionalProperties semantics.
+  const before = JSON.parse(JSON.stringify(schema), (key, value) =>
+    ['pattern', 'minItems', 'maxItems'].includes(key) ? undefined : value);
+  const changes = [
+    raw => { raw.explanation = 'A two-line shell.'; },
+    raw => { raw.examples = ['Only one worked example']; },
+    raw => { raw.questions = ['Only one guided prompt']; },
+    raw => { raw.exercises = raw.exercises.slice(0, 3); },
+    raw => { raw.keyPoints = ['Only one takeaway']; },
+    raw => { raw.exercises[0].options = raw.exercises[0].options.slice(0, 2); },
+  ];
+  for (const change of changes) {
+    const raw = document(); change(raw);
+    assert.equal(schemaAcceptsFixture(before, raw), true, 'old schema accepted the incomplete envelope');
+    assert.throws(() => lessons.parseLesson(JSON.stringify(raw), false, undefined, undefined, true));
+    assert.equal(schemaAcceptsFixture(schema, raw), false, 'same fixture must now be rejected at provider schema');
+  }
+  assert.equal(schemaAcceptsFixture(schema, document()), true);
+  assert.equal(lessons.parseLesson(JSON.stringify(document()), false, undefined, undefined, true).exercises.length, 10);
+});
+
+test('core schema uses supported patterns and preserves existing exact parser bounds', () => {
+  const lessons = service(document());
+  const schema = lessons.languageCoreLessonJsonSchema().schema;
+  assert.equal(schema.properties.objective.pattern, '\\S');
+  assert.equal(schema.properties.explanation.pattern, '^[\\s\\S]{600,}$');
+  assert.deepEqual([schema.properties.questions.minItems, schema.properties.questions.maxItems], [3, 5]);
+  assert.deepEqual([schema.properties.exercises.minItems, schema.properties.exercises.maxItems], [10, 12]);
+  assert.deepEqual([schema.properties.keyPoints.minItems, schema.properties.keyPoints.maxItems], [3, 5]);
+  const optionSchema = schema.properties.exercises.items.properties.options;
+  assert.deepEqual([optionSchema.minItems, optionSchema.maxItems], [3, 4]);
+  assert.equal(schema.properties.examples.minItems, 3);
+  assert.equal(schema.properties.commonMisconceptions.minItems, 1);
+  assert.equal(Object.hasOwn(schema.properties.homework, 'pattern'), false, 'optional homework may remain blank');
+  for (const count of [599, 600, 601]) {
+    const raw = document(); raw.explanation = '語'.repeat(count);
+    assert.equal(schemaAcceptsFixture(schema, raw), count >= 600);
+    if (count >= 600) assert.ok(lessons.parseLesson(JSON.stringify(raw), false, undefined, undefined, true));
+    else assert.throws(() => lessons.parseLesson(JSON.stringify(raw), false, undefined, undefined, true));
+  }
+  const blank = document(); blank.objective = ' \n\t';
+  assert.equal(schemaAcceptsFixture(schema, blank), false);
+  const emptyHomework = document(); emptyHomework.homework = '';
+  assert.equal(schemaAcceptsFixture(schema, emptyHomework), true);
 });

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
   buildLanguageLearningCatalogue, projectLanguageLearningCore, toSupportedLanguage,
@@ -21,6 +21,7 @@ import { applyLanguageLearningCorePosition, loadLanguageLearningCoreEvidence } f
 const INTENT = 'language-learning-core';
 const VERSION = 1;
 type Scope = 'lesson' | 'module' | 'level';
+type LessonStartStage = 'context' | 'provider' | 'assessment' | 'session' | 'response';
 interface LessonLink { id: string; variant: number; requestHash?: string }
 interface CoreState {
   version: 1;
@@ -33,7 +34,8 @@ interface CoreState {
   activeAssessmentId: string | null;
   answers: string[];
   phase: 'teaching' | 'assessment' | 'result';
-  generation?: { targetId: string; variant: number; key: string; status: 'generating' | 'failed' };
+  generation?: { targetId: string; variant: number; key: string; status: 'generating' | 'failed';
+    stage?: string; code?: string };
   teachingStep?: number;
 }
 export interface LanguageLearningCoreSessionView {
@@ -57,6 +59,7 @@ export interface LanguageLearningCoreSessionView {
  * contains only position/draft state and server-owned source identities. */
 @Injectable()
 export class LanguageLearningCoreService {
+  private readonly logger = new Logger(LanguageLearningCoreService.name);
   constructor(
     private readonly prisma: PrismaService,
     private readonly experiences: ExperienceSessionService,
@@ -72,7 +75,7 @@ export class LanguageLearningCoreService {
     const { profile, session, state, catalogue } = await this.load(userId, profileId);
     let evidence = await this.evidence(userId, profileId, state);
     const assessment = state.activeAssessmentId
-      ? await this.examiner.get(userId, state.activeAssessmentId).catch(() => null) : null;
+      ? await this.readSessionSource(() => this.examiner.get(userId, state.activeAssessmentId!), 'ASSESSMENT_READ_FAILED') : null;
     if (await this.recoverCompletion(userId, state, assessment, evidence)) {
       evidence = await this.evidence(userId, profileId, state);
     }
@@ -82,7 +85,7 @@ export class LanguageLearningCoreService {
     const roles = await resolveLanguageTeachingRoles(this.prisma, userId, profile);
     const link = state.activeScope === 'lesson' && state.activeTargetId
       ? state.lessonLinks[state.activeTargetId] : null;
-    const content = link ? await this.lessons.get(userId, link.id).catch(() => null) : null;
+    const content = link ? await this.readSessionSource(() => this.lessons.get(userId, link.id), 'LESSON_READ_FAILED') : null;
     return { core, sessionId: session.id, supportLanguage: roles.supportLanguage,
       targetLanguage: roles.targetLanguage,
       // Answer keys and corrections stay server-side until a sealed submission.
@@ -92,6 +95,16 @@ export class LanguageLearningCoreService {
       activeScope: state.activeScope, activeTargetId: state.activeTargetId,
       remediation: Boolean(link && link.variant > 0), phase: state.phase,
       teachingStep: state.teachingStep ?? 0 };
+  }
+
+  private async readSessionSource<T>(read: () => Promise<T>, reason: 'ASSESSMENT_READ_FAILED' | 'LESSON_READ_FAILED'): Promise<T> {
+    try { return await read(); }
+    catch {
+      this.logger.error(JSON.stringify({ event: 'LANGUAGE_LESSON_SESSION', stage: 'response',
+        status: 'FAIL', code: 'LESSON_SESSION_FAILED', reason, httpStatus: 503 }));
+      throw new ServiceUnavailableException({ message: 'The lesson could not be restored. Please try again later.',
+        code: 'LESSON_SESSION_FAILED', stage: 'response', reason });
+    }
   }
 
   /** Recover the crash window after a sealed pass but before publication. The
@@ -157,18 +170,43 @@ export class LanguageLearningCoreService {
     if (!content && state.generation?.status === 'generating') {
       throw new ConflictException('Lesson generation is already running. Reload to recover it.');
     }
+    if (!content && state.generation?.status === 'failed' && state.generation.targetId === targetId
+      && state.generation.variant === variant && state.generation.key === key) {
+      throw new ConflictException({ message: 'This lesson request failed. No automatic retry was made.',
+        code: 'LESSON_GENERATION_ALREADY_FAILED', stage: state.generation.stage ?? 'provider',
+        reason: state.generation.code ?? 'LESSON_START_FAILED' });
+    }
     const baseline = existing ? await this.lessons.get(userId, existing.id) : null;
-    if (!content) {
-      session = await this.save(userId, session, { ...state,
-        generation: { targetId, variant, key, status: 'generating' } });
-      state = this.state(session, profileId);
-      const roles = await resolveLanguageTeachingRoles(this.prisma, userId, profile);
-      try {
+    let stage: LessonStartStage = 'context';
+    let ownsGenerationClaim = false;
+    const diagnostic = { route: '/languages/:profileId/learning-core/lessons/:lessonId/start',
+      lessonId: targetId, moduleId: definition.moduleId, targetLanguage: catalogue.languageCode,
+      level: state.productLevel, variant, remediation };
+    try {
+      if (!content) {
+        session = await this.save(userId, session, { ...state,
+          generation: { targetId, variant, key, status: 'generating' } });
+        ownsGenerationClaim = true;
+        state = this.state(session, profileId);
+        const roles = await resolveLanguageTeachingRoles(this.prisma, userId, profile);
+        // The active screen may be another lesson. Always use the selected
+        // lesson's sealed attempt, not an unrelated latest UI submission.
+        const previousAssessment = remediation && baseline && existing
+          ? await this.seedLesson(userId, session, state, catalogue.version, targetId, baseline, existing.variant)
+          : null;
+        const failedItems = previousAssessment?.latestSubmission?.results
+          .filter((item) => item.questionId.startsWith(`${targetId}:`) && item.verdict !== 'correct')
+          .map((item) => ({ prompt: item.prompt, answer: item.learnerAnswer, reason: item.why })).slice(0, 10) ?? [];
+        stage = 'provider';
+        this.logger.log(JSON.stringify({ event: 'LANGUAGE_LESSON_START', ...diagnostic,
+          supportLanguage: roles.supportLanguageCode, stage, status: 'STARTED' }));
         content = await this.lessons.generate(userId, {
           topic: definition.title, language: profile.language,
           level: state.productLevel.toLowerCase() as 'beginner' | 'intermediate' | 'advanced', flashcards: false,
         }, { languageProfileId: profileId, languageLearningCore: true, languageGenerationKey: generationKey,
-          ...(baseline ? { remediationBaselineExercises: baseline.exercises } : {}),
+          ...(baseline ? { remediationBaselineExercises: baseline.exercises,
+            remediationBaselineContent: { explanation: baseline.explanation, examples: baseline.examples,
+              questions: baseline.questions } } : {}),
           directive: [
             `Target language: ${roles.targetLanguage}. Support language: ${roles.supportLanguage}.`,
             `Module: ${definition.moduleId}. Lesson: ${definition.id}. CEFR: ${state.cefrLevel}.`,
@@ -176,22 +214,77 @@ export class LanguageLearningCoreService {
             `Criteria: ${definition.criteria.map((criterion) => criterion.description).join('; ')}.`,
             'Explanations, instructions, corrections and immediate glosses use the support language. Target-language examples remain bilingual.',
             'Include a real teaching explanation, several worked examples, guided practice and ten distinct closed independent exercises.',
-            remediation ? `Remediation of this lesson only. Use a different explanation, situations and exercises. Previous incorrect responses: ${JSON.stringify(projection.latestSubmission?.results.filter((item) => item.questionId.startsWith(`${targetId}:`) && item.verdict !== 'correct').map((item) => ({ prompt: item.prompt, answer: item.learnerAnswer, reason: item.why })).slice(0, 10))}.` : '',
+            remediation ? `Remediation of this lesson only. Focus on these actual failed items; preserve acquired concepts. Use a different explanation, examples, situations and exercises. Previous incorrect responses: ${JSON.stringify(failedItems)}.` : '',
           ].join('\n'),
         });
-      } catch (error) {
-        await this.save(userId, session, { ...state, generation: { targetId, variant, key, status: 'failed' } });
-        throw error;
       }
+      stage = 'assessment';
+      const seeded = await this.seedLesson(userId, session, state, catalogue.version, targetId, content, variant);
+      const next: CoreState = { ...state, generation: undefined,
+        lessonLinks: { ...state.lessonLinks, [targetId]: { id: content.id, variant,
+          requestHash: createHash('sha256').update(key).digest('hex') } },
+        activeScope: 'lesson', activeTargetId: targetId, activeAssessmentId: seeded.id,
+        answers: seeded.latestSubmission ? [] : seeded.questions.map(() => ''),
+        phase: seeded.latestSubmission ? 'result' : 'teaching', teachingStep: 0 };
+      stage = 'session';
+      await this.save(userId, session, next);
+      stage = 'response';
+      const result = await this.get(userId, profileId);
+      if (result.content?.id !== content.id || result.assessment?.id !== seeded.id
+        || result.activeScope !== 'lesson' || result.activeTargetId !== targetId) {
+        throw new ServiceUnavailableException({ message: 'The lesson could not be restored. Please try again later.',
+          code: 'LESSON_SESSION_FAILED', stage: 'response', reason: 'LESSON_SESSION_RESPONSE_INCOMPLETE' });
+      }
+      this.logger.log(JSON.stringify({ event: 'LANGUAGE_LESSON_START', ...diagnostic,
+        stage: 'session', status: 'LESSON_READY', httpStatus: 200 }));
+      return result;
+    } catch (error) {
+      const safe = this.lessonStartFailure(error, stage);
+      // A valid persisted Lesson is recoverable by generationKey. Preserve it
+      // and any prior mastery; only mark this incomplete attempt, never erase
+      // content or overwrite a newer tab's completed session.
+      try {
+        const latest = await this.experiences.get(userId, session.id);
+        const latestState = this.state(latest, profileId);
+        if (ownsGenerationClaim && latestState.generation?.targetId === targetId && latestState.generation.variant === variant
+          && latestState.generation.key === key && latestState.generation.status === 'generating') {
+          await this.save(userId, latest, { ...latestState, generation: { targetId, variant, key,
+            status: 'failed', stage: safe.stage, code: safe.code } });
+        }
+      } catch { /* A database outage must not hide the original bounded cause. */ }
+      this.logger.error(JSON.stringify({ event: 'LANGUAGE_LESSON_START', ...diagnostic,
+        status: 'LESSON_GENERATION_FAILED', ...safe }));
+      throw new HttpException({ message: 'The lesson could not be prepared. Please try again later.',
+        code: safe.code, stage: safe.stage, reason: safe.reason }, safe.httpStatus);
     }
-    const seeded = await this.seedLesson(userId, session, state, catalogue.version, targetId, content, variant);
-    const next: CoreState = { ...state, generation: undefined,
-      lessonLinks: { ...state.lessonLinks, [targetId]: { id: content.id, variant,
-        requestHash: createHash('sha256').update(key).digest('hex') } },
-      activeScope: 'lesson', activeTargetId: targetId, activeAssessmentId: seeded.id,
-      answers: seeded.questions.map(() => ''), phase: 'teaching', teachingStep: 0 };
-    await this.save(userId, session, next);
-    return this.get(userId, profileId);
+  }
+
+  private lessonStartFailure(error: unknown, stage: LessonStartStage) {
+    const response = error instanceof HttpException ? error.getResponse() : null;
+    const safe = response && typeof response === 'object' ? response as Record<string, unknown> : {};
+    const knownCodes = new Set(['LESSON_CONTENT_INVALID', 'LESSON_PARSER_INVALID', 'LESSON_PROVIDER_FAILED',
+      'LESSON_ADAPTER_FAILED', 'LESSON_PERSISTENCE_FAILED', 'LESSON_SESSION_FAILED']);
+    const knownStages = new Set(['parser', 'content', 'provider', 'adapter', 'persistence', 'lesson-session', 'response']);
+    const knownReasons = new Set(['PROVIDER_REQUEST_FAILED', 'PROVIDER_TEXT_MISSING', 'INVALID_JSON',
+      'JSON_OBJECT_REQUIRED', 'OBJECTIVE_REQUIRED', 'INTRO_REQUIRED', 'EXPLANATION_REQUIRED', 'SUMMARY_REQUIRED',
+      'REVISION_SHEET_REQUIRED', 'WORKED_EXAMPLES_REQUIRED', 'EXPLANATION_TOO_SHORT',
+      'MISCONCEPTION_CORRECTION_REQUIRED', 'GUIDED_PRACTICE_REQUIRED', 'KEY_POINTS_REQUIRED',
+      'DUPLICATE_WORKED_EXAMPLE', 'DUPLICATE_GUIDED_PROMPT', 'EXERCISES_REQUIRED', 'INVALID_EXERCISE_ITEM',
+      'EXERCISE_COUNT_INVALID', 'QCM_EXERCISE_REQUIRED', 'EXERCISE_CORRECTION_REQUIRED',
+      'DUPLICATE_EXERCISE_PROMPT', 'CORE_EXERCISE_CONTRACT_INVALID', 'INVALID_CONTENT_ARRAY_ITEM',
+      'INVALID_QCM_OPTIONS', 'LANGUAGE_EXERCISE_CONTRACT_INVALID', 'EXERCISE_CONTRACT_INVALID',
+      'REMEDIATION_EXERCISE_REUSED', 'REMEDIATION_MINIMUM_NOT_MET', 'REMEDIATION_EXPLANATION_REUSED',
+      'REMEDIATION_EXAMPLES_REUSED', 'LESSON_SESSION_CREATE_FAILED', 'LESSON_TRANSACTION_FAILED',
+      'ASSESSMENT_READ_FAILED', 'LESSON_READ_FAILED', 'LESSON_SESSION_RESPONSE_INCOMPLETE']);
+    const code = typeof safe.code === 'string' && knownCodes.has(safe.code) ? safe.code
+      : stage === 'assessment' ? 'LESSON_ASSESSMENT_FAILED'
+        : stage === 'session' ? 'LESSON_SESSION_FAILED' : 'LESSON_START_FAILED';
+    const safeStage = typeof safe.stage === 'string' && knownStages.has(safe.stage) ? safe.stage : stage;
+    // Only the explicit trusted enum survives, not arbitrary provider prose.
+    const reason = typeof safe.reason === 'string' && knownReasons.has(safe.reason)
+      ? safe.reason : code;
+    return { code, stage: safeStage, reason,
+      httpStatus: error instanceof HttpException ? error.getStatus() : 503 };
   }
 
   async saveAnswers(userId: string, profileId: string, targetId: string, answers: string[],
@@ -329,9 +422,19 @@ export class LanguageLearningCoreService {
     if (acquired.count !== 1) throw new ConflictException('This help request has already been claimed.');
     const currentModule = view.core.modules.find((module) => module.lessons.some((lesson) => lesson.id === targetId));
     const currentLesson = currentModule?.lessons.find((lesson) => lesson.id === targetId);
-    const remediationHistory = (await this.evidence(userId, profileId, state))
+    const lessonEvidence = (await this.evidence(userId, profileId, state))
       .filter((item) => item.scope === 'lesson' && item.targetId === targetId)
-      .sort((a, b) => a.evaluatedAt.localeCompare(b.evaluatedAt)).slice(-8)
+      .sort((a, b) => a.evaluatedAt.localeCompare(b.evaluatedAt));
+    // A fresh remediation assessment is deliberately ungraded. Retain the
+    // selected lesson's last canonical errors for coaching, never another
+    // lesson's current UI submission and never an unverified browser score.
+    const previousEvidence = lessonEvidence.at(-1);
+    const previousSubmission = !view.latestSubmission && previousEvidence
+      ? await this.prisma.assessmentSubmission.findFirst({ where: { id: previousEvidence.submissionId,
+        userId, masteryGenerationStatus: 'ready' }, select: { assessmentId: true } }) : null;
+    const coachingSubmission = view.latestSubmission ?? (previousSubmission
+      ? (await this.examiner.get(userId, previousSubmission.assessmentId)).latestSubmission : null);
+    const remediationHistory = lessonEvidence.slice(-8)
       .map((item) => ({ evaluatedAt: item.evaluatedAt, remediation: item.remediation,
         score: item.awardedPoints !== null && item.maximumPoints ? item.awardedPoints / item.maximumPoints : null,
         weakConcepts: item.weakConcepts }));
@@ -345,9 +448,9 @@ export class LanguageLearningCoreService {
           currentConcepts: currentLesson?.criteria, masteryState: currentLesson?.status,
           lessonId: targetId, objective: view.content.objective, explanation: view.content.explanation.slice(0, 10000),
           examples: view.content.examples, questions: view.content.questions,
-          evaluatedErrors: view.latestSubmission?.results.filter((item) => item.verdict !== 'correct'),
-          currentAnswers: state.answers, remediationHistory,
-          score: view.latestSubmission?.score ?? null }),
+          evaluatedErrors: coachingSubmission?.results.filter((item) => item.verdict !== 'correct'),
+          currentAnswers: state.answers, remediationHistory, remediationActive: view.remediation,
+          score: coachingSubmission?.score ?? null }),
       ].join('\n') },
       { role: 'user', content: message.trim() },
     ], { operation: 'language-core-help', maxOutputTokens: 700, temperature: 0.3 });
