@@ -19,10 +19,14 @@ import type {
   LLMGenerateOptions,
   KycTeacher,
   LanguageTrainingFormat,
+  LanguageExerciseInstruction,
 } from '@second-brain/shared';
 import {
   LANGUAGE_REMEDIATION_MINIMUM_EXERCISES,
   LANGUAGE_TRAINING_FORMATS,
+  LANGUAGE_EXERCISE_INSTRUCTION_KEYS,
+  LANGUAGE_EXERCISE_INSTRUCTION_PARAMS,
+  resolveLanguageExercisePresentation,
   resolveTeacherPolicy,
   TEACHER_POLICY_METADATA_SOURCE,
   teacherPolicyDirective,
@@ -128,11 +132,18 @@ const LANGUAGE_CORE_LESSON_DIRECTIVE = [
   '3-4 plausible unique options, answer copied verbatim from one option, and correction.',
   'Each correction explains the mistake/rule, the correct form and another example.',
   'Use the configured support language for objective, intro, explanation, commonMisconceptions,',
-  'questions (guided-practice instructions), exercises[].question (instructions), exercises[].correction,',
+  'questions (guided-practice instructions), exercises[].correction,',
   'homework instructions, summary, keyPoints and revisionSheet. Preserve the meaning of the server objective,',
   'but translate its pedagogical wording into the support language; do not copy a target-language title as the objective.',
   'Use the target language for examples/expressions, with immediate support-language glosses.',
   'Independent exercise prompts/options must not reveal answers through translations or hints.',
+  'Second Brain owns ALL standard exercise instruction wording. Never author that wording in question or targetText.',
+  'For each exercise return instruction={key,params} using the supplied strict schema, plus targetText containing only',
+  'the target-language learning material. question is a distinct canonical semantic identifier/content, not an instruction.',
+  'Use the alphabet/letter/spelling instruction family with structured operands when that is the actual task;',
+  'its targetText may be empty because the operand is already present in params. For generic choose/discriminate/',
+  'matchRegister provide nonempty targetText (sentence, context or expression), never a freely authored instruction.',
+  'Do not request listening, speaking or pronunciation for these written multiple-choice items.',
   'Never claim acoustic pronunciation has been assessed from text. Oral teaching may use text practice.',
   'For remediation change the explanation, situations and every exercise, targeting only the specified weaknesses.',
 ].join(' ');
@@ -877,7 +888,14 @@ export class LessonService {
     });
     const lesson = this.parseLesson(text, languageMastery, remediationBaselineExercises,
       languageNotions, languageLearningCore, remediationBaselineContent);
-    if (languageLearningCore && languageRoleContext) this.requireLanguageRoleContent(lesson, languageRoleContext);
+    if (languageLearningCore && languageRoleContext) {
+      for (const exercise of lesson.exercises) {
+        const presentation = resolveLanguageExercisePresentation(exercise,
+          languageRoleContext.supportLanguageCode, languageRoleContext.targetLanguageCode);
+        if (!presentation.normalized) throw this.lessonGenerationFailure('content', 'EXERCISE_INSTRUCTION_INVALID');
+      }
+      this.requireLanguageRoleContent(lesson, languageRoleContext);
+    }
     return lesson;
   }
 
@@ -893,6 +911,18 @@ export class LessonService {
       type: 'array', items: text, minItems: minimum,
       ...(maximum === undefined ? {} : { maxItems: maximum }),
     });
+    const writtenKeys = LANGUAGE_EXERCISE_INSTRUCTION_KEYS.filter(key =>
+      ['choose', 'discriminate', 'matchRegister', 'letterName', 'spellWord', 'spellName',
+        'letterAfter', 'letterBefore', 'alphabetFirst', 'letterBetween', 'letterNameVariant'].includes(key));
+    const instruction = { anyOf: writtenKeys.map(key => ({
+      type: 'object', additionalProperties: false, required: ['key', 'params'],
+      properties: { key: { type: 'string', enum: [key] }, params: {
+        type: 'object', additionalProperties: false,
+        required: [...LANGUAGE_EXERCISE_INSTRUCTION_PARAMS[key]],
+        properties: Object.fromEntries(LANGUAGE_EXERCISE_INSTRUCTION_PARAMS[key].map(param => [param,
+          param === 'variant' ? { type: 'string', enum: ['american', 'british'] } : text])),
+      } },
+    })) };
     return {
       name: 'language_core_lesson', strict: true,
       schema: {
@@ -910,8 +940,10 @@ export class LessonService {
           summary: teachingText, keyPoints: { ...texts(3, 5), items: teachingText }, revisionSheet: teachingText,
           exercises: { type: 'array', minItems: 10, maxItems: 12, items: {
             type: 'object', additionalProperties: false,
-            required: ['question', 'answer', 'type', 'options', 'correction'],
-            properties: { question: teachingText,
+            required: ['question', 'answer', 'type', 'options', 'correction', 'instruction', 'targetText'],
+            properties: { question: { ...text, description: `Distinct semantic exercise content/identity in ${target}, not learner-facing instruction prose.` },
+              instruction,
+              targetText: { type: 'string', description: `Semantic learning material in ${target}, not an instruction or answer-revealing translation. Empty only when the structured instruction operands already express the complete task.` },
               answer: { ...text, description: `Exact correct option text; keep the requested learning production in ${target}.` },
               type: { type: 'string', enum: ['qcm'] },
               options: { ...texts(3, 4), description: `Independent learning options in ${target} where appropriate; no support-language translation revealing the answer.` },
@@ -942,10 +974,12 @@ export class LessonService {
       'The catalogue objective/title may be written in the target language. Preserve its meaning,',
       'but express the objective field itself in supportLanguage, not by copying catalogue wording.',
       'Write objective, intro, explanation (including grammar/vocabulary rules and pedagogical notes),',
-      'commonMisconceptions, questions/guided-practice instructions, exercise instructions in question,',
+      'commonMisconceptions, questions/guided-practice instructions,',
       'correction explanations, homework instructions, summary, keyPoints and revisionSheet primarily in supportLanguage.',
       'Write target vocabulary, expressions, dialogues, example sentences, listening/reading material,',
       'sentences to repeat and expected target-language productions in targetLanguage.',
+      'Exercise instruction wording is application-owned: return only instruction.key and structured instruction.params.',
+      'Exercise question and targetText are semantic target-language material, never freely authored standard instructions.',
       'Preserve each examples[] target sentence and follow it with the immediate support-language meaning.',
       'Each existing string may contain support-language instruction plus clearly quoted target-language text;',
       'use quotation marks or backticks for embedded target examples instead of switching the teaching prose.',
@@ -968,9 +1002,16 @@ export class LessonService {
       ...(content.commonMisconceptions ?? []).map(value => ['commonMisconceptions', value] as [string, unknown]),
       ...(content.questions ?? []).map(value => ['questions', value] as [string, unknown]),
       ...(content.keyPoints ?? []).map(value => ['keyPoints', value] as [string, unknown]),
-      ...(content.exercises ?? []).flatMap(exercise => [
-        ['exercises.question', exercise.question], ['exercises.correction', exercise.correction],
-      ] as [string, unknown][]),
+      ...(content.exercises ?? []).flatMap(exercise => {
+        const presentation = resolveLanguageExercisePresentation(exercise, roles.supportLanguageCode,
+          roles.targetLanguageCode);
+        return [
+          // Structured/recognized instructions are deterministic copy. Their
+          // target semantic content is not support-language prose to classify.
+          ['exercises.question', presentation.normalized ? presentation.instructionText : exercise.question],
+          ['exercises.correction', exercise.correction],
+        ] as [string, unknown][];
+      }),
     ];
     // examples[], answers, options, audioText and dialogueTurns are learning
     // target material, NOT samples for checking the teaching language.
@@ -1270,7 +1311,7 @@ export class LessonService {
         : [];
     const exercises = rawExercises.length > 0
       ? rawExercises
-          .map((exercise) => this.normalizeExercise(exercise, languageMastery, languageNotions))
+          .map((exercise) => this.normalizeExercise(exercise, languageMastery, languageNotions, languageLearningCore))
           .filter((exercise): exercise is LessonExercise => exercise !== null)
       : [];
     const exerciseTypes = new Set(exercises.map((exercise) => exercise.type));
@@ -1308,6 +1349,11 @@ export class LessonService {
       if (exercises.length < 10 || exercises.length > 12) reasons.push('EXERCISE_COUNT_INVALID');
       if (exercises.some(exercise => exercise.type !== 'qcm')) reasons.push('QCM_EXERCISE_REQUIRED');
       if (exercises.some(exercise => !exercise.correction)) reasons.push('EXERCISE_CORRECTION_REQUIRED');
+      if (rawExercises.some(exercise => !exercise || typeof exercise !== 'object'
+        || !(exercise as Record<string, unknown>).instruction
+        || typeof (exercise as Record<string, unknown>).targetText !== 'string')) {
+        reasons.push('EXERCISE_INSTRUCTION_REQUIRED');
+      }
       if (new Set(exercises.map(exercise => exercise.question.normalize('NFKC').trim().toLowerCase())).size !== exercises.length) {
         reasons.push('DUPLICATE_EXERCISE_PROMPT');
       }
@@ -1479,6 +1525,7 @@ export class LessonService {
     value: unknown,
     languageMastery = false,
     languageNotions?: readonly { notionId: string; criterionId: string }[],
+    languageLearningCore = false,
   ): LessonExercise | null {
     if (!value || typeof value !== 'object') return null;
     const e = value as Record<string, unknown>;
@@ -1495,6 +1542,27 @@ export class LessonService {
       ...(typeof e.correction === 'string' && e.correction.trim()
         ? { correction: e.correction.trim() } : {}),
     };
+    if (e.instruction !== undefined) {
+      const instruction = e.instruction as Record<string, unknown> | null;
+      if (!instruction || typeof instruction !== 'object' || Array.isArray(instruction)
+        || Object.keys(instruction).some(key => key !== 'key' && key !== 'params')
+        || typeof instruction.key !== 'string'
+        || !Object.prototype.hasOwnProperty.call(LANGUAGE_EXERCISE_INSTRUCTION_PARAMS, instruction.key)) return null;
+      const key = instruction.key as keyof typeof LANGUAGE_EXERCISE_INSTRUCTION_PARAMS;
+      const expected = LANGUAGE_EXERCISE_INSTRUCTION_PARAMS[key];
+      const params = instruction.params ?? {};
+      if (!params || typeof params !== 'object' || Array.isArray(params)
+        || Object.keys(params).length !== expected.length
+        || expected.some(name => typeof (params as Record<string, unknown>)[name] !== 'string'
+          || !((params as Record<string, string>)[name]).trim())) return null;
+      if (key === 'letterNameVariant' && !['american', 'british'].includes((params as Record<string, string>).variant)) return null;
+      base.instruction = { key, params: { ...(params as Record<string, string>) } } as LanguageExerciseInstruction;
+      if (typeof e.targetText !== 'string') return null;
+      base.targetText = e.targetText.trim();
+      if (expected.length === 0 && key !== 'alphabetFirst' && !base.targetText) return null;
+      if (languageLearningCore && !['choose', 'discriminate', 'matchRegister', 'letterName', 'spellWord',
+        'spellName', 'letterAfter', 'letterBefore', 'alphabetFirst', 'letterBetween', 'letterNameVariant'].includes(key)) return null;
+    } else if (languageLearningCore) return null;
     if (languageMastery) {
       if (!(LANGUAGE_TRAINING_FORMATS as readonly unknown[]).includes(e.languageFormat)) return null;
       base.languageFormat = e.languageFormat as LanguageTrainingFormat;

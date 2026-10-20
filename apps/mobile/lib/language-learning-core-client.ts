@@ -21,6 +21,7 @@ export interface LanguageLearningSessionView {
   phase?: 'teaching' | 'assessment' | 'result';
   teachingStep?: number;
   supportLanguage?: string;
+  supportLanguageCode?: string;
   targetLanguage?: string;
 }
 

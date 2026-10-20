@@ -1,6 +1,8 @@
 /** Examiner role (Phase 5, Educational Engine): assessment, detailed correction,
  *  personalised feedback, and knowledge-gap detection. */
 
+import type { LanguageExerciseInstruction } from './language-exercise-instructions';
+
 export interface SubmitAttemptRequest {
   /** The learner's answer to the exercise. */
   answer: string;
@@ -89,6 +91,10 @@ export type QuestionFormat = 'mcq' | 'open';
 export interface AssessmentQuestionView {
   id: string;
   prompt: string;
+  /** Public presentation only; never replaces canonical scoring data. */
+  instruction?: LanguageExerciseInstruction;
+  instructionText?: string;
+  targetText?: string;
   format: QuestionFormat;
   /** Choices when format='mcq'; absent otherwise. */
   options?: string[];

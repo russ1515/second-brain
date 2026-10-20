@@ -2,6 +2,7 @@
 require('reflect-metadata');
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const { buildLanguageLearningCatalogue } = require('@second-brain/shared');
 const { LessonService } = require('../dist/lessons/lesson.service');
 const { ExaminerService } = require('../dist/examiner/examiner.service');
@@ -22,6 +23,7 @@ function lessonDocument(variant = 0) {
     questions: [`Repère ensemble la lettre ${variant}`, `Compare ensemble deux formes ${variant}`, `Explique ensemble un choix ${variant}`],
     exercises: Array.from({ length: 10 }, (_, i) => ({ type: 'qcm',
       question: `Situation ${variant}, item ${i + 1} : quelle lettre correspond à l’exemple ?`,
+      instruction: { key: 'choose', params: {} }, targetText: `Target situation ${variant}, item ${i + 1}`,
       options: [`Exact ${variant}-${i}`, `Autre ${variant}-${i}`, `Distracteur ${variant}-${i}`],
       answer: `Exact ${variant}-${i}`, correction: `La règle ${i} distingue la forme attendue ; autre exemple ${variant}.`,
     })),
@@ -479,3 +481,136 @@ for (const arrival of ['submission', 'draft']) {
     else assert.ok(state.answers[0]);
   });
 }
+
+const retainedInstructionPrompts = [
+  "Listen and choose the correct name of the letter: What is the name of the letter 'B'?",
+  "How do you spell the word 'cat' using letter names?",
+  "Spell the name 'Ann' using English letter names.",
+  "Which letter comes after 'M' in the English alphabet?",
+  "What is the name of the letter 'W'?",
+  "Spell the word 'dog' using letter names.",
+  'What is the first letter of the English alphabet?',
+  "How do you say the name of the letter 'Z' in American English?",
+  "Spell the name 'Bob' using English letter names.",
+  "Which letter is between 'S' and 'U' in the alphabet?",
+];
+
+function retainedLegacySource(f) {
+  // Simulate an existing immutable persisted pre-contract snapshot, not an
+  // application repair/write path. The GET below must perform zero writes.
+  for (const [index, exercise] of f.tables.lesson[0].exercises.entries()) {
+    exercise.question = retainedInstructionPrompts[index];
+    delete exercise.instruction; delete exercise.targetText;
+  }
+  for (const [index, question] of f.tables.assessment[0].questions.questions.entries()) {
+    question.prompt = retainedInstructionPrompts[index];
+    delete question.instruction; delete question.targetText;
+  }
+  const assessment = f.tables.assessment[0];
+  // The retained fixture must already possess the canonical hash of its own
+  // original authored payload. The application must never repair this hash.
+  assessment.masteryCreationHash = createHash('sha256').update(JSON.stringify({
+    topic: assessment.topic, lessonId: assessment.lessonId, contentVersion: assessment.contentVersion,
+    level: assessment.level, metadata: assessment.questions.languageLearningCore,
+    questions: assessment.questions.questions.map(question => ({ id: question.id, prompt: question.prompt,
+      options: question.options, answerKey: question.answerKey, correction: question.rubric })),
+  })).digest('hex');
+  const session = f.tables.experienceSession.find(row => row.intent === 'language-learning-core');
+  session.version = 11;
+  session.currentStep.metadata.languageLearningCore.phase = 'assessment';
+  session.currentStep.metadata.languageLearningCore.answers = Array(10).fill('');
+}
+
+test('retained ten instructions hydrate read-only through F5, canonical grading, remediation and mastery', async () => {
+  const f = fixture(); const id = f.definitions[0].id;
+  await f.core.startLesson(f.owner, f.profile.id, id, 'existing'); retainedLegacySource(f);
+  const before = structuredClone(f.tables);
+  const view = await f.core.get(f.owner, f.profile.id);
+  assert.equal(view.supportLanguageCode, 'fr'); assert.equal(view.phase, 'assessment');
+  assert.equal(view.assessment.id, before.assessment[0].id); assert.equal(view.content.id, before.lesson[0].id);
+  assert.deepEqual(view.answers, Array(10).fill(''));
+  assert.deepEqual(f.tables, before, 'projection does not rewrite source, assessment, hash, revision or evidence');
+  assert.equal(f.requests.length, 1, 'hydration makes no provider request');
+  assert.equal(view.assessment.questions.length, 10);
+  for (const [index, question] of view.assessment.questions.entries()) {
+    assert.notEqual(question.prompt, retainedInstructionPrompts[index]);
+    assert.ok(question.instructionText.length > 0);
+    assert.deepEqual(question.options, before.assessment[0].questions.questions[index].options);
+    assert.equal(question.id, before.assessment[0].questions.questions[index].id);
+    assert.equal(question.points, before.assessment[0].questions.questions[index].points);
+    assert.equal('answerKey' in question, false);
+    assert.equal('rubric' in question, false);
+  }
+  assert.doesNotMatch(view.assessment.questions[0].prompt, /Listen|écoute/i, 'written MCQ must not pretend it has audio');
+  assert.match(view.assessment.questions[0].prompt, /B/);
+  assert.match(view.assessment.questions[1].prompt, /cat/);
+  assert.match(view.assessment.questions[7].prompt, /américain/i);
+  assert.deepEqual((await f.core.get(f.owner, f.profile.id)).assessment, view.assessment);
+  const failed = await f.core.submit(f.owner, f.profile.id, id, f.answers(view, 8), 'legacy-fail');
+  assert.equal(failed.latestSubmission.score, 80); assert.equal(lesson(failed, id).status, 'NEEDS_REMEDIATION');
+  assert.deepEqual(f.tables.assessmentSubmission[0].results.map(result => result.prompt), retainedInstructionPrompts,
+    'sealed canonical results retain exactly the raw question prompts');
+  assert.deepEqual(f.tables.lesson[0], before.lesson[0]); assert.deepEqual(f.tables.assessment[0], before.assessment[0]);
+  assert.deepEqual(failed.latestSubmission.results.map(result => result.prompt), view.assessment.questions.map(question => question.prompt));
+  assert.equal((await f.projection()).modules[0].lessons[0].status, 'NEEDS_REMEDIATION', 'canonical evidence still validates');
+  const remediation = await f.core.startLesson(f.owner, f.profile.id, id, 'legacy-remediate', true);
+  assert.equal(remediation.supportLanguageCode, 'fr'); assert.equal(remediation.remediation, true);
+  assert.notEqual(remediation.content.id, view.content.id);
+  const passed = await f.core.submit(f.owner, f.profile.id, id, f.answers(remediation, 9), 'legacy-pass');
+  assert.equal(lesson(passed, id).status, 'MASTERED');
+  assert.equal(lesson(passed, f.definitions[1].id).status, 'AVAILABLE');
+  assert.deepEqual(await f.projection(), passed.core);
+  const relogin = new LanguageLearningCoreService(f.prisma, f.experiences, f.core.languages,
+    f.core.placement, f.lessons, f.examiner, f.core.completions, f.llm);
+  assert.deepEqual((await relogin.get(f.owner, f.profile.id)).core, passed.core);
+  assert.deepEqual(f.tables.lesson[0], before.lesson[0]); assert.deepEqual(f.tables.assessment[0], before.assessment[0]);
+  assert.equal(f.requests.length, 2, 'only initial fixture generation and remediation, never an instruction translation call');
+});
+
+test('unrecognized retained instruction fails explicitly without writes, answer exposure or provider retry', async () => {
+  const f = fixture(); await f.core.startLesson(f.owner, f.profile.id, f.definitions[0].id, 'start');
+  retainedLegacySource(f);
+  f.tables.assessment[0].questions.questions[0].prompt = 'Apply this unusual instruction with an unsupported constraint.';
+  const before = structuredClone(f.tables);
+  for (let count = 0; count < 2; count++) await assert.rejects(f.core.get(f.owner, f.profile.id), error => {
+    assert.equal(error.getStatus(), 422);
+    assert.equal(error.getResponse().code, 'LESSON_EXERCISE_INSTRUCTION_NOT_NORMALIZABLE');
+    assert.equal(error.getResponse().reason, 'NOT_NORMALIZABLE');
+    assert.doesNotMatch(JSON.stringify(error.getResponse()), /Exact|answerKey|rubric/); return true;
+  });
+  assert.deepEqual(f.tables, before); assert.equal(f.requests.length, 1);
+});
+
+test('structural instruction hydration is independent of target text length and interface preference', async () => {
+  for (const support of ['fr', 'ar']) {
+    const f = fixture();
+    const view = await f.core.startLesson(f.owner, f.profile.id, f.definitions[0].id, 'start');
+    await f.core.saveAnswers(f.owner, f.profile.id, f.definitions[0].id, Array(10).fill(''), 'assessment');
+    f.profile.teachingLanguageSource = 'native'; f.profile.nativeLanguage = support;
+    f.prisma.profile.findUnique = async () => ({ preferredLanguage: 'ja' });
+    for (const [index, count] of [5, 20, 40, 60].entries()) {
+      const source = f.tables.assessment[0].questions.questions[index]; source.targetText = 'X'.repeat(count);
+    }
+    const before = structuredClone(f.tables); const restored = await f.core.get(f.owner, f.profile.id);
+    assert.equal(restored.supportLanguageCode, support);
+    for (const [index, count] of [5, 20, 40, 60].entries()) {
+      const question = restored.assessment.questions[index];
+      assert.equal(question.targetText, 'X'.repeat(count));
+      assert.equal(question.prompt, question.instructionText + '\n' + 'X'.repeat(count));
+      assert.equal(support === 'ar' ? /\p{Script=Arabic}/u.test(question.instructionText) : /Choisis/i.test(question.instructionText), true);
+    }
+    assert.deepEqual(f.tables, before); assert.equal(f.requests.length, 1);
+  }
+});
+
+test('French contextual help with an English example never changes score or mastery', async () => {
+  const f = fixture({ helpText: 'On ajoute un s avec la troisième personne au présent. Observe le sujet avant de choisir la forme : "She walks to school." signifie qu’elle va à l’école à pied. Cette règle explique le choix sans modifier ton résultat.' });
+  const id = f.definitions[0].id; const started = await f.core.startLesson(f.owner, f.profile.id, id, 'start');
+  await f.core.submit(f.owner, f.profile.id, id, f.answers(started, 8), 'failed');
+  const before = structuredClone({ submissions: f.tables.assessmentSubmission, completions: f.tables.learningCompletion,
+    projection: await f.projection() });
+  const answer = await f.core.help(f.owner, f.profile.id, id, 'Pourquoi on met un s ici ?', 'help');
+  assert.match(answer.answer, /On ajoute un s/); assert.match(answer.answer, /She walks to school/);
+  assert.deepEqual(f.tables.assessmentSubmission, before.submissions); assert.deepEqual(f.tables.learningCompletion, before.completions);
+  assert.deepEqual(await f.projection(), before.projection);
+});

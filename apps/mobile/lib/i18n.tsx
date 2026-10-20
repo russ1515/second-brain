@@ -8885,6 +8885,13 @@ export function tr(key: TranslationKey, values?: TranslationValues): string {
   return formatTranslation(template, values);
 }
 
+/** Explicit pedagogical locale lookup. Unlike UI translation, this must not
+ * silently teach in English (or mutate the account's interface language). */
+export function trInLocale(locale: string, key: TranslationKey, values?: TranslationValues): string | null {
+  const template = registry.get(locale)?.catalog[key];
+  return typeof template === 'string' && template.trim() ? formatTranslation(template, values) : null;
+}
+
 const useWebDocumentLocaleEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect;
 
 export function I18nProvider({

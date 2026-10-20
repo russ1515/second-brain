@@ -32,6 +32,7 @@ function content(support = 'fr', target = 'en') {
     examples: targets.map((text, i) => `"${text}" — ${glosses[i]}`),
     commonMisconceptions: [teaching[support]], questions: [1, 2, 3].map(i => `${teaching[support]} (${i})`),
     exercises: Array.from({ length: 10 }, (_, i) => ({ type: 'qcm', question: `${teaching[support]} (${i})`,
+      instruction: { key: 'choose', params: {} }, targetText: `Target sentence ${i}`,
       answer: `Letter ${i}`, options: [`Letter ${i}`, 'Wrong option', 'Other option'],
       correction: `${teaching[support]} "I am a student."` })),
     homework: teaching[support], summary: teaching[support], keyPoints: [1, 2, 3].map(i => `${teaching[support]} (${i})`),
@@ -81,6 +82,7 @@ test('all pedagogical fields and remediation corrections share one reliable chec
   }
   for (const field of ['question', 'correction']) {
     const raw = content(); raw.exercises[0][field] = teaching.en;
+    if (field === 'question') { delete raw.exercises[0].instruction; delete raw.exercises[0].targetText; }
     assert.ok(lessons.getLanguageRoleViolation(raw, roles('fr', 'en'))?.fields.includes(`exercises.${field}`));
   }
   const remediation = content(); remediation.exercises[0].correction = `${teaching.fr} "She is a student."`;

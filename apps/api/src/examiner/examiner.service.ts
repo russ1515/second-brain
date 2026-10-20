@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -22,6 +23,8 @@ import type {
   LanguagePlacementSkillEvidence,
   LanguagePlacementRequiredSkill,
   LanguagePlacementCefr,
+  LanguageExerciseInstruction,
+  LanguageTrainingFormat,
 } from '@second-brain/shared';
 import {
   isTeacherPolicySnapshot,
@@ -32,6 +35,7 @@ import {
   LANGUAGE_PLACEMENT_LEVELS,
   placementRoundCeiling,
   placementRubricDirective,
+  resolveLanguageExercisePresentation,
 } from '@second-brain/shared';
 import { createHash, randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -52,6 +56,10 @@ interface StoredQuestion {
   answerKey: string;
   /** What a good answer must contain — the marking rubric. */
   rubric: string;
+  instruction?: LanguageExerciseInstruction;
+  targetText?: string;
+  languageFormat?: LanguageTrainingFormat;
+  audioText?: string;
 }
 
 interface StoredAssessmentPayload {
@@ -89,6 +97,10 @@ export interface LanguageLearningCoreQuestion {
   options: string[];
   answerKey: string;
   correction: string;
+  instruction?: LanguageExerciseInstruction;
+  targetText?: string;
+  languageFormat?: LanguageTrainingFormat;
+  audioText?: string;
 }
 
 export interface LanguagePlacementAssessmentMetadata {
@@ -276,7 +288,12 @@ export class ExaminerService {
         masteryCreationKey: creationKey, masteryCreationHash: hash, masteryGenerationStatus: 'ready',
         questions: { version: 2, teacherPolicy, languageLearningCore: metadata,
           questions: questions.map((question) => ({ id: question.id, prompt: question.prompt, format: 'mcq',
-            options: question.options, points: 1, answerKey: question.answerKey, rubric: question.correction })) } as unknown as Prisma.InputJsonValue,
+            options: question.options, points: 1, answerKey: question.answerKey, rubric: question.correction,
+            ...(question.instruction ? { instruction: question.instruction } : {}),
+            ...(question.targetText === undefined ? {} : { targetText: question.targetText }),
+            ...(question.languageFormat ? { languageFormat: question.languageFormat } : {}),
+            ...(question.audioText ? { audioText: question.audioText } : {}),
+          })) } as unknown as Prisma.InputJsonValue,
       }, update: {},
     });
     if (assessment.masteryCreationHash !== hash) throw new ConflictException('Assessment source changed for this version.');
@@ -851,7 +868,9 @@ export class ExaminerService {
     });
   }
 
-  async get(userId: string, id: string): Promise<AssessmentView> {
+  async get(userId: string, id: string, languageInstructions?: {
+    supportLanguageCode: string; targetLanguageCode: string;
+  }): Promise<AssessmentView> {
     const assessment = await this.requireOwned(userId, id);
     const latest = await this.prisma.assessmentSubmission.findFirst({
       where: {
@@ -860,7 +879,31 @@ export class ExaminerService {
       },
       orderBy: { createdAt: 'desc' },
     });
-    return this.toView(assessment, latest);
+    const view = this.toView(assessment, latest);
+    if (!languageInstructions) return view;
+    const payload = this.readPayload(assessment.questions);
+    if (!payload.languageLearningCore) throw new NotFoundException('Language catalogue assessment not found.');
+    // Hydration is a presentation projection only. The canonical prompts,
+    // answer keys, source hashes and sealed results are never rewritten.
+    const presentations = new Map(payload.questions.map((question) => {
+      const rendered = resolveLanguageExercisePresentation({ question: question.prompt,
+        type: question.format === 'mcq' ? 'qcm' : 'open', instruction: question.instruction,
+        targetText: question.targetText, languageFormat: question.languageFormat, audioText: question.audioText },
+      languageInstructions.supportLanguageCode, languageInstructions.targetLanguageCode);
+      if (!rendered.normalized) throw new HttpException({
+        message: 'This exercise instruction cannot be presented safely in the teaching language.',
+        code: 'LESSON_EXERCISE_INSTRUCTION_NOT_NORMALIZABLE', stage: 'instruction', reason: rendered.reason,
+      }, 422);
+      return [question.id, rendered] as const;
+    }));
+    return { ...view, questions: view.questions.map((question) => {
+      const rendered = presentations.get(question.id)!;
+      return { ...question, prompt: rendered.prompt, instruction: rendered.instruction,
+        instructionText: rendered.instructionText, ...(rendered.targetText === undefined ? {} : { targetText: rendered.targetText }) };
+    }),
+      latestSubmission: view.latestSubmission ? { ...view.latestSubmission,
+        results: view.latestSubmission.results.map((result) => ({ ...result,
+          prompt: presentations.get(result.questionId)?.prompt ?? result.prompt })) } : null };
   }
 
   async languageMasteryMetadata(

@@ -164,6 +164,7 @@ function runtimeOverlay(filename) {
   const registered = new Map();
   const overlayModule = { exports: {} };
   const fakeRequire = (name) => {
+    if (name === '@second-brain/shared') return require('@second-brain/shared');
     assert.equal(name, '../i18n');
     return { extendLocale(code, entries) {
       assert.ok(!registered.has(code), `${filename} duplicate locale ${code}`);
@@ -269,6 +270,7 @@ const overlayFiles = new Set([
   'index.ts',
   'language-mastery-v1.ts',
   'language-learning-core-v1.ts',
+  'language-exercise-instructions-v1.ts',
   'language-placement-v1.ts',
   'landing-v1.ts',
   'learning-control-v1.ts',
@@ -321,6 +323,7 @@ test('post-placement and placement overlays are actually registered for all 34 r
   for (const [filename, keyExport] of [
     ['language-learning-core-v1.ts', 'languageLearningCoreKeys'],
     ['language-placement-v1.ts', 'languagePlacementKeys'],
+    ['language-exercise-instructions-v1.ts', 'languageExerciseInstructionKeys'],
   ]) {
     const filenameWithoutExtension = path.basename(filename, '.ts');
     assert.match(barrel, new RegExp(`import ['\"]\\./${filenameWithoutExtension}['\"]`));
@@ -337,6 +340,25 @@ test('post-placement and placement overlays are actually registered for all 34 r
         assert.ok(typeof value === 'string' && value.trim(), `${filename} ${code}.${key}`);
         assert.deepEqual(placeholders(value), placeholders(registered.get('en')[key]), `${filename} ${code}.${key}`);
       }
+    }
+  }
+});
+
+test('every support-language teaching control resolves explicitly in all 34 registered catalogues', () => {
+  const keys = stringArray(path.join(ROOT, 'apps/mobile/lib/language-learning-copy.ts'), 'LANGUAGE_LEARNING_SUPPORT_KEYS');
+  const overlays = ['language-learning-core-v1.ts', 'language-placement-v1.ts', 'language-exercise-instructions-v1.ts']
+    .map((filename) => runtimeOverlay(filename).registered);
+  const supportCatalog = (code) => {
+    const base = code === 'en' ? english : code === 'fr' ? french
+      : effectiveCatalog(localeResources.find((resource) => resource.code === code));
+    return new Map([...base, ...overlays.flatMap((overlay) => Object.entries(overlay.get(code)))]);
+  };
+  const source = supportCatalog('en');
+  for (const code of supported) {
+    const values = supportCatalog(code);
+    for (const key of keys) {
+      assert.ok(values.get(key)?.trim(), `${code} support-language control missing: ${key}`);
+      assert.deepEqual(placeholders(values.get(key)), placeholders(source.get(key)), `${code}.${key}`);
     }
   }
 });
@@ -646,7 +668,7 @@ test('every statically referenced translation key exists in the English runtime 
   // Keep the base coverage calculation above unchanged and check actual runtime
   // keys here, including each overlay's registered English values.
   const runtimeEnglish = new Map(english);
-  for (const filename of ['language-learning-core-v1.ts', 'language-placement-v1.ts']) {
+  for (const filename of ['language-learning-core-v1.ts', 'language-placement-v1.ts', 'language-exercise-instructions-v1.ts']) {
     for (const [key, value] of Object.entries(runtimeOverlay(filename).registered.get('en'))) runtimeEnglish.set(key, value);
   }
   for (const file of codeFiles(path.join(ROOT, 'apps/mobile'))) {

@@ -21,7 +21,7 @@ function load(file, imports) {
 }
 function harness(exportName, props, transport = {}) {
   const slots = [], effects = [], calls = [], navigation = [];
-  const copy = (key) => key;
+  const copy = (key) => transport.uiCopy ? transport.uiCopy(key) : key;
   let index = 0, tree;
   const same = (a, b) => a && b && a.length === b.length && a.every((value, i) => value === b[i]);
   const react = {
@@ -38,6 +38,12 @@ function harness(exportName, props, transport = {}) {
     'expo-router': { useRouter: () => ({ push(href) { navigation.push(['push', href]); }, replace(href) { navigation.push(['replace', href]); } }) },
     '../../lib/design/theme': { useTokens: () => ({ colors: {}, spacing: {}, typography: {} }) },
     '../../lib/language-rll-i18n': { useRlleCopy: () => ({ copy }) },
+    '../../lib/language-learning-copy': { useLanguageLearningCopy: (code, target) => ({
+      ready: Boolean(code && ['fr', 'ar', 'en', 'he'].includes(code)),
+      copy: (key) => transport.supportCopy ? transport.supportCopy(code, key) : key,
+      direction: ['ar', 'he'].includes(code) ? 'rtl' : 'ltr',
+      targetDirection: ['ar', 'he'].includes(target) ? 'rtl' : 'ltr',
+    }) },
     '../../lib/language-placement-presentation': { LANGUAGE_PRODUCT_LEVEL_COPY: { BEGINNER: 'beginner' } },
     '../../lib/language-learning-core-client': api,
     '../../lib/language-learning-core-presentation': load('apps/mobile/lib/language-learning-core-presentation.ts', {}),
@@ -60,7 +66,7 @@ const session = () => ({
   sessionId: 'session-1', activeScope: 'lesson', activeTargetId: 'lesson-1', phase: 'teaching', teachingStep: 1,
   content: { id: 'content-1', topic: 'Alphabet', objective: 'Identify letters', intro: 'Introduction française', explanation: 'Explication française détaillée', examples: ['A — exemple', 'B — exemple'], questions: ['Explique la différence'], exercises: [] },
   assessment: { id: 'assessment-1', title: 'Alphabet', questions: [{ id: 'q1', prompt: 'Question', options: ['A', 'B'], points: 1 }] },
-  answers: ['A'], latestSubmission: null, supportLanguage: 'fr', remediation: false,
+  answers: ['A'], latestSubmission: null, supportLanguage: 'French', supportLanguageCode: 'fr', remediation: false,
 });
 
 test('34 catalogues receive every learning-core key with no locale fallback or duplicate Norwegian', () => {
@@ -255,7 +261,7 @@ test('a restored teaching step shows actual explanation and retains the existing
   const ui = harness('LearningLesson', { profileId: 'p1', session: session(), lesson: { id: 'lesson-1', status: 'IN_PROGRESS' }, busy: false, onSession() {}, onError() {}, run() {} });
   assert.ok(ui.byId('language-core-teaching'));
   assert.ok(ui.nodes().find((node) => node.type === 'Markdown' && node.props.text === 'Explication française détaillée'));
-  assert.equal(ui.nodes().find((node) => node.type === 'SpeakButton').props.language, 'fr');
+  assert.equal(ui.nodes().find((node) => node.type === 'SpeakButton').props.language, 'French');
   assert.equal(ui.byId('language-core-autonomous'), undefined);
 });
 
@@ -383,8 +389,72 @@ test('restored autonomous assessment keeps answers and hides explanation, answer
   ui.cleanup();
 });
 
+test('an English interface uses the Arabic support catalogue locally, while English target options remain unchanged and LTR', () => {
+  const data = { ...session(), phase: 'assessment', supportLanguageCode: 'ar', supportLanguage: 'Arabic',
+    assessment: { ...session().assessment, questions: [{ id: 'q1', prompt: 'اختر الإجابة الصحيحة.\nShe ___ to school.', instructionText: 'اختر الإجابة الصحيحة.', targetText: 'She ___ to school.', options: ['goes', 'go'], points: 1 }] }, answers: ['goes'] };
+  const ui = harness('LearningLesson', { profileId: 'p1', session: data, lesson: definition(), busy: false, onSession() {}, onError() {}, run() {} }, {
+    uiCopy: (key) => `en:${key}`, supportCopy: (code, key) => `${code}:${key}`,
+  });
+  assert.equal(ui.nodes().find((node) => node.type === 'Alert').props.title, 'ar:rlle.ui.autonomy.notice');
+  assert.equal(ui.nodes().find((node) => node.type === 'Button').props.label, 'ar:lesson.submit');
+  const prompt = ui.byId('language-core-question-q1');
+  assert.ok(prompt.props.children.includes(data.assessment.questions[0].instructionText));
+  assert.ok(!prompt.props.children.includes(data.assessment.questions[0].prompt));
+  assert.equal(prompt.props.style.at(-1).writingDirection, 'rtl');
+  const target = ui.byId('language-core-target-q1');
+  assert.equal(target.props.children, 'She ___ to school.');
+  assert.equal(target.props.style.at(-1).writingDirection, 'ltr');
+  const option = ui.nodes().find((node) => node.type === 'Text' && node.props.children === 'goes');
+  assert.equal(option.props.style.at(-1).writingDirection, 'ltr');
+  assert.equal(ui.nodes().some((node) => typeof node.type === 'function' && node.type.name === 'LanguageLearningHelp'), false);
+  assert.deepEqual(ui.calls, []);
+  assert.deepEqual(data.assessment.questions[0].options, ['goes', 'go']);
+});
+
+test('missing support-language metadata never falls back to interface/English pedagogy or sends a request', () => {
+  const data = { ...session(), phase: 'assessment', supportLanguageCode: undefined };
+  const ui = harness('LearningLesson', { profileId: 'p1', session: data, lesson: definition(), busy: false, onSession() {}, onError() {}, run() {} });
+  assert.ok(ui.nodes().some((node) => node.type === 'SmartErrorState'));
+  assert.equal(ui.byId('language-core-autonomous'), undefined);
+  assert.deepEqual(ui.calls, []);
+});
+
+test('explicit locale lookup is read-only and has no English or interface fallback', () => {
+  const noop = () => undefined;
+  const i18n = load('apps/mobile/lib/i18n.tsx', {
+    react: { createContext: () => ({}), useCallback: (fn) => fn, useContext: noop,
+      useEffect: noop, useLayoutEffect: noop, useMemo: (fn) => fn(), useRef: noop, useState: noop },
+    '@react-native-async-storage/async-storage': {},
+    './locale-resolution': load('apps/mobile/lib/locale-resolution.ts', {}),
+  });
+  const interfaceText = i18n.tr('lesson.submit');
+  assert.equal(interfaceText, 'Submit answer');
+  assert.equal(i18n.trInLocale('fr', 'lesson.submit'), 'Valider ma réponse');
+  assert.equal(i18n.tr('lesson.submit'), interfaceText);
+  i18n.registerLocale('ar', 'العربية', { 'lesson.submit': 'أرسل الإجابة' });
+  assert.equal(i18n.trInLocale('ar', 'lesson.submit'), 'أرسل الإجابة');
+  assert.equal(i18n.trInLocale('ar', 'lesson.correction'), null);
+  assert.equal(i18n.trInLocale('unknown', 'lesson.submit'), null);
+  assert.equal(i18n.tr('lesson.submit'), interfaceText);
+});
+
+test('the instruction overlay registers the shared canonical 23 strings in all 34 locales without translation fallback', () => {
+  const registered = new Map();
+  const { LANGUAGE_EXERCISE_INSTRUCTION_COPY } = require('@second-brain/shared');
+  const overlay = load('apps/mobile/lib/locales/language-exercise-instructions-v1.ts', {
+    '../i18n': { extendLocale: (code, entries) => registered.set(code, entries) },
+  });
+  assert.equal(overlay.languageExerciseInstructionKeys.length, 23);
+  assert.deepEqual([...registered.keys()].sort(), [...SUPPORTED_LANGUAGE_CODES].sort());
+  for (const code of SUPPORTED_LANGUAGE_CODES) {
+    assert.deepEqual(Object.keys(registered.get(code)), overlay.languageExerciseInstructionKeys);
+    for (const [key, value] of Object.entries(LANGUAGE_EXERCISE_INSTRUCTION_COPY[code])) assert.equal(registered.get(code)[`languageInstruction.${key}`], value);
+  }
+  assert.match(read('apps/mobile/lib/locales/index.ts'), /import '\.\/language-exercise-instructions-v1';/);
+});
+
 test('contextual help is collapsed, makes no load-time provider call and has no progress mutation callback', async () => {
-  const ui = harness('LanguageLearningHelp', { profileId: 'p1', lessonId: 'lesson-1' }, { askLanguageLearningHelp: async () => ({ answer: 'Aide contextuelle' }) });
+  const ui = harness('LanguageLearningHelp', { profileId: 'p1', lessonId: 'lesson-1', supportLanguageCode: 'fr' }, { askLanguageLearningHelp: async () => ({ answer: 'Aide contextuelle' }) });
   assert.equal(ui.nodes().find((node) => node.type === 'Button').props.accessibilityExpanded, false);
   assert.equal(ui.nodes().find((node) => node.type === 'TextInput'), undefined);
   assert.deepEqual(ui.calls, []);

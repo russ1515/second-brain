@@ -1,6 +1,7 @@
 /** Written-first learning (Phase 5, Educational Engine) wire contracts. */
 
 import type { LanguageTrainingFormat } from './language-mastery';
+import type { LanguageExerciseInstruction } from './language-exercise-instructions';
 
 /** The kinds of exercise the teacher generates after a lesson. */
 export type ExerciseType = 'qcm' | 'open' | 'exercise' | 'case';
@@ -8,6 +9,11 @@ export type ExerciseType = 'qcm' | 'open' | 'exercise' | 'case';
 /** An exercise with its model answer (the built-in correction). */
 export interface LessonExercise {
   question: string;
+  /** Deterministic, support-language presentation metadata. Canonical question
+   * and assessment hashes are preserved when hydrating legacy lessons. */
+  instruction?: LanguageExerciseInstruction;
+  /** Target-language material, separate from the localized instruction. */
+  targetText?: string;
   /** Model answer (for 'qcm', the text of the correct option). */
   answer: string;
   /** Teacher-authored explanation of the rule and a further example. Kept

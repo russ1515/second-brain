@@ -42,6 +42,7 @@ export interface LanguageLearningCoreSessionView {
   core: LanguageLearningCoreView;
   sessionId: string;
   supportLanguage: string;
+  supportLanguageCode: string;
   targetLanguage: string;
   content: LessonView | null;
   assessment: AssessmentView | null;
@@ -73,16 +74,18 @@ export class LanguageLearningCoreService {
 
   async get(userId: string, profileId: string): Promise<LanguageLearningCoreSessionView> {
     const { profile, session, state, catalogue } = await this.load(userId, profileId);
+    const roles = await resolveLanguageTeachingRoles(this.prisma, userId, profile);
     let evidence = await this.evidence(userId, profileId, state);
     const assessment = state.activeAssessmentId
-      ? await this.readSessionSource(() => this.examiner.get(userId, state.activeAssessmentId!), 'ASSESSMENT_READ_FAILED') : null;
+      ? await this.readSessionSource(() => this.examiner.get(userId, state.activeAssessmentId!, {
+        supportLanguageCode: roles.supportLanguageCode, targetLanguageCode: catalogue.languageCode,
+      }), 'ASSESSMENT_READ_FAILED') : null;
     if (await this.recoverCompletion(userId, state, assessment, evidence)) {
       evidence = await this.evidence(userId, profileId, state);
     }
     const projectedCore = projectLanguageLearningCore({ languageCode: catalogue.languageCode,
       productLevel: state.productLevel, cefrLevel: state.cefrLevel, evidence });
     const core = applyLanguageLearningCorePosition(projectedCore, state);
-    const roles = await resolveLanguageTeachingRoles(this.prisma, userId, profile);
     const link = state.activeScope === 'lesson' && state.activeTargetId
       ? state.lessonLinks[state.activeTargetId] : null;
     const content = link ? await this.readSessionSource(() => this.lessons.get(userId, link.id), 'LESSON_READ_FAILED') : null;
@@ -93,7 +96,7 @@ export class LanguageLearningCoreService {
       && this.lessons.getLanguageRoleViolation(content, { supportLanguageCode: roles.supportLanguageCode,
         targetLanguageCode: catalogue.languageCode, targetLanguage: roles.targetLanguage })
       && await this.isUnattemptedSource(userId, state, state.activeTargetId, content.id));
-    return { core, sessionId: session.id, supportLanguage: roles.supportLanguage,
+    return { core, sessionId: session.id, supportLanguage: roles.supportLanguage, supportLanguageCode: roles.supportLanguageCode,
       targetLanguage: roles.targetLanguage,
       // Answer keys and corrections stay server-side until a sealed submission.
       content: content && !hideInvalidUnattempted ? { ...content, exercises: [] } : null,
@@ -117,7 +120,9 @@ export class LanguageLearningCoreService {
 
   private async readSessionSource<T>(read: () => Promise<T>, reason: 'ASSESSMENT_READ_FAILED' | 'LESSON_READ_FAILED'): Promise<T> {
     try { return await read(); }
-    catch {
+    catch (error) {
+      if (error instanceof HttpException && typeof error.getResponse() === 'object'
+        && (error.getResponse() as { code?: string }).code === 'LESSON_EXERCISE_INSTRUCTION_NOT_NORMALIZABLE') throw error;
       this.logger.error(JSON.stringify({ event: 'LANGUAGE_LESSON_SESSION', stage: 'response',
         status: 'FAIL', code: 'LESSON_SESSION_FAILED', reason, httpStatus: 503 }));
       throw new ServiceUnavailableException({ message: 'The lesson could not be restored. Please try again later.',
@@ -314,14 +319,17 @@ export class LanguageLearningCoreService {
     const knownCodes = new Set(['LESSON_CONTENT_INVALID', 'LESSON_PARSER_INVALID', 'LESSON_PROVIDER_FAILED',
       'LESSON_SUPPORT_LANGUAGE_CONTRACT_VIOLATION',
       'LESSON_LANGUAGE_REGENERATION_BLOCKED',
+      'LESSON_EXERCISE_INSTRUCTION_NOT_NORMALIZABLE',
       'LESSON_ADAPTER_FAILED', 'LESSON_PERSISTENCE_FAILED', 'LESSON_SESSION_FAILED']);
-    const knownStages = new Set(['parser', 'content', 'provider', 'adapter', 'persistence', 'lesson-session', 'response']);
+    const knownStages = new Set(['parser', 'content', 'provider', 'adapter', 'persistence', 'lesson-session', 'response', 'instruction']);
     const knownReasons = new Set(['PROVIDER_REQUEST_FAILED', 'PROVIDER_TEXT_MISSING', 'INVALID_JSON',
       'JSON_OBJECT_REQUIRED', 'OBJECTIVE_REQUIRED', 'INTRO_REQUIRED', 'EXPLANATION_REQUIRED', 'SUMMARY_REQUIRED',
       'REVISION_SHEET_REQUIRED', 'WORKED_EXAMPLES_REQUIRED', 'EXPLANATION_TOO_SHORT',
       'MISCONCEPTION_CORRECTION_REQUIRED', 'GUIDED_PRACTICE_REQUIRED', 'KEY_POINTS_REQUIRED',
       'DUPLICATE_WORKED_EXAMPLE', 'DUPLICATE_GUIDED_PROMPT', 'EXERCISES_REQUIRED', 'INVALID_EXERCISE_ITEM',
       'EXERCISE_COUNT_INVALID', 'QCM_EXERCISE_REQUIRED', 'EXERCISE_CORRECTION_REQUIRED',
+      'EXERCISE_INSTRUCTION_REQUIRED', 'EXERCISE_INSTRUCTION_INVALID',
+      'NOT_NORMALIZABLE', 'UNSUPPORTED_SUPPORT_LANGUAGE', 'INVALID_DESCRIPTOR', 'MISSING_TRANSLATION',
       'DUPLICATE_EXERCISE_PROMPT', 'CORE_EXERCISE_CONTRACT_INVALID', 'INVALID_CONTENT_ARRAY_ITEM',
       'INVALID_QCM_OPTIONS', 'LANGUAGE_EXERCISE_CONTRACT_INVALID', 'EXERCISE_CONTRACT_INVALID',
       'REMEDIATION_EXERCISE_REUSED', 'REMEDIATION_MINIMUM_NOT_MET', 'REMEDIATION_EXPLANATION_REUSED',
@@ -592,7 +600,12 @@ export class LanguageLearningCoreService {
         throw new ConflictException('This content does not have a valid closed assessment.');
       }
       return { id: `${prefix}:${index}`, prompt: exercise.question, options: exercise.options,
-        answerKey: exercise.answer, correction: exercise.correction };
+        answerKey: exercise.answer, correction: exercise.correction,
+        ...(exercise.instruction ? { instruction: exercise.instruction } : {}),
+        ...(exercise.targetText === undefined ? {} : { targetText: exercise.targetText }),
+        ...(exercise.languageFormat ? { languageFormat: exercise.languageFormat } : {}),
+        ...(exercise.audioText ? { audioText: exercise.audioText } : {}),
+      };
     });
   }
   private async seedLesson(userId: string, session: ExperienceSession, state: CoreState,

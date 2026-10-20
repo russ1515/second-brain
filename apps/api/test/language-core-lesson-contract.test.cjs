@@ -17,6 +17,7 @@ function document() {
     questions: ['Try together one', 'Try together two', 'Try together three'],
     exercises: Array.from({ length: 10 }, (_, i) => ({ type: 'qcm',
       question: `Independent situation ${i + 1}`, answer: `Correct ${i + 1}`,
+      instruction: { key: 'choose', params: {} }, targetText: `Target situation ${i + 1}`,
       options: [`Wrong ${i + 1}`, `Correct ${i + 1}`, `Distractor ${i + 1}`],
       correction: `Rule ${i + 1}: why, correct form and another example.`,
     })),
@@ -345,6 +346,7 @@ test('write, session and commit failures roll back the graph and report only saf
 // Pure fixture validator for the exact JSON Schema subset emitted here, not a
 // second application contract/validator. No provider or dependency is needed.
 function schemaAcceptsFixture(schema, value) {
+  if (schema.anyOf) return schema.anyOf.some(child => schemaAcceptsFixture(child, value));
   if (schema.enum && !schema.enum.includes(value)) return false;
   if (schema.type === 'string') return typeof value === 'string'
     && (!schema.pattern || new RegExp(schema.pattern, 'u').test(value));
@@ -407,4 +409,38 @@ test('core schema uses supported patterns and preserves existing exact parser bo
   assert.equal(schemaAcceptsFixture(schema, blank), false);
   const emptyHomework = document(); emptyHomework.homework = '';
   assert.equal(schemaAcceptsFixture(schema, emptyHomework), true);
+});
+
+test('new core instructions are structural keys and operands, never provider-authored instruction prose', async () => {
+  const raw = document(); const lessons = service(raw);
+  const schema = lessons.languageCoreLessonJsonSchema().schema;
+  const exerciseSchema = schema.properties.exercises.items;
+  assert.ok(exerciseSchema.required.includes('instruction'));
+  assert.ok(exerciseSchema.required.includes('targetText'));
+  assert.ok(exerciseSchema.properties.instruction.anyOf.length > 0);
+  for (const change of [
+    x => { delete x.exercises[0].instruction; },
+    x => { x.exercises[0].instruction = { key: 'unknown', params: {} }; },
+    x => { x.exercises[0].instruction = { key: 'choose', params: { prose: 'Please answer in English.' } }; },
+    x => { x.exercises[0].instruction = { key: 'letterName', params: {} }; },
+    x => { x.exercises[0].instruction = { key: 'listen', params: {} }; },
+  ]) {
+    const wrong = document(); change(wrong);
+    assert.equal(schemaAcceptsFixture(schema, wrong), false);
+    assert.throws(() => lessons.parseLesson(JSON.stringify(wrong), false, undefined, undefined, true));
+  }
+  for (const count of [5, 20, 40, 60]) {
+    const short = document(); short.exercises[0].targetText = 'X'.repeat(count);
+    const parsed = lessons.parseLesson(JSON.stringify(short), false, undefined, undefined, true);
+    assert.deepEqual(parsed.exercises[0].instruction, { key: 'choose', params: {} });
+    assert.equal(parsed.exercises[0].targetText, short.exercises[0].targetText);
+  }
+  const hiddenInstruction = document();
+  hiddenInstruction.exercises[0].targetText = "Which letter comes after 'M' in the English alphabet?";
+  const observed = [];
+  await assert.rejects(() => service(hiddenInstruction, observed).generateLesson('Alphabet', '', {},
+    undefined, false, undefined, undefined, true, undefined,
+    { supportLanguageCode: 'fr', targetLanguageCode: 'en', targetLanguage: 'English' }),
+    expectedFailure(422, 'content', 'EXERCISE_INSTRUCTION_INVALID'));
+  assert.equal(observed.length, 1, 'invalid provider output is rejected, never retried');
 });
