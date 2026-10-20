@@ -5,6 +5,8 @@ import { useRouter } from 'expo-router';
 import { useTokens } from '../../lib/design/theme';
 import { useRlleCopy } from '../../lib/language-rll-i18n';
 import { LANGUAGE_PRODUCT_LEVEL_COPY } from '../../lib/language-placement-presentation';
+import { languageCoreCourseHref, selectLanguageCoreLesson } from '../../lib/language-learning-core-presentation';
+import { languageCourseOpeningError } from '../../lib/language-course-opening';
 import {
   askLanguageLearningHelp, loadLanguageLearningCore, saveLanguageLearningAnswers, saveLanguageLearningAssessmentAnswers,
   startLanguageLearningAssessment, startLanguageLearningLesson, startLanguageLearningRemediation,
@@ -29,27 +31,37 @@ const operationKey = (profileId: string, targetId: string, action: string) =>
 
 /** One server-authoritative post-placement projection. Rendering the catalogue
  * never generates lessons, assessments, help or provider calls. */
-export function LanguageLearningCore({ profileId }: { profileId: string }) {
+export function LanguageLearningCore({ profileId, requestedModuleId, requestedLessonId }: { profileId: string; requestedModuleId?: string; requestedLessonId?: string }) {
   const { copy } = useRlleCopy();
+  const router = useRouter();
   const { colors: c, spacing, typography } = useTokens();
   const [session, setSession] = useState<LanguageLearningSessionView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [expandedModule, setExpandedModule] = useState<string | null>(null);
   const requestKeys = useRef(new Map<string, string>());
+  const loadRevision = useRef(0);
   const load = useCallback(async () => {
+    const revision = ++loadRevision.current;
     setError(null);
-    try { setSession(await loadLanguageLearningCore(profileId)); }
-    catch (cause) { setError((cause as Error).message); }
-  }, [profileId]);
-  useEffect(() => { setSession(null); requestKeys.current.clear(); void load(); }, [load]);
+    try { const result = await loadLanguageLearningCore(profileId); if (revision === loadRevision.current) setSession(result); }
+    catch (cause) { if (revision === loadRevision.current) setError(languageCourseOpeningError(cause, 'LEARNING_CORE', copy)); }
+  }, [profileId, copy]);
+  useEffect(() => { setSession(null); requestKeys.current.clear(); void load(); return () => { loadRevision.current += 1; }; }, [load]);
   const run = async (action: string, targetId: string, fn: (key: string) => Promise<LanguageLearningSessionView>) => {
     if (busy) return;
     setBusy(`${action}:${targetId}`); setError(null);
     const requestId = `${action}:${targetId}:${session?.latestSubmission?.id ?? 'initial'}`;
     const key = requestKeys.current.get(requestId) ?? operationKey(profileId, targetId, action);
     requestKeys.current.set(requestId, key);
-    try { setSession(await fn(key)); }
+    try {
+      const result = await fn(key);
+      setSession(result);
+      // Keep the deep link aligned with an explicit action; changing a target
+      // must never display another lesson's restored content under its title.
+      if (['start', 'remediation'].includes(action) && result.activeScope === 'lesson' && result.activeTargetId) router.replace(languageCoreCourseHref(profileId, result.core, result.activeTargetId) as never);
+      else if (['assessment', 'next-level'].includes(action)) router.replace(`/languages/${encodeURIComponent(profileId)}/course` as never);
+    }
     catch (cause) { setError((cause as Error).message); }
     finally { setBusy(null); }
   };
@@ -57,8 +69,17 @@ export function LanguageLearningCore({ profileId }: { profileId: string }) {
     ? <SmartErrorState detail={error} retryable onRetry={() => void load()} />
     : <SmartLoadingState title={copy('rlle.ui.course.loading')} />;
   const { core } = session;
+  const restoringAssessment = (session.activeScope === 'module' || session.activeScope === 'level') && Boolean(session.assessment) && !requestedModuleId && !requestedLessonId;
+  const selection = restoringAssessment ? { kind: 'none' as const } : selectLanguageCoreLesson(core, requestedModuleId, requestedLessonId);
+  if (selection.kind === 'invalid') return <View style={{ gap: spacing.sm }} testID="language-core-invalid-selection"><SmartErrorState detail={`${copy(selection.code === 'COURSE_LESSON_LOCKED' ? 'rlle.ui.course.status.locked' : 'error.notFound')}\n${selection.code}`} /><Button label={copy('rlle.ui.common.backCourse')} onPress={() => router.replace(`/languages/${encodeURIComponent(profileId)}/course` as never)} /></View>;
+  const selectedLesson = selection.kind === 'selected' ? selection.lesson : undefined;
+  const activeContentMatches = session.activeScope === 'lesson'
+    ? selectedLesson?.id === session.activeTargetId
+    : !requestedModuleId && !requestedLessonId;
+  const hasSelectedContent = activeContentMatches && Boolean(session.content || session.assessment);
+  const openLesson = (lessonId: string) => router.replace(languageCoreCourseHref(profileId, core, lessonId) as never);
   const activeLesson = core.modules.flatMap((module) => module.lessons).find((lesson) => lesson.id === session.activeTargetId);
-  const currentModule = expandedModule ?? core.currentModuleId ?? core.modules[0]?.id;
+  const currentModule = expandedModule ?? (selection.kind === 'selected' ? selection.module.id : core.currentModuleId) ?? core.modules[0]?.id;
   const completed = core.modules.reduce((total, module) => total + module.masteredLessons, 0);
   const total = core.modules.reduce((count, module) => count + module.totalLessons, 0);
   return (
@@ -80,17 +101,32 @@ export function LanguageLearningCore({ profileId }: { profileId: string }) {
             label={copy(core.nextAction.kind === 'remediate-lesson' ? 'rlle.ui.remediation.start' : core.nextAction.kind === 'resume-lesson' ? 'rlle.ui.course.resume' : 'rlle.ui.nba.nextLessonAction')}
             variant="ai"
             disabled={busy !== null}
-            onPress={() => {
-              const targetId = core.nextAction.lessonId!;
-              const remediate = core.nextAction.kind === 'remediate-lesson';
-              void run(remediate ? 'remediation' : 'start', targetId, (key) => remediate
-                ? startLanguageLearningRemediation(profileId, targetId, key)
-                : startLanguageLearningLesson(profileId, targetId, key));
-            }}
+            onPress={() => openLesson(core.nextAction.lessonId!)}
           />
         ) : null}
       </Card>
       {error ? <SmartErrorState detail={error} /> : null}
+      {selection.kind === 'selected' ? (
+        <Card style={{ gap: spacing.md }} testID="language-core-lesson-preview">
+          <Text style={[typography.label, { color: c.textMuted }]}>{copy(`learningCore.module.${String(selection.module.order).padStart(2, '0')}`)}</Text>
+          <Text accessibilityRole="header" style={[typography.h2, { color: c.textPrimary }]}>{selection.lesson.title}</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+            <Badge label={copy(LANGUAGE_PRODUCT_LEVEL_COPY[core.productLevel])} tone="info" /><Badge label={core.cefrLevel} />
+            <Badge label={copy(LEARNING_CORE_STATUS_COPY[selection.lesson.status])} />
+          </View>
+          <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{copy('rlle.ui.course.title', { language: session.targetLanguage ?? core.languageCode })}</Text>
+          {session.supportLanguage ? <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{copy('passport.teachingLanguage')} · {session.supportLanguage}</Text> : null}
+          {!hasSelectedContent ? <>
+            <View style={{ gap: spacing.xs }} testID="language-core-preview-objective"><Text style={[typography.label, { color: c.textPrimary }]}>{copy('lesson.objectiveLabel')}</Text><Text style={[typography.body, { color: c.textSecondary }]}>{selection.lesson.objective}</Text></View>
+            <View style={{ gap: spacing.sm }} testID="language-core-content-pending"><Text style={[typography.label, { color: c.textPrimary }]}>{copy('lesson.concept')}</Text><Text style={[typography.bodySmall, { color: c.textSecondary }]}>{copy('rlle.ui.lesson.noActive')}</Text></View>
+            <Button testID="language-core-preview-help" label={copy('learningCore.help')} variant="ghost" disabled accessibilityExpanded={false} />
+            <Button testID="language-core-preview-start" label={copy(selection.lesson.status === 'NEEDS_REMEDIATION' ? 'rlle.ui.remediation.start' : 'rlle.ui.lesson.start')} variant="ai" loading={busy !== null} disabled={busy !== null} onPress={() => {
+              const remediate = selection.lesson.status === 'NEEDS_REMEDIATION';
+              void run(remediate ? 'remediation' : 'start', selection.lesson.id, (key) => remediate ? startLanguageLearningRemediation(profileId, selection.lesson.id, key) : startLanguageLearningLesson(profileId, selection.lesson.id, key));
+            }} />
+          </> : null}
+        </Card>
+      ) : null}
       {core.levelStatus === 'NEEDS_REMEDIATION' ? (
         <Card style={{ gap: spacing.sm }} testID="language-core-level-remediation">
           <Text accessibilityRole="header" style={[typography.h3, { color: c.textPrimary }]}>{copy('learningCore.levelAssessment')}</Text>
@@ -100,7 +136,7 @@ export function LanguageLearningCore({ profileId }: { profileId: string }) {
             .map((lesson) => <Button key={lesson.id} testID={`language-core-level-remediation-${lesson.id}`} label={`${copy('rlle.ui.remediation.start')} · ${lesson.title}`} variant="ai" disabled={busy !== null} onPress={() => void run('remediation', lesson.id, (key) => startLanguageLearningRemediation(profileId, lesson.id, key))} />)}
         </Card>
       ) : null}
-      {session.content || session.assessment ? (
+      {hasSelectedContent ? (
         <LearningLesson key={`${session.sessionId}:${session.assessment?.id ?? session.content?.id}`} profileId={profileId} session={session} lesson={activeLesson} busy={busy !== null} onSession={setSession} onError={setError} run={run} />
       ) : null}
       <View style={{ gap: spacing.sm }} testID="language-core-modules">
@@ -125,7 +161,7 @@ export function LanguageLearningCore({ profileId }: { profileId: string }) {
                         {lesson.bestScore != null ? <Text style={[typography.caption, { color: c.textMuted }]}>{copy('learningCore.bestScore')} · {learningCoreScore(lesson.bestScore)}</Text> : null}
                       </View>
                       {lesson.weakConcepts.length ? <Text style={[typography.caption, { color: c.textSecondary }]}>{lesson.weakConcepts.join(' · ')}</Text> : null}
-                      {lesson.status !== 'LOCKED' ? <Button size="sm" variant={lesson.status === 'NEEDS_REMEDIATION' ? 'ai' : 'ghost'} disabled={busy !== null} loading={busy === `${lesson.status === 'NEEDS_REMEDIATION' ? 'remediation' : 'start'}:${lesson.id}`} label={copy(lesson.status === 'NEEDS_REMEDIATION' ? 'rlle.ui.remediation.start' : lesson.status === 'AVAILABLE' ? 'rlle.ui.lesson.start' : 'rlle.ui.lesson.resume')} onPress={() => void run(lesson.status === 'NEEDS_REMEDIATION' ? 'remediation' : 'start', lesson.id, (key) => lesson.status === 'NEEDS_REMEDIATION' ? startLanguageLearningRemediation(profileId, lesson.id, key) : startLanguageLearningLesson(profileId, lesson.id, key))} /> : null}
+                      {lesson.status !== 'LOCKED' ? <Button size="sm" variant={lesson.status === 'NEEDS_REMEDIATION' ? 'ai' : 'ghost'} disabled={busy !== null} label={copy(lesson.status === 'NEEDS_REMEDIATION' ? 'rlle.ui.remediation.start' : lesson.status === 'AVAILABLE' ? 'rlle.ui.lesson.start' : 'rlle.ui.lesson.resume')} onPress={() => openLesson(lesson.id)} /> : null}
                       {lesson.status === 'MASTERED' && module.status === 'NEEDS_REMEDIATION' && module.weakLessonIds.includes(lesson.id) ? <Button label={copy('rlle.ui.remediation.start')} variant="ai" disabled={busy !== null} onPress={() => void run('remediation', lesson.id, (key) => startLanguageLearningRemediation(profileId, lesson.id, key))} /> : null}
                     </View>
                   ))}
@@ -300,12 +336,12 @@ export function LanguageLearningPassportSummary({ profileId }: { profileId: stri
     if (core || busy) return;
     setBusy(true); setError(null);
     try { setCore((await loadLanguageLearningCore(profileId)).core); }
-    catch (cause) { setError((cause as Error).message); }
+    catch (cause) { setError(languageCourseOpeningError(cause, 'LEARNING_CORE', copy)); }
     finally { setBusy(false); }
   };
   const current = core?.modules.flatMap((module) => module.lessons).find((lesson) => lesson.id === core.currentLessonId);
   return <View style={{ gap: spacing.sm }} testID={`passport-learning-core-${profileId}`}>
     <Button variant="ghost" label={copy('rlle.ui.course.curriculum')} accessibilityExpanded={open} loading={busy} onPress={() => void expand()} />
-    {open ? <View style={{ gap: spacing.sm }}>{error ? <SmartErrorState detail={error} /> : null}{core?.modules.map((module) => <View key={module.id} style={{ gap: spacing.xs }}><Text style={[typography.bodySmall, { color: c.textPrimary }]}>{String(module.order).padStart(2, '0')} · {copy(`learningCore.module.${String(module.order).padStart(2, '0')}`)}</Text><Text style={[typography.caption, { color: c.textSecondary }]}>{copy(LEARNING_CORE_STATUS_COPY[module.status])} · {module.masteredLessons}/{module.totalLessons} · {learningCoreScore(module.score)}</Text>{module.lessons.filter((lesson) => lesson.status !== 'LOCKED').map((lesson) => <Text key={lesson.id} style={[typography.caption, { color: c.textSecondary }]}>{lesson.title} · {copy(LEARNING_CORE_STATUS_COPY[lesson.status])} · {learningCoreScore(lesson.score)} · {learningCoreScore(lesson.bestScore)}{lesson.weakConcepts.length ? ` · ${lesson.weakConcepts.join(' · ')}` : ''}</Text>)}</View>)}{current ? <Text style={[typography.body, { color: c.textPrimary }]}>{copy('rlle.ui.lesson.title')} · {current.title}</Text> : null}<Button label={copy('rlle.ui.course.resume')} onPress={() => router.push(`/languages/${encodeURIComponent(profileId)}/course` as never)} /></View> : null}
+    {open ? <View style={{ gap: spacing.sm }}>{error ? <SmartErrorState detail={error} /> : null}{core?.modules.map((module) => <View key={module.id} style={{ gap: spacing.xs }}><Text style={[typography.bodySmall, { color: c.textPrimary }]}>{String(module.order).padStart(2, '0')} · {copy(`learningCore.module.${String(module.order).padStart(2, '0')}`)}</Text><Text style={[typography.caption, { color: c.textSecondary }]}>{copy(LEARNING_CORE_STATUS_COPY[module.status])} · {module.masteredLessons}/{module.totalLessons} · {learningCoreScore(module.score)}</Text>{module.lessons.filter((lesson) => lesson.status !== 'LOCKED').map((lesson) => <Text key={lesson.id} style={[typography.caption, { color: c.textSecondary }]}>{lesson.title} · {copy(LEARNING_CORE_STATUS_COPY[lesson.status])} · {learningCoreScore(lesson.score)} · {learningCoreScore(lesson.bestScore)}{lesson.weakConcepts.length ? ` · ${lesson.weakConcepts.join(' · ')}` : ''}</Text>)}</View>)}{current ? <Text style={[typography.body, { color: c.textPrimary }]}>{copy('rlle.ui.lesson.title')} · {current.title}</Text> : null}<Button label={copy('rlle.ui.course.resume')} onPress={() => router.push(languageCoreCourseHref(profileId, core) as never)} /></View> : null}
   </View>;
 }

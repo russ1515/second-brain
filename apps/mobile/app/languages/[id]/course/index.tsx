@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
@@ -26,49 +26,50 @@ import { CurriculumMap, DimensionProgress, LanguageMasteryBulletins, LevelSummar
 import { LanguagePlacementPanel } from '../../../../components/language/placement-panel';
 import { LanguageLearningCore } from '../../../../components/language/learning-core';
 import { hasCompleteLanguageCoreCatalogue } from '../../../../lib/language-learning-core-presentation';
+import { loadLanguageCourseOpening, type LanguageCourseOpeningLoad } from '../../../../lib/language-course-opening';
 import { useTokens } from '../../../../lib/design/theme';
 import { actionDestinationHref } from '../../../../lib/action-destination';
 import { useRlleCopy } from '../../../../lib/language-rll-i18n';
 import { languagePlacementLevelLabel } from '../../../../lib/language-placement-presentation';
 import {
-  loadLanguageProfile,
-  loadRlleCourse,
   pauseRlleSession,
   resumeRlleSession,
   startRlleCourse,
   updateRlleCoursePreferences,
-  type RlleCourseLoad,
 } from '../../../../lib/language-rll-client';
 
 export default function LanguageCourseScreen() {
-  const params = useLocalSearchParams<{ id: string | string[]; generation?: string | string[] }>();
+  const params = useLocalSearchParams<{ id: string | string[]; generation?: string | string[]; moduleId?: string | string[]; lessonId?: string | string[] }>();
   const profileId = Array.isArray(params.id) ? params.id[0] : params.id;
   const generationFailed = (Array.isArray(params.generation) ? params.generation[0] : params.generation) === 'failed';
+  const requestedModuleId = Array.isArray(params.moduleId) ? params.moduleId[0] : params.moduleId;
+  const requestedLessonId = Array.isArray(params.lessonId) ? params.lessonId[0] : params.lessonId;
   const router = useRouter();
   const { copy } = useRlleCopy();
   const { colors: c, spacing, typography } = useTokens();
   const [profile, setProfile] = useState<LanguageProfileDetail | null>(null);
-  const [courseLoad, setCourseLoad] = useState<RlleCourseLoad | null>(null);
+  const [courseLoad, setCourseLoad] = useState<LanguageCourseOpeningLoad | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [placement, setPlacement] = useState<LanguagePlacementView | null>(null);
+  const loadRevision = useRef(0);
 
   const load = useCallback(async () => {
     if (!profileId) return;
+    const revision = ++loadRevision.current;
     setError(null);
     try {
-      const [nextProfile, nextCourse] = await Promise.all([
-        loadLanguageProfile(profileId),
-        loadRlleCourse(profileId),
-      ]);
-      setProfile(nextProfile);
-      setCourseLoad(nextCourse);
+      const result = await loadLanguageCourseOpening(profileId, copy);
+      if (revision !== loadRevision.current) return;
+      setProfile(result.profile);
+      setCourseLoad(result.courseLoad);
     } catch (cause) {
+      if (revision !== loadRevision.current) return;
       setError((cause as Error).message);
     }
-  }, [profileId]);
+  }, [profileId, copy]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setProfile(null); setCourseLoad(null); void load(); return () => { loadRevision.current += 1; }; }, [load]);
   useEffect(() => { setPlacement(null); }, [profileId]);
 
   if (!profile || !courseLoad) {
@@ -79,7 +80,7 @@ export default function LanguageCourseScreen() {
   const course = courseLoad.kind === 'live' ? courseLoad.course : null;
   // The accepted placement is immutable input. The learning catalogue is a
   // distinct, owner-scoped server projection, not another placement attempt.
-  if (hasCompleteLanguageCoreCatalogue(profile, course?.placement ?? profile.placement)) {
+  if (courseLoad.kind === 'core' || hasCompleteLanguageCoreCatalogue(profile, course?.placement ?? profile.placement)) {
     return (
       <ScrollView contentContainerStyle={{ paddingBottom: spacing.xxl }}>
         <Page width="wide">
@@ -88,7 +89,7 @@ export default function LanguageCourseScreen() {
             title={copy('rlle.ui.course.title', { language: profile.language })}
             action={<Badge label={languagePlacementLevelLabel(course?.placement ?? profile.placement, copy, profile.cefrLevel, false)} tone="info" />}
           />
-          <LanguageLearningCore profileId={profile.id} />
+          <LanguageLearningCore profileId={profile.id} requestedModuleId={requestedModuleId} requestedLessonId={requestedLessonId} />
         </Page>
       </ScrollView>
     );
