@@ -39,7 +39,9 @@ function harness({ levels = [['A1', 'A2', 'A1', 'A1']], native = false } = {}) {
         return { count: 1 };
       },
     },
-    assessmentSubmission: { findMany: async ({ where }) => [...submissions.values()]
+    assessmentSubmission: { findFirst: async ({ where }) => [...submissions.values()].find((item) =>
+      Object.entries(where).every(([key, value]) => item[key] === value)) ?? null,
+      findMany: async ({ where }) => [...submissions.values()]
       .filter((item) => item.userId === where.userId && where.assessmentId.in.includes(item.assessmentId))
       .map((item) => ({ ...structuredClone(item), assessment: structuredClone(assessments.get(item.assessmentId).row) })) },
   };
@@ -246,7 +248,7 @@ test('canonical saved submission recovers after interruption before placement su
   const h = harness();
   await h.start();
   h.failNextSave();
-  await assert.rejects(h.submit('diagnostic-1'), /simulated post-submission interruption/);
+  await assert.rejects(h.submit('diagnostic-1'), (error) => error.code === 'PLACEMENT_PASSPORT_WRITE_FAILED');
   const reloaded = await h.service.get(OWNER, PROFILE);
   assert.equal(reloaded.status, 'complete');
   assert.equal(reloaded.globalLevel, 'A1');
@@ -333,4 +335,109 @@ test('saved state remains compact references, never embeds learner answers or fu
   assert.equal(state.skills, undefined);
   assert.equal(state.assessment, undefined);
   assert.deepEqual(state.assessmentIds, { 1: 'diagnostic-1' });
+});
+
+test('draft answers and current question survive service recreation, reload and reconnection without grading', async () => {
+  const h = harness(); await h.start();
+  const draft = ['familiar words', '', '', ''];
+  const request = { assessmentId: 'diagnostic-1', answers: draft, currentQuestionIndex: 1, expectedVersion: 0 };
+  const saved = await h.service.saveProgress(OWNER, PROFILE, request);
+  assert.deepEqual(saved.progress, { assessmentId: 'diagnostic-1', answers: draft,
+    currentQuestionIndex: 1, version: 1, completed: false, source: 'draft' });
+  const reconnectedService = new LanguagePlacementService(h.prisma, {
+    get: async (userId, id) => ({ ...structuredClone(h.sessions.get(id)), links: { languageProfileId: PROFILE } }),
+  }, h.service.examiner);
+  assert.deepEqual((await reconnectedService.get(OWNER, PROFILE)).progress, saved.progress);
+  assert.equal(h.calls.grade, 0);
+  assert.equal(saved.globalLevel, null, 'a draft never manufactures a CEFR decision');
+});
+
+test('optimistic draft versions reject stale tabs and preserve the latest saved answers', async () => {
+  const h = harness(); await h.start();
+  await h.service.saveProgress(OWNER, PROFILE, { assessmentId: 'diagnostic-1', answers: ANSWERS,
+    currentQuestionIndex: 2, expectedVersion: 0 });
+  await assert.rejects(h.service.saveProgress(OWNER, PROFILE, { assessmentId: 'diagnostic-1',
+    answers: ['stale', '', '', ''], currentQuestionIndex: 0, expectedVersion: 0 }),
+  (error) => error.getResponse().code === 'PLACEMENT_STATE_CONFLICT');
+  const loaded = await h.service.get(OWNER, PROFILE);
+  assert.deepEqual(loaded.progress.answers, ANSWERS);
+  assert.equal(loaded.progress.version, 1);
+  const duplicate = await h.service.saveProgress(OWNER, PROFILE, { assessmentId: 'diagnostic-1',
+    answers: ANSWERS, currentQuestionIndex: 2, expectedVersion: 1 });
+  assert.equal(duplicate.progress.version, 1, 'exact autosave replay does not rewrite the session');
+});
+
+test('canonical submitted answers supersede a stale draft and cannot be overwritten by autosave', async () => {
+  const h = harness(); await h.start();
+  await h.service.saveProgress(OWNER, PROFILE, { assessmentId: 'diagnostic-1',
+    answers: ['older draft', '', '', ''], currentQuestionIndex: 1, expectedVersion: 0 });
+  const complete = await h.submit('diagnostic-1');
+  assert.deepEqual(complete.progress.answers, ANSWERS);
+  assert.equal(complete.progress.source, 'submission');
+  assert.equal(complete.progress.completed, true);
+  assert.equal(complete.status, 'complete');
+  await assert.rejects(h.service.saveProgress(OWNER, PROFILE, { assessmentId: 'diagnostic-1',
+    answers: ['overwritten', '', '', ''], currentQuestionIndex: 0, expectedVersion: 1 }),
+  (error) => error.getResponse().code === 'PLACEMENT_STATE_CONFLICT');
+  assert.equal(h.calls.grade, 1);
+});
+
+test('failed canonical attempt restores its exact answers without inventing a placement or another provider call', async () => {
+  const h = harness(); await h.start();
+  h.submissions.set('diagnostic-1', { id: 'failed-submission', userId: OWNER, assessmentId: 'diagnostic-1',
+    masterySubmissionKey: 'language-placement:diagnostic-1', masteryGenerationStatus: 'failed', answers: ANSWERS,
+    results: [], createdAt: new Date('2026-10-20T12:00:00.000Z') });
+  // The real Examiner only exposes ready canonical evidence.
+  h.service.examiner.languagePlacementSubmissionEvidence = async () => null;
+  h.service.examiner.languagePlacementAssessment = async () => ({ id: 'diagnostic-1',
+    questions: h.assessments.get('diagnostic-1').questions, latestSubmission: null });
+  const loaded = await h.service.get(OWNER, PROFILE);
+  assert.equal(loaded.status, 'active');
+  assert.equal(loaded.globalLevel, null);
+  assert.equal(loaded.progress.source, 'submission');
+  assert.deepEqual(loaded.progress.answers, ANSWERS);
+  assert.equal(h.calls.grade, 0);
+  await assert.rejects(h.service.saveProgress(OWNER, PROFILE, { assessmentId: 'diagnostic-1',
+    answers: ['changed', ...ANSWERS.slice(1)], currentQuestionIndex: 1, expectedVersion: 0 }),
+  (error) => error.getResponse().code === 'PLACEMENT_STATE_CONFLICT');
+});
+
+test('all stored CEFR outcomes map deterministically to their product level and Passport after reload', async (t) => {
+  for (const [level, expected] of [['PRE_A1', 'BEGINNER'], ['A1', 'BEGINNER'], ['A2', 'BEGINNER'],
+    ['B1', 'INTERMEDIATE'], ['B2', 'INTERMEDIATE'], ['C1', 'ADVANCED'], ['C2', 'ADVANCED']]) {
+    await t.test(level, async () => {
+      const levels = level === 'PRE_A1' || level === 'A1' ? [Array(4).fill(level)]
+        : level === 'A2' || level === 'B1' ? [Array(4).fill('A2'), Array(4).fill(level)]
+          : [Array(4).fill('A2'), Array(4).fill('B2'), Array(4).fill(level)];
+      const h = harness({ levels });
+      let result = await h.start();
+      for (let round = 1; round <= levels.length; round += 1) {
+        if (!result.assessment) result = await h.start();
+        result = await h.submit(result.assessment.id);
+      }
+      const reloaded = await h.service.get(OWNER, PROFILE);
+      const passport = (await projectLanguagePlacementSummaries(h.prisma, OWNER,
+        [{ id: PROFILE, experienceSessions: [...h.sessions.values()] }])).get(PROFILE);
+      assert.equal(reloaded.globalLevel, level);
+      assert.equal(reloaded.productLevel, expected);
+      assert.equal(passport.globalLevel, reloaded.globalLevel);
+      assert.equal(passport.productLevel, reloaded.productLevel);
+      assert.equal(passport.status, 'complete');
+      assert.equal(h.calls.grade, levels.length);
+    });
+  }
+});
+
+test('foreign users, stale assessments and invalid draft shapes cannot save placement progress', async () => {
+  const h = harness(); await h.start();
+  const request = { assessmentId: 'diagnostic-1', answers: ANSWERS, currentQuestionIndex: 0, expectedVersion: 0 };
+  await assert.rejects(h.service.saveProgress('foreign-owner', PROFILE, request), /profile not found/);
+  await assert.rejects(h.service.saveProgress(OWNER, PROFILE, { ...request, assessmentId: 'foreign' }),
+    (error) => error.getResponse().code === 'PLACEMENT_STATE_CONFLICT');
+  for (const change of [{ answers: ['one'] }, { currentQuestionIndex: -1 }, { currentQuestionIndex: 4 },
+    { expectedVersion: -1 }, { answers: ['x'.repeat(4_001), '', '', ''] }]) {
+    await assert.rejects(h.service.saveProgress(OWNER, PROFILE, { ...request, ...change }),
+      (error) => error.getStatus() === 400);
+  }
+  assert.equal(h.calls.grade, 0);
 });

@@ -51,7 +51,7 @@ export async function projectLanguagePlacementSummaries(
     if (state?.schemaVersion !== 1 || state.policyVersion !== LANGUAGE_PLACEMENT_POLICY_VERSION || state.profileId !== profileId) continue;
     const summary: LanguagePlacementSummary = { policyVersion: LANGUAGE_PLACEMENT_POLICY_VERSION,
       status: 'active', globalLevel: null, productLevel: null, completedAt: null,
-      round: 1, skills: [],
+      round: 1, skills: [], oralStatus: 'NOT_EVALUATED', nextAction: 'COMPLETE_WRITTEN_DIAGNOSTIC',
       selfEstimate: (LANGUAGE_PLACEMENT_SELF_ESTIMATES as readonly unknown[]).includes(state.selfEstimate)
         ? state.selfEstimate as LanguagePlacementSummary['selfEstimate'] : null };
     let bestConsensus: LanguagePlacementView['globalLevel'] = null;
@@ -101,6 +101,8 @@ export async function projectLanguagePlacementSummaries(
       }
       summary.round = decision.nextRound;
     }
+    summary.nextAction = summary.status === 'complete' ? 'PREPARE_LEARNING_PATH'
+      : summary.status === 'not_evaluable' ? 'REVIEW_DIAGNOSTIC_AVAILABILITY' : 'COMPLETE_WRITTEN_DIAGNOSTIC';
     output.set(profileId, summary);
   }
   return output;

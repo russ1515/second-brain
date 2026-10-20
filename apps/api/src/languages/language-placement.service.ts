@@ -13,10 +13,12 @@ import {
   type LanguagePlacementSelfEstimate,
   type LanguagePlacementSkillEvidence,
   type LanguagePlacementView,
+  type SaveLanguagePlacementProgressRequest,
   type StartLanguagePlacementRequest,
   type SubmitLanguagePlacementRequest,
 } from '@second-brain/shared';
 import { accountDataLockKey } from '../common/account-data-lock';
+import { PlacementRuntimeException } from '../common/language-placement-error';
 import { resolveLanguageTeachingRoles } from '../common/language-teaching';
 import { ExaminerService } from '../examiner/examiner.service';
 import { ExperienceSessionService } from '../experience-sessions/experience-session.service';
@@ -25,8 +27,8 @@ import { PrismaService } from '../prisma/prisma.service';
 export const LANGUAGE_PLACEMENT_INTENT = 'language-placement';
 const SCHEMA_VERSION = 1;
 
-/** Only references and the server decision are cached here. Questions, answers,
- * rubric results and detailed observations remain in the existing Examiner. */
+/** Examiner submissions remain canonical. This existing session metadata holds
+ * only the server cursor/decision plus a bounded, ungraded draft for resuming. */
 interface StoredPlacement {
   schemaVersion: 1;
   policyVersion: typeof LANGUAGE_PLACEMENT_POLICY_VERSION;
@@ -39,6 +41,9 @@ interface StoredPlacement {
   globalLevel: LanguagePlacementView['globalLevel'];
   productLevel: LanguagePlacementView['productLevel'];
   completedAt: string | null;
+  progress?: NonNullable<LanguagePlacementView['progress']>;
+  oralStatus?: 'NOT_EVALUATED';
+  nextAction?: LanguagePlacementView['nextAction'];
 }
 
 export function placementSummaryFromStep(step: unknown): Pick<LanguagePlacementView,
@@ -108,8 +113,13 @@ export class LanguagePlacementService {
         break;
       }
     }
+    // This version is written-only. Persist that explicit limitation and the
+    // existing next action alongside the canonical-derived decision/cursor.
+    state = { ...state, oralStatus: 'NOT_EVALUATED', nextAction: state.status === 'complete'
+      ? 'PREPARE_LEARNING_PATH' : state.status === 'not_evaluable' ? 'REVIEW_DIAGNOSTIC_AVAILABILITY' : 'COMPLETE_WRITTEN_DIAGNOSTIC' };
     if (JSON.stringify(initial) !== JSON.stringify(state)) session = await this.save(userId, session, initial, state);
-    return this.view(profile, roles.supportLanguage, state, skills, assessment);
+    return this.view(profile, roles.supportLanguage, state, skills, assessment,
+      await this.progress(userId, state));
   }
 
   async start(userId: string, profileId: string, request: StartLanguagePlacementRequest): Promise<LanguagePlacementView> {
@@ -164,6 +174,53 @@ export class LanguagePlacementService {
     return this.get(userId, profileId);
   }
 
+  async saveProgress(userId: string, profileId: string, request: SaveLanguagePlacementProgressRequest): Promise<LanguagePlacementView> {
+    await this.owned(userId, profileId);
+    const session = await this.findSession(userId, profileId);
+    if (!session) throw new BadRequestException('Start the language placement first.');
+    if (!Array.isArray(request.answers) || request.answers.length !== 4
+      || request.answers.some((answer) => typeof answer !== 'string' || answer.length > 4_000)
+      || !Number.isInteger(request.currentQuestionIndex) || request.currentQuestionIndex < 0 || request.currentQuestionIndex > 3
+      || !Number.isSafeInteger(request.expectedVersion) || request.expectedVersion < 0) {
+      throw new BadRequestException('Invalid language placement progress.');
+    }
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const lock = accountDataLockKey(userId);
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lock}, 0))`;
+        const row = await tx.experienceSession.findFirst({ where: { id: session.id, userId,
+          languageProfileId: profileId, type: 'language', intent: LANGUAGE_PLACEMENT_INTENT } });
+        if (!row) throw new NotFoundException('Language placement not found.');
+        const state = this.state({ ...session, currentStep: row.currentStep } as unknown as ExperienceSession, profileId);
+        if (state.status !== 'active' || state.assessmentIds[state.round] !== request.assessmentId) {
+          throw this.stateConflict();
+        }
+        // A claimed/failed/ready Examiner submission already owns these answers.
+        // An autosave can never mutate them or manufacture another attempt.
+        const submitted = await tx.assessmentSubmission.findFirst({ where: { userId,
+          assessmentId: request.assessmentId, masterySubmissionKey: `language-placement:${request.assessmentId}` },
+          select: { id: true } });
+        if (submitted) throw this.stateConflict();
+        const previous = this.savedProgress(state);
+        const version = previous?.version ?? 0;
+        if (request.expectedVersion !== version) throw this.stateConflict();
+        if (previous && previous.currentQuestionIndex === request.currentQuestionIndex
+          && JSON.stringify(previous.answers) === JSON.stringify(request.answers)) return;
+        const next = { ...state, progress: { assessmentId: request.assessmentId,
+          answers: [...request.answers], currentQuestionIndex: request.currentQuestionIndex,
+          version: version + 1, completed: false, source: 'draft' as const } };
+        const saved = await tx.experienceSession.updateMany({ where: { id: row.id, userId, version: row.version }, data: {
+          currentStep: this.step(next) as unknown as Prisma.InputJsonValue, version: { increment: 1 },
+        } });
+        if (saved.count !== 1) throw this.stateConflict();
+      });
+    } catch (error) {
+      if (error instanceof ConflictException || error instanceof NotFoundException || error instanceof PlacementRuntimeException) throw error;
+      throw new PlacementRuntimeException('PLACEMENT_PASSPORT_WRITE_FAILED');
+    }
+    return this.get(userId, profileId);
+  }
+
   async requireCourseEntry(userId: string, profileId: string): Promise<CefrLevel> {
     const placement = await this.requireCoursePlacement(userId, profileId);
     return placement.globalLevel === 'PRE_A1' ? 'A1' : placement.globalLevel;
@@ -206,25 +263,30 @@ export class LanguagePlacementService {
   }
 
   private async save(userId: string, session: ExperienceSession, previous: StoredPlacement, next: StoredPlacement): Promise<ExperienceSession> {
-    await this.prisma.$transaction(async (tx) => {
-      const lock = accountDataLockKey(userId);
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lock}, 0))`;
-      const row = await tx.experienceSession.findFirst({ where: { id: session.id, userId, languageProfileId: next.profileId,
-        type: 'language', intent: LANGUAGE_PLACEMENT_INTENT } });
-      if (!row) throw new NotFoundException('Language placement not found.');
-      const current = record(record(row.currentStep)?.metadata)?.languagePlacement;
-      if (JSON.stringify(current) === JSON.stringify(next)) return;
-      if (JSON.stringify(current) !== JSON.stringify(previous)) {
-        throw new ConflictException('Language placement changed concurrently. Reload it before continuing.');
-      }
-      const result = await tx.experienceSession.updateMany({ where: { id: row.id, userId, version: row.version }, data: {
-        currentStep: this.step(next) as unknown as Prisma.InputJsonValue,
-        progress: { completed: next.status === 'complete' ? 1 : 0, total: 1 },
-        status: next.status === 'complete' ? 'completed' : 'active',
-        completedAt: next.completedAt ? new Date(next.completedAt) : null, version: { increment: 1 },
-      } });
-      if (result.count !== 1) throw new ConflictException('Language placement changed concurrently.');
-    });
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const lock = accountDataLockKey(userId);
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lock}, 0))`;
+        const row = await tx.experienceSession.findFirst({ where: { id: session.id, userId, languageProfileId: next.profileId,
+          type: 'language', intent: LANGUAGE_PLACEMENT_INTENT } });
+        if (!row) throw new NotFoundException('Language placement not found.');
+        const current = record(record(row.currentStep)?.metadata)?.languagePlacement;
+        if (JSON.stringify(current) === JSON.stringify(next)) return;
+        if (JSON.stringify(current) !== JSON.stringify(previous)) {
+          throw this.stateConflict();
+        }
+        const result = await tx.experienceSession.updateMany({ where: { id: row.id, userId, version: row.version }, data: {
+          currentStep: this.step(next) as unknown as Prisma.InputJsonValue,
+          progress: { completed: next.status === 'complete' ? 1 : 0, total: 1 },
+          status: next.status === 'complete' ? 'completed' : 'active',
+          completedAt: next.completedAt ? new Date(next.completedAt) : null, version: { increment: 1 },
+        } });
+        if (result.count !== 1) throw this.stateConflict();
+      });
+    } catch (error) {
+      if (error instanceof ConflictException || error instanceof NotFoundException || error instanceof PlacementRuntimeException) throw error;
+      throw new PlacementRuntimeException('PLACEMENT_PASSPORT_WRITE_FAILED');
+    }
     return this.experiences.get(userId, session.id);
   }
 
@@ -234,13 +296,50 @@ export class LanguagePlacementService {
   }
 
   private view(profile: LanguageProfile, supportLanguage: string, state: StoredPlacement | null,
-    skills: LanguagePlacementSkillEvidence[], assessment: AssessmentView | null): LanguagePlacementView {
+    skills: LanguagePlacementSkillEvidence[], assessment: AssessmentView | null,
+    progress: LanguagePlacementView['progress'] = null): LanguagePlacementView {
     return {
       policyVersion: LANGUAGE_PLACEMENT_POLICY_VERSION, profileId: profile.id, targetLanguage: profile.language,
       supportLanguage, status: state?.status ?? 'required', selfEstimate: state?.selfEstimate ?? null,
       round: state?.round ?? 1, globalLevel: state?.globalLevel ?? null, productLevel: state?.productLevel ?? null,
       skills, assessment, completedAt: state?.completedAt ?? null, submissionIds: state?.submissionIds ?? [],
+      oralStatus: 'NOT_EVALUATED', nextAction: state?.status === 'complete' ? 'PREPARE_LEARNING_PATH'
+        : state?.status === 'not_evaluable' ? 'REVIEW_DIAGNOSTIC_AVAILABILITY' : 'COMPLETE_WRITTEN_DIAGNOSTIC',
+      progress,
     };
+  }
+
+  private savedProgress(state: StoredPlacement): LanguagePlacementView['progress'] {
+    const progress = state.progress;
+    if (!progress || progress.assessmentId !== state.assessmentIds[state.round]
+      || !Array.isArray(progress.answers) || progress.answers.length !== 4
+      || progress.answers.some((answer) => typeof answer !== 'string' || answer.length > 4_000)
+      || !Number.isInteger(progress.currentQuestionIndex) || progress.currentQuestionIndex < 0 || progress.currentQuestionIndex > 3
+      || !Number.isSafeInteger(progress.version) || progress.version < 1
+      || progress.source !== 'draft' || progress.completed !== false) return null;
+    return { ...progress, answers: [...progress.answers] };
+  }
+
+  private async progress(userId: string, state: StoredPlacement): Promise<LanguagePlacementView['progress']> {
+    const assessmentId = state.assessmentIds[state.round];
+    if (!assessmentId) return null;
+    const saved = this.savedProgress(state);
+    const submitted = await this.prisma.assessmentSubmission.findFirst({ where: { userId, assessmentId,
+      masterySubmissionKey: `language-placement:${assessmentId}` }, select: { answers: true, masteryGenerationStatus: true } });
+    if (!submitted) return saved;
+    if (!Array.isArray(submitted.answers) || submitted.answers.length !== 4
+      || submitted.answers.some((answer) => typeof answer !== 'string' || answer.length > 4_000)) {
+      throw new PlacementRuntimeException('PLACEMENT_LEVEL_MAPPING_FAILED');
+    }
+    return { assessmentId, answers: submitted.answers as string[], currentQuestionIndex: saved?.currentQuestionIndex ?? 3,
+      version: saved?.version ?? 0, completed: true, source: 'submission',
+      ...(['grading', 'failed', 'ready'].includes(submitted.masteryGenerationStatus ?? '')
+        ? { submissionStatus: submitted.masteryGenerationStatus as 'grading' | 'failed' | 'ready' } : {}) };
+  }
+
+  private stateConflict(): ConflictException {
+    return new ConflictException({ code: 'PLACEMENT_STATE_CONFLICT',
+      message: 'Language placement changed. Reload it before continuing.' });
   }
 
   private requestKey(value: string): void {

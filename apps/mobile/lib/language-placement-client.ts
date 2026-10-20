@@ -1,5 +1,6 @@
 import type {
   LanguagePlacementView,
+  SaveLanguagePlacementProgressRequest,
   StartLanguagePlacementRequest,
   SubmitLanguagePlacementRequest,
 } from '@second-brain/shared';
@@ -20,6 +21,16 @@ export function startLanguagePlacement(
   request: StartLanguagePlacementRequest,
 ): Promise<LanguagePlacementView> {
   return api<LanguagePlacementView>(`${placementPath(profileId)}/start`, {
+    method: 'POST', body: request,
+  });
+}
+
+/** Answer/cursor persistence only: this endpoint never invokes a provider. */
+export function saveLanguagePlacementProgress(
+  profileId: string,
+  request: SaveLanguagePlacementProgressRequest,
+): Promise<LanguagePlacementView> {
+  return api<LanguagePlacementView>(`${placementPath(profileId)}/progress`, {
     method: 'POST', body: request,
   });
 }

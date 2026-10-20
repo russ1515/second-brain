@@ -121,7 +121,7 @@ function fixture(options = {}) {
         summary: 'Diagnostic observations only.', advice: 'Begin at the demonstrated level.',
       };
       if (options.grading) options.grading(payload);
-      return { text: JSON.stringify(payload) };
+      return { text: options.gradingText ? options.gradingText(payload) : JSON.stringify(payload) };
     },
   };
   const service = new ExaminerService(prisma, llm);
@@ -380,6 +380,137 @@ test('missing CEFR descriptors, duplicate skills and null observations never acq
 
 test('a fabricated quote absent from the submitted answer cannot support a level', async () => {
   await assertNotEvaluable({ grading: (payload) => { payload.results[0].placement.evidenceQuote = 'This phrase never occurred in the answer.'; } });
+});
+
+test('placement grading advertises one complete contract with evidence nested in every result', async () => {
+  const f = fixture();
+  const assessment = await f.service.createLanguagePlacementOnce(OWNER, f.createInput());
+  await f.service.submitLanguagePlacementOnce(OWNER, assessment.id, f.submitInput());
+  const prompt = f.calls[1].messages.find((message) => message.role === 'user').content;
+  const contract = prompt.split('Return ONLY JSON: ')[1].split('Language placement policy:')[0];
+  for (const field of ['questionId', 'awarded', 'verdict', 'placement', 'skill', 'level', 'reason', 'evidenceQuote']) {
+    assert.ok(contract.includes(`"${field}"`), `The main results contract must include ${field}.`);
+  }
+  assert.equal((prompt.match(/Return ONLY JSON:/g) || []).length, 1);
+  assert.ok(prompt.includes('Copy each input id verbatim into questionId'));
+  assert.ok(prompt.includes('Do not translate JSON property names, skill identifiers or CEFR values'));
+});
+
+test('following the old advertised main JSON shape reproduces an explicit missing-evidence rejection', async () => {
+  const f = fixture({ grading: (payload) => { payload.results.forEach((result) => { delete result.placement; }); } });
+  const assessment = await f.service.createLanguagePlacementOnce(OWNER, f.createInput());
+  await assert.rejects(f.service.submitLanguagePlacementOnce(OWNER, assessment.id, f.submitInput()), (error) => {
+    assert.equal(error.getStatus(), 503);
+    assert.equal(error.code, 'PLACEMENT_RESULT_SKILL_INVALID');
+    return true;
+  });
+  assert.equal(f.rows.submissions[0].masteryGenerationStatus, 'failed');
+  assert.deepEqual(f.rows.submissions[0].answers, ANSWERS);
+  assert.equal(f.stats.grades, 1);
+  assert.equal(f.stats.completionWrites, 0);
+});
+
+test('placement accepts complete JSON and fenced shuffled result order with exact canonical evidence', async () => {
+  for (const gradingText of [
+    (payload) => JSON.stringify(payload),
+    (payload) => '```json\n' + JSON.stringify({ ...payload, results: [...payload.results].reverse() }) + '\n```',
+  ]) {
+    const f = fixture({ gradingText });
+    const assessment = await f.service.createLanguagePlacementOnce(OWNER, f.createInput());
+    const result = await f.service.submitLanguagePlacementOnce(OWNER, assessment.id, f.submitInput());
+    assert.deepEqual(result.skills.map((item) => item.skill), SKILLS);
+    assert.deepEqual(result.skills.map((item) => item.evidenceQuote), ANSWERS);
+    assert.equal(shared.projectLanguagePlacementRound({ round: 1, skills: result.skills }).productLevel, 'BEGINNER');
+    assert.equal(f.stats.grades, 1);
+  }
+});
+
+test('every invalid placement provider contract has a precise safe reason and preserves the failed attempt', async () => {
+  const cases = [
+    ['PLACEMENT_RESULT_JSON_INVALID', { gradingText: () => '{"results":[' }],
+    ['PLACEMENT_RESULT_STRUCTURE_INVALID', { gradingText: () => '{"results":{}}' }],
+    ['PLACEMENT_RESULT_QUESTION_IDS_INVALID', { grading: (p) => { p.results.pop(); } }],
+    ['PLACEMENT_RESULT_QUESTION_IDS_INVALID', { grading: (p) => { p.results[1].questionId = p.results[0].questionId; } }],
+    ['PLACEMENT_RESULT_QUESTION_IDS_INVALID', { grading: (p) => { p.results[0].questionId = 'unrecognized-id'; } }],
+    ['PLACEMENT_RESULT_SKILL_INVALID', { grading: (p) => { p.results[0].placement.skill = 'reading'; } }],
+    ['PLACEMENT_RESULT_CEFR_INVALID', { grading: (p) => { delete p.results[0].placement.level; } }],
+    ['PLACEMENT_RESULT_CEFR_INVALID', { grading: (p) => { p.results[0].placement.level = 'a1'; } }],
+    ['PLACEMENT_RESULT_CEFR_ABOVE_CEILING', { grading: (p) => { p.results[0].placement.level = 'B1'; } }],
+    ['PLACEMENT_RESULT_REASON_INVALID', { grading: (p) => { p.results[0].placement.reason = ''; } }],
+    ['PLACEMENT_RESULT_EVIDENCE_INVALID', { grading: (p) => { p.results[0].placement.evidenceQuote = 'invented evidence'; } }],
+    ['PLACEMENT_RESULT_EVIDENCE_INVALID', { grading: (p) => { p.results[0].placement.evidenceQuote = null; } }],
+    ['PLACEMENT_RESULT_SCORE_INVALID', { grading: (p) => { p.results[0].awarded = '9'; } }],
+    ['PLACEMENT_RESULT_SCORE_INVALID', { grading: (p) => { p.results[0].awarded = 10.1; } }],
+    ['PLACEMENT_RESULT_VERDICT_INVALID', { grading: (p) => { p.results[0].verdict = 'passed'; } }],
+  ];
+  for (const [code, options] of cases) {
+    const f = fixture(options);
+    const assessment = await f.service.createLanguagePlacementOnce(OWNER, f.createInput());
+    await assert.rejects(f.service.submitLanguagePlacementOnce(OWNER, assessment.id, f.submitInput()), (error) => {
+      assert.equal(error.getStatus(), 503, code);
+      assert.equal(error.code, code);
+      assert.ok(!JSON.stringify(error.getResponse()).includes(ANSWERS[0]));
+      return true;
+    });
+    assert.equal(f.rows.submissions[0].masteryGenerationStatus, 'failed');
+    assert.deepEqual(f.rows.submissions[0].answers, ANSWERS);
+    assert.equal(f.rows.submissions[0].results.length, 0);
+    assert.equal(f.stats.grades, 1);
+    assert.equal(f.stats.completionWrites, 0);
+  }
+});
+
+test('placement provider failure exposes only a safe reason and never attempts another call', async () => {
+  const f = fixture();
+  const assessment = await f.service.createLanguagePlacementOnce(OWNER, f.createInput());
+  let calls = 0;
+  f.service.llm.generate = async () => { calls += 1; throw new Error('PRIVATE_PROVIDER_DETAIL'); };
+  await assert.rejects(f.service.submitLanguagePlacementOnce(OWNER, assessment.id, f.submitInput()), (error) => {
+    assert.equal(error.code, 'PLACEMENT_PROVIDER_UNAVAILABLE');
+    assert.equal(JSON.stringify(error.getResponse()).includes('PRIVATE_PROVIDER_DETAIL'), false);
+    return true;
+  });
+  assert.equal(calls, 1);
+  assert.equal(f.rows.submissions[0].masteryGenerationStatus, 'failed');
+  assert.deepEqual(f.rows.submissions[0].answers, ANSWERS);
+});
+
+test('a failed canonical result write has a persistence reason and preserves answers without a level', async () => {
+  const f = fixture();
+  const assessment = await f.service.createLanguagePlacementOnce(OWNER, f.createInput());
+  const original = f.service.prisma.assessmentSubmission.updateMany;
+  f.service.prisma.assessmentSubmission.updateMany = async (input) => {
+    if (input.data.masteryGenerationStatus === 'ready') throw new Error('PRIVATE_DATABASE_DETAIL');
+    return original(input);
+  };
+  await assert.rejects(f.service.submitLanguagePlacementOnce(OWNER, assessment.id, f.submitInput()), (error) => {
+    assert.equal(error.code, 'PLACEMENT_PERSISTENCE_FAILED');
+    assert.equal(JSON.stringify(error.getResponse()).includes('PRIVATE_DATABASE_DETAIL'), false);
+    return true;
+  });
+  assert.equal(f.rows.submissions[0].masteryGenerationStatus, 'failed');
+  assert.deepEqual(f.rows.submissions[0].answers, ANSWERS);
+  assert.deepEqual(f.rows.submissions[0].results, []);
+  assert.equal(f.stats.grades, 1);
+  assert.equal(f.stats.completionWrites, 0);
+});
+
+test('canonical evidence corruption reports its own safe reason without regrading', async () => {
+  for (const corrupt of [
+    (row) => { row.results[0] = null; },
+    (row) => { row.results[0].verdict = 'passed'; },
+    (row) => { row.results[0].placement.evidenceQuote = 'absent quote'; },
+  ]) {
+    const f = fixture();
+    const assessment = await f.service.createLanguagePlacementOnce(OWNER, f.createInput());
+    await f.service.submitLanguagePlacementOnce(OWNER, assessment.id, f.submitInput());
+    corrupt(f.rows.submissions[0]);
+    await assert.rejects(f.service.languagePlacementSubmissionEvidence(OWNER, assessment.id, PROFILE, SESSION), (error) => {
+      assert.equal(error.code, 'PLACEMENT_CANONICAL_EVIDENCE_INVALID');
+      return true;
+    });
+    assert.equal(f.stats.grades, 1);
+  }
 });
 
 test('diagnostic input requires exactly four answers and the correct round before grading', async () => {

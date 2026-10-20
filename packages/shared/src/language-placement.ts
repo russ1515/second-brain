@@ -42,6 +42,26 @@ export interface SubmitLanguagePlacementRequest {
   idempotencyKey: string;
 }
 
+/** Owner-scoped answer/cursor autosave. This never evaluates or grants a level. */
+export interface SaveLanguagePlacementProgressRequest {
+  assessmentId: string;
+  answers: string[];
+  currentQuestionIndex: number;
+  expectedVersion: number;
+}
+
+export interface LanguagePlacementProgress {
+  assessmentId: string;
+  answers: string[];
+  currentQuestionIndex: number;
+  version: number;
+  /** A canonical attempt exists; this does not mean placement is successful. */
+  completed: boolean;
+  source: 'draft' | 'submission';
+  /** A failed technical attempt may be retried explicitly with identical answers. */
+  submissionStatus?: 'grading' | 'failed' | 'ready';
+}
+
 export interface LanguagePlacementView {
   policyVersion: typeof LANGUAGE_PLACEMENT_POLICY_VERSION;
   profileId: string;
@@ -56,12 +76,15 @@ export interface LanguagePlacementView {
   assessment: AssessmentView | null;
   completedAt: string | null;
   submissionIds: string[];
+  progress?: LanguagePlacementProgress | null;
+  oralStatus?: 'NOT_EVALUATED';
+  nextAction?: 'COMPLETE_WRITTEN_DIAGNOSTIC' | 'PREPARE_LEARNING_PATH' | 'REVIEW_DIAGNOSTIC_AVAILABILITY';
 }
 
 /** The same persisted diagnostic is projected in the language profile and
  * Learner Passport; it is deliberately distinct from CEFR certification. */
 export type LanguagePlacementSummary = Pick<LanguagePlacementView,
-  'policyVersion' | 'status' | 'round' | 'selfEstimate' | 'globalLevel' | 'productLevel' | 'completedAt' | 'skills'>;
+  'policyVersion' | 'status' | 'round' | 'selfEstimate' | 'globalLevel' | 'productLevel' | 'completedAt' | 'skills' | 'oralStatus' | 'nextAction'>;
 
 export interface LanguagePlacementRoundProjection {
   status: 'complete' | 'not_evaluable';

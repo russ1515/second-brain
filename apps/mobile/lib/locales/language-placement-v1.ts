@@ -16,6 +16,12 @@ export const languagePlacementKeys = [
   'placement.ui.result',
   'placement.ui.notEvaluable',
   'placement.ui.start',
+  'placement.ui.draftSaved',
+  'placement.ui.draftSaving',
+  'placement.ui.draftSaveFailed',
+  'placement.ui.diagnosticDate',
+  'placement.ui.nextAction',
+  'placement.ui.resume',
 ] as const;
 
 type PlacementCopy = readonly [string, string, string, string, string, string, string, string, string, string, string, string, string];
@@ -397,8 +403,48 @@ export const languagePlacementTranslations: Record<string, PlacementCopy> = {
   ],
 };
 
+type ResumeCopy = readonly [string, string, string, string, string, string];
+/** Answer persistence and completed diagnostic, not an invented mastery result. */
+export const languagePlacementResumeTranslations: Record<string, ResumeCopy> = {
+  en: ['Answers saved', 'Saving answers…', 'Answers could not be saved. Keep this page open.', 'Diagnostic on {date}', 'Next: prepare your learning path', 'Resume question {number}'],
+  fr: ['Réponses enregistrées', 'Enregistrement des réponses…', 'Les réponses n’ont pas pu être enregistrées. Garde cette page ouverte.', 'Diagnostic du {date}', 'Prochaine étape : préparer ton parcours d’apprentissage', 'Reprendre la question {number}'],
+  es: ['Respuestas guardadas', 'Guardando respuestas…', 'No se pudieron guardar las respuestas. Mantén esta página abierta.', 'Diagnóstico del {date}', 'Siguiente paso: preparar tu itinerario de aprendizaje', 'Retomar la pregunta {number}'],
+  de: ['Antworten gespeichert', 'Antworten werden gespeichert…', 'Die Antworten konnten nicht gespeichert werden. Lass diese Seite geöffnet.', 'Einstufung vom {date}', 'Nächster Schritt: deinen Lernpfad vorbereiten', 'Bei Frage {number} fortfahren'],
+  it: ['Risposte salvate', 'Salvataggio delle risposte…', 'Impossibile salvare le risposte. Tieni aperta questa pagina.', 'Test di livello del {date}', 'Prossimo passo: preparare il tuo percorso di apprendimento', 'Riprendi dalla domanda {number}'],
+  pt: ['Respostas guardadas', 'A guardar respostas…', 'Não foi possível guardar as respostas. Mantém esta página aberta.', 'Diagnóstico de {date}', 'Próximo passo: preparar o teu percurso de aprendizagem', 'Retomar a pergunta {number}'],
+  hi: ['उत्तर सहेजे गए', 'उत्तर सहेजे जा रहे हैं…', 'उत्तर सहेजे नहीं जा सके। इस पेज को खुला रखें।', '{date} का स्तर परीक्षण', 'अगला चरण: अपना सीखने का मार्ग तैयार करें', 'प्रश्न {number} से फिर शुरू करें'],
+  tr: ['Yanıtlar kaydedildi', 'Yanıtlar kaydediliyor…', 'Yanıtlar kaydedilemedi. Bu sayfayı açık tut.', '{date} tarihli seviye tespiti', 'Sonraki adım: öğrenme yolunu hazırla', '{number}. sorudan devam et'],
+  pl: ['Odpowiedzi zapisane', 'Zapisywanie odpowiedzi…', 'Nie udało się zapisać odpowiedzi. Pozostaw tę stronę otwartą.', 'Diagnoza z dnia {date}', 'Następny krok: przygotowanie ścieżki nauki', 'Wznów od pytania {number}'],
+  ru: ['Ответы сохранены', 'Сохранение ответов…', 'Не удалось сохранить ответы. Оставь эту страницу открытой.', 'Диагностика от {date}', 'Следующий шаг: подготовить твой учебный маршрут', 'Продолжить с вопроса {number}'],
+  zh: ['回答已保存', '正在保存回答…', '无法保存回答。请保持此页面打开。', '诊断日期：{date}', '下一步：准备你的学习路径', '从第 {number} 题继续'],
+  vi: ['Đã lưu câu trả lời', 'Đang lưu câu trả lời…', 'Không thể lưu câu trả lời. Hãy giữ trang này mở.', 'Chẩn đoán ngày {date}', 'Bước tiếp theo: chuẩn bị lộ trình học của bạn', 'Tiếp tục từ câu hỏi {number}'],
+  ja: ['回答を保存しました', '回答を保存中…', '回答を保存できませんでした。このページを開いたままにしてください。', '診断日：{date}', '次のステップ：学習プランを準備する', '質問 {number} から再開'],
+  sv: ['Svaren har sparats', 'Sparar svar…', 'Svaren kunde inte sparas. Låt den här sidan vara öppen.', 'Kartläggning den {date}', 'Nästa steg: förbered din lärväg', 'Fortsätt från fråga {number}'],
+  th: ['บันทึกคำตอบแล้ว', 'กำลังบันทึกคำตอบ…', 'ไม่สามารถบันทึกคำตอบได้ โปรดเปิดหน้านี้ไว้', 'การวินิจฉัยวันที่ {date}', 'ขั้นตอนถัดไป: เตรียมเส้นทางการเรียนรู้ของคุณ', 'ทำต่อจากคำถามที่ {number}'],
+  ar: ['حُفظت الإجابات', 'جارٍ حفظ الإجابات…', 'تعذّر حفظ الإجابات. أبقِ هذه الصفحة مفتوحة.', 'التشخيص بتاريخ {date}', 'الخطوة التالية: إعداد مسار تعلّمك', 'تابع من السؤال {number}'],
+  ko: ['답변이 저장되었습니다', '답변 저장 중…', '답변을 저장하지 못했습니다. 이 페이지를 열어 두세요.', '진단일: {date}', '다음 단계: 학습 경로 준비하기', '{number}번 질문부터 계속하기'],
+  nl: ['Antwoorden opgeslagen', 'Antwoorden opslaan…', 'De antwoorden konden niet worden opgeslagen. Laat deze pagina open.', 'Diagnose van {date}', 'Volgende stap: je leertraject voorbereiden', 'Doorgaan vanaf vraag {number}'],
+  el: ['Οι απαντήσεις αποθηκεύτηκαν', 'Αποθήκευση απαντήσεων…', 'Οι απαντήσεις δεν αποθηκεύτηκαν. Κράτησε αυτή τη σελίδα ανοιχτή.', 'Διάγνωση στις {date}', 'Επόμενο βήμα: προετοιμασία της μαθησιακής διαδρομής σου', 'Συνέχισε από την ερώτηση {number}'],
+  cs: ['Odpovědi uloženy', 'Ukládání odpovědí…', 'Odpovědi se nepodařilo uložit. Nech tuto stránku otevřenou.', 'Diagnostika ze dne {date}', 'Další krok: připravit tvou vzdělávací cestu', 'Pokračovat otázkou {number}'],
+  ro: ['Răspunsuri salvate', 'Se salvează răspunsurile…', 'Răspunsurile nu au putut fi salvate. Păstrează această pagină deschisă.', 'Diagnostic din {date}', 'Pasul următor: pregătirea parcursului tău de învățare', 'Reia de la întrebarea {number}'],
+  hu: ['A válaszok mentve', 'Válaszok mentése…', 'Nem sikerült menteni a válaszokat. Hagyd nyitva ezt az oldalt.', 'Felmérés dátuma: {date}', 'Következő lépés: a tanulási útvonalad előkészítése', 'Folytatás a(z) {number}. kérdéstől'],
+  da: ['Svarene er gemt', 'Gemmer svar…', 'Svarene kunne ikke gemmes. Hold denne side åben.', 'Diagnosticering den {date}', 'Næste skridt: forbered dit læringsforløb', 'Fortsæt fra spørgsmål {number}'],
+  fi: ['Vastaukset tallennettu', 'Tallennetaan vastauksia…', 'Vastauksia ei voitu tallentaa. Pidä tämä sivu auki.', 'Kartoitus {date}', 'Seuraavaksi: valmistele oppimispolkusi', 'Jatka kysymyksestä {number}'],
+  id: ['Jawaban tersimpan', 'Menyimpan jawaban…', 'Jawaban tidak dapat disimpan. Biarkan halaman ini terbuka.', 'Diagnostik pada {date}', 'Langkah berikutnya: siapkan jalur belajarmu', 'Lanjutkan dari pertanyaan {number}'],
+  nb: ['Svarene er lagret', 'Lagrer svar…', 'Svarene kunne ikke lagres. Hold denne siden åpen.', 'Kartlegging den {date}', 'Neste steg: forbered læringsløpet ditt', 'Fortsett fra spørsmål {number}'],
+  uk: ['Відповіді збережено', 'Збереження відповідей…', 'Не вдалося зберегти відповіді. Залиш цю сторінку відкритою.', 'Діагностика від {date}', 'Наступний крок: підготувати твій навчальний маршрут', 'Продовжити із запитання {number}'],
+  ln: ['Biyano ebombami', 'Kobomba biyano…', 'Biyano ekokaki kobombama te. Tiká lokasa oyo efungwama.', 'Momekano ya nivo ya {date}', 'Etape elandi: kobongisa nzela na yo ya koyekola', 'Zongelá motuna {number}'],
+  sw: ['Majibu yamehifadhiwa', 'Inahifadhi majibu…', 'Majibu hayakuweza kuhifadhiwa. Acha ukurasa huu wazi.', 'Uchunguzi wa tarehe {date}', 'Hatua inayofuata: kuandaa njia yako ya kujifunza', 'Endelea na swali la {number}'],
+  wo: ['Tontu yi denc nañu', 'Mi ngi denc tontu yi…', 'Manul denc tontu yi. Bàyyil xët wii mu ubbeeku.', 'Nattu bi ci {date}', 'Li ci topp: waajal sa yoonu njàng', 'Dellu ci laaj {number}'],
+  ha: ['An adana amsoshi', 'Ana adana amsoshi…', 'Ba a iya adana amsoshin ba. Ka bar wannan shafi a buɗe.', 'Gwajin tantance mataki na {date}', 'Mataki na gaba: shirya hanyar koyonka', 'Ci gaba daga tambaya ta {number}'],
+  he: ['התשובות נשמרו', 'שמירת התשובות…', 'לא ניתן לשמור את התשובות. יש להשאיר את הדף הזה פתוח.', 'אבחון בתאריך {date}', 'השלב הבא: הכנת מסלול הלמידה שלך', 'המשך משאלה {number}'],
+  'zh-Hant': ['回答已儲存', '正在儲存回答…', '無法儲存回答。請保持此頁面開啟。', '診斷日期：{date}', '下一步：準備你的學習路徑', '從第 {number} 題繼續'],
+  bn: ['উত্তর সংরক্ষিত হয়েছে', 'উত্তর সংরক্ষণ করা হচ্ছে…', 'উত্তর সংরক্ষণ করা যায়নি। এই পৃষ্ঠাটি খোলা রাখুন।', '{date} তারিখের মূল্যায়ন', 'পরবর্তী ধাপ: আপনার শেখার পথ প্রস্তুত করুন', '{number} নম্বর প্রশ্ন থেকে আবার শুরু করুন'],
+};
+
 for (const [code, values] of Object.entries(languagePlacementTranslations)) {
+  const complete = [...values, ...languagePlacementResumeTranslations[code]];
   extendLocale(code, Object.fromEntries(
-    languagePlacementKeys.map((key, index) => [key, values[index]]),
+    languagePlacementKeys.map((key, index) => [key, complete[index]]),
   ));
 }

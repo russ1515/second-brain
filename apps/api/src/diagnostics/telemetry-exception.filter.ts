@@ -2,6 +2,7 @@ import { ArgumentsHost, Catch, HttpException, Logger } from '@nestjs/common';
 import { BaseExceptionFilter, HttpAdapterHost } from '@nestjs/core';
 import type { Request, Response } from 'express';
 import { ErrorEventService } from './error-event.service';
+import { PlacementRuntimeException } from '../common/language-placement-error';
 
 /**
  * Records server failures without changing Nest's established response contract.
@@ -38,13 +39,18 @@ export class TelemetryExceptionFilter extends BaseExceptionFilter {
         // contain provider, database, form or document material, so render a
         // fixed 5xx contract ourselves instead of delegating to it.
         const response = http.getResponse<Response>();
+        // Only this fixed, typed Placement contract may retain a reason code.
+        // All arbitrary exception messages/payloads remain opaque as before.
+        const placement = exception instanceof PlacementRuntimeException ? exception : null;
+        if (placement) this.logger.error(`Language placement failed: ${placement.code}`);
         if (!response.headersSent) {
           const rawRequestId = request.headers['x-request-id'];
           const requestId = Array.isArray(rawRequestId) ? rawRequestId[0] : rawRequestId;
           response.status(status).json({
             statusCode: status,
-            code: 'INTERNAL_ERROR',
+            code: placement?.code ?? 'INTERNAL_ERROR',
             message: 'Internal server error.',
+            ...(placement ? { stage: placement.stage } : {}),
             requestId: typeof requestId === 'string' ? requestId : null,
           });
         }

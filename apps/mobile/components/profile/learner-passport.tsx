@@ -1,6 +1,7 @@
 import { Text, View } from 'react-native';
 import {
   SUPPORTED_LANGUAGES,
+  LANGUAGE_PLACEMENT_REQUIRED_SKILLS,
   type LearnerPassportView,
   type SupportedLanguageCode,
 } from '@second-brain/shared';
@@ -8,6 +9,8 @@ import { useTokens } from '../../lib/design/theme';
 import { useI18n, type TranslationKey } from '../../lib/i18n';
 import { Badge, Button, Card } from '../ds/core';
 import { LanguageBadge } from '../ds/language';
+import { useRlleCopy } from '../../lib/language-rll-i18n';
+import { LANGUAGE_PRODUCT_LEVEL_COPY } from '../../lib/language-placement-presentation';
 
 const AGE_KEY = {
   under12: 'onb.age.under12',
@@ -32,6 +35,7 @@ export function LearnerPassportCard({
 }) {
   const { colors: c } = useTokens();
   const { t } = useI18n();
+  const { copy, formatLocale } = useRlleCopy();
   const declared = passport?.declared;
   const observed = passport?.observed;
   const education = declared?.education;
@@ -94,18 +98,50 @@ export function LearnerPassportCard({
           <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: '800', flex: 1 }}>{t('passport.progression')}</Text>
           <Badge tone="ai" label={t('passport.source.observed')} />
         </View>
-        {progress.length ? progress.map((item) => (
-          <View key={item.profileId} style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        {progress.length ? progress.map((item) => {
+          const placement = item.placement;
+          const diagnosed = placement?.status === 'complete' && placement.productLevel && placement.globalLevel;
+          const diagnosticDate = placement?.completedAt ? new Date(placement.completedAt) : null;
+          return (
+          <View key={item.profileId} style={{ gap: 8 }} testID={`passport-language-${item.profileId}`}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             {item.languageCode ? <LanguageBadge code={item.languageCode} /> : <Text style={{ color: c.textPrimary }}>{item.language}</Text>}
             <Badge
-              tone={item.evaluatedLevel ? 'success' : 'neutral'}
-              label={item.evaluatedLevel ?? item.declaredLevel}
+              tone={diagnosed || item.evaluatedLevel ? 'success' : 'neutral'}
+              label={diagnosed
+                ? copy(LANGUAGE_PRODUCT_LEVEL_COPY[placement.productLevel!])
+                : placement ? copy('rlle.ui.course.notEvaluated') : item.evaluatedLevel ?? item.declaredLevel}
             />
+            {diagnosed ? <Badge tone="info" label={placement.globalLevel!} /> : null}
             <Text style={{ color: c.textMuted, fontSize: 12 }}>
               {item.lessonCount} · {item.sessionCount}
             </Text>
           </View>
-        )) : (
+          {diagnosed ? (
+            <View style={{ gap: 5 }} testID={`passport-placement-${item.profileId}`}>
+              {LANGUAGE_PLACEMENT_REQUIRED_SKILLS.map((skill) => {
+                // Display the latest canonical observation, not the strongest
+                // isolated skill and never a client-side classification.
+                const evidence = placement.skills.filter((entry) => entry.skill === skill)
+                  .sort((a, b) => b.round - a.round)[0];
+                return (
+                  <Text key={skill} style={{ color: c.textSecondary, fontSize: 12 }}>
+                    {copy(`rlle.ui.dimension.${skill}`)} · {evidence?.level ?? copy('rlle.ui.course.notEvaluated')}
+                  </Text>
+                );
+              })}
+              <Text style={{ color: c.textMuted, fontSize: 12 }}>{copy('placement.ui.oralUnavailable')}</Text>
+              {diagnosticDate && !Number.isNaN(diagnosticDate.getTime()) ? (
+                <Text style={{ color: c.textMuted, fontSize: 12 }}>
+                  {copy('placement.ui.diagnosticDate', { date: new Intl.DateTimeFormat(formatLocale).format(diagnosticDate) })}
+                </Text>
+              ) : null}
+              <Text style={{ color: c.textSecondary, fontSize: 12 }}>{copy('placement.ui.nextAction')}</Text>
+            </View>
+          ) : null}
+          </View>
+          );
+        }) : (
           <Text style={{ color: c.textMuted, fontSize: 13 }}>{t('profile.kyc.languagesEmpty')}</Text>
         )}
       </View>

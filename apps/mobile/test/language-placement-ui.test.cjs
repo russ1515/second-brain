@@ -45,7 +45,7 @@ const complete = () => ({ ...required(), status: 'complete', selfEstimate: 'zero
 
 /** Tiny deterministic hook runner, not a browser substitute. It executes the
  * real component handlers/effects with mocked transport and no provider. */
-function panelHarness({ initial = required(), start = async () => active(), submit = async () => complete() } = {}) {
+function panelHarness({ initial = required(), start = async () => active(), submit = async () => complete(), save } = {}) {
   const slots = [];
   const effects = [];
   let index = 0;
@@ -88,6 +88,10 @@ function panelHarness({ initial = required(), start = async () => active(), subm
     '../../lib/language-placement-presentation': load('apps/mobile/lib/language-placement-presentation.ts', {}),
     '../../lib/language-placement-client': {
       loadLanguagePlacement: async (id) => { calls.push(['load', id]); return initial; },
+      saveLanguagePlacementProgress: async (id, body) => {
+        calls.push(['save', id, body]);
+        return save ? save(body) : { ...active(), progress: { ...body, version: body.expectedVersion + 1, completed: false, source: 'draft' } };
+      },
       startLanguagePlacement: async (id, body) => { calls.push(['start', id, body]); return start(body); },
       submitLanguagePlacement: async (id, body) => { calls.push(['submit', id, body]); return submit(body); },
     },
@@ -105,7 +109,9 @@ function panelHarness({ initial = required(), start = async () => active(), subm
   const byId = (id) => nodes().find((node) => node.props?.testID === id);
   const settle = async () => { await new Promise((resolve) => setImmediate(resolve)); render(); };
   render();
-  return { calls, received, render, settle, byId, nodes };
+  const switchProfile = (profileId) => { props = { ...props, profileId }; render(); };
+  const unmount = () => { for (const slot of slots) slot?.cleanup?.(); };
+  return { calls, received, render, settle, byId, nodes, switchProfile, unmount };
 }
 
 test('placement GET restores the server state without automatically spending a provider call', async () => {
@@ -135,14 +141,14 @@ test('a subsequent round requires an explicit Continue and cannot classify from 
   ui.render();
   ui.byId('language-placement-submit').props.onPress();
   await ui.settle();
-  assert.deepEqual(ui.calls.map((call) => call[0]), ['load', 'submit']);
-  assert.equal(ui.calls[1][2].answers[0], 'ma réponse');
-  assert.equal(ui.calls[1][2].idempotencyKey, 'mobile-placement:assessment-1');
+  assert.deepEqual(ui.calls.map((call) => call[0]), ['load', 'save', 'submit']);
+  assert.equal(ui.calls[2][2].answers[0], 'ma réponse');
+  assert.equal(ui.calls[2][2].idempotencyKey, 'mobile-placement:assessment-1');
   assert.ok(ui.byId('language-placement-next-round'));
   assert.equal(ui.byId('language-placement-result'), undefined);
   ui.byId('language-placement-next-round').props.onPress();
   await ui.settle();
-  assert.equal(ui.calls[2][2].idempotencyKey, 'mobile-placement:profile-1:2:zero');
+  assert.equal(ui.calls[3][2].idempotencyKey, 'mobile-placement:profile-1:2:zero');
 });
 
 test('submit failure preserves learner answers and never retries in the background', async () => {
@@ -180,12 +186,152 @@ test('client transport uses only canonical placement endpoints and supplied oper
   });
   await client.loadLanguagePlacement('profile /1');
   await client.startLanguagePlacement('profile /1', { selfEstimate: 'unknown', idempotencyKey: 'first' });
+  await client.saveLanguagePlacementProgress('profile /1', { assessmentId: 'assessment-1', answers: ['a'], currentQuestionIndex: 0, expectedVersion: 0 });
   await client.submitLanguagePlacement('profile /1', { assessmentId: 'assessment-1', answers: ['a'], idempotencyKey: 'submit' });
   assert.deepEqual(calls.map((call) => call[0]), [
-    '/languages/profile%20%2F1/placement', '/languages/profile%20%2F1/placement/start', '/languages/profile%20%2F1/placement/submit',
+    '/languages/profile%20%2F1/placement', '/languages/profile%20%2F1/placement/start',
+    '/languages/profile%20%2F1/placement/progress', '/languages/profile%20%2F1/placement/submit',
   ]);
   assert.deepEqual(calls[2][1].body.answers, ['a']);
-  assert.equal(calls[2][1].body.idempotencyKey, 'submit');
+  assert.equal(calls[2][1].body.expectedVersion, 0);
+  assert.equal(calls[2][1].method, 'POST');
+  assert.equal(calls[3][1].body.idempotencyKey, 'submit');
+});
+
+test('F5 mid-diagnostic restores server answers and the active question without a provider call', async () => {
+  const initial = { ...active(), progress: {
+    assessmentId: 'assessment-1', answers: ['first answer', 'second answer', '', ''], currentQuestionIndex: 2,
+    version: 3, completed: false, source: 'draft',
+  } };
+  const ui = panelHarness({ initial });
+  await ui.settle();
+  assert.equal(ui.byId('language-placement-answer-0').props.value, 'first answer');
+  assert.equal(ui.byId('language-placement-answer-1').props.value, 'second answer');
+  assert.equal(ui.byId('language-placement-answer-2').props.autoFocus, true);
+  assert.equal(ui.byId('language-placement-answer-0').props.autoFocus, false);
+  assert.match(ui.byId('language-placement-current-question').props.children, /"number":3/);
+  assert.deepEqual(ui.calls.map((call) => call[0]), ['load']);
+});
+
+test('legacy canonical submission answers are restored read-only without implicit resubmission eligibility', async () => {
+  const ui = panelHarness({ initial: { ...active(), progress: {
+    assessmentId: 'assessment-1', answers: ['saved attempted answer', '', '', ''], currentQuestionIndex: 1,
+    version: 2, completed: true, source: 'submission',
+  } } });
+  await ui.settle();
+  assert.equal(ui.byId('language-placement-answer-0').props.value, 'saved attempted answer');
+  assert.equal(ui.byId('language-placement-answer-0').props.editable, false);
+  assert.equal(ui.byId('language-placement-submit').props.disabled, true);
+  ui.byId('language-placement-submit').props.onPress();
+  await ui.settle();
+  assert.deepEqual(ui.calls.map((call) => call[0]), ['load']);
+  assert.equal(ui.byId('language-placement-result'), undefined);
+});
+
+test('only an explicitly failed canonical attempt allows one manual exact-answer retry', async () => {
+  const storedAnswers = ['saved attempted answer', 'stored grammar', 'stored reading', 'stored writing'];
+  const ui = panelHarness({ initial: { ...active(), progress: {
+    assessmentId: 'assessment-1', answers: storedAnswers, currentQuestionIndex: 1,
+    version: 2, completed: true, source: 'submission', submissionStatus: 'failed',
+  } } });
+  await ui.settle();
+  assert.deepEqual(ui.calls.map((call) => call[0]), ['load']);
+  assert.equal(ui.byId('language-placement-answer-0').props.value, storedAnswers[0]);
+  assert.equal(ui.byId('language-placement-answer-0').props.editable, false);
+  assert.equal(ui.byId('language-placement-submit').props.disabled, false);
+  assert.equal(ui.byId('language-placement-submit').props.label, 'rlle.ui.common.retry');
+  const retry = ui.byId('language-placement-submit').props.onPress;
+  retry();
+  retry();
+  await ui.settle();
+  const submissions = ui.calls.filter((call) => call[0] === 'submit');
+  assert.equal(submissions.length, 1);
+  assert.deepEqual(submissions[0][2].answers, storedAnswers);
+  assert.equal(submissions[0][2].assessmentId, 'assessment-1');
+  assert.equal(submissions[0][2].idempotencyKey, 'mobile-placement:assessment-1');
+  assert.equal(ui.calls.filter((call) => call[0] === 'save').length, 0);
+});
+
+test('grading and ready canonical submissions cannot be retried', async () => {
+  for (const submissionStatus of ['grading', 'ready']) {
+    const ui = panelHarness({ initial: { ...active(), progress: {
+      assessmentId: 'assessment-1', answers: ['stored', '', '', ''], currentQuestionIndex: 1,
+      version: 2, completed: true, source: 'submission', submissionStatus,
+    } } });
+    await ui.settle();
+    assert.equal(ui.byId('language-placement-answer-0').props.editable, false);
+    assert.equal(ui.byId('language-placement-submit').props.disabled, true);
+    ui.byId('language-placement-submit').props.onPress();
+    await ui.settle();
+    assert.deepEqual(ui.calls.map((call) => call[0]), ['load']);
+  }
+});
+
+test('autosave preserves newest edits, serializes writes and flushes them before evaluation', async () => {
+  let resolveFirst;
+  let writes = 0;
+  const ui = panelHarness({ initial: active(), save: async (body) => {
+    writes += 1;
+    if (writes === 1) await new Promise((resolve) => { resolveFirst = resolve; });
+    return { ...active(), progress: { ...body, version: body.expectedVersion + 1, completed: false, source: 'draft' } };
+  } });
+  await ui.settle();
+  ui.byId('language-placement-answer-0').props.onChangeText('first edit');
+  ui.render();
+  ui.byId('language-placement-answer-0').props.onBlur();
+  ui.byId('language-placement-answer-0').props.onChangeText('latest edit');
+  ui.render();
+  ui.byId('language-placement-answer-2').props.onFocus();
+  ui.render();
+  ui.byId('language-placement-submit').props.onPress();
+  await ui.settle();
+  assert.equal(ui.calls.filter((call) => call[0] === 'save').length, 1);
+  assert.equal(ui.calls.filter((call) => call[0] === 'submit').length, 0);
+  resolveFirst();
+  await ui.settle();
+  const saves = ui.calls.filter((call) => call[0] === 'save');
+  assert.equal(saves.length, 2);
+  assert.equal(saves[1][2].answers[0], 'latest edit');
+  assert.equal(saves[1][2].currentQuestionIndex, 2);
+  assert.equal(saves[1][2].expectedVersion, 1);
+  assert.equal(ui.calls.find((call) => call[0] === 'submit')[2].answers[0], 'latest edit');
+});
+
+test('failed answer persistence does not erase text, retry automatically or invoke evaluation', async () => {
+  const failure = Object.assign(new Error('localized service error'), { payload: { code: 'PLACEMENT_STATE_CONFLICT', message: 'private provider text' } });
+  const ui = panelHarness({ initial: active(), save: async () => { throw failure; } });
+  await ui.settle();
+  ui.byId('language-placement-answer-0').props.onChangeText('answer remains');
+  ui.render();
+  ui.byId('language-placement-submit').props.onPress();
+  await ui.settle();
+  assert.equal(ui.byId('language-placement-answer-0').props.value, 'answer remains');
+  assert.ok(ui.byId('language-placement-save-retry'));
+  assert.equal(ui.calls.filter((call) => call[0] === 'save').length, 1);
+  assert.equal(ui.calls.filter((call) => call[0] === 'submit').length, 0);
+  const error = ui.nodes().find((node) => node.type === 'SmartErrorState');
+  assert.equal(error.props.detail, 'localized service error · PLACEMENT_STATE_CONFLICT');
+  assert.doesNotMatch(error.props.detail, /private provider/);
+  ui.unmount();
+});
+
+test('in-flight draft response from a previous profile cannot rehydrate another profile', async () => {
+  let resolveOld;
+  const ui = panelHarness({ initial: active(), save: async (body) => {
+    await new Promise((resolve) => { resolveOld = resolve; });
+    return { ...active(), progress: { ...body, version: 1, completed: false, source: 'draft' } };
+  } });
+  await ui.settle();
+  ui.byId('language-placement-answer-0').props.onChangeText('old profile private answer');
+  ui.render();
+  ui.byId('language-placement-answer-0').props.onBlur();
+  ui.switchProfile('profile-2');
+  await ui.settle();
+  resolveOld();
+  await ui.settle();
+  assert.equal(ui.byId('language-placement-answer-0').props.value, '');
+  assert.equal(ui.received.filter((view) => view.progress?.answers[0] === 'old profile private answer').length, 0);
+  ui.unmount();
 });
 
 test('level badges render only diagnosed product levels, never the compatibility A1 default', () => {
@@ -197,6 +343,17 @@ test('level badges render only diagnosed product levels, never the compatibility
   assert.equal(languagePlacementLevelLabel({ ...complete(), productLevel: 'INTERMEDIATE' }, copy, 'A1', false), 'learn.explain.lvlIntermediate');
   assert.equal(languagePlacementLevelLabel({ ...complete(), productLevel: 'ADVANCED' }, copy, 'A1', false), 'learn.explain.lvlAdvanced');
   assert.equal(languagePlacementLevelLabel(null, copy, 'B2', false), 'B2 · rlle.ui.course.level.declared');
+});
+
+test('placement failures expose only an allowlisted reason and localized text', () => {
+  const { languagePlacementErrorDetail } = load('apps/mobile/lib/language-placement-presentation.ts', {});
+  assert.equal(languagePlacementErrorDetail({ message: 'localized', payload: { code: 'PLACEMENT_RESULT_CEFR_INVALID' } }),
+    'localized · PLACEMENT_RESULT_CEFR_INVALID');
+  assert.equal(languagePlacementErrorDetail({ message: 'localized', payload: { message: { code: 'PLACEMENT_STATE_CONFLICT' } } }),
+    'localized · PLACEMENT_STATE_CONFLICT');
+  for (const code of ['PLACEMENT_UNTRUSTED_PAYLOAD', 'raw-secret', '<script>']) {
+    assert.equal(languagePlacementErrorDetail({ message: 'localized', payload: { code } }), 'localized');
+  }
 });
 
 test('new-course UI gates generation on server placement and never forces existing courses back to placement', () => {
@@ -221,6 +378,9 @@ test('placement copy is fully translated and registered in all 34 locales with e
     '../i18n': { extendLocale: (code, catalog) => translations.set(code, catalog) },
   });
   assert.equal(translations.size, 34);
+  for (const suffix of ['draftSaved', 'draftSaving', 'draftSaveFailed', 'diagnosticDate', 'nextAction', 'resume']) {
+    assert.ok(overlay.languagePlacementKeys.includes(`placement.ui.${suffix}`), suffix);
+  }
   assert.deepEqual([...translations.keys()].sort(), [...SUPPORTED_LANGUAGE_CODES].sort());
   const placeholders = (text) => [...text.matchAll(/\{([^{}]+)\}/g)].map((match) => match[1]).sort();
   for (const [code, catalog] of translations) {
