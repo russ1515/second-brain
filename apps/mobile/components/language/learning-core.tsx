@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import type { LanguageLearningCoreView, LanguageLearningLessonView, LanguageLearningState } from '@second-brain/shared';
+import { resolveLanguageExercisePresentation } from '@second-brain/shared';
 import { useRouter } from 'expo-router';
 import { useTokens } from '../../lib/design/theme';
 import { useRlleCopy } from '../../lib/language-rll-i18n';
@@ -27,6 +28,13 @@ export const LEARNING_CORE_STATUS_COPY: Record<LanguageLearningState, string> = 
 export function learningCoreScore(value: number | null): string {
   return value == null ? '—' : `${Number((value * 100).toFixed(2))}%`;
 }
+/** Display only: persisted evidence labels and grading remain untouched. */
+const weakConceptLabels = (labels: readonly string[], supportLanguageCode?: string, targetLanguageCode?: string): string =>
+  labels.map((label) => {
+    if (!supportLanguageCode) return label;
+    const presentation = resolveLanguageExercisePresentation({ question: label }, supportLanguageCode, targetLanguageCode);
+    return presentation.normalized ? presentation.prompt : label;
+  }).join(' · ');
 const operationKey = (profileId: string, targetId: string, action: string) =>
   `learning-core:${profileId}:${targetId}:${action}:${Date.now()}`;
 
@@ -163,7 +171,7 @@ export function LanguageLearningCore({ profileId, requestedModuleId, requestedLe
                         {lesson.score != null ? <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{learningCoreScore(lesson.score)}</Text> : null}
                         {lesson.bestScore != null ? <Text style={[typography.caption, { color: c.textMuted }]}>{copy('learningCore.bestScore')} · {learningCoreScore(lesson.bestScore)}</Text> : null}
                       </View>
-                      {lesson.weakConcepts.length ? <Text style={[typography.caption, { color: c.textSecondary }]}>{lesson.weakConcepts.join(' · ')}</Text> : null}
+                      {lesson.weakConcepts.length ? <Text testID={`language-core-weak-concepts-${lesson.id}`} style={[typography.caption, { color: c.textSecondary, writingDirection: teaching.direction, textAlign: teaching.direction === 'rtl' ? 'right' : 'left' }]}>{weakConceptLabels(lesson.weakConcepts, session.supportLanguageCode, core.languageCode)}</Text> : null}
                       {lesson.status !== 'LOCKED' ? <Button size="sm" variant={lesson.status === 'NEEDS_REMEDIATION' ? 'ai' : 'ghost'} disabled={busy !== null || !teaching.ready} label={actionCopy(lesson.status === 'NEEDS_REMEDIATION' ? 'rlle.ui.remediation.start' : lesson.status === 'AVAILABLE' ? 'rlle.ui.lesson.start' : 'rlle.ui.lesson.resume')} onPress={() => openLesson(lesson.id)} /> : null}
                       {lesson.status === 'MASTERED' && module.status === 'NEEDS_REMEDIATION' && module.weakLessonIds.includes(lesson.id) ? <Button label={actionCopy('rlle.ui.remediation.start')} variant="ai" disabled={busy !== null || !teaching.ready} onPress={() => void run('remediation', lesson.id, (key) => startLanguageLearningRemediation(profileId, lesson.id, key))} /> : null}
                     </View>
@@ -337,19 +345,21 @@ export function LanguageLearningPassportSummary({ profileId }: { profileId: stri
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [core, setCore] = useState<LanguageLearningCoreView | null>(null);
+  const [supportLanguageCode, setSupportLanguageCode] = useState<string | undefined>();
+  const teaching = useLanguageLearningCopy(supportLanguageCode);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const expand = async () => {
     setOpen((value) => !value);
     if (core || busy) return;
     setBusy(true); setError(null);
-    try { setCore((await loadLanguageLearningCore(profileId)).core); }
+    try { const result = await loadLanguageLearningCore(profileId); setCore(result.core); setSupportLanguageCode(result.supportLanguageCode); }
     catch (cause) { setError(languageCourseOpeningError(cause, 'LEARNING_CORE', copy)); }
     finally { setBusy(false); }
   };
   const current = core?.modules.flatMap((module) => module.lessons).find((lesson) => lesson.id === core.currentLessonId);
   return <View style={{ gap: spacing.sm }} testID={`passport-learning-core-${profileId}`}>
     <Button variant="ghost" label={copy('rlle.ui.course.curriculum')} accessibilityExpanded={open} loading={busy} onPress={() => void expand()} />
-    {open ? <View style={{ gap: spacing.sm }}>{error ? <SmartErrorState detail={error} /> : null}{core?.modules.map((module) => <View key={module.id} style={{ gap: spacing.xs }}><Text style={[typography.bodySmall, { color: c.textPrimary }]}>{String(module.order).padStart(2, '0')} · {copy(`learningCore.module.${String(module.order).padStart(2, '0')}`)}</Text><Text style={[typography.caption, { color: c.textSecondary }]}>{copy(LEARNING_CORE_STATUS_COPY[module.status])} · {module.masteredLessons}/{module.totalLessons} · {learningCoreScore(module.score)}</Text>{module.lessons.filter((lesson) => lesson.status !== 'LOCKED').map((lesson) => <Text key={lesson.id} style={[typography.caption, { color: c.textSecondary }]}>{lesson.title} · {copy(LEARNING_CORE_STATUS_COPY[lesson.status])} · {learningCoreScore(lesson.score)} · {learningCoreScore(lesson.bestScore)}{lesson.weakConcepts.length ? ` · ${lesson.weakConcepts.join(' · ')}` : ''}</Text>)}</View>)}{current ? <Text style={[typography.body, { color: c.textPrimary }]}>{copy('rlle.ui.lesson.title')} · {current.title}</Text> : null}<Button label={copy('rlle.ui.course.resume')} onPress={() => router.push(languageCoreCourseHref(profileId, core) as never)} /></View> : null}
+    {open ? <View style={{ gap: spacing.sm }}>{error ? <SmartErrorState detail={error} /> : null}{core?.modules.map((module) => <View key={module.id} style={{ gap: spacing.xs }}><Text style={[typography.bodySmall, { color: c.textPrimary }]}>{String(module.order).padStart(2, '0')} · {copy(`learningCore.module.${String(module.order).padStart(2, '0')}`)}</Text><Text style={[typography.caption, { color: c.textSecondary }]}>{copy(LEARNING_CORE_STATUS_COPY[module.status])} · {module.masteredLessons}/{module.totalLessons} · {learningCoreScore(module.score)}</Text>{module.lessons.filter((lesson) => lesson.status !== 'LOCKED').map((lesson) => <Text key={lesson.id} style={[typography.caption, { color: c.textSecondary }]}>{lesson.title} · {copy(LEARNING_CORE_STATUS_COPY[lesson.status])} · {learningCoreScore(lesson.score)} · {learningCoreScore(lesson.bestScore)}{lesson.weakConcepts.length ? <Text testID={`passport-core-weak-concepts-${lesson.id}`} style={{ writingDirection: teaching.direction, textAlign: teaching.direction === 'rtl' ? 'right' : 'left' }}>{` · ${weakConceptLabels(lesson.weakConcepts, supportLanguageCode, core.languageCode)}`}</Text> : null}</Text>)}</View>)}{current ? <Text style={[typography.body, { color: c.textPrimary }]}>{copy('rlle.ui.lesson.title')} · {current.title}</Text> : null}<Button label={copy('rlle.ui.course.resume')} onPress={() => router.push(languageCoreCourseHref(profileId, core) as never)} /></View> : null}
   </View>;
 }

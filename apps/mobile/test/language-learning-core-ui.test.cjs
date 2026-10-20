@@ -419,6 +419,37 @@ test('missing support-language metadata never falls back to interface/English pe
   assert.deepEqual(ui.calls, []);
 });
 
+for (const supportLanguageCode of ['fr', 'ar']) {
+  test(`weak evidence labels use ${supportLanguageCode} only for recognized legacy instructions, without mutating evidence`, async () => {
+    const { LANGUAGE_EXERCISE_INSTRUCTION_COPY } = require('@second-brain/shared');
+    const labels = Object.freeze(["Spell the name 'Bob' using English letter names.", "Which letter is between 'S' and 'U' in the alphabet?", 'English vowel sounds']);
+    const lesson = Object.freeze({ ...definition('lesson-1', 'NEEDS_REMEDIATION'), score: 0.8, bestScore: 0.8, weakConcepts: labels });
+    const data = { ...session(), supportLanguageCode, core: { ...session().core, modules: [coreModule([lesson])] } };
+    const before = JSON.stringify(data);
+    const operand = (value) => supportLanguageCode === 'ar' ? `\u2068${value}\u2069` : value;
+    const copy = LANGUAGE_EXERCISE_INSTRUCTION_COPY[supportLanguageCode];
+    const expected = [copy.spellName.replace('{name}', operand('Bob')),
+      copy.letterBetween.replace('{first}', operand('S')).replace('{last}', operand('U')), labels[2]].join(' · ');
+    const ui = harness('LanguageLearningCore', { profileId: 'p1' }, { loadLanguageLearningCore: async () => data });
+    await ui.settle();
+    const weak = ui.byId('language-core-weak-concepts-lesson-1');
+    assert.equal(weak.props.children, expected);
+    assert.equal(weak.props.style.at(-1).writingDirection, supportLanguageCode === 'ar' ? 'rtl' : 'ltr');
+    assert.ok(weak.props.children.includes('English vowel sounds'));
+    assert.ok(!weak.props.children.includes(labels[0]) && !weak.props.children.includes(labels[1]));
+    assert.deepEqual(ui.calls, [['loadLanguageLearningCore', 'p1']]);
+    const passport = harness('LanguageLearningPassportSummary', { profileId: 'p1' }, { loadLanguageLearningCore: async () => data });
+    passport.nodes().find((node) => node.type === 'Button').props.onPress();
+    await passport.settle();
+    const passportWeak = passport.byId('passport-core-weak-concepts-lesson-1');
+    assert.equal(passportWeak.props.children, ` · ${expected}`);
+    assert.equal(passportWeak.props.style.writingDirection, supportLanguageCode === 'ar' ? 'rtl' : 'ltr');
+    assert.deepEqual(passport.calls, [['loadLanguageLearningCore', 'p1']]);
+    assert.equal(JSON.stringify(data), before);
+    assert.equal(lesson.score, 0.8); assert.equal(lesson.status, 'NEEDS_REMEDIATION');
+  });
+}
+
 test('explicit locale lookup is read-only and has no English or interface fallback', () => {
   const noop = () => undefined;
   const i18n = load('apps/mobile/lib/i18n.tsx', {
