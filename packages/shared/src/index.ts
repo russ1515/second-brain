@@ -74,6 +74,8 @@ export * from './route-metadata';
 export * from './revision-engine';
 export * from './session';
 export * from './speech';
+export * from './phonetic-assessment';
+export * from './phonetic-feedback-copy';
 export * from './subscription';
 export * from './tutor';
 export * from './teacher-policy';

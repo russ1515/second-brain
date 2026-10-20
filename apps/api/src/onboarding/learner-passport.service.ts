@@ -34,6 +34,7 @@ import {
 } from '@second-brain/shared';
 import { LearnerProfileService } from '../concepts/learner-profile.service';
 import { loadLanguageLearningCoreProjection } from '../languages/language-learning-core-projection';
+import { loadPhoneticPassportSummary } from '../languages/phonetic-attempt-projection';
 import { isValidTimezone } from '../journey/local-time';
 import { PrismaService } from '../prisma/prisma.service';
 import { placementSessionsInclude, projectLanguagePlacementSummaries, type LanguagePlacementSummary,
@@ -98,6 +99,7 @@ export class LearnerPassportService {
     const view = this.toView(base, learnerProfile);
     await Promise.all(view.observed.languageProgress.map(async (language) => {
       language.learningCore = await loadLanguageLearningCoreProjection(this.prisma, userId, language.profileId);
+      language.phoneticAssessment = await loadPhoneticPassportSummary(this.prisma, userId, language.profileId);
     }));
     return view;
   }

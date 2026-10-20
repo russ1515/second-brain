@@ -61,6 +61,7 @@ import './teaching-language-v1';
 import './language-placement-v1';
 import './language-learning-core-v1';
 import './language-exercise-instructions-v1';
+import './phonetic-evidence-v1';
 import './workspace-capture-v1';
 import './workspace-orchestrator-v1';
 import './workspace-shells-v1';

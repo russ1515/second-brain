@@ -21,6 +21,9 @@ import { LanguagePlacementService } from './language-placement.service';
 import { LanguagePlacementController } from './language-placement.controller';
 import { LanguageLearningCoreController } from './language-learning-core.controller';
 import { LanguageLearningCoreService } from './language-learning-core.service';
+import { PhoneticAssessmentEngine } from './phonetic-assessment.engine';
+import { PhoneticAttemptController } from './phonetic-attempt.controller';
+import { PhoneticAttemptService } from './phonetic-attempt.service';
 
 /** Language engine (Phase 5, Educational Engine): the professional language
  *  teacher. It orchestrates rather than duplicates — vocabulary is ordinary
@@ -42,6 +45,7 @@ import { LanguageLearningCoreService } from './language-learning-core.service';
     LanguageAcousticMasteryController,
     LanguagePlacementController,
     LanguageLearningCoreController,
+    PhoneticAttemptController,
   ],
   providers: [
     LanguageService,
@@ -55,6 +59,8 @@ import { LanguageLearningCoreService } from './language-learning-core.service';
     LanguageAcousticMasteryService,
     LanguagePlacementService,
     LanguageLearningCoreService,
+    PhoneticAssessmentEngine,
+    PhoneticAttemptService,
   ],
   exports: [LanguageService, RealLifeLanguageService, LanguageMasteryAttemptService],
 })

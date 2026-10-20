@@ -92,11 +92,11 @@ export function createRecorder(): Recorder {
         await restorePlaybackMode();
       }
       const uri = active.getURI();
-      if (!uri) throw speechInputError('AUDIO_RECORDING', tr('voice.error.empty'));
+      if (!uri) throw Object.assign(speechInputError('AUDIO_RECORDING', tr('voice.error.empty')), { recordingFailure: 'EMPTY_RECORDING' });
       const response = await fetch(uri);
       const blob = await response.blob();
       if (blob.size === 0) {
-        throw speechInputError('AUDIO_RECORDING', tr('voice.error.empty'));
+        throw Object.assign(speechInputError('AUDIO_RECORDING', tr('voice.error.empty')), { recordingFailure: 'EMPTY_RECORDING' });
       }
       const extension = uri.split('?')[0].split('.').pop()?.toLowerCase();
       const mimeType = extension === 'wav' ? 'audio/wav' : 'audio/mp4';

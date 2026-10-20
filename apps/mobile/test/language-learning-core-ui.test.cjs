@@ -53,6 +53,7 @@ function harness(exportName, props, transport = {}) {
     '../ds/core': Object.fromEntries(['Alert', 'Badge', 'Button', 'Card', 'Progress'].map((key) => [key, key])),
     '../ds/states': { SmartErrorState: 'SmartErrorState', SmartLoadingState: 'SmartLoadingState' },
     '../markdown': { Markdown: 'Markdown' }, '../speak-button': { SpeakButton: 'SpeakButton' },
+    './phonetic-evidence-panel': { PhoneticEvidencePanel: 'PhoneticEvidencePanel' },
   });
   const render = () => { index = 0; tree = exported[exportName](props); while (effects.length) effects.shift()(); return tree; };
   const nodes = () => { const walk = (node) => !node || typeof node !== 'object' ? [] : Array.isArray(node) ? node.flatMap(walk) : [node, ...walk(node.props?.children)]; return walk(tree); };

@@ -19,6 +19,7 @@ import { Alert, Badge, Button, Card, Progress } from '../ds/core';
 import { SmartErrorState, SmartLoadingState } from '../ds/states';
 import { Markdown } from '../markdown';
 import { SpeakButton } from '../speak-button';
+import { PhoneticEvidencePanel } from './phonetic-evidence-panel';
 
 export const LEARNING_CORE_STATUS_COPY: Record<LanguageLearningState, string> = {
   LOCKED: 'rlle.ui.course.status.locked', AVAILABLE: 'rlle.ui.course.status.available',
@@ -305,6 +306,8 @@ export function LearningLesson({ profileId, session, lesson, busy, onSession, on
           </View>
         </View>
       ) : null}
+      {!autonomous && session.activeScope === 'lesson' && content?.exercises.some((exercise) => exercise.languageFormat === 'voice-pronunciation' && exercise.audioText)
+        ? <PhoneticEvidencePanel key={`phonetic:${content.id}`} profileId={profileId} lessonId={content.id} supportLanguageCode={session.supportLanguageCode} targetLanguageCode={session.core.languageCode} /> : null}
       {!autonomous && lesson ? <LanguageLearningHelp key={lesson.id} profileId={profileId} lessonId={lesson.id} supportLanguageCode={session.supportLanguageCode} /> : null}
     </Card>
   );

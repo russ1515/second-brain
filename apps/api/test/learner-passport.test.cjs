@@ -80,6 +80,7 @@ function readPrisma(overrides = {}, ageBand = '12to15') {
   // read-only projection must stay null, not manufacture new progress.
   prisma.languageProfile.findFirst ??= async () => null;
   prisma.experienceSession ??= { findFirst: async () => null };
+  prisma.experienceSession.findMany ??= async () => [];
   return prisma;
 }
 

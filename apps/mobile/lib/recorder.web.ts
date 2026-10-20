@@ -128,7 +128,7 @@ export function createRecorder(): Recorder {
           const durationMs = Math.max(0, Date.now() - startedAt - pausedMs - pendingPause);
           release();
           if (blob.size === 0) {
-            reject(speechInputError('AUDIO_RECORDING', tr('voice.error.empty')));
+            reject(Object.assign(speechInputError('AUDIO_RECORDING', tr('voice.error.empty')), { recordingFailure: 'EMPTY_RECORDING' }));
             return;
           }
           resolve({ blob, mimeType, durationMs });

@@ -103,6 +103,7 @@ export class ExperienceSessionService {
       request.intent === 'language-course' ||
       request.intent === 'language-learning-core' ||
       request.intent === 'language-core-help' ||
+      request.intent === 'language-phonetic-attempt' ||
       request.links?.tutorSessionId ||
       request.links?.lessonId
     ) {
@@ -137,7 +138,7 @@ export class ExperienceSessionService {
     const existing = await this.requireOwned(userId, id);
     // Placement evidence and the course cursor are written only by Langues.
     // A generic JSON patch must not fabricate a diagnostic or bypass its gate.
-    if (['language-course', 'language-placement', 'language-learning-core', 'language-core-help']
+    if (['language-course', 'language-placement', 'language-learning-core', 'language-core-help', 'language-phonetic-attempt']
       .some((intent) => existing.intent === intent || request.intent === intent)) {
       throw new BadRequestException('Language diagnostic and course state are managed by the language service.');
     }
@@ -367,7 +368,10 @@ export class ExperienceSessionService {
         scanCursor,
         ['active', 'paused'],
       );
-      const filtered = await this.filterResumableWorkspaceSessions(userId, page.items);
+      // An acoustic inference attempt is evidence, not a resumable lesson.
+      // A pending/interrupted claim must not appear as a new learning card.
+      const resumableActivities = page.items.filter((session) => session.intent !== 'language-phonetic-attempt');
+      const filtered = await this.filterResumableWorkspaceSessions(userId, resumableActivities);
       eligible.push(...filtered);
       if (eligible.length >= safeLimit) {
         const items = eligible.slice(0, safeLimit);

@@ -1,0 +1,2 @@
+# Install in an isolated environment; never install on the production host implicitly.
+pocketsphinx==5.0.4

@@ -119,6 +119,17 @@ export function LearnerPassportCard({
               {item.lessonCount} · {item.sessionCount}
             </Text>
           </View>
+          {item.phoneticAssessment ? (
+            <View testID={`passport-phonetic-evidence-${item.profileId}`} style={{ gap: 5 }}>
+              <Badge tone="info" label={t('phonetic.experimental' as TranslationKey)} />
+              <Text style={{ color: c.textSecondary, fontSize: 12 }}>{t('phonetic.unverified' as TranslationKey)}</Text>
+              {item.phoneticAssessment.lastAttemptAt ? (
+                <Text style={{ color: c.textMuted, fontSize: 12 }}>
+                  {t('phonetic.latest' as TranslationKey)} · {new Intl.DateTimeFormat(formatLocale).format(new Date(item.phoneticAssessment.lastAttemptAt))}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
           {diagnosed ? (
             <View style={{ gap: 5 }} testID={`passport-placement-${item.profileId}`}>
               {LANGUAGE_PLACEMENT_REQUIRED_SKILLS.map((skill) => {

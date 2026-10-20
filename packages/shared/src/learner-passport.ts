@@ -58,6 +58,8 @@ export interface LearnerPassportDeclared {
 }
 
 export interface LearnerPassportLanguageProgress {
+  /** Experimental acoustic observations, never calibrated mastery evidence. */
+  phoneticAssessment?: import('./phonetic-assessment').PhoneticPassportSummary | null;
   /** Same read-only projection of canonical lesson/module submissions as the
    * language course. Never a second writable progress store. */
   learningCore?: import('./language-learning-core').LanguageLearningCoreView | null;
