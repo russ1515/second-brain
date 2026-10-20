@@ -208,12 +208,94 @@ test('acoustic capability remains blocked and text/STT results can never manufac
   assert.equal(current.modules[6].status, 'NOT_EVALUABLE');
   assert.equal(current.modules[6].assessmentAvailable, false);
   assert.equal(current.modules[6].assessmentBlockedReason, 'acoustic-unavailable');
-  assert.equal(current.modules[7].status, 'LOCKED');
+  assert.equal(current.modules[7].status, 'MASTERED', 'independent written proofs remain usable after practice-only progression');
+  assert.equal(current.modules[6].practiceOnlyProgression, true);
+  assert.equal(current.modules[6].score, null);
+  assert.equal(current.modules[6].bestScore, null);
   assert.equal(current.levelAssessmentAvailable, false);
   assert.notEqual(current.levelStatus, 'MASTERED');
   assert.equal(current.nextProductLevel, null);
   assert.equal(current.pronunciationAcoustic, 'BLOCKED_CAPABILITY');
   assert.equal(current.nextAction.kind, 'capability-blocked');
+});
+
+test('completed written pronunciation practice opens module 8 without certifying pronunciation or the level', () => {
+  const preceding = catalogue.modules.slice(0, 6).flatMap((module) => moduleProof(module));
+  const pronunciation = catalogue.modules[6];
+  const writtenPractice = pronunciation.lessons.map((lesson) => evidence('lesson', lesson.id, 0.94));
+  const current = view([...preceding, ...writtenPractice]);
+  assert.equal(current.modules[6].status, 'NOT_EVALUABLE');
+  assert.equal(current.modules[6].practiceOnlyProgression, true);
+  assert.equal(current.modules[6].assessmentAvailable, false);
+  assert.equal(current.modules[6].score, null);
+  assert.equal(current.modules[7].status, 'AVAILABLE');
+  assert.equal(current.modules[7].lessons[0].status, 'AVAILABLE');
+  assert.equal(current.currentModuleId, catalogue.modules[7].id);
+  assert.equal(current.currentLessonId, catalogue.modules[7].lessons[0].id);
+  assert.equal(current.nextAction.kind, 'start-lesson');
+  assert.equal(current.levelAssessmentAvailable, false);
+  assert.equal(current.nextProductLevel, null);
+  assert.equal(current.pronunciationAcoustic, 'BLOCKED_CAPABILITY');
+  assert.deepEqual(view(JSON.parse(JSON.stringify([...preceding, ...writtenPractice]))), current,
+    'F5/reconnection reconstruct exactly the same practice eligibility from canonical evidence');
+});
+
+test('failed written pronunciation practice requires targeted remediation and does not open module 8 early', () => {
+  const preceding = catalogue.modules.slice(0, 6).flatMap((module) => moduleProof(module));
+  const pronunciation = catalogue.modules[6];
+  const practice = pronunciation.lessons.slice(0, -1).map((lesson) => evidence('lesson', lesson.id, 0.94));
+  const last = pronunciation.lessons.at(-1);
+  const failed = view([...preceding, ...practice, evidence('lesson', last.id, 0.899)]);
+  assert.equal(failed.modules[6].practiceOnlyProgression, false);
+  assert.equal(failed.modules[6].lessons.at(-1).status, 'NEEDS_REMEDIATION');
+  assert.equal(failed.modules[6].masteredLessons, pronunciation.lessons.length - 1);
+  assert.equal(failed.modules[7].status, 'LOCKED');
+  assert.equal(failed.nextAction.kind, 'remediate-lesson');
+  assert.equal(failed.nextAction.lessonId, last.id);
+  const remediated = view([...preceding, ...practice,
+    evidence('lesson', last.id, 0.899), evidence('lesson', last.id, 0.9, { remediation: true })]);
+  assert.equal(remediated.modules[6].status, 'NOT_EVALUABLE');
+  assert.equal(remediated.modules[6].practiceOnlyProgression, true);
+  assert.equal(remediated.modules[7].status, 'AVAILABLE');
+});
+
+test('practice-only progression cannot skip ordinary prerequisites or count an unavailable/STT observation as mastery', () => {
+  const preceding = catalogue.modules.slice(0, 5).flatMap((module) => moduleProof(module));
+  const pronunciation = catalogue.modules[6];
+  const writtenPractice = pronunciation.lessons.map((lesson) => evidence('lesson', lesson.id, 1));
+  const missingSix = view([...preceding, ...writtenPractice]);
+  assert.equal(missingSix.modules[5].status, 'AVAILABLE');
+  assert.equal(missingSix.modules[6].status, 'LOCKED');
+  assert.equal(missingSix.modules[6].practiceOnlyProgression, false);
+  assert.equal(missingSix.modules[7].status, 'LOCKED');
+  const fullPreceding = catalogue.modules.slice(0, 6).flatMap((module) => moduleProof(module));
+  const neutralOnly = view([...fullPreceding,
+    ...pronunciation.lessons.map((lesson) => evidence('lesson', lesson.id, null)),
+    evidence('module', pronunciation.id, 1)]);
+  assert.equal(neutralOnly.modules[6].practiceOnlyProgression, false);
+  assert.equal(neutralOnly.modules[6].score, null);
+  assert.equal(neutralOnly.modules[7].status, 'LOCKED');
+  assert.equal(neutralOnly.levelAssessmentAvailable, false);
+});
+
+test('modules after pronunciation keep their normal 90 percent module gates and acquired lesson history', () => {
+  const preceding = catalogue.modules.slice(0, 6).flatMap((module) => moduleProof(module));
+  const writtenPractice = catalogue.modules[6].lessons.map((lesson) => evidence('lesson', lesson.id, 0.95));
+  const speaking = catalogue.modules[7];
+  const speakingLessons = speaking.lessons.map((lesson) => evidence('lesson', lesson.id, 0.94));
+  const failed = view([...preceding, ...writtenPractice, ...speakingLessons,
+    evidence('module', speaking.id, 0.89, { weakLessonIds: [speaking.lessons[2].id] })]);
+  assert.equal(failed.modules[7].status, 'NEEDS_REMEDIATION');
+  assert.equal(failed.modules[7].masteredLessons, speaking.lessons.length);
+  assert.equal(failed.modules[8].status, 'LOCKED');
+  assert.deepEqual(failed.modules[7].weakLessonIds, [speaking.lessons[2].id]);
+  const passed = view([...preceding, ...writtenPractice, ...speakingLessons,
+    evidence('module', speaking.id, 0.9)]);
+  assert.equal(passed.modules[7].status, 'MASTERED');
+  assert.equal(passed.modules[8].status, 'AVAILABLE');
+  assert.equal(passed.modules[6].status, 'NOT_EVALUABLE');
+  assert.equal(passed.levelAssessmentAvailable, false);
+  assert.equal(passed.nextProductLevel, null);
 });
 
 test('level remediation keeps canonical weak targets scoped and preserves all prior lesson acquisitions', () => {

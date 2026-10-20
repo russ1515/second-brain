@@ -103,6 +103,9 @@ export interface LanguageLearningLessonView extends LanguageLearningLessonDefini
 
 export interface LanguageLearningModuleView extends Omit<LanguageLearningModuleDefinition, 'lessons'> {
   status: LanguageLearningState;
+  /** Written practice is complete, but unavailable acoustic evidence has NOT
+   * certified this module. This permits only continued practice/navigation. */
+  practiceOnlyProgression: boolean;
   lessons: LanguageLearningLessonView[];
   score: number | null;
   bestScore: number | null;
@@ -421,9 +424,9 @@ export function projectLanguageLearningCore(input: {
   evidence: readonly LanguageLearningCoreEvidence[];
 }): LanguageLearningCoreView {
   const catalogue = buildLanguageLearningCatalogue(input);
-  let previousModuleMastered = true;
+  let previousModulePracticeCompleted = true;
   const modules = catalogue.modules.map<LanguageLearningModuleView>((module) => {
-    const moduleAccessible = previousModuleMastered && catalogue.curriculumStatus === 'COMPLETE';
+    const moduleAccessible = previousModulePracticeCompleted && catalogue.curriculumStatus === 'COMPLETE';
     let previousLessonMastered = moduleAccessible;
     const lessons = module.lessons.map<LanguageLearningLessonView>((lesson) => {
       const proof = evidenceState(input.evidence, 'lesson', lesson.id);
@@ -449,14 +452,22 @@ export function projectLanguageLearningCore(input: {
       : !allLessonsMastered ? (lessons.some((lesson) => lesson.lastActivityAt) ? 'IN_PROGRESS' : 'AVAILABLE')
       : module.acousticAssessmentRequired ? 'NOT_EVALUABLE'
       : proof.mastered ? 'MASTERED' : proof.attempts.length ? proof.status : 'IN_PROGRESS';
-    previousModuleMastered = status === 'MASTERED';
+    // An unavailable acoustic certificate is not a failed written lesson. Once
+    // all actual written/practice prerequisites are mastered, keep teaching the
+    // next module without promoting this neutral state to certified mastery.
+    const practiceOnlyProgression = moduleAccessible && allLessonsMastered
+      && module.acousticAssessmentRequired && status === 'NOT_EVALUABLE';
+    previousModulePracticeCompleted = status === 'MASTERED' || practiceOnlyProgression;
     const permittedIds = new Set((module.kind === 'transversal'
       ? catalogue.modules.flatMap((item) => item.lessons) : lessons).map((lesson) => lesson.id));
     const weakLessonIds = proof.mastered ? [] : [...new Set(
       (proof.latestEvaluated?.weakLessonIds ?? []).filter((id) => permittedIds.has(id)),
     )];
     return {
-      ...module, lessons, status, score: proof.score, bestScore: proof.bestScore,
+      ...module, lessons, status, practiceOnlyProgression,
+      // A written/STT observation must never be shown as an acoustic score.
+      score: module.acousticAssessmentRequired ? null : proof.score,
+      bestScore: module.acousticAssessmentRequired ? null : proof.bestScore,
       masteredLessons: lessons.filter((lesson) => lesson.status === 'MASTERED').length,
       totalLessons: lessons.length,
       assessmentAvailable,
@@ -478,7 +489,10 @@ export function projectLanguageLearningCore(input: {
       : levelProof.attempts.length ? levelProof.status : 'IN_PROGRESS'
     : modules.some((module) => module.status === 'IN_PROGRESS' || module.status === 'MASTERED')
       ? 'IN_PROGRESS' : 'AVAILABLE';
-  const currentModule = modules.find((module) => module.status !== 'MASTERED') ?? null;
+  // Follow the first actionable learning module. Once all independent practice
+  // is complete, return to the outstanding acoustic certification limitation.
+  const currentModule = modules.find((module) => module.status !== 'MASTERED' && !module.practiceOnlyProgression)
+    ?? modules.find((module) => module.practiceOnlyProgression) ?? null;
   const currentLesson = currentModule?.lessons.find((lesson) => lesson.status !== 'MASTERED') ?? null;
   let nextAction: LanguageLearningCoreNextAction;
   if (catalogue.curriculumStatus !== 'COMPLETE') {

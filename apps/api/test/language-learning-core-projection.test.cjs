@@ -284,3 +284,88 @@ test('read projection is repeatable and never writes state, calls a provider or 
   assert.equal(one.levelAssessmentAvailable, false);
   assert.equal('placement' in one, false);
 });
+
+test('canonical written practice opens module 8 in the shared Passport projection while acoustic certification stays unavailable', async () => {
+  const f = fixture();
+  const sources = [];
+  const assessments = [];
+  const completions = [];
+  const sourceByDefinition = new Map();
+  for (const definition of catalogue.modules.slice(0, 7).flatMap(module => module.lessons)) {
+    const row = fixture();
+    const ordinal = sources.length;
+    row.lesson.id = `source-written-${ordinal}`;
+    row.lesson.masteryRemediationGenerationKey = `language-core:${profileId}:BEGINNER:${definition.id}:0`;
+    row.question.id = `${definition.id}:0`;
+    row.metadata.targetId = definition.id;
+    row.metadata.sourceLessonIds = [row.lesson.id];
+    row.metadata.questionLessonIds = [definition.id];
+    row.assessment.id = `assessment-written-${ordinal}`;
+    row.assessment.lessonId = row.lesson.id;
+    row.assessment.masteryCreationKey = `language-core:${profileId}:BEGINNER:lesson:${definition.id}:0`;
+    row.submission.id = `submission-written-${ordinal}`;
+    row.submission.assessmentId = row.assessment.id;
+    row.submission.masterySubmissionKey = `language-core:${row.assessment.id}`;
+    row.submission.results[0].questionId = row.question.id;
+    row.submission.masterySubmissionHash = createHash('sha256').update(JSON.stringify({
+      id: row.assessment.id, answers: row.submission.answers,
+    })).digest('hex');
+    Object.assign(row.completion, { id: `completion-written-${ordinal}`, lessonId: row.lesson.id,
+      learningRefId: row.lesson.id, evidenceRefId: row.submission.id, assessmentSubmissionId: row.submission.id });
+    sources.push(row.lesson);
+    assessments.push(row.assessment);
+    completions.push(row.completion);
+    sourceByDefinition.set(definition.id, row.lesson);
+  }
+  for (const module of catalogue.modules.slice(0, 6)) {
+    const row = fixture();
+    row.metadata.scope = 'module';
+    row.metadata.targetId = module.id;
+    row.metadata.sourceLessonIds = module.lessons.map(definition => sourceByDefinition.get(definition.id).id);
+    row.metadata.sourceContentVersions = module.lessons.map(() => 1);
+    row.metadata.questionLessonIds = module.lessons.map(definition => definition.id);
+    row.assessment.id = `assessment-module-${module.id}`;
+    row.assessment.lessonId = null;
+    row.assessment.contentVersion = null;
+    row.assessment.masteryCreationKey = `language-core:${profileId}:BEGINNER:module:${module.id}:0`;
+    row.assessment.questions.questions = module.lessons.map(definition => ({ ...row.question, id: `${definition.id}:0` }));
+    row.submission.id = `submission-module-${module.id}`;
+    row.submission.assessmentId = row.assessment.id;
+    row.submission.masterySubmissionKey = `language-core:${row.assessment.id}`;
+    row.submission.answers = module.lessons.map(() => 'A');
+    row.submission.results = row.assessment.questions.questions.map(question => ({
+      ...row.submission.results[0], questionId: question.id,
+    }));
+    row.submission.masterySubmissionHash = createHash('sha256').update(JSON.stringify({
+      id: row.assessment.id, answers: row.submission.answers,
+    })).digest('hex');
+    assessments.push(row.assessment);
+  }
+  f.data.sources = sources;
+  f.data.assessments = assessments;
+  f.data.completions = completions;
+  f.session.currentStep.metadata.languageLearningCore.activeScope = null;
+  f.session.currentStep.metadata.languageLearningCore.activeTargetId = null;
+  const before = JSON.stringify({ session: f.session, sources, assessments, completions });
+  const projected = await loadLanguageLearningCoreProjection(f.prisma, userId, profileId);
+  assert.equal(projected.modules[6].status, 'NOT_EVALUABLE');
+  assert.equal(projected.modules[6].practiceOnlyProgression, true);
+  assert.equal(projected.modules[6].score, null);
+  assert.equal(projected.modules[6].assessmentAvailable, false);
+  assert.equal(projected.modules[7].status, 'AVAILABLE');
+  assert.equal(projected.currentModuleId, catalogue.modules[7].id);
+  assert.equal(projected.currentLessonId, catalogue.modules[7].lessons[0].id);
+  assert.equal(projected.levelAssessmentAvailable, false);
+  assert.equal(projected.nextProductLevel, null);
+  assert.equal(projected.pronunciationAcoustic, 'BLOCKED_CAPABILITY');
+  assert.deepEqual(await loadLanguageLearningCoreProjection(f.prisma, userId, profileId), projected);
+  assert.equal(JSON.stringify({ session: f.session, sources, assessments, completions }), before);
+  // Removing one real written completion recalculates the practice gate; a
+  // cached cursor or an unavailable acoustic observation cannot preserve it.
+  const lastPronunciationSource = sourceByDefinition.get(catalogue.modules[6].lessons.at(-1).id).id;
+  f.data.completions = completions.filter(completion => completion.lessonId !== lastPronunciationSource);
+  const recalculated = await loadLanguageLearningCoreProjection(f.prisma, userId, profileId);
+  assert.equal(recalculated.modules[6].practiceOnlyProgression, false);
+  assert.equal(recalculated.modules[7].status, 'LOCKED');
+  assert.equal(recalculated.levelAssessmentAvailable, false);
+});
