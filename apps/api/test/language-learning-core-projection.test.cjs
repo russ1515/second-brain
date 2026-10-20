@@ -98,6 +98,21 @@ function fixture() {
   return { ...data, data, prisma, queries };
 }
 
+test('an explicit language-contract correction is not remediation, while legacy positive variants remain compatible', async () => {
+  for (const explicit of [false, undefined]) {
+    const f = fixture();
+    f.metadata.variant = 1;
+    if (explicit !== undefined) f.metadata.remediation = explicit;
+    f.lesson.masteryRemediationGenerationKey = `language-core:${profileId}:BEGINNER:${target.id}:1`;
+    f.assessment.masteryCreationKey = `language-core:${profileId}:BEGINNER:lesson:${target.id}:1`;
+    const evidence = await loadLanguageLearningCoreEvidence(f.prisma, userId, profileId, context);
+    assert.equal(evidence.length, 1);
+    assert.equal(evidence[0].remediation, explicit === undefined);
+  }
+  const malformed = fixture(); malformed.metadata.remediation = 'false';
+  assert.deepEqual(await loadLanguageLearningCoreEvidence(malformed.prisma, userId, profileId, context), []);
+});
+
 test('canonical source, immutable question/rubric and exact completion produce the same Passport and core mastery', async () => {
   const f = fixture();
   const evidence = await loadLanguageLearningCoreEvidence(f.prisma, userId, profileId, context);

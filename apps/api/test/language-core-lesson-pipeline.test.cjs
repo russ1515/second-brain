@@ -157,7 +157,7 @@ function fixture(options = {}) {
   };
   const llm = { generate: async (messages, request) => {
     requests.push({ messages, request });
-    if (request.operation === 'language-core-help') return { text: 'Compare les formes déjà étudiées, puis explique ton choix.' };
+    if (request.operation === 'language-core-help') return { text: options.helpText ?? 'Compare les formes déjà étudiées, puis explique ton choix.' };
     const index = providerIndex++;
     return options.provider ? options.provider(index) : { text: JSON.stringify(lessonDocument(index)) };
   } };
@@ -188,6 +188,13 @@ function fixture(options = {}) {
 }
 
 function lesson(view, id) { return view.core.modules.flatMap((module) => module.lessons).find((item) => item.id === id); }
+
+function legacyWrongLanguage(row) {
+  row.objective = 'Learn how to recognise the alphabet and use its letters in a personal introduction.';
+  row.intro = 'In this lesson you will learn the English alphabet and practise recognising its letters. We will explore how letters are named, how their written forms differ, and how you can use them when introducing yourself to another person.';
+  row.explanation = 'The alphabet is a set of letters used to write words. Each letter has a name and a shape. Look carefully at the written shape before choosing your answer. Compare the letters with the examples, then practise using them in a short introduction. '.repeat(5);
+  return row;
+}
 
 test('real service pipeline parses, persists, fails below90, remediates, masters and restores one canonical lesson', async () => {
   const f = fixture(); const id = f.definitions[0].id; const nextId = f.definitions[1].id;
@@ -362,3 +369,113 @@ test('an incomplete post-bind response is never reported as LESSON_READY and rec
   const resumed = await f.core.startLesson(f.owner, f.profile.id, id, 'response-fail');
   assert.ok(resumed.content); assert.ok(resumed.assessment); assert.equal(f.requests.length, 1);
 });
+
+test('a confirmed invalid-language untouched cached source is preserved and explicitly replaced with a new non-remediation variant', async () => {
+  const f = fixture(); const id = f.definitions[0].id;
+  const first = await f.core.startLesson(f.owner, f.profile.id, id, 'legacy-start');
+  legacyWrongLanguage(f.tables.lesson[0]);
+  const originals = structuredClone({ lesson: f.tables.lesson[0], assessment: f.tables.assessment[0] });
+  const oldSession = structuredClone(f.tables.experienceSession.find((row) => row.intent === 'language-learning-core'));
+  const hidden = await f.core.get(f.owner, f.profile.id);
+  assert.equal(hidden.content, null); assert.equal(hidden.assessment, null);
+  assert.equal(hidden.activeTargetId, id); assert.deepEqual(hidden.answers, first.answers);
+  assert.equal(f.requests.length, 1);
+  assert.deepEqual(f.tables.experienceSession.find((row) => row.id === oldSession.id), oldSession);
+  const corrected = await f.core.startLesson(f.owner, f.profile.id, id, 'correct-language');
+  assert.notEqual(corrected.content.id, first.content.id); assert.notEqual(corrected.assessment.id, first.assessment.id);
+  assert.equal(corrected.remediation, false);
+  assert.equal(f.tables.assessment[1].questions.languageLearningCore.variant, 1);
+  assert.equal(f.tables.assessment[1].questions.languageLearningCore.remediation, false);
+  assert.deepEqual(f.tables.lesson[0], originals.lesson); assert.deepEqual(f.tables.assessment[0], originals.assessment);
+  assert.equal(f.tables.assessmentSubmission.length, 0); assert.equal(f.tables.learningCompletion.length, 0);
+  assert.equal(lesson(corrected, f.definitions[1].id).status, 'LOCKED');
+  const replay = await f.core.startLesson(f.owner, f.profile.id, id, 'correct-language');
+  assert.equal(replay.content.id, corrected.content.id); assert.equal(f.requests.length, 2);
+  assert.equal((await f.core.get(f.owner, f.profile.id)).content.id, corrected.content.id);
+  assert.deepEqual(f.placement, { status: 'complete', productLevel: 'BEGINNER', globalLevel: 'A1' });
+  const failed = await f.core.submit(f.owner, f.profile.id, id, f.answers(corrected, 8), 'corrected-fail');
+  assert.equal(lesson(failed, id).status, 'NEEDS_REMEDIATION');
+  const remediation = await f.core.startLesson(f.owner, f.profile.id, id, 'actual-remediation', true);
+  assert.equal(remediation.remediation, true);
+  const mastered = await f.core.submit(f.owner, f.profile.id, id, f.answers(remediation, 9), 'corrected-pass');
+  assert.equal(lesson(mastered, id).status, 'MASTERED');
+  assert.equal(lesson(mastered, f.definitions[1].id).status, 'AVAILABLE');
+  assert.deepEqual((await f.core.get(f.owner, f.profile.id)).core, mastered.core);
+  assert.deepEqual(f.tables.lesson[0], originals.lesson); assert.deepEqual(f.tables.assessment[0], originals.assessment);
+});
+
+test('a paid language-invalid replacement fails before persistence and the same explicit request never retries', async () => {
+  const f = fixture({ provider: (index) => ({ text: JSON.stringify(index === 0 ? lessonDocument() : legacyWrongLanguage(lessonDocument(index))) }) });
+  const id = f.definitions[0].id;
+  await f.core.startLesson(f.owner, f.profile.id, id, 'legacy-start'); legacyWrongLanguage(f.tables.lesson[0]);
+  await assert.rejects(f.core.startLesson(f.owner, f.profile.id, id, 'invalid-replacement'), (error) => {
+    assert.equal(error.getStatus(), 422);
+    assert.equal(error.getResponse().code, 'LESSON_SUPPORT_LANGUAGE_CONTRACT_VIOLATION'); return true;
+  });
+  assert.equal(f.tables.lesson.length, 1); assert.equal(f.tables.assessment.length, 1);
+  await assert.rejects(f.core.startLesson(f.owner, f.profile.id, id, 'invalid-replacement'), /No automatic retry/);
+  assert.equal(f.requests.length, 2); assert.equal((await f.core.get(f.owner, f.profile.id)).content, null);
+});
+
+for (const protectedKind of ['sealed-evidence', 'draft-answer', 'autonomous-start']) {
+  test(`language correction never overwrites a source protected by ${protectedKind}`, async () => {
+    const f = fixture(); const id = f.definitions[0].id;
+    const first = await f.core.startLesson(f.owner, f.profile.id, id, 'first');
+    if (protectedKind === 'sealed-evidence') await f.core.submit(f.owner, f.profile.id, id, f.answers(first, 10), 'pass');
+    else await f.core.saveAnswers(f.owner, f.profile.id, id,
+      protectedKind === 'draft-answer' ? [first.assessment.questions[0].options[0], ...Array(9).fill('')] : Array(10).fill(''),
+      protectedKind === 'draft-answer' ? 'teaching' : 'assessment');
+    legacyWrongLanguage(f.tables.lesson[0]);
+    const original = structuredClone(f.tables);
+    const view = await f.core.get(f.owner, f.profile.id);
+    assert.ok(view.content); assert.ok(view.assessment);
+    await assert.rejects(f.core.startLesson(f.owner, f.profile.id, id, 'must-preserve'), (error) => {
+      assert.equal(error.getResponse().code, 'LESSON_LANGUAGE_REGENERATION_BLOCKED'); return true;
+    });
+    assert.deepEqual(f.tables, original); assert.equal(f.requests.length, 1);
+  });
+}
+
+test('Professor help reuses the language-role validator and a rejected answer never mutates mastery or retries', async () => {
+  const f = fixture({ helpText: 'The alphabet is a set of letters that you can use to write words and introduce yourself. Compare each written letter with the examples from the lesson, then explain why the shapes are different before answering the practice question.' });
+  const id = f.definitions[0].id;
+  await f.core.startLesson(f.owner, f.profile.id, id, 'start'); const before = await f.projection();
+  await assert.rejects(f.core.help(f.owner, f.profile.id, id, 'Comment les distinguer ?', 'language-help'), (error) => {
+    assert.equal(error.getResponse().code, 'LESSON_SUPPORT_LANGUAGE_CONTRACT_VIOLATION'); return true;
+  });
+  await assert.rejects(f.core.help(f.owner, f.profile.id, id, 'Comment les distinguer ?', 'language-help'), /No automatic retry/);
+  assert.deepEqual(await f.projection(), before); assert.equal(f.tables.learningCompletion.length, 0);
+  assert.equal(f.requests.filter((item) => item.request.operation === 'language-core-help').length, 1);
+});
+
+for (const arrival of ['submission', 'draft']) {
+  test(`a ${arrival} arriving during language repair prevents activation and preserves original work`, async () => {
+    let f, first;
+    f = fixture({ provider: async (index) => {
+      if (index === 1) {
+        if (arrival === 'submission') {
+          await f.examiner.submitLanguageLearningCore(f.owner, first.assessment.id, {
+            profileId: f.profile.id, sessionId: first.sessionId,
+            answers: f.answers(first, 8), idempotencyKey: 'late-original-submission',
+          });
+        } else {
+          await f.core.saveAnswers(f.owner, f.profile.id, f.definitions[0].id,
+            [first.assessment.questions[0].options[0], ...Array(9).fill('')], 'teaching', 2);
+        }
+      }
+      return { text: JSON.stringify(lessonDocument(index)) };
+    } });
+    const id = f.definitions[0].id;
+    first = await f.core.startLesson(f.owner, f.profile.id, id, 'legacy-start'); legacyWrongLanguage(f.tables.lesson[0]);
+    const originalSource = structuredClone(f.tables.lesson[0]); const originalAssessment = structuredClone(f.tables.assessment[0]);
+    await assert.rejects(f.core.startLesson(f.owner, f.profile.id, id, 'race-correction'), (error) => {
+      assert.equal(error.getResponse().code, 'LESSON_LANGUAGE_REGENERATION_BLOCKED'); return true;
+    });
+    const state = f.tables.experienceSession.find((row) => row.intent === 'language-learning-core').currentStep.metadata.languageLearningCore;
+    assert.equal(state.lessonLinks[id].id, first.content.id); assert.equal(state.activeAssessmentId, first.assessment.id);
+    assert.deepEqual(f.tables.lesson[0], originalSource); assert.deepEqual(f.tables.assessment[0], originalAssessment);
+    assert.equal(f.tables.assessment.length, 1); assert.equal(f.requests.length, 2);
+    if (arrival === 'submission') assert.equal(f.tables.assessmentSubmission.length, 1);
+    else assert.ok(state.answers[0]);
+  });
+}

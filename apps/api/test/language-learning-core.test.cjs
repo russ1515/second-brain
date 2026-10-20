@@ -190,7 +190,9 @@ test('help concurrent duplicate requests acquire exactly one paid-provider claim
   const core = Object.create(LanguageLearningCoreService.prototype);
   const state = { activeScope: 'lesson', activeTargetId: 'target', phase: 'teaching',
     productLevel: 'BEGINNER', cefrLevel: 'A1' };
-  core.load = async () => ({ session: { id: 'course' }, state });
+  core.load = async () => ({ session: { id: 'course' }, state,
+    profile: { language: 'English', normalizedLanguage: 'en', teachingLanguageSource: 'interface' },
+    catalogue: { languageCode: 'en' } });
   core.get = async () => ({ content: { id: 'lesson', topic: 'Alphabet', objective: 'Read letters',
     explanation: 'Lesson explanation', examples: ['A'], questions: ['Which letter?'] },
     core: { modules: [{ id: 'basics', title: 'Basics', lessons: [{ id: 'target', status: 'IN_PROGRESS', criteria: [] }] }] },
@@ -199,7 +201,8 @@ test('help concurrent duplicate requests acquire exactly one paid-provider claim
   let claimed = false;
   let paid = 0;
   let writes = 0;
-  core.prisma = { experienceSession: {
+  core.lessons = { getLanguageTeachingTextViolation: () => null };
+  core.prisma = { profile: { findUnique: async () => ({ preferredLanguage: 'fr' }) }, experienceSession: {
     findFirst: async () => null,
     updateMany: async () => {
       if (claimed) return { count: 0 };
@@ -237,9 +240,11 @@ test('a failed module cannot reassess without fresh successful targeted remediat
   const state = { activeScope: null, activeTargetId: null, activeAssessmentId: null,
     lessonLinks: { 'lesson-one': { id: 'db-one' } }, productLevel: 'BEGINNER' };
   core.load = async () => ({ session: { id: 'course' }, state,
+    profile: { language: 'English', normalizedLanguage: 'en', teachingLanguageSource: 'interface' },
     catalogue: { modules: [{ id: 'basics', lessons: [{ id: 'lesson-one', moduleId: 'basics' }] }] } });
   core.get = async () => ({ core: { modules: [{ id: 'basics', assessmentAvailable: true }] } });
-  core.lessons = { get: async () => ({ id: 'db-one', exercises: [{ question: 'Question', type: 'qcm',
+  core.prisma = { profile: { findUnique: async () => ({ preferredLanguage: 'fr' }) } };
+  core.lessons = { getLanguageRoleViolation: () => null, get: async () => ({ id: 'db-one', exercises: [{ question: 'Question', type: 'qcm',
     options: ['one', 'two'], answer: 'one', correction: 'Explication' }] }) };
   core.evidence = async () => [{ scope: 'module', targetId: 'basics', awardedPoints: 8, maximumPoints: 10,
     evaluatedAt: '2026-10-20T10:00:00.000Z', weakLessonIds: ['lesson-one'] }];

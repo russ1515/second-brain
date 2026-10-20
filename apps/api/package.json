@@ -67,6 +67,7 @@
     "rxjs": "^7.8.1",
     "sharp": "0.33.5",
     "ts-fsrs": "^4.4.0",
+    "tinyld": "1.3.4",
     "undici": "^6.27.0"
   },
   "devDependencies": {

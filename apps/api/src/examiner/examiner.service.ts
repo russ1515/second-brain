@@ -74,6 +74,9 @@ export interface LanguageLearningCoreAssessmentMetadata {
   scope: 'lesson' | 'module' | 'level';
   targetId: string;
   variant: number;
+  /** A language-contract correction is a new source, not learner remediation.
+   * Missing values retain the original variant-based interpretation. */
+  remediation?: boolean;
   sourceLessonIds: string[];
   sourceContentVersions: number[];
   questionLessonIds: string[];

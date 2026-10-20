@@ -27,6 +27,8 @@ import {
   TEACHER_POLICY_METADATA_SOURCE,
   teacherPolicyDirective,
   lessonFlowStepKeys,
+  SUPPORTED_LANGUAGES,
+  toSupportedLanguage,
 } from '@second-brain/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
@@ -44,8 +46,36 @@ import { LearningCompletionService } from '../learning-evidence/learning-complet
 import { GoalsService } from '../goals/goals.service';
 import { accountDataLockKey } from '../common/account-data-lock';
 import { createHash } from 'node:crypto';
+import { detectAll, supportedLanguages, toISO2 } from 'tinyld';
 
 const CONTEXT_LIMIT = 5;
+
+/** Instruction language and learning target are separate trusted server data.
+ * These options never form part of the public GenerateLessonDto. */
+export interface LanguageLessonRoleContext {
+  supportLanguageCode: string;
+  targetLanguageCode?: string;
+  targetLanguage: string;
+  moduleId?: string;
+  lessonObjective?: string;
+}
+
+export interface LanguageRoleViolation {
+  code: 'LESSON_SUPPORT_LANGUAGE_CONTRACT_VIOLATION';
+  stage: 'content';
+  reason: 'PEDAGOGICAL_LANGUAGE_MISMATCH';
+  fields: string[];
+}
+
+type LanguageRoleContent = Pick<LessonView,
+  'objective' | 'intro' | 'explanation' | 'examples' | 'questions' | 'exercises'
+  | 'homework' | 'summary' | 'keyPoints' | 'revisionSheet'>
+  & { commonMisconceptions?: readonly string[] };
+
+const LANGUAGE_ID_CODES = new Map(supportedLanguages.map(code => {
+  const iso2 = toISO2(code);
+  return [toSupportedLanguage(iso2) ?? iso2, iso2] as const;
+}));
 
 const SYSTEM_PROMPT = [
   'You are a master teacher building a complete written lesson for a learner.',
@@ -97,7 +127,10 @@ const LANGUAGE_CORE_LESSON_DIRECTIVE = [
   'Return exactly ten distinct independent multiple-choice exercises, each with type=qcm,',
   '3-4 plausible unique options, answer copied verbatim from one option, and correction.',
   'Each correction explains the mistake/rule, the correct form and another example.',
-  'Use the configured support language for every explanation, instruction and correction.',
+  'Use the configured support language for objective, intro, explanation, commonMisconceptions,',
+  'questions (guided-practice instructions), exercises[].question (instructions), exercises[].correction,',
+  'homework instructions, summary, keyPoints and revisionSheet. Preserve the meaning of the server objective,',
+  'but translate its pedagogical wording into the support language; do not copy a target-language title as the objective.',
   'Use the target language for examples/expressions, with immediate support-language glosses.',
   'Independent exercise prompts/options must not reveal answers through translations or hints.',
   'Never claim acoustic pronunciation has been assessed from text. Oral teaching may use text practice.',
@@ -115,6 +148,7 @@ export interface InternalLessonOptions {
   /** Post-placement catalogue lesson. Uses the existing writer/persistence,
    * not the unrelated ten-format acoustic mastery contract. Server-only. */
   languageLearningCore?: boolean;
+  languageRoleContext?: LanguageLessonRoleContext;
   /** Language profile this lesson belongs to (language engine). */
   languageProfileId?: string;
   /** Extra teaching directive appended to the system prompt (e.g. the language
@@ -206,7 +240,13 @@ export class LessonService {
         where: { userId, masteryRemediationGenerationKey: languageGenerationKey },
         select: { id: true },
       });
-      if (existing) return this.get(userId, existing.id);
+      if (existing) {
+        const lesson = await this.get(userId, existing.id);
+        if (internal.languageLearningCore && internal.languageRoleContext) {
+          this.requireLanguageRoleContent(lesson, internal.languageRoleContext);
+        }
+        return lesson;
+      }
     }
 
     // Ground the lesson in the learner's existing notes when available.
@@ -241,6 +281,7 @@ export class LessonService {
       internal.languageNotions,
       internal.languageLearningCore === true,
       internal.remediationBaselineContent,
+      internal.languageRoleContext,
     );
     const persist = async (tx: Prisma.TransactionClient, raw: RawLesson) => {
       const lockKey = accountDataLockKey(userId);
@@ -356,7 +397,11 @@ export class LessonService {
         })(), internal.languageLearningCore === true);
 
     if ('existingLessonId' in generated) {
-      return this.get(userId, generated.existingLessonId);
+      const lesson = await this.get(userId, generated.existingLessonId);
+      if (internal.languageLearningCore && internal.languageRoleContext) {
+        this.requireLanguageRoleContent(lesson, internal.languageRoleContext);
+      }
+      return lesson;
     }
     const { lesson, doc, experience } = generated.created;
 
@@ -759,6 +804,7 @@ export class LessonService {
     languageNotions?: readonly { notionId: string; criterionId: string }[],
     languageLearningCore = false,
     remediationBaselineContent?: InternalLessonOptions['remediationBaselineContent'],
+    languageRoleContext?: LanguageLessonRoleContext,
   ): Promise<RawLesson> {
     if (languageMastery && !languageNotions?.length) {
       throw new UnprocessableEntityException(
@@ -767,7 +813,9 @@ export class LessonService {
     }
     const level = dto.level ? ` Pitch it at a ${dto.level} level.` : '';
     const language = dto.language
-      ? ` This is a ${dto.language} language lesson; teach ${dto.language}.`
+      ? languageLearningCore
+        ? ` The language being learned is ${dto.language}; this is NOT an instruction to write teaching prose in that language.`
+        : ` This is a ${dto.language} language lesson; teach ${dto.language}.`
       : '';
     const notionDirective = languageNotions?.length
       ? [
@@ -784,7 +832,12 @@ export class LessonService {
       : languageMastery
       ? `${SYSTEM_PROMPT} ${LANGUAGE_MASTERY_EXERCISE_PROMPT} ${notionDirective}`
       : SYSTEM_PROMPT;
-    const system = directive ? `${baseSystem} ${directive}` : baseSystem;
+    // This scoped language-only contract is last, after TeacherPolicy and the
+    // catalogue directive, so a target-language objective/preference cannot
+    // silently replace the learner's selected instruction language.
+    const finalLanguageDirective = languageLearningCore && languageRoleContext
+      ? this.languageRoleDirective(languageRoleContext, dto.level) : '';
+    const system = [baseSystem, directive, finalLanguageDirective].filter(Boolean).join(' ');
     let result: { text: string };
     try {
       result = await this.llm.generate(
@@ -801,7 +854,7 @@ export class LessonService {
           temperature: 0.4,
           operation: languageLearningCore ? 'language-core-lesson' : 'lesson',
           ...(languageLearningCore
-            ? { jsonSchema: this.languageCoreLessonJsonSchema() }
+            ? { jsonSchema: this.languageCoreLessonJsonSchema(languageRoleContext) }
             : languageMastery
             ? { jsonSchema: this.languageLessonJsonSchema(languageNotions ?? []) }
             : {}),
@@ -822,15 +875,20 @@ export class LessonService {
     if (languageLearningCore) this.lessonGenerationTrace('adapter', 'PASS', {
       textCharacters: text.length,
     });
-    return this.parseLesson(text, languageMastery, remediationBaselineExercises,
+    const lesson = this.parseLesson(text, languageMastery, remediationBaselineExercises,
       languageNotions, languageLearningCore, remediationBaselineContent);
+    if (languageLearningCore && languageRoleContext) this.requireLanguageRoleContent(lesson, languageRoleContext);
+    return lesson;
   }
 
-  private languageCoreLessonJsonSchema() {
+  private languageCoreLessonJsonSchema(roles?: LanguageLessonRoleContext) {
     // Mirror the parser's existing structural minima in Structured Outputs so
     // a successful provider envelope cannot legally contain a one-line shell.
     // Content semantics, answer matching and novelty remain server checked.
+    const support = roles ? this.languageRoleNames(roles).support : 'the configured support language';
+    const target = roles ? this.languageRoleNames(roles).target : 'the learning target language';
     const text = { type: 'string', pattern: '\\S' };
+    const teachingText = { ...text, description: `Pedagogical prose in ${support}. Target examples may be quoted in ${target}.` };
     const texts = (minimum: number, maximum?: number) => ({
       type: 'array', items: text, minItems: minimum,
       ...(maximum === undefined ? {} : { maxItems: maximum }),
@@ -842,19 +900,180 @@ export class LessonService {
         required: ['objective', 'intro', 'explanation', 'examples', 'commonMisconceptions',
           'questions', 'exercises', 'homework', 'summary', 'keyPoints', 'revisionSheet'],
         properties: {
-          objective: text, intro: text,
-          explanation: { type: 'string', pattern: '^[\\s\\S]{600,}$' },
-          examples: texts(3), commonMisconceptions: texts(1), questions: texts(3, 5),
-          homework: { type: 'string' }, summary: text, keyPoints: texts(3, 5), revisionSheet: text,
+          objective: { ...teachingText, description: `Learning objective expressed in ${support}, preserving the catalogue objective meaning, not its original wording.` },
+          intro: teachingText,
+          explanation: { ...teachingText, pattern: '^[\\s\\S]{600,}$' },
+          examples: { ...texts(3), description: `Keep each worked example in ${target}, followed by its immediate concise ${support} meaning. Do not replace the target text with its translation.` },
+          commonMisconceptions: { ...texts(1), items: teachingText },
+          questions: { ...texts(3, 5), items: teachingText },
+          homework: { type: 'string', description: `Optional practice instructions in ${support}, with target production in ${target}.` },
+          summary: teachingText, keyPoints: { ...texts(3, 5), items: teachingText }, revisionSheet: teachingText,
           exercises: { type: 'array', minItems: 10, maxItems: 12, items: {
             type: 'object', additionalProperties: false,
             required: ['question', 'answer', 'type', 'options', 'correction'],
-            properties: { question: text, answer: text, type: { type: 'string', enum: ['qcm'] },
-              options: texts(3, 4), correction: text },
+            properties: { question: teachingText,
+              answer: { ...text, description: `Exact correct option text; keep the requested learning production in ${target}.` },
+              type: { type: 'string', enum: ['qcm'] },
+              options: { ...texts(3, 4), description: `Independent learning options in ${target} where appropriate; no support-language translation revealing the answer.` },
+              correction: { ...teachingText, description: `Explain the error and rule in ${support}; keep the corrected form and another quoted example in ${target}.` } },
           } },
         },
       },
     };
+  }
+
+  private languageRoleNames(roles: LanguageLessonRoleContext) {
+    const supportCode = toSupportedLanguage(roles.supportLanguageCode);
+    const targetCode = toSupportedLanguage(roles.targetLanguageCode ?? roles.targetLanguage);
+    if (!supportCode || !targetCode) {
+      throw new BadRequestException('A language lesson requires configured support and target language roles.');
+    }
+    return { supportCode, targetCode, support: SUPPORTED_LANGUAGES[supportCode].englishName,
+      target: SUPPORTED_LANGUAGES[targetCode].englishName };
+  }
+
+  private languageRoleDirective(roles: LanguageLessonRoleContext, level?: string): string {
+    const names = this.languageRoleNames(roles);
+    return [
+      'FINAL AUTHORITATIVE LANGUAGE ROLE CONTRACT (language roles only; never change grading or curriculum):',
+      JSON.stringify({ supportLanguage: names.support, supportLanguageCode: names.supportCode,
+        targetLanguage: names.target, targetLanguageCode: names.targetCode,
+        level: level ?? null, module: roles.moduleId ?? null, lessonObjective: roles.lessonObjective ?? null }),
+      'The catalogue objective/title may be written in the target language. Preserve its meaning,',
+      'but express the objective field itself in supportLanguage, not by copying catalogue wording.',
+      'Write objective, intro, explanation (including grammar/vocabulary rules and pedagogical notes),',
+      'commonMisconceptions, questions/guided-practice instructions, exercise instructions in question,',
+      'correction explanations, homework instructions, summary, keyPoints and revisionSheet primarily in supportLanguage.',
+      'Write target vocabulary, expressions, dialogues, example sentences, listening/reading material,',
+      'sentences to repeat and expected target-language productions in targetLanguage.',
+      'Preserve each examples[] target sentence and follow it with the immediate support-language meaning.',
+      'Each existing string may contain support-language instruction plus clearly quoted target-language text;',
+      'use quotation marks or backticks for embedded target examples instead of switching the teaching prose.',
+      'Corrections and remediation explain the mistake in supportLanguage but keep the corrected target form',
+      'and new example in targetLanguage. Never translate away the language being learned.',
+      'Autonomous exercises retain understandable support-language instructions, but no translations, hints,',
+      'model answers or corrections that reveal the answer before submission.',
+      'This explicit supportLanguage takes priority over target-language titles, input language, immersion',
+      'ratios or general teacher language preferences. It never lowers an exam standard or mastery threshold.',
+    ].join(' ');
+  }
+
+  /** No mutation, provider or logging. Null means no RELIABLE contradiction,
+   * not semantic certification. Short, ambiguous and unsupported languages are
+   * deliberately left UNKNOWN rather than rejecting legitimate bilingual work. */
+  getLanguageRoleViolation(content: LanguageRoleContent, roles: LanguageLessonRoleContext): LanguageRoleViolation | null {
+    const fields: [string, unknown][] = [
+      ['objective', content.objective], ['intro', content.intro], ['explanation', content.explanation],
+      ['homework', content.homework], ['summary', content.summary], ['revisionSheet', content.revisionSheet],
+      ...(content.commonMisconceptions ?? []).map(value => ['commonMisconceptions', value] as [string, unknown]),
+      ...(content.questions ?? []).map(value => ['questions', value] as [string, unknown]),
+      ...(content.keyPoints ?? []).map(value => ['keyPoints', value] as [string, unknown]),
+      ...(content.exercises ?? []).flatMap(exercise => [
+        ['exercises.question', exercise.question], ['exercises.correction', exercise.correction],
+      ] as [string, unknown][]),
+    ];
+    // examples[], answers, options, audioText and dialogueTurns are learning
+    // target material, NOT samples for checking the teaching language.
+    const violating = [...new Set(fields.filter(([, value]) => typeof value === 'string'
+      && this.hasReliableTeachingLanguageMismatch(value, roles)).map(([field]) => field))];
+    return violating.length ? { code: 'LESSON_SUPPORT_LANGUAGE_CONTRACT_VIOLATION',
+      stage: 'content', reason: 'PEDAGOGICAL_LANGUAGE_MISMATCH', fields: violating } : null;
+  }
+
+  /** Professor Help reuses the exact same conservative checker. It never
+   * changes a score, an assessment, a completion or a progress record. */
+  getLanguageTeachingTextViolation(text: string, roles: LanguageLessonRoleContext): LanguageRoleViolation | null {
+    return this.hasReliableTeachingLanguageMismatch(text, roles)
+      ? { code: 'LESSON_SUPPORT_LANGUAGE_CONTRACT_VIOLATION', stage: 'content',
+          reason: 'PEDAGOGICAL_LANGUAGE_MISMATCH', fields: ['teachingText'] }
+      : null;
+  }
+
+  private requireLanguageRoleContent(content: LanguageRoleContent, roles: LanguageLessonRoleContext): void {
+    const violation = this.getLanguageRoleViolation(content, roles);
+    if (!violation) return;
+    const shape = { invalidLanguageFieldCount: violation.fields.length };
+    this.lessonGenerationTrace('content', 'FAIL', shape, violation.reason);
+    const names = this.languageRoleNames(roles);
+    this.logger.error(JSON.stringify({ event: 'LESSON_LANGUAGE_ROLE_REJECTED', ...violation,
+      supportLanguageCode: names.supportCode, targetLanguageCode: names.targetCode }));
+    throw new UnprocessableEntityException({ statusCode: 422,
+      message: 'The teacher did not respect the selected teaching language.', ...violation,
+      reasons: [violation.reason], shape });
+  }
+
+  private hasReliableTeachingLanguageMismatch(text: string, roles: LanguageLessonRoleContext): boolean {
+    const support = toSupportedLanguage(roles.supportLanguageCode);
+    if (!support) return false;
+    const baseCode = new Intl.Locale(support).language;
+    const detectorSupport = LANGUAGE_ID_CODES.get(support) ?? LANGUAGE_ID_CODES.get(baseCode);
+    // TinyLD has no validated profiles for every product language. In
+    // particular ln/sw/wo/ha must not be guessed from neighbouring languages.
+    if (!detectorSupport) return false;
+    const sample = text.normalize('NFKC')
+      .replace(/```[\s\S]*?```/gu, ' ')
+      .replace(/`[^`\n]*`/gu, ' ')
+      .replace(/"[^"\n]*"|“[^”\n]*”|«[^»\n]*»|‘[^’\n]*’/gu, ' ')
+      .replace(/https?:\/\/\S+/gu, ' ')
+      .trim().slice(0, 12_000);
+    const letters = sample.match(/\p{L}/gu) ?? [];
+    if (letters.length < 80) return false;
+    // Script contradictions are only a fallback on substantial prose. Quoted
+    // target examples were removed above, never banned as English/Latin words.
+    const target = toSupportedLanguage(roles.targetLanguageCode ?? roles.targetLanguage);
+    if (target) {
+      try {
+        const expectedScript = new Intl.Locale(support).maximize().script;
+        const targetScript = new Intl.Locale(target).maximize().script;
+        if (expectedScript && targetScript && expectedScript !== targetScript) {
+          const expected = new RegExp(`\\p{Script_Extensions=${expectedScript}}`, 'u');
+          const other = new RegExp(`\\p{Script_Extensions=${targetScript}}`, 'u');
+          if (!letters.some(letter => expected.test(letter)) && letters.every(letter => other.test(letter))) return true;
+        }
+      } catch { /* Composite Unicode scripts or uncertain tags remain UNKNOWN. */ }
+    }
+    const words = sample.match(/\p{L}[\p{L}\p{M}'’-]*/gu) ?? [];
+    if (words.length < 12) return false;
+    try {
+      // Compare against ALL detector languages, not just a forced support /
+      // target pair. Scores are heuristic signals, not calibrated probabilities.
+      const candidates = detectAll(sample).filter(item => Number.isFinite(item.accuracy));
+      const first = candidates[0];
+      if (!first) return false;
+      const second = candidates[1]?.accuracy ?? 0;
+      const supportScore = candidates.find(item => item.lang === detectorSupport)?.accuracy ?? 0;
+      const contradiction = first.lang !== detectorSupport && first.accuracy >= 0.97
+        && first.accuracy - second >= 0.35 && supportScore <= 0.2;
+      // Quoted target material was removed; short unquoted target sentences
+      // cannot supply the substantial evidence required for a mixed-field
+      // rejection. One support sentence, however, must not excuse an otherwise
+      // overwhelmingly wrong-language pedagogical field.
+      const spans = sample.split(/\n+|[.!?؟]+\s+/u).slice(0, 40);
+      const corroborating = new Map<string, { count: number; letters: number }>();
+      let supportEvidence = 0;
+      for (const span of spans) {
+        const spanLetters = (span.match(/\p{L}/gu) ?? []).length;
+        const spanWords = (span.match(/\p{L}[\p{L}\p{M}'’-]*/gu) ?? []).length;
+        if (spanLetters < 20 || spanWords < 4) continue;
+        const ranked = detectAll(span).filter(item => Number.isFinite(item.accuracy));
+        if (ranked[0]?.lang === detectorSupport && ranked[0].accuracy >= 0.97
+          && ranked[0].accuracy - (ranked[1]?.accuracy ?? 0) >= 0.35) supportEvidence += spanLetters;
+        if (spanLetters >= 40 && spanWords >= 8 && ranked[0] && ranked[0].lang !== detectorSupport
+          && ranked[0].accuracy >= 0.97 && ranked[0].accuracy - (ranked[1]?.accuracy ?? 0) >= 0.35) {
+          const evidence = corroborating.get(ranked[0].lang) ?? { count: 0, letters: 0 };
+          corroborating.set(ranked[0].lang, { count: evidence.count + 1,
+            letters: evidence.letters + spanLetters });
+        }
+      }
+      // This is a conservative language-detection confidence boundary, never a
+      // learning/mastery score. Unknown and short spans stay in the denominator.
+      const overwhelming = [...corroborating.values()].some(evidence => evidence.count >= 2
+        && evidence.letters / letters.length > 0.8);
+      return overwhelming || (contradiction && supportEvidence === 0);
+    } catch {
+      // A detector failure must not fabricate a language verdict.
+      return false;
+    }
   }
 
   /** The provider guarantees the JSON envelope while the parser below remains

@@ -156,6 +156,24 @@ function codeFiles(directory) {
   return files;
 }
 
+function runtimeOverlay(filename) {
+  const source = fs.readFileSync(path.join(LOCALES_DIR, filename), 'utf8');
+  const js = ts.transpileModule(source, { compilerOptions: {
+    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
+  } }).outputText;
+  const registered = new Map();
+  const overlayModule = { exports: {} };
+  const fakeRequire = (name) => {
+    assert.equal(name, '../i18n');
+    return { extendLocale(code, entries) {
+      assert.ok(!registered.has(code), `${filename} duplicate locale ${code}`);
+      registered.set(code, entries);
+    } };
+  };
+  new Function('require', 'module', 'exports', js)(fakeRequire, overlayModule, overlayModule.exports);
+  return { registered, exports: overlayModule.exports };
+}
+
 const english = catalog(I18N_FILE, 'en');
 const french = catalog(I18N_FILE, 'fr');
 const supported = objectKeys(SHARED_LANGUAGES_FILE, 'SUPPORTED_LANGUAGES');
@@ -250,6 +268,8 @@ const overlayFiles = new Set([
   'global-path-v1.ts',
   'index.ts',
   'language-mastery-v1.ts',
+  'language-learning-core-v1.ts',
+  'language-placement-v1.ts',
   'landing-v1.ts',
   'learning-control-v1.ts',
   'learning-data-control-africa-v1.ts',
@@ -295,6 +315,31 @@ const localeResources = fs.readdirSync(LOCALES_DIR)
   .filter((file) => file.endsWith('.ts') && !overlayFiles.has(file))
   .sort()
   .map(registeredLocale);
+
+test('post-placement and placement overlays are actually registered for all 34 runtime languages', () => {
+  const barrel = fs.readFileSync(path.join(LOCALES_DIR, 'index.ts'), 'utf8');
+  for (const [filename, keyExport] of [
+    ['language-learning-core-v1.ts', 'languageLearningCoreKeys'],
+    ['language-placement-v1.ts', 'languagePlacementKeys'],
+  ]) {
+    const filenameWithoutExtension = path.basename(filename, '.ts');
+    assert.match(barrel, new RegExp(`import ['\"]\\./${filenameWithoutExtension}['\"]`));
+    const source = fs.readFileSync(path.join(LOCALES_DIR, filename), 'utf8');
+    assert.match(source, /\bextendLocale\(/);
+    assert.doesNotMatch(source, /\bregisterLocale\(/);
+    const { registered, exports } = runtimeOverlay(filename);
+    assert.deepEqual([...registered.keys()].sort(), [...supported].sort(), filename);
+    const keys = [...exports[keyExport]];
+    assert.equal(new Set(keys).size, keys.length);
+    for (const [code, entries] of registered) {
+      assert.deepEqual(Object.keys(entries), keys, `${filename} ${code}`);
+      for (const [key, value] of Object.entries(entries)) {
+        assert.ok(typeof value === 'string' && value.trim(), `${filename} ${code}.${key}`);
+        assert.deepEqual(placeholders(value), placeholders(registered.get('en')[key]), `${filename} ${code}.${key}`);
+      }
+    }
+  }
+});
 
 function effectiveCatalog(resource) {
   const { code, file, variableName } = resource;
@@ -596,7 +641,14 @@ test('Arabic and Hebrew are registered as RTL and all other locales remain LTR',
   }
 });
 
-test('every statically referenced translation key exists in the English source catalog', () => {
+test('every statically referenced translation key exists in the English runtime catalog', () => {
+  // These are real barrel-loaded extensions, not missing base translations.
+  // Keep the base coverage calculation above unchanged and check actual runtime
+  // keys here, including each overlay's registered English values.
+  const runtimeEnglish = new Map(english);
+  for (const filename of ['language-learning-core-v1.ts', 'language-placement-v1.ts']) {
+    for (const [key, value] of Object.entries(runtimeOverlay(filename).registered.get('en'))) runtimeEnglish.set(key, value);
+  }
   for (const file of codeFiles(path.join(ROOT, 'apps/mobile'))) {
     const source = sourceFile(file);
     function visit(node) {
@@ -608,7 +660,7 @@ test('every statically referenced translation key exists in the English source c
       ) {
         const key = unwrap(node.arguments[0]);
         if (ts.isStringLiteralLike(key)) {
-          assert.ok(english.has(key.text), `${path.relative(ROOT, file)} references missing key ${key.text}`);
+          assert.ok(runtimeEnglish.has(key.text), `${path.relative(ROOT, file)} references missing key ${key.text}`);
         }
       }
       ts.forEachChild(node, visit);

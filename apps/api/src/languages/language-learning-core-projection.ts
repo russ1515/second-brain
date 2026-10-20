@@ -145,6 +145,7 @@ export async function loadLanguageLearningCoreEvidence(
       || metadata.catalogueVersion !== LANGUAGE_LEARNING_CORE_VERSION
       || metadata.profileId !== profileId || metadata.sessionId !== session.id
       || metadata.productLevel !== context.productLevel
+      || (metadata.remediation !== undefined && typeof metadata.remediation !== 'boolean')
       || !['lesson', 'module', 'level'].includes(String(metadata.scope))
       || typeof metadata.targetId !== 'string' || !Number.isInteger(metadata.variant) || Number(metadata.variant) < 0
       || !strings(metadata.sourceLessonIds) || !strings(metadata.questionLessonIds)
@@ -241,7 +242,7 @@ export async function loadLanguageLearningCoreEvidence(
         state: 'evaluated', awardedPoints, maximumPoints,
         evaluatedAt: submission.createdAt.toISOString(),
         weakLessonIds: [...new Set(weakLessonIds)], weakConcepts: [...new Set(weakConcepts)],
-        remediation: Number(metadata.variant) > 0 });
+        remediation: typeof metadata.remediation === 'boolean' ? metadata.remediation : Number(metadata.variant) > 0 });
     }
   }
   return output;
