@@ -1361,14 +1361,17 @@ function autopilotReply(_messages, _options, state) {
     output.taskFulfillment = {
       fulfilled: true, contractMatchesTask: true, scope: contract.scope,
       criterionReviews: contract.criteria.map((criterion) => ({
-        criterionId: criterion.id, fulfilled: true,
+        criterionId: criterion.id, fulfilled: true, status: 'SATISFIED', reason: 'The actual persisted answer covers this required criterion.',
         excerpt: row.draftContent.includes('Kinetic energy: it is associated with the motion of an object.')
           ? 'Kinetic energy: it is associated with the motion of an object.' : row.draftContent.slice(0, 200),
       })),
       citationLabels: (state.sourceResolution?.citations || []).filter((citation) => row.draftContent.includes(`[${citation.citationLabel}]`)).map((citation) => citation.citationLabel),
     };
   }
-  if (phase === 'FINALIZATION') output.deconstruction = 'We identified the formula, substituted measured inputs, verified 25 J, and kept the unavailable height explicit.';
+  if (phase === 'FINALIZATION') {
+    output.deconstruction = 'We identified the formula, substituted measured inputs, verified 25 J, and kept the unavailable height explicit.';
+    output.issues = []; output.needsInput = '';
+  }
   return JSON.stringify(output);
 }
 
@@ -1422,7 +1425,10 @@ test('Autopilot requires one consent, preserves the capture and completes the au
   assert.equal(workspace.professor.transitions.length, 6);
   assert.equal(workspace.completion.snapshots.at(-1).draft.content, workspace.draft.content);
   assert.equal(state.llmOptions.every((option) => option.operation === 'workspace-assistant'), true);
-  assert.ok(state.llmMessages.every((messages) => messages[0].content.includes('explicitly consented')));
+  assert.ok(state.llmMessages.slice(0, 3).every((messages) => messages[0].content.includes('explicitly consented')),
+    'The frozen C/M/WORK orchestration keeps its consent-specific directive');
+  assert.match(state.llmMessages[3][0].content, /VERIFICATION COMPLETE REVIEW CONTRACT/);
+  assert.match(state.llmMessages[4][0].content, /FINALIZATION uses only the already verified persisted draft/);
 });
 
 test('Autopilot metadata is resumable across a new service instance without resetting counters or phase', async () => {
@@ -2336,11 +2342,15 @@ async function universalWorkFixture(fixture, options = {}) {
       output.checkedPlanItemIds = row.plan.map((item) => item.id);
       output.taskFulfillment = {
         fulfilled: true, contractMatchesTask: true, scope: workContract.scope,
-        criterionReviews: workContract.criteria.map((criterion, index) => ({ criterionId: criterion.id, fulfilled: true, excerpt: fixture.excerpts[index] })),
+        criterionReviews: workContract.criteria.map((criterion, index) => ({ criterionId: criterion.id, fulfilled: true,
+          status: 'SATISFIED', reason: 'The actual persisted draft covers this independently reviewed criterion.', excerpt: fixture.excerpts[index] })),
         citationLabels: (harness.state.sourceResolution?.citations || []).filter((citation) => row.draftContent.includes(`[${citation.citationLabel}]`)).map((citation) => citation.citationLabel),
       };
     }
-    if (phase === 'FINALIZATION') output.deconstruction = 'The captured task was interpreted, drafted and checked against its actual required criteria.';
+    if (phase === 'FINALIZATION') {
+      output.deconstruction = 'The captured task was interpreted, drafted and checked against its actual required criteria.';
+      output.issues = []; output.needsInput = '';
+    }
     return JSON.stringify(options.transformOutput ? options.transformOutput(output, phase, state) : output);
   };
   const workspace = await harness.service.create('owner', request({
@@ -2435,7 +2445,8 @@ test('Universal verification blocks a structurally valid but off-task draft thro
       }
       if (phase === 'VERIFICATION') {
         output.taskFulfillment.fulfilled = false;
-        output.taskFulfillment.criterionReviews = output.taskFulfillment.criterionReviews.map((review) => ({ criterionId: review.criterionId, fulfilled: false, reason: 'The draft lists keywords but does not summarize the source.' }));
+        output.taskFulfillment.criterionReviews = output.taskFulfillment.criterionReviews.map((review) => ({ criterionId: review.criterionId, fulfilled: false,
+          status: 'MISSING', reason: 'The draft lists keywords but does not summarize the source.', evidenceExcerpts: [] }));
       }
       return output;
     },

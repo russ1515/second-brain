@@ -99,7 +99,11 @@ function fixture({ active = true, phase = 'VERIFICATION' } = {}) {
     assert.equal(reserved?.state, 'RESERVED', 'durable technical ceiling precedes the fake transport');
     calls.llm.push({ messages: copy(messages), options: copy(options), context: copy(context) });
     ledgerFor({ context });
-    return { provider: 'openai', model: options.model, text: JSON.stringify(historical.verificationOutput) };
+    const response = copy(historical.verificationOutput);
+    response.taskFulfillment.criterionReviews = response.taskFulfillment.criterionReviews.map(item => ({
+      ...item, status: 'SATISFIED', excerpt: historical.draft,
+    }));
+    return { provider: 'openai', model: options.model, text: JSON.stringify(response) };
   } };
   return { service, row, owner, historical, authorization, values, pricing, calls, current, view, setExecution, ledgerFor,
     setLedger: value => { ledger = value; } };
@@ -141,6 +145,30 @@ test('same reservation is idempotent and another request cannot spend while the 
   const next = f.setExecution('technical-acceptance-step-02');
   await assert.rejects(() => reserve(f, next), error => code(error) === 'workspace_acceptance_reservation_pending');
   assert.equal(window(f).reservations.length, 1); assert.equal(f.calls.llm.length, 0); preserved(f);
+});
+
+test('scoped reservation includes structured-output schema bytes in its pre-provider ceiling and refuses schema overflow', async () => {
+  const f = fixture(); const execution = f.setExecution();
+  const schema = { name: 'technical-verification-schema', strict: true,
+    schema: { type: 'object', properties: { text: { type: 'string', description: 'x'.repeat(2000) } },
+      required: ['text'], additionalProperties: false } };
+  const reservation = await f.service.reserveAutopilotAcceptanceCost(f.owner, f.row,
+    f.row.progress.workflow.professor, execution, shortMessages, 1500, schema);
+  const expectedBytes = Buffer.byteLength(JSON.stringify(shortMessages), 'utf8')
+    + Buffer.byteLength(JSON.stringify(schema), 'utf8');
+  assert.equal(reservation.inputTokenCap, expectedBytes + 2048);
+  const expectedUpper = Prisma.Decimal.max(f.pricing.inputTokenPrice, f.pricing.cachedInputTokenPrice)
+    .mul(expectedBytes + 2048).add(f.pricing.outputTokenPrice.mul(1500)).toFixed(12, Prisma.Decimal.ROUND_CEIL);
+  assert.equal(window(f).reservations[0].upperCostUsd, new Prisma.Decimal(expectedUpper).toString());
+  assert.equal(f.calls.llm.length, 0);
+  const oversized = fixture(); const otherExecution = oversized.setExecution();
+  await assert.rejects(() => oversized.service.reserveAutopilotAcceptanceCost(oversized.owner, oversized.row,
+    oversized.row.progress.workflow.professor, otherExecution, shortMessages, 1500,
+    { ...schema, description: 'x'.repeat(50_001) }), error => code(error) === 'workspace_acceptance_not_authorized');
+  assert.equal(oversized.calls.price.length, 0);
+  assert.equal(window(oversized).reservations.length, 0);
+  assert.equal(oversized.calls.llm.length, 0);
+  preserved(f); preserved(oversized);
 });
 
 test('missing rates, unknown model, revoked scope, oversized prompt, WORK and expensive quote fail before mock transport', async () => {

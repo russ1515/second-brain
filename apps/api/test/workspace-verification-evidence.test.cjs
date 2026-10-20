@@ -315,7 +315,7 @@ test('Evidence collections fail closed on empty arrays, malformed values and non
   assert.equal(validateVerificationAnchors(fixture.draft, -1, [anchor]), false);
 });
 
-function serviceIntegrationFixture(withTrustedHistory) {
+function serviceIntegrationFixture(withTrustedHistory, freshDraftQuotes = false) {
   const fixture = realVerificationFixture();
   const service = Object.create(AcademicWorkspaceService.prototype);
   const state = { version: 1, runId: fixture.runId, status: 'PAUSED', aiSteps: 6, maxAiSteps: 6,
@@ -341,7 +341,11 @@ function serviceIntegrationFixture(withTrustedHistory) {
   } } };
   service.llm = { generate: async (messages, options) => {
     calls.mockedLlm += 1; calls.messages.push(copy(messages)); calls.options.push(copy(options));
-    return { text: JSON.stringify(fixture.verificationOutput) };
+    const response = copy(fixture.verificationOutput);
+    response.taskFulfillment.criterionReviews = response.taskFulfillment.criterionReviews.map(item => ({
+      ...item, status: 'SATISFIED', ...(freshDraftQuotes ? { excerpt: fixture.draft } : {}),
+    }));
+    return { text: JSON.stringify(response) };
   } };
   service.sourceEngine = {
     resolve: async (owner, references) => {
@@ -359,8 +363,8 @@ function serviceIntegrationFixture(withTrustedHistory) {
   return { fixture, row, calls, generate };
 }
 
-test('Generator integration mock binds the retained V using the owned row R3, real draft and exact stored WORK index', async () => {
-  const { fixture, row, calls, generate } = serviceIntegrationFixture(true);
+test('Generator integration mock independently verifies every criterion with fresh exact R3 draft quotations', async () => {
+  const { fixture, row, calls, generate } = serviceIntegrationFixture(true, true);
   const beforeRow = JSON.stringify(row);
   const beforeWorkDirective = autopilotProfessorDirective('WORK', 'assignment', fixture.contract);
   const generated = await generate();
@@ -368,7 +372,11 @@ test('Generator integration mock binds the retained V using the owned row R3, re
   assert.equal(calls.mockedLlm, 1); assert.equal(calls.provider, 0);
   assert.equal(calls.options[0].operation, 'workspace-assistant');
   assert.equal(calls.options[0].maxOutputTokens, 1500);
-  assert.equal(calls.options[0].jsonSchema, undefined);
+  assert.equal(calls.options[0].jsonSchema.name, 'workspace_verification_complete_v1');
+  assert.equal(calls.options[0].jsonSchema.strict, true);
+  const reviewsSchema = calls.options[0].jsonSchema.schema.properties.taskFulfillment.properties.criterionReviews;
+  assert.equal(reviewsSchema.minItems, 4);
+  assert.equal(reviewsSchema.maxItems, 4);
   assert.match(calls.messages[0].at(-1).content, /Professor phase: VERIFICATION/);
   assert.ok(calls.messages[0].at(-1).content.includes(`Current draft:\n${fixture.draft}`));
   assert.equal(autopilotProfessorDirective('WORK', 'assignment', fixture.contract), beforeWorkDirective);
@@ -380,14 +388,11 @@ test('Generator integration mock binds the retained V using the owned row R3, re
   assert.deepEqual(gate(fixture, output), []);
 });
 
-test('Generator integration mock without trusted WORK metadata cannot certify commentary, objective or a synthetic joined quote', async () => {
+test('Generator integration rejects raw commentary, objective and synthetic joined quotes before binding or publication', async () => {
   const { fixture, row, calls, generate } = serviceIntegrationFixture(false);
   const beforeRow = JSON.stringify(row);
-  const generated = await generate();
-  const output = generated.reply.autopilot.output;
+  await assert.rejects(generate, error => error?.getResponse?.().reason === 'VERIFICATION_EXCERPT_NOT_IN_DRAFT');
   assert.equal(calls.mockedLlm, 1); assert.equal(calls.provider, 0);
   assert.equal(JSON.stringify(row), beforeRow);
-  assert.equal(output.taskFulfillment.reviewedDraftFingerprint, undefined);
-  for (const id of ['required-2', 'required-3', 'required-4']) assert.equal(review(output, id).status, 'INVALID_EVIDENCE');
-  assert.ok(gate(fixture, output).includes('task-evidence-invalid'));
+  assert.equal(fixture.verificationOutput.taskFulfillment.criterionReviews.length, 4, 'historical raw failure fixture stays intact');
 });

@@ -127,6 +127,13 @@ export interface WorkspaceAutopilotOutput {
   issues?: string[];
   needsInput?: string;
   deconstruction?: string;
+  /** Server-bound FINALIZATION provenance; never accepted from provider JSON. */
+  finalizationEvidence?: {
+    draftRevision: number;
+    draftFingerprint: string;
+    verificationReplyId: string;
+    sourceFingerprint: string;
+  };
 }
 
 export interface WorkspaceAutopilotReceipt {

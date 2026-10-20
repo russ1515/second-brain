@@ -37,6 +37,8 @@ export interface WorkspaceWorkDiagnosticInput {
     parsedOutput?: WorkspaceAutopilotOutput;
     workEvidence?: WorkspaceAutopilotOutput['workEvidence'];
     draftCandidate?: string;
+    draftRevision?: number;
+    persistedDraft?: string;
   };
 }
 
@@ -52,6 +54,8 @@ interface PrivateDiagnosticConfig extends WorkspaceWorkDiagnosticScope {
   maxPreviewChars?: number;
   /** Separate authorisation for the one exact technical request; never enables arbitrary provider objects. */
   fullTechnicalEvidence?: boolean;
+  /** Additive exact-phase opt-in; an omitted phase retains WORK-only capture. */
+  phase?: 'WORK' | 'VERIFICATION' | 'FINALIZATION';
 }
 
 const MAX_CONFIG_BYTES = 4_096;
@@ -65,7 +69,7 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const INTENTS = ['assignment-exercise', 'article-summary', 'research-task', 'academic-section', 'argumentative-essay', 'scientific-article', 'report', 'general'];
 const KINDS = ['ANSWER_DRAFT', 'SUMMARY_DRAFT', 'SOURCED_RESEARCH_DRAFT', 'CURRENT_ACADEMIC_SECTION_DRAFT', 'ARGUMENTATIVE_DRAFT', 'SCIENTIFIC_DRAFT', 'REPORT_DRAFT', 'INTENT_MATCHED_DRAFT'];
 const PHASES = ['CAPTURE', 'COMPREHENSION', 'METHOD', 'WORK', 'COACHING', 'VERIFICATION', 'FINALIZATION', 'DECONSTRUCTION'];
-const REASONS = [...AUTOPILOT_DIAGNOSTIC_REASONS, 'MISSING_WORK_CONTRACT', 'OUTPUT_SHAPE_MISMATCH', 'EMPTY_PROVIDER_TEXT', 'PARSER_FAILED', 'ARTIFACT_TYPE_MISMATCH', 'METHOD_ONLY_OUTPUT', 'PROMPT_REPHRASE_ONLY', 'DRAFT_TOO_WEAK', 'VALIDATOR_FALSE_POSITIVE', 'WORK_ARTIFACT_REQUIRED', 'WORK_EVIDENCE_REQUIRED', 'SOURCE_EVIDENCE_REQUIRED', 'PROVIDER_FAILED', 'UNKNOWN', 'NONE'];
+const REASONS = [...AUTOPILOT_DIAGNOSTIC_REASONS, 'MISSING_WORK_CONTRACT', 'OUTPUT_SHAPE_MISMATCH', 'EMPTY_PROVIDER_TEXT', 'PARSER_FAILED', 'ARTIFACT_TYPE_MISMATCH', 'METHOD_ONLY_OUTPUT', 'PROMPT_REPHRASE_ONLY', 'DRAFT_TOO_WEAK', 'VALIDATOR_FALSE_POSITIVE', 'WORK_ARTIFACT_REQUIRED', 'WORK_EVIDENCE_REQUIRED', 'SOURCE_EVIDENCE_REQUIRED', 'PROVIDER_FAILED', 'VERIFICATION_CONTRACT_REJECTED', 'VERIFICATION_REJECTED', 'FINALIZATION_CONTRACT_REJECTED', 'FINALIZATION_REJECTED', 'UNKNOWN', 'NONE'];
 const PROVIDER_FIELDS = ['text', 'content', 'output', 'output_text', 'choices', 'candidates', 'provider', 'model', 'usage', 'finishReason', 'finish_reason', 'id', 'status', 'error'];
 
 function allowed(value: unknown, options: readonly string[]): string {
@@ -108,6 +112,8 @@ const FULL_FIELDS = new Set([
   'fulfilled', 'criterionReviews', 'citationLabels', 'uncoveredRequirements', 'reviewedDraftFingerprint',
   'reviewedContractFingerprint', 'contractFingerprint', 'draftFingerprint',
   'originField', 'index', 'association', 'requirementAnchored', 'excerptAnchored', 'reasonCode',
+  'evidenceSource', 'draftRevision', 'evidenceAnchors', 'evidenceOrigin', 'revision', 'source',
+  'startOffset', 'endOffset', 'checkedPlanItemIds', 'finalizationEvidence', 'verificationReplyId', 'sourceFingerprint',
 ]);
 
 interface FullPrivacy {
@@ -174,7 +180,7 @@ function fullTechnicalEvidence(input: WorkspaceWorkDiagnosticInput): { technical
   if (!evidence || typeof evidence.userInstructions !== 'string' || !Array.isArray(evidence.criteriaExtraction) || !Array.isArray(evidence.criteriaMatrix)) {
     throw new Error('TECHNICAL_EVIDENCE_REQUIRED');
   }
-  const texts = [input.rawText, input.normalizedText, evidence.userInstructions, evidence.canonicalInstructions, evidence.draftCandidate]
+  const texts = [input.rawText, input.normalizedText, evidence.userInstructions, evidence.canonicalInstructions, evidence.draftCandidate, evidence.persistedDraft]
     .filter((value): value is string => typeof value === 'string');
   if (texts.some((value) => value.length > MAX_FULL_TEXT_CHARS)
     || texts.reduce((length, value) => length + Buffer.byteLength(value, 'utf8'), 0) > MAX_FULL_ARTIFACT_BYTES - 4_096) {
@@ -193,6 +199,8 @@ function fullTechnicalEvidence(input: WorkspaceWorkDiagnosticInput): { technical
     parsedOutput: clone(evidence.parsedOutput, 'parsedOutput'),
     workEvidence: clone(evidence.workEvidence, 'workEvidence'),
     draftCandidate: typeof evidence.draftCandidate === 'string' ? scrub(evidence.draftCandidate, 'draftCandidate') : null,
+    ...(evidence.persistedDraft !== undefined ? { persistedDraft: scrub(evidence.persistedDraft, 'persistedDraft') } : {}),
+    ...(evidence.draftRevision !== undefined ? { draftRevision: evidence.draftRevision } : {}),
   };
   privacy.fidelity = privacy.redacted ? 'REDACTED' : complete ? 'EXACT' : 'INCOMPLETE';
   return { technicalEvidence: data, privacy, fullTextRetained: complete && !privacy.redacted };
@@ -220,6 +228,7 @@ export async function writePrivateWorkspaceWorkDiagnostic(
       || typeof config.expiresAt !== 'string'
       || (config.includePreview !== undefined && typeof config.includePreview !== 'boolean')
       || (config.fullTechnicalEvidence !== undefined && typeof config.fullTechnicalEvidence !== 'boolean')
+      || (config.phase !== undefined && !['WORK', 'VERIFICATION', 'FINALIZATION'].includes(config.phase))
       || (config.maxPreviewChars !== undefined && (!Number.isInteger(config.maxPreviewChars) || config.maxPreviewChars < 0 || config.maxPreviewChars > MAX_PREVIEW_CHARS))) return { status: 'UNSAFE_CONFIG' };
   } catch { return { status: 'UNSAFE_CONFIG' }; }
   const expiry = Date.parse(config.expiresAt);
@@ -228,7 +237,8 @@ export async function writePrivateWorkspaceWorkDiagnostic(
   if (expiry - Date.now() > (config.fullTechnicalEvidence ? FULL_TTL_MS : MAX_TTL_MS)) return { status: 'UNSAFE_CONFIG' };
   if (input.trace.workspaceId !== scope.workspaceId
     || !(['ownerId', 'workspaceId', 'runId', 'requestId'] as const).every((key) => scope[key] === config[key])) return { status: 'SCOPE_MISMATCH' };
-  if (config.fullTechnicalEvidence && input.trace.currentPhase !== 'WORK') return { status: 'SCOPE_MISMATCH' };
+  if (config.phase !== undefined && config.phase !== input.trace.currentPhase) return { status: 'SCOPE_MISMATCH' };
+  if (config.fullTechnicalEvidence && input.trace.currentPhase !== (config.phase ?? 'WORK')) return { status: 'SCOPE_MISMATCH' };
 
   try {
     const directory = resolve(config.directory);
