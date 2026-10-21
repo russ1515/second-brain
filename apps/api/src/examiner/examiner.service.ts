@@ -79,7 +79,10 @@ export interface LanguageLearningCoreAssessmentMetadata {
   sessionId: string;
   catalogueVersion: string;
   productLevel: string;
-  scope: 'lesson' | 'module' | 'level';
+  scope: 'lesson' | 'module' | 'level' | 'stage';
+  /** Omitted on historical lesson/product assessments; new stage-scoped
+   * examinations retain their exact CEFR independently of product grouping. */
+  cefrLevel?: import('@second-brain/shared').CefrLevel;
   targetId: string;
   variant: number;
   /** A language-contract correction is a new source, not learner remediation.

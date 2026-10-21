@@ -238,17 +238,17 @@ test('unfinished module assessment start is an exact resume, not another exam', 
 test('a failed module cannot reassess without fresh successful targeted remediation', async () => {
   const core = Object.create(LanguageLearningCoreService.prototype);
   const state = { activeScope: null, activeTargetId: null, activeAssessmentId: null,
-    lessonLinks: { 'lesson-one': { id: 'db-one' } }, productLevel: 'BEGINNER' };
+    lessonLinks: { 'lesson-one': { id: 'db-one' } }, productLevel: 'BEGINNER', cefrLevel: 'A1' };
   core.load = async () => ({ session: { id: 'course' }, state,
     profile: { language: 'English', normalizedLanguage: 'en', teachingLanguageSource: 'interface' },
-    catalogue: { modules: [{ id: 'basics', lessons: [{ id: 'lesson-one', moduleId: 'basics' }] }] } });
+    catalogue: { modules: [{ id: 'basics', lessons: [{ id: 'lesson-one', moduleId: 'basics', cefrLevel: 'A1' }] }] } });
   core.get = async () => ({ core: { modules: [{ id: 'basics', assessmentAvailable: true }] } });
   core.prisma = { profile: { findUnique: async () => ({ preferredLanguage: 'fr' }) } };
-  core.lessons = { getLanguageRoleViolation: () => null, get: async () => ({ id: 'db-one', exercises: [{ question: 'Question', type: 'qcm',
-    options: ['one', 'two'], answer: 'one', correction: 'Explication' }] }) };
-  core.evidence = async () => [{ scope: 'module', targetId: 'basics', awardedPoints: 8, maximumPoints: 10,
+  core.lessons = { getLanguageRoleViolation: () => null, get: async () => ({ id: 'db-one', exercises: Array.from({ length: 10 }, (_, index) => ({ question: `Question ${index}`, type: 'qcm',
+    options: ['one', 'two'], answer: 'one', correction: 'Explication' })) }) };
+  core.evidence = async () => [{ scope: 'module', targetId: 'A1:basics', cefrLevel: 'A1', awardedPoints: 8, maximumPoints: 10,
     evaluatedAt: '2026-10-20T10:00:00.000Z', weakLessonIds: ['lesson-one'] }];
-  await assert.rejects(core.startAssessment('owner', 'profile', 'module', 'basics', 'new'), /new targeted remediation/);
+  await assert.rejects(core.startAssessment('owner', 'profile', 'module', 'A1:basics', 'new'), /new targeted remediation/);
 });
 
 test('a sealed passing submission survives a crash before completion publication without another provider call', async () => {

@@ -4,7 +4,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { LanguageLearningCoreService } from './language-learning-core.service';
-import { LanguageCoreAnswersDto, LanguageCoreAssessmentDto, LanguageCoreHelpDto, LanguageCoreKeyDto, LanguageCoreSubmitDto } from './dto/language-learning-core.dto';
+import { LanguageCoreAnswersDto, LanguageCoreAssessmentDto, LanguageCoreHelpDto, LanguageCoreKeyDto, LanguageCoreStageDto, LanguageCoreSubmitDto } from './dto/language-learning-core.dto';
 
 @UseGuards(JwtAccessGuard)
 @Controller('languages/:id/learning-core')
@@ -58,7 +58,7 @@ export class LanguageLearningCoreController {
   }
   @Post('levels/next')
   @HttpCode(HttpStatus.OK)
-  nextLevel(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: LanguageCoreKeyDto) {
-    return this.core.nextLevel(user.userId, id, body.idempotencyKey);
+  nextLevel(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: LanguageCoreStageDto) {
+    return this.core.nextLevel(user.userId, id, body.idempotencyKey, body.cefrLevel);
   }
 }

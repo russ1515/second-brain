@@ -2,6 +2,10 @@ import type { CefrLevel } from './language';
 import type { LanguageProductLevel } from './language-placement';
 import type { SupportedLanguageCode } from './languages';
 import { LANGUAGE_MASTERY_THRESHOLD } from './language-mastery';
+import {
+  buildUniversalStageLessons, curriculumLessonContract, languageModuleAssessmentTarget,
+  LANGUAGE_CURRICULUM_PRODUCT_STAGES, type LanguageLessonCurriculumContract,
+} from './language-universal-curriculum';
 
 /** Additive post-placement curriculum. Placement and the existing five-pillar
  * certification keep their own immutable policies and evidence. */
@@ -35,7 +39,7 @@ export interface LanguageLearningCriterion {
   description: string;
 }
 
-export interface LanguageLearningLessonDefinition {
+export interface LanguageLearningLessonDefinition extends LanguageLessonCurriculumContract {
   id: string;
   moduleId: LanguageLearningModuleId;
   order: number;
@@ -74,7 +78,9 @@ export interface LanguageLearningCatalogue {
  * The API validates the assessment's immutable scope/content version, rubric,
  * submitted answers and provenance. Browser claims/chat are never evidence. */
 export interface LanguageLearningCoreEvidence {
-  scope: 'lesson' | 'module' | 'level';
+  scope: 'lesson' | 'module' | 'stage' | 'level';
+  /** Absent on preserved pre-expansion assessment snapshots. */
+  cefrLevel?: CefrLevel;
   targetId: string;
   contentVersion: number;
   submissionId: string;
@@ -119,6 +125,7 @@ export interface LanguageLearningModuleView extends Omit<LanguageLearningModuleD
 export interface LanguageLearningCoreNextAction {
   kind: 'start-lesson' | 'resume-lesson' | 'remediate-lesson'
     | 'module-assessment' | 'module-remediation' | 'level-assessment'
+    | 'stage-assessment' | 'stage-remediation' | 'next-stage'
     | 'next-level' | 'capability-blocked' | 'catalogue-unavailable';
   moduleId: LanguageLearningModuleId | null;
   lessonId: string | null;
@@ -135,7 +142,23 @@ export interface LanguageLearningCoreView extends Omit<LanguageLearningCatalogue
   levelWeakLessonIds: string[];
   levelAssessmentAvailable: boolean;
   nextProductLevel: LanguageProductLevel | null;
+  stages: LanguageLearningStageView[];
+  stageAssessmentAvailable: boolean;
+  nextCefrLevel: CefrLevel | null;
+  /** Added by the API from authoritative placement and stage evidence. The
+   * pure curriculum projection must not invent a placement entitlement. */
+  reachableCefrLevels?: CefrLevel[];
   pronunciationAcoustic: 'BLOCKED_CAPABILITY';
+}
+
+export interface LanguageLearningStageView {
+  cefrLevel: CefrLevel;
+  status: LanguageLearningState;
+  masteredLessons: number;
+  totalLessons: number;
+  assessmentAvailable: boolean;
+  score: number | null;
+  weakLessonIds: string[];
 }
 
 const MODULE_TITLES: Record<LanguageLearningModuleId, string> = {
@@ -152,9 +175,7 @@ const MODULE_TITLES: Record<LanguageLearningModuleId, string> = {
   'practice-review-assessment': 'Practice, Review & Assessment',
 };
 
-const LEVELS: Record<LanguageProductLevel, CefrLevel[]> = {
-  BEGINNER: ['A1', 'A2'], INTERMEDIATE: ['B1', 'B2'], ADVANCED: ['C1', 'C2'],
-};
+const LEVELS = LANGUAGE_CURRICULUM_PRODUCT_STAGES;
 
 /** Stable lesson ids are explicit, not derived from mutable translated text.
  * These are target-language curriculum labels, not UI localization fallback. */
@@ -328,20 +349,49 @@ function lessonObjective(moduleId: LanguageLearningModuleId, title: string): str
   return `${tasks[moduleId]}. Lesson focus: ${title}.`;
 }
 
+/** Explicit pedagogical classification of the immutable original slugs. The
+ * remaining original lessons are A1. This is not an ID/content-version rewrite:
+ * saved lesson links, rubrics, scores and completion references stay valid. */
+const ENGLISH_BEGINNER_A2_SLUGS: Partial<Record<LanguageLearningModuleId, readonly string[]>> = {
+  basics: ['numbers-20-1000', 'dates', 'time'],
+  'greetings-introductions': ['work', 'studies', 'introducing-another', 'full-introduction'],
+  'vocabulary-expressions': ['work', 'shopping-money', 'health', 'travel', 'technology', 'essential-expressions'],
+  'grammar-sentence-building': ['prepositions-time', 'some-any', 'much-many', 'connectors', 'longer-sentences'],
+  conjugation: ['simple-vs-continuous', 'past-simple', 'was-were', 'did-didnt', 'irregular-introduction',
+    'go-went', 'come-came', 'eat-ate', 'see-saw', 'have-had', 'will', 'going-to', 'can-could', 'should', 'would-like', 'tense-review'],
+  'listening-comprehension': ['past-event', 'telephone', 'without-every-word', 'faster-dialogue', 'different-speakers', 'full-conversation'],
+  'pronunciation-fluency': ['ed-endings', 'sentence-stress', 'rhythm', 'linking', 'shadowing', 'not-word-by-word',
+    'hesitation', 'speak-minute', 'personalized-correction', 'fluency-challenge'],
+  'speaking-oral-expression': ['now', 'yesterday', 'weekend', 'plans', 'holidays', 'simple-problem', 'opinion',
+    'simple-reason', 'respond-spontaneously', 'one-minute', 'two-minutes', 'mini-presentation'],
+  conversation: ['workplace', 'doctor', 'explaining-problem', 'phone', 'invitation', 'accept-refuse', 'plans',
+    'past-experience', 'opinion', 'agree-disagree', 'natural-questions', 'free-five-minutes', 'free-ten-minutes'],
+  'reading-comprehension': ['short-story', 'work-text', 'travel-text', 'context', 'short-summary', 'mini-article',
+    'global-comprehension', 'reading-assessment'],
+};
+
+export function getLegacyEnglishBeginnerLessonIds(moduleId?: LanguageLearningModuleId): readonly string[] {
+  return (moduleId ? [moduleId] : LANGUAGE_LEARNING_MODULE_IDS).flatMap((id) =>
+    (ENGLISH_BEGINNER_LESSONS[id] ?? []).map(([slug]) => `en-beginner:${id}:${slug}`));
+}
+
+export function legacyEnglishLessonCefr(moduleId: LanguageLearningModuleId, slug: string): 'A1' | 'A2' {
+  return ENGLISH_BEGINNER_A2_SLUGS[moduleId]?.includes(slug) ? 'A2' : 'A1';
+}
+
 export function buildLanguageLearningCatalogue(input: {
   languageCode: SupportedLanguageCode;
   productLevel: LanguageProductLevel;
   cefrLevel?: CefrLevel;
 }): LanguageLearningCatalogue {
   const cefrLevels = [...LEVELS[input.productLevel]];
-  const complete = input.languageCode === 'en' && input.productLevel === 'BEGINNER';
   return {
     version: LANGUAGE_LEARNING_CORE_VERSION,
     languageCode: input.languageCode,
     productLevel: input.productLevel,
     cefrLevel: input.cefrLevel && cefrLevels.includes(input.cefrLevel) ? input.cefrLevel : cefrLevels[0],
     cefrLevels,
-    curriculumStatus: complete ? 'COMPLETE' : 'PARTIAL',
+    curriculumStatus: 'COMPLETE',
     modules: LANGUAGE_LEARNING_MODULE_IDS.map((id, index) => ({
       id,
       order: index + 1,
@@ -349,20 +399,28 @@ export function buildLanguageLearningCatalogue(input: {
       kind: id === 'practice-review-assessment' ? 'transversal' : 'curriculum',
       acousticAssessmentRequired: id === 'pronunciation-fluency',
       toolkit: id === 'practice-review-assessment' ? [...LANGUAGE_LEARNING_TOOLKIT] : [],
-      lessons: complete ? (ENGLISH_BEGINNER_LESSONS[id] ?? []).map(([slug, title], lessonIndex) => {
-        const lessonId = `en-beginner:${id}:${slug}`;
-        return {
-          id: lessonId, moduleId: id, order: lessonIndex + 1, title,
-          objective: lessonObjective(id, title),
-          skills: [...MODULE_SKILLS[id]],
-          criteria: MODULE_SKILLS[id].map((skill) => ({
-            id: `${lessonId}:${skill}`,
-            description: `Demonstrate ${skill} independently in the context of ${title}.`,
-          })),
-          contentVersion: LANGUAGE_LEARNING_CONTENT_VERSION,
-          requiresAcousticAssessment: false,
-        };
-      }) : [],
+      lessons: (() => {
+        if (input.languageCode !== 'en' || input.productLevel !== 'BEGINNER' || id === 'practice-review-assessment') {
+          return cefrLevels.flatMap((cefrLevel, stageIndex) => buildUniversalStageLessons({ languageCode: input.languageCode,
+            cefrLevel, moduleId: id, moduleOrder: index + 1, skills: MODULE_SKILLS[id], offset: stageIndex * 3 }));
+        }
+        const previous = new Map<CefrLevel, string>();
+        return (ENGLISH_BEGINNER_LESSONS[id] ?? []).map(([slug, title], lessonIndex) => {
+          const lessonId = `en-beginner:${id}:${slug}`;
+          const cefrLevel = legacyEnglishLessonCefr(id, slug);
+          const prerequisite = previous.get(cefrLevel);
+          previous.set(cefrLevel, lessonId);
+          return {
+            ...curriculumLessonContract({ id: lessonId, languageCode: 'en', cefrLevel, moduleId: id,
+              moduleOrder: index + 1, lessonIndex, skills: MODULE_SKILLS[id], prerequisites: prerequisite ? [prerequisite] : [] }),
+            id: lessonId, moduleId: id, order: lessonIndex + 1, title,
+            objective: lessonObjective(id, title), skills: [...MODULE_SKILLS[id]],
+            criteria: MODULE_SKILLS[id].map((skill) => ({ id: `${lessonId}:${skill}`,
+              description: `Demonstrate ${skill} independently in the context of ${title}.` })),
+            contentVersion: LANGUAGE_LEARNING_CONTENT_VERSION, requiresAcousticAssessment: false,
+          };
+        });
+      })(),
     })),
   };
 }
@@ -424,88 +482,111 @@ export function projectLanguageLearningCore(input: {
   evidence: readonly LanguageLearningCoreEvidence[];
 }): LanguageLearningCoreView {
   const catalogue = buildLanguageLearningCatalogue(input);
-  let previousModulePracticeCompleted = true;
-  const modules = catalogue.modules.map<LanguageLearningModuleView>((module) => {
-    const moduleAccessible = previousModulePracticeCompleted && catalogue.curriculumStatus === 'COMPLETE';
-    let previousLessonMastered = moduleAccessible;
-    const lessons = module.lessons.map<LanguageLearningLessonView>((lesson) => {
-      const proof = evidenceState(input.evidence, 'lesson', lesson.id);
-      let status: LanguageLearningState = proof.mastered ? 'MASTERED'
-        : previousLessonMastered ? (proof.attempts.length ? proof.status : 'AVAILABLE') : 'LOCKED';
-      if (lesson.requiresAcousticAssessment && status === 'MASTERED') status = 'NOT_EVALUABLE';
-      previousLessonMastered = status === 'MASTERED';
-      return {
-        ...lesson, status, score: proof.score, bestScore: proof.bestScore,
-        weakConcepts: proof.mastered ? [] : [...new Set(proof.latestEvaluated?.weakConcepts ?? [])],
-        remediationCount: proof.attempts.filter((attempt) => attempt.remediation).length,
-        masteredAt: status === 'MASTERED' ? proof.mastered?.evaluatedAt ?? null : null,
-        lastActivityAt: proof.latest?.evaluatedAt ?? null,
-        completionId: status === 'MASTERED' ? proof.mastered?.completionId ?? null : null,
-      };
-    });
-    const allLessonsMastered = lessons.length > 0
-      ? lessons.every((lesson) => lesson.status === 'MASTERED')
-      : module.kind === 'transversal' && moduleAccessible;
-    const proof = evidenceState(input.evidence, 'module', module.id);
-    const assessmentAvailable = moduleAccessible && allLessonsMastered && !module.acousticAssessmentRequired;
-    const status: LanguageLearningState = !moduleAccessible ? 'LOCKED'
-      : !allLessonsMastered ? (lessons.some((lesson) => lesson.lastActivityAt) ? 'IN_PROGRESS' : 'AVAILABLE')
-      : module.acousticAssessmentRequired ? 'NOT_EVALUABLE'
-      : proof.mastered ? 'MASTERED' : proof.attempts.length ? proof.status : 'IN_PROGRESS';
-    // An unavailable acoustic certificate is not a failed written lesson. Once
-    // all actual written/practice prerequisites are mastered, keep teaching the
-    // next module without promoting this neutral state to certified mastery.
-    const practiceOnlyProgression = moduleAccessible && allLessonsMastered
-      && module.acousticAssessmentRequired && status === 'NOT_EVALUABLE';
-    previousModulePracticeCompleted = status === 'MASTERED' || practiceOnlyProgression;
-    const permittedIds = new Set((module.kind === 'transversal'
-      ? catalogue.modules.flatMap((item) => item.lessons) : lessons).map((lesson) => lesson.id));
-    const weakLessonIds = proof.mastered ? [] : [...new Set(
-      (proof.latestEvaluated?.weakLessonIds ?? []).filter((id) => permittedIds.has(id)),
-    )];
-    return {
-      ...module, lessons, status, practiceOnlyProgression,
-      // A written/STT observation must never be shown as an acoustic score.
-      score: module.acousticAssessmentRequired ? null : proof.score,
-      bestScore: module.acousticAssessmentRequired ? null : proof.bestScore,
-      masteredLessons: lessons.filter((lesson) => lesson.status === 'MASTERED').length,
-      totalLessons: lessons.length,
-      assessmentAvailable,
-      assessmentBlockedReason: catalogue.curriculumStatus !== 'COMPLETE' ? 'catalogue-unavailable'
-        : !moduleAccessible ? 'prerequisite-incomplete'
-        : !allLessonsMastered ? 'lessons-incomplete'
-        : module.acousticAssessmentRequired ? 'acoustic-unavailable' : null,
-      weakLessonIds,
+  const definitions = catalogue.modules.flatMap((module) => module.lessons);
+  const lessonProofs = new Map(definitions.map((lesson) => [lesson.id,
+    evidenceState(input.evidence.filter((item) => !item.cefrLevel || item.cefrLevel === lesson.cefrLevel), 'lesson', lesson.id)]));
+  const stageEvidence = (stage: CefrLevel) => input.evidence.filter((item) => item.cefrLevel === stage);
+  const stageModuleProof = (stage: CefrLevel, id: LanguageLearningModuleId) =>
+    evidenceState(stageEvidence(stage), 'module', languageModuleAssessmentTarget(stage, id));
+  const completedLesson = (id: string) => Boolean(lessonProofs.get(id)?.mastered)
+    && !definitions.find((lesson) => lesson.id === id)?.requiresAcousticAssessment;
+  const stageProofs = new Map(catalogue.cefrLevels.map((stage) => [stage, evidenceState(stageEvidence(stage), 'stage', stage)]));
+  const stageReady = (stage: CefrLevel) => catalogue.modules.every((module) => {
+    const lessons = module.lessons.filter((lesson) => lesson.cefrLevel === stage);
+    return lessons.length > 0 && lessons.every((lesson) => completedLesson(lesson.id))
+      && (module.acousticAssessmentRequired || Boolean(stageModuleProof(stage, module.id).mastered));
+  });
+  // A later stage's stored mastery is retained, but an absent/failing previous
+  // stage is never manufactured from placement, chat or an overall module pass.
+  const stages: LanguageLearningStageView[] = catalogue.cefrLevels.map((cefrLevel) => {
+    const lessons = definitions.filter((lesson) => lesson.cefrLevel === cefrLevel);
+    const proof = stageProofs.get(cefrLevel)!;
+    const ready = stageReady(cefrLevel);
+    const mastered = ready && Boolean(proof.mastered);
+    const active = cefrLevel === catalogue.cefrLevel;
+    const masteredLessons = lessons.filter((lesson) => completedLesson(lesson.id)).length;
+    const priorToActive = catalogue.cefrLevels.indexOf(cefrLevel) < catalogue.cefrLevels.indexOf(catalogue.cefrLevel);
+    return { cefrLevel, status: mastered ? 'MASTERED' : !active ? priorToActive ? 'AVAILABLE' : 'LOCKED'
+      : ready ? proof.attempts.length ? proof.status : 'IN_PROGRESS'
+        : masteredLessons || lessons.some((lesson) => lessonProofs.get(lesson.id)!.latest) ? 'IN_PROGRESS' : 'AVAILABLE',
+      masteredLessons, totalLessons: lessons.length, assessmentAvailable: active && ready,
+      score: proof.score, weakLessonIds: proof.mastered ? [] : [...new Set(
+        (proof.latestEvaluated?.weakLessonIds ?? []).filter((id) => lessons.some((lesson) => lesson.id === id)))],
     };
   });
-  const allModulesMastered = modules.every((module) => module.status === 'MASTERED');
+  const modules = catalogue.modules.map<LanguageLearningModuleView>((module) => {
+    const activeDefinitions = module.lessons.filter((lesson) => lesson.cefrLevel === catalogue.cefrLevel);
+    const lessons = module.lessons.map<LanguageLearningLessonView>((lesson) => {
+      const proof = lessonProofs.get(lesson.id)!;
+      const accessible = lesson.cefrLevel === catalogue.cefrLevel && lesson.prerequisites.every(completedLesson);
+      const status: LanguageLearningState = completedLesson(lesson.id) ? 'MASTERED'
+        : accessible ? proof.attempts.length ? proof.status : 'AVAILABLE' : 'LOCKED';
+      return { ...lesson, status, score: proof.score, bestScore: proof.bestScore,
+        weakConcepts: proof.mastered ? [] : [...new Set(proof.latestEvaluated?.weakConcepts ?? [])],
+        remediationCount: proof.attempts.filter((attempt) => attempt.remediation).length,
+        masteredAt: status === 'MASTERED' ? proof.mastered!.evaluatedAt : null,
+        lastActivityAt: proof.latest?.evaluatedAt ?? null, completionId: status === 'MASTERED' ? proof.mastered!.completionId : null };
+    });
+    const activeLessons = lessons.filter((lesson) => lesson.cefrLevel === catalogue.cefrLevel);
+    const allLessonsMastered = activeDefinitions.length > 0 && activeDefinitions.every((lesson) => completedLesson(lesson.id));
+    const proof = stageModuleProof(catalogue.cefrLevel, module.id);
+    // Legacy module/level snapshots remain readable as history. They cannot
+    // grant mastery to a new stage-scoped module or new curriculum lesson.
+    const legacy = evidenceState(input.evidence.filter((item) => !item.cefrLevel), 'module', module.id);
+    const status: LanguageLearningState = !allLessonsMastered
+      ? activeLessons.some((lesson) => lesson.lastActivityAt) ? 'IN_PROGRESS' : 'AVAILABLE'
+      : module.acousticAssessmentRequired ? 'NOT_EVALUABLE'
+      : proof.mastered ? 'MASTERED' : proof.attempts.length ? proof.status : 'IN_PROGRESS';
+    const permittedIds = new Set(activeDefinitions.map((lesson) => lesson.id));
+    return { ...module, lessons, status,
+      practiceOnlyProgression: allLessonsMastered && module.acousticAssessmentRequired,
+      score: module.acousticAssessmentRequired ? null : proof.score ?? legacy.score,
+      bestScore: module.acousticAssessmentRequired ? null : proof.bestScore ?? legacy.bestScore,
+      masteredLessons: activeLessons.filter((lesson) => lesson.status === 'MASTERED').length,
+      totalLessons: activeLessons.length,
+      assessmentAvailable: allLessonsMastered && !module.acousticAssessmentRequired,
+      assessmentBlockedReason: !allLessonsMastered ? 'lessons-incomplete'
+        : module.acousticAssessmentRequired ? 'acoustic-unavailable' : null,
+      weakLessonIds: proof.mastered ? [] : [...new Set(
+        (proof.latestEvaluated?.weakLessonIds ?? []).filter((id) => permittedIds.has(id)))],
+    };
+  });
+  const activeStage = stages.find((stage) => stage.cefrLevel === catalogue.cefrLevel)!;
+  const allStagesMastered = stages.every((stage) => stage.status === 'MASTERED');
   const levelProof = evidenceState(input.evidence, 'level', input.productLevel);
-  const levelLessonIds = new Set(catalogue.modules.flatMap((module) => module.lessons.map((lesson) => lesson.id)));
+  const levelLessonIds = new Set(definitions.map((lesson) => lesson.id));
   const levelWeakLessonIds = levelProof.mastered ? [] : [...new Set(
     (levelProof.latestEvaluated?.weakLessonIds ?? []).filter((id) => levelLessonIds.has(id)),
   )];
-  const levelStatus: LanguageLearningState = catalogue.curriculumStatus !== 'COMPLETE' ? 'LOCKED'
-    : allModulesMastered ? levelProof.mastered ? 'MASTERED'
-      : levelProof.attempts.length ? levelProof.status : 'IN_PROGRESS'
-    : modules.some((module) => module.status === 'IN_PROGRESS' || module.status === 'MASTERED')
-      ? 'IN_PROGRESS' : 'AVAILABLE';
-  // Follow the first actionable learning module. Once all independent practice
-  // is complete, return to the outstanding acoustic certification limitation.
-  const currentModule = modules.find((module) => module.status !== 'MASTERED' && !module.practiceOnlyProgression)
-    ?? modules.find((module) => module.practiceOnlyProgression) ?? null;
-  const currentLesson = currentModule?.lessons.find((lesson) => lesson.status !== 'MASTERED') ?? null;
+  const levelStatus: LanguageLearningState = allStagesMastered ? 'MASTERED'
+    : stages.some((stage) => stage.status === 'NEEDS_REMEDIATION') ? 'NEEDS_REMEDIATION'
+    : stages.some((stage) => stage.status === 'MASTERED' || stage.status === 'IN_PROGRESS') ? 'IN_PROGRESS' : 'AVAILABLE';
+  const legacyProgress = input.languageCode === 'en' && input.productLevel === 'BEGINNER'
+    && input.evidence.some((item) => item.scope === 'lesson' && item.targetId.startsWith('en-beginner:'));
+  const actionable = modules.flatMap((module) => module.lessons.map((lesson) => ({ module, lesson,
+    stageOrder: module.lessons.filter((entry) => entry.cefrLevel === catalogue.cefrLevel).findIndex((entry) => entry.id === lesson.id) })))
+    .filter(({ lesson }) => lesson.cefrLevel === catalogue.cefrLevel && !['MASTERED', 'LOCKED'].includes(lesson.status))
+    .sort((a, b) => legacyProgress ? a.module.order - b.module.order || a.lesson.order - b.lesson.order
+      : a.stageOrder - b.stageOrder || a.module.order - b.module.order);
+  const weakStageId = activeStage.status === 'NEEDS_REMEDIATION' ? activeStage.weakLessonIds[0] : null;
+  const weakLesson = weakStageId ? definitions.find((lesson) => lesson.id === weakStageId) : null;
+  const currentLesson = weakLesson ? modules.flatMap((module) => module.lessons).find((lesson) => lesson.id === weakLesson.id)!
+    : actionable[0]?.lesson ?? null;
+  const currentModule = currentLesson ? modules.find((module) => module.id === currentLesson.moduleId)!
+    : modules.find((module) => !['MASTERED', 'NOT_EVALUABLE'].includes(module.status)) ?? null;
+  const stageIndex = catalogue.cefrLevels.indexOf(catalogue.cefrLevel);
+  const nextCefrLevel = activeStage.status === 'MASTERED' ? catalogue.cefrLevels[stageIndex + 1] ?? null : null;
   let nextAction: LanguageLearningCoreNextAction;
   if (catalogue.curriculumStatus !== 'COMPLETE') {
     nextAction = { kind: 'catalogue-unavailable', moduleId: null, lessonId: null };
   } else if (levelStatus === 'MASTERED') {
     nextAction = { kind: 'next-level', moduleId: null, lessonId: null };
-  } else if (allModulesMastered) {
-    const weakLesson = levelStatus === 'NEEDS_REMEDIATION' && levelWeakLessonIds.length
-      ? catalogue.modules.flatMap((module) => module.lessons).find((lesson) => lesson.id === levelWeakLessonIds[0])
-      : null;
-    nextAction = weakLesson
-      ? { kind: 'remediate-lesson', moduleId: weakLesson.moduleId, lessonId: weakLesson.id }
-      : { kind: 'level-assessment', moduleId: null, lessonId: null };
+  } else if (nextCefrLevel) {
+    nextAction = { kind: 'next-stage', moduleId: null, lessonId: null };
+  } else if (weakLesson) {
+    nextAction = { kind: 'stage-remediation', moduleId: weakLesson.moduleId, lessonId: weakLesson.id };
+  } else if (activeStage.assessmentAvailable) {
+    nextAction = { kind: 'stage-assessment', moduleId: null, lessonId: null };
   } else if (currentLesson) {
     nextAction = {
       kind: currentLesson.status === 'NEEDS_REMEDIATION' ? 'remediate-lesson'
@@ -527,10 +608,13 @@ export function projectLanguageLearningCore(input: {
     nextAction, levelStatus,
     levelScore: levelProof.score, levelBestScore: levelProof.bestScore,
     levelWeakLessonIds,
-    levelAssessmentAvailable: allModulesMastered,
+    // Historical product-level exams remain readable. New completion is the
+    // two authoritative CEFR-stage decisions, not a third unscoped score.
+    levelAssessmentAvailable: false,
     nextProductLevel: levelStatus !== 'MASTERED' ? null
       : input.productLevel === 'BEGINNER' ? 'INTERMEDIATE'
       : input.productLevel === 'INTERMEDIATE' ? 'ADVANCED' : null,
     pronunciationAcoustic: 'BLOCKED_CAPABILITY',
+    stages, stageAssessmentAvailable: activeStage.assessmentAvailable, nextCefrLevel,
   };
 }

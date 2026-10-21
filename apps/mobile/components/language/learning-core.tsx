@@ -7,7 +7,7 @@ import { useTokens } from '../../lib/design/theme';
 import { useRlleCopy } from '../../lib/language-rll-i18n';
 import { useLanguageLearningCopy } from '../../lib/language-learning-copy';
 import { LANGUAGE_PRODUCT_LEVEL_COPY } from '../../lib/language-placement-presentation';
-import { languageCoreCourseHref, selectLanguageCoreLesson } from '../../lib/language-learning-core-presentation';
+import { languageCoreCourseHref, languageCoreLessonTitle, languageCoreModuleAssessmentTarget, selectLanguageCoreLesson } from '../../lib/language-learning-core-presentation';
 import { languageCourseOpeningError } from '../../lib/language-course-opening';
 import {
   askLanguageLearningHelp, loadLanguageLearningCore, saveLanguageLearningAnswers, saveLanguageLearningAssessmentAnswers,
@@ -81,7 +81,7 @@ export function LanguageLearningCore({ profileId, requestedModuleId, requestedLe
     : <SmartLoadingState title={copy('rlle.ui.course.loading')} />;
   const { core } = session;
   const actionCopy = (key: string, values?: Record<string, string | number>) => teaching.ready ? teaching.copy(key, values) : copy('error.detail');
-  const restoringAssessment = (session.activeScope === 'module' || session.activeScope === 'level') && Boolean(session.assessment) && !requestedModuleId && !requestedLessonId;
+  const restoringAssessment = (session.activeScope === 'module' || session.activeScope === 'stage' || session.activeScope === 'level') && Boolean(session.assessment) && !requestedModuleId && !requestedLessonId;
   const selection = restoringAssessment ? { kind: 'none' as const } : selectLanguageCoreLesson(core, requestedModuleId, requestedLessonId);
   if (selection.kind === 'invalid') return <View style={{ gap: spacing.sm }} testID="language-core-invalid-selection"><SmartErrorState detail={`${copy(selection.code === 'COURSE_LESSON_LOCKED' ? 'rlle.ui.course.status.locked' : 'error.notFound')}\n${selection.code}`} /><Button label={copy('rlle.ui.common.backCourse')} onPress={() => router.replace(`/languages/${encodeURIComponent(profileId)}/course` as never)} /></View>;
   const selectedLesson = selection.kind === 'selected' ? selection.lesson : undefined;
@@ -94,6 +94,10 @@ export function LanguageLearningCore({ profileId, requestedModuleId, requestedLe
   const currentModule = expandedModule ?? (selection.kind === 'selected' ? selection.module.id : core.currentModuleId) ?? core.modules[0]?.id;
   const completed = core.modules.reduce((total, module) => total + module.masteredLessons, 0);
   const total = core.modules.reduce((count, module) => count + module.totalLessons, 0);
+  const lessonTitle = (lesson: LanguageLearningLessonView) => {
+    const module = core.modules.find((entry) => entry.lessons.some((item) => item.id === lesson.id));
+    return module ? languageCoreLessonTitle(lesson, module, copy) : copy('rlle.ui.lesson.title');
+  };
   return (
     <View style={{ gap: spacing.lg }} testID="language-learning-core">
       <Card style={{ gap: spacing.sm }}>
@@ -117,19 +121,33 @@ export function LanguageLearningCore({ profileId, requestedModuleId, requestedLe
           />
         ) : null}
       </Card>
+      {core.stages?.length ? <View style={{ gap: spacing.sm }} testID="language-core-stages">
+        {core.stages.map((stage) => <Card key={stage.cefrLevel} style={{ gap: spacing.xs }} testID={`language-core-stage-${stage.cefrLevel}`}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+            <Badge label={stage.cefrLevel} tone={stage.cefrLevel === core.cefrLevel ? 'info' : 'neutral'} />
+            <Badge label={copy(LEARNING_CORE_STATUS_COPY[stage.status])} tone={stage.status === 'MASTERED' ? 'success' : stage.status === 'NEEDS_REMEDIATION' ? 'warning' : 'neutral'} />
+            <Text style={[typography.caption, { color: c.textSecondary }]}>{copy('rlle.ui.course.progressUnits', { done: stage.masteredLessons, total: stage.totalLessons })} · {learningCoreScore(stage.score)}</Text>
+          </View>
+          {stage.totalLessons > 0 ? <Progress value={stage.masteredLessons / stage.totalLessons * 100} /> : null}
+          {stage.cefrLevel !== core.cefrLevel && session.reachableCefrLevels?.includes(stage.cefrLevel) ? <Button testID={`language-core-open-stage-${stage.cefrLevel}`} label={`${actionCopy('onb.continue')} · ${stage.cefrLevel}`} variant="ghost" disabled={busy !== null || !teaching.ready} onPress={() => void run('next-level', stage.cefrLevel, (key) => startNextLanguageLearningLevel(profileId, key, stage.cefrLevel))} /> : null}
+          {stage.status === 'NEEDS_REMEDIATION' ? stage.weakLessonIds.map((id) => core.modules.flatMap((module) => module.lessons).find((lesson) => lesson.id === id))
+            .filter((lesson): lesson is LanguageLearningLessonView => Boolean(lesson))
+            .map((lesson) => <Button key={lesson.id} testID={`language-core-stage-remediation-${lesson.id}`} label={`${actionCopy('rlle.ui.remediation.start')} · ${lessonTitle(lesson)}`} variant="ai" disabled={busy !== null || !teaching.ready} onPress={() => void run('remediation', lesson.id, (key) => startLanguageLearningRemediation(profileId, lesson.id, key))} />) : null}
+        </Card>)}
+      </View> : null}
       {error ? <SmartErrorState detail={error} /> : null}
       {selection.kind === 'selected' ? (
         <Card style={{ gap: spacing.md }} testID="language-core-lesson-preview">
           <Text style={[typography.label, { color: c.textMuted }]}>{copy(`learningCore.module.${String(selection.module.order).padStart(2, '0')}`)}</Text>
-          <Text accessibilityRole="header" style={[typography.h2, { color: c.textPrimary }]}>{selection.lesson.title}</Text>
+          <Text accessibilityRole="header" style={[typography.h2, { color: c.textPrimary }]}>{lessonTitle(selection.lesson)}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
-            <Badge label={copy(LANGUAGE_PRODUCT_LEVEL_COPY[core.productLevel])} tone="info" /><Badge label={core.cefrLevel} />
+            <Badge label={copy(LANGUAGE_PRODUCT_LEVEL_COPY[core.productLevel])} tone="info" /><Badge label={selection.lesson.cefrLevel ?? core.cefrLevel} />
             <Badge label={copy(LEARNING_CORE_STATUS_COPY[selection.lesson.status])} />
           </View>
           <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{copy('rlle.ui.course.title', { language: session.targetLanguage ?? core.languageCode })}</Text>
           {session.supportLanguage ? <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{copy('passport.teachingLanguage')} · {session.supportLanguage}</Text> : null}
           {!hasSelectedContent ? <>
-            <View style={{ gap: spacing.xs }} testID="language-core-preview-objective"><Text style={[typography.label, { color: c.textPrimary }]}>{copy('lesson.objectiveLabel')}</Text><Text style={[typography.body, { color: c.textSecondary }]}>{selection.lesson.objective}</Text></View>
+            <View style={{ gap: spacing.xs }} testID="language-core-preview-objective"><Text style={[typography.label, { color: c.textPrimary }]}>{copy('lesson.objectiveLabel')}</Text><Text style={[typography.body, { color: c.textSecondary }]}>{selection.lesson.titleStrategy === 'localized-module-stage-ordinal' ? lessonTitle(selection.lesson) : selection.lesson.objective}</Text></View>
             <View style={{ gap: spacing.sm }} testID="language-core-content-pending"><Text style={[typography.label, { color: c.textPrimary }]}>{copy('lesson.concept')}</Text><Text style={[typography.bodySmall, { color: c.textSecondary }]}>{copy('rlle.ui.lesson.noActive')}</Text></View>
             <Button testID="language-core-preview-help" label={copy('learningCore.help')} variant="ghost" disabled accessibilityExpanded={false} />
             <Button testID="language-core-preview-start" label={teaching.ready ? teaching.copy(selection.lesson.status === 'NEEDS_REMEDIATION' ? 'rlle.ui.remediation.start' : 'rlle.ui.lesson.start') : copy('error.detail')} variant="ai" loading={busy !== null} disabled={busy !== null || !teaching.ready} onPress={() => {
@@ -145,7 +163,7 @@ export function LanguageLearningCore({ profileId, requestedModuleId, requestedLe
           <Badge label={copy(LEARNING_CORE_STATUS_COPY[core.levelStatus])} tone="warning" />
           {(core.levelWeakLessonIds ?? []).map((id) => core.modules.flatMap((module) => module.lessons).find((lesson) => lesson.id === id))
             .filter((lesson): lesson is LanguageLearningLessonView => Boolean(lesson))
-            .map((lesson) => <Button key={lesson.id} testID={`language-core-level-remediation-${lesson.id}`} label={`${actionCopy('rlle.ui.remediation.start')} · ${lesson.title}`} variant="ai" disabled={busy !== null || !teaching.ready} onPress={() => void run('remediation', lesson.id, (key) => startLanguageLearningRemediation(profileId, lesson.id, key))} />)}
+            .map((lesson) => <Button key={lesson.id} testID={`language-core-level-remediation-${lesson.id}`} label={`${actionCopy('rlle.ui.remediation.start')} · ${lessonTitle(lesson)}`} variant="ai" disabled={busy !== null || !teaching.ready} onPress={() => void run('remediation', lesson.id, (key) => startLanguageLearningRemediation(profileId, lesson.id, key))} />)}
         </Card>
       ) : null}
       {hasSelectedContent ? (
@@ -166,8 +184,9 @@ export function LanguageLearningCore({ profileId, requestedModuleId, requestedLe
                 <View style={{ gap: spacing.sm }}>
                   {module.lessons.map((lesson) => (
                     <View key={lesson.id} style={{ borderTopWidth: 1, borderTopColor: c.borderSubtle, paddingTop: spacing.sm, gap: spacing.xs }}>
-                      <Text style={[typography.body, { color: c.textPrimary }]}>{lesson.order}. {lesson.title}</Text>
+                      <Text style={[typography.body, { color: c.textPrimary }]}>{lesson.order}. {lessonTitle(lesson)}</Text>
                       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+                        {lesson.cefrLevel ? <Badge label={lesson.cefrLevel} /> : null}
                         <Badge label={copy(LEARNING_CORE_STATUS_COPY[lesson.status])} tone={lesson.status === 'MASTERED' ? 'success' : lesson.status === 'NEEDS_REMEDIATION' ? 'warning' : 'neutral'} />
                         {lesson.score != null ? <Text style={[typography.bodySmall, { color: c.textSecondary }]}>{learningCoreScore(lesson.score)}</Text> : null}
                         {lesson.bestScore != null ? <Text style={[typography.caption, { color: c.textMuted }]}>{copy('learningCore.bestScore')} · {learningCoreScore(lesson.bestScore)}</Text> : null}
@@ -182,17 +201,20 @@ export function LanguageLearningCore({ profileId, requestedModuleId, requestedLe
                     .filter((id) => !module.lessons.some((lesson) => lesson.id === id))
                     .map((id) => core.modules.flatMap((entry) => entry.lessons).find((lesson) => lesson.id === id))
                     .filter((lesson): lesson is LanguageLearningLessonView => Boolean(lesson))
-                    .map((lesson) => <Button key={lesson.id} label={`${actionCopy('rlle.ui.remediation.start')} · ${lesson.title}`} variant="ai" disabled={busy !== null || !teaching.ready} onPress={() => void run('remediation', lesson.id, (key) => startLanguageLearningRemediation(profileId, lesson.id, key))} />) : null}
+                    .map((lesson) => <Button key={lesson.id} label={`${actionCopy('rlle.ui.remediation.start')} · ${lessonTitle(lesson)}`} variant="ai" disabled={busy !== null || !teaching.ready} onPress={() => void run('remediation', lesson.id, (key) => startLanguageLearningRemediation(profileId, lesson.id, key))} />) : null}
                   {module.assessmentBlockedReason === 'acoustic-unavailable' ? <Alert tone="warning" title={copy('rlle.ui.capabilities.notEvaluable')} detail={copy('rlle.ui.capabilities.blockedDetail')} /> : null}
-                  {module.assessmentAvailable ? <Button label={actionCopy('learningCore.moduleAssessment')} disabled={busy !== null || !teaching.ready} onPress={() => void run('assessment', module.id, (key) => startLanguageLearningAssessment(profileId, 'module', module.id, key))} /> : null}
+                  {module.assessmentAvailable ? <Button testID={`language-core-module-assessment-${module.id}`} label={`${actionCopy('learningCore.moduleAssessment')} · ${core.cefrLevel}`} disabled={busy !== null || !teaching.ready} onPress={() => {
+                    const targetId = languageCoreModuleAssessmentTarget(core, module.id);
+                    void run('assessment', targetId, (key) => startLanguageLearningAssessment(profileId, 'module', targetId, key));
+                  }} /> : null}
                 </View>
               ) : null}
             </Card>
           );
         })}
       </View>
-      {core.levelAssessmentAvailable ? <Button label={actionCopy('learningCore.levelAssessment')} disabled={busy !== null || !teaching.ready} onPress={() => void run('assessment', core.productLevel, (key) => startLanguageLearningAssessment(profileId, 'level', core.productLevel, key))} /> : null}
-      {core.levelStatus === 'MASTERED' && core.nextProductLevel ? <Button label={`${actionCopy('onb.continue')} · ${actionCopy(LANGUAGE_PRODUCT_LEVEL_COPY[core.nextProductLevel])}`} disabled={busy !== null || !teaching.ready} onPress={() => void run('next-level', core.productLevel, (key) => startNextLanguageLearningLevel(profileId, key))} /> : null}
+      {core.stageAssessmentAvailable ? <Button testID="language-core-stage-assessment" label={`${actionCopy('learningCore.levelAssessment')} · ${core.cefrLevel}`} disabled={busy !== null || !teaching.ready} onPress={() => void run('assessment', core.cefrLevel, (key) => startLanguageLearningAssessment(profileId, 'stage', core.cefrLevel, key))} /> : null}
+      {core.nextAction.kind === 'next-stage' && core.nextCefrLevel ? <Button testID="language-core-next-stage" label={`${actionCopy('onb.continue')} · ${core.nextCefrLevel}`} disabled={busy !== null || !teaching.ready} onPress={() => void run('next-level', core.cefrLevel, (key) => startNextLanguageLearningLevel(profileId, key))} /> : core.nextAction.kind === 'next-level' && core.nextProductLevel ? <Button testID="language-core-next-level" label={`${actionCopy('onb.continue')} · ${actionCopy(LANGUAGE_PRODUCT_LEVEL_COPY[core.nextProductLevel])}`} disabled={busy !== null || !teaching.ready} onPress={() => void run('next-level', core.productLevel, (key) => startNextLanguageLearningLevel(profileId, key))} /> : null}
     </View>
   );
 }
@@ -267,11 +289,17 @@ export function LearningLesson({ profileId, session, lesson, busy, onSession, on
     dirty.current = false;
   };
   const content = session.content;
+  const sourceModule = lesson ? session.core.modules.find((module) => module.lessons.some((entry) => entry.id === lesson.id)) : undefined;
+  const heading = lesson?.titleStrategy === 'localized-module-stage-ordinal' && sourceModule
+    ? languageCoreLessonTitle(lesson, sourceModule, interfaceCopy)
+    : session.activeScope === 'stage' ? `${interfaceCopy('learningCore.levelAssessment')} · ${session.activeTargetId}`
+      : session.activeScope === 'module' ? `${interfaceCopy('learningCore.moduleAssessment')} · ${session.core.cefrLevel}`
+        : content?.topic ?? session.assessment?.title ?? lesson?.title;
   const labels = ['lesson.objectiveLabel', 'lesson.concept', 'lesson.examples', 'lesson.questions'];
   if (!ready) return <SmartErrorState detail={interfaceCopy('error.detail')} />;
   return (
     <Card style={{ gap: spacing.md, borderColor: c.aiAccent, direction }} testID="language-core-lesson">
-      <Text accessibilityRole="header" style={[typography.h2, { color: c.textPrimary }]}>{content?.topic ?? session.assessment?.title ?? lesson?.title}</Text>
+      <Text accessibilityRole="header" style={[typography.h2, { color: c.textPrimary }]}>{heading}</Text>
       {session.latestSubmission ? (
         <View style={{ gap: spacing.sm }} testID="language-core-result">
           {lesson ? <Badge label={copy(LEARNING_CORE_STATUS_COPY[lesson.status])} tone={lesson.status === 'MASTERED' ? 'success' : 'warning'} /> : null}
@@ -363,6 +391,20 @@ export function LanguageLearningPassportSummary({ profileId }: { profileId: stri
   const current = core?.modules.flatMap((module) => module.lessons).find((lesson) => lesson.id === core.currentLessonId);
   return <View style={{ gap: spacing.sm }} testID={`passport-learning-core-${profileId}`}>
     <Button variant="ghost" label={copy('rlle.ui.course.curriculum')} accessibilityExpanded={open} loading={busy} onPress={() => void expand()} />
-    {open ? <View style={{ gap: spacing.sm }}>{error ? <SmartErrorState detail={error} /> : null}{core?.modules.map((module) => <View key={module.id} style={{ gap: spacing.xs }}><Text style={[typography.bodySmall, { color: c.textPrimary }]}>{String(module.order).padStart(2, '0')} · {copy(`learningCore.module.${String(module.order).padStart(2, '0')}`)}</Text><Text style={[typography.caption, { color: c.textSecondary }]}>{copy(LEARNING_CORE_STATUS_COPY[module.status])} · {module.masteredLessons}/{module.totalLessons} · {learningCoreScore(module.score)}</Text>{module.lessons.filter((lesson) => lesson.status !== 'LOCKED').map((lesson) => <Text key={lesson.id} style={[typography.caption, { color: c.textSecondary }]}>{lesson.title} · {copy(LEARNING_CORE_STATUS_COPY[lesson.status])} · {learningCoreScore(lesson.score)} · {learningCoreScore(lesson.bestScore)}{lesson.weakConcepts.length ? <Text testID={`passport-core-weak-concepts-${lesson.id}`} style={{ writingDirection: teaching.direction, textAlign: teaching.direction === 'rtl' ? 'right' : 'left' }}>{` · ${weakConceptLabels(lesson.weakConcepts, supportLanguageCode, core.languageCode)}`}</Text> : null}</Text>)}</View>)}{current ? <Text style={[typography.body, { color: c.textPrimary }]}>{copy('rlle.ui.lesson.title')} · {current.title}</Text> : null}<Button label={copy('rlle.ui.course.resume')} onPress={() => router.push(languageCoreCourseHref(profileId, core) as never)} /></View> : null}
+    {open ? <View style={{ gap: spacing.sm }}>
+      {error ? <SmartErrorState detail={error} /> : null}
+      {core ? <View testID="passport-core-levels" style={{ gap: spacing.xs }}>
+        <Text style={[typography.body, { color: c.textPrimary }]}>{copy(LANGUAGE_PRODUCT_LEVEL_COPY[core.productLevel])} · {core.cefrLevel}</Text>
+        {core.stages?.map((stage) => <Text key={stage.cefrLevel} testID={`passport-core-stage-${stage.cefrLevel}`} style={[typography.caption, { color: c.textSecondary }]}>{stage.cefrLevel} · {copy(LEARNING_CORE_STATUS_COPY[stage.status])} · {stage.masteredLessons}/{stage.totalLessons} · {learningCoreScore(stage.score)}</Text>)}
+        <Text testID="passport-core-acoustic-unverified" style={[typography.caption, { color: c.textMuted }]}>{copy('rlle.ui.capabilities.strictDisabled')}</Text>
+      </View> : null}
+      {core?.modules.map((module) => <View key={module.id} style={{ gap: spacing.xs }}>
+        <Text style={[typography.bodySmall, { color: c.textPrimary }]}>{String(module.order).padStart(2, '0')} · {copy(`learningCore.module.${String(module.order).padStart(2, '0')}`)}</Text>
+        <Text style={[typography.caption, { color: c.textSecondary }]}>{copy(LEARNING_CORE_STATUS_COPY[module.status])} · {module.masteredLessons}/{module.totalLessons} · {learningCoreScore(module.score)}</Text>
+        {module.lessons.filter((lesson) => lesson.status !== 'LOCKED').map((lesson) => <Text key={lesson.id} style={[typography.caption, { color: c.textSecondary }]}>{languageCoreLessonTitle(lesson, module, copy)} · {copy(LEARNING_CORE_STATUS_COPY[lesson.status])} · {learningCoreScore(lesson.score)} · {learningCoreScore(lesson.bestScore)}{lesson.weakConcepts.length ? <Text testID={`passport-core-weak-concepts-${lesson.id}`} style={{ writingDirection: teaching.direction, textAlign: teaching.direction === 'rtl' ? 'right' : 'left' }}>{` · ${weakConceptLabels(lesson.weakConcepts, supportLanguageCode, core.languageCode)}`}</Text> : null}</Text>)}
+      </View>)}
+      {current && core ? <Text testID="passport-core-current-lesson" style={[typography.body, { color: c.textPrimary }]}>{copy('rlle.ui.lesson.title')} · {languageCoreLessonTitle(current, core.modules.find((module) => module.lessons.some((lesson) => lesson.id === current.id))!, copy)}</Text> : null}
+      <Button label={copy('rlle.ui.course.resume')} onPress={() => router.push(languageCoreCourseHref(profileId, core) as never)} />
+    </View> : null}
   </View>;
 }

@@ -98,6 +98,141 @@ function fixture() {
   return { ...data, data, prisma, queries };
 }
 
+// Ten distinct closed written items exercise canonical reconstruction, not
+// provider generation or the pedagogical quality of any generated curriculum.
+const CLOSED_WRITTEN_ITEMS = [
+  ['Choose the first letter in the English alphabet.', ['A', 'B', 'C'], 'A'],
+  ['Choose the written number for two.', ['2', '3', '4'], '2'],
+  ['Choose the subject pronoun for the speaker.', ['I', 'you', 'they'], 'I'],
+  ['Choose the plural of book.', ['books', 'booked', 'booking'], 'books'],
+  ['Complete: She ___ a teacher.', ['is', 'are', 'am'], 'is'],
+  ['Complete: They ___ a house.', ['have', 'has', 'having'], 'have'],
+  ['Choose the question asking for a name.', ['What is your name?', 'Where is your name?', 'When is your name?'], 'What is your name?'],
+  ['Choose the negative of I like tea.', ['I do not like tea.', 'I does not like tea.', 'I not tea like.'], 'I do not like tea.'],
+  ['Complete: Yesterday I ___ home.', ['went', 'go', 'going'], 'went'],
+  ['Complete: Tomorrow I ___ study.', ['will', 'was', 'did'], 'will'],
+];
+
+function seedTenClosedWrittenItems(f, definitions) {
+  const selected = CLOSED_WRITTEN_ITEMS.map((_, index) => definitions[index % definitions.length]);
+  f.metadata.questionLessonIds = selected.map((definition) => definition.id);
+  f.assessment.questions.questions = CLOSED_WRITTEN_ITEMS.map(([prompt, options, answerKey], index) => ({
+    id: `${selected[index].id}:${index}`, prompt, format: 'mcq', options: [...options],
+    answerKey, points: 1, rubric: `The expected written answer is ${answerKey}.`,
+  }));
+  f.submission.answers = f.assessment.questions.questions.map((question) => question.answerKey);
+  f.submission.results = f.assessment.questions.questions.map((question) => ({ questionId: question.id,
+    prompt: question.prompt, learnerAnswer: question.answerKey, awarded: 1, max: 1,
+    verdict: 'correct', why: question.rubric, how: question.rubric }));
+  f.submission.masterySubmissionHash = createHash('sha256').update(JSON.stringify({
+    id: f.assessment.id, answers: f.submission.answers,
+  })).digest('hex');
+}
+
+function aggregateFixture(scope, targetId, definitions, stage) {
+  const f = fixture();
+  f.data.sources = definitions.map((definition, index) => ({
+    id: `aggregate-source-${index}`, userId, languageProfileId: profileId, contentVersion: 1,
+    masteryRemediationGenerationKey: `language-core:${profileId}:BEGINNER:${definition.id}:0`,
+  }));
+  Object.assign(f.metadata, { scope, targetId, sourceLessonIds: f.data.sources.map((source) => source.id),
+    sourceContentVersions: definitions.map(() => 1), questionLessonIds: definitions.slice(0, 10).map((definition) => definition.id) });
+  if (stage) f.metadata.cefrLevel = stage;
+  Object.assign(f.assessment, { lessonId: null, contentVersion: null,
+    masteryCreationKey: `language-core:${profileId}:BEGINNER:${scope}:${targetId}:0` });
+  f.assessment.questions.questions = definitions.slice(0, 10).map((definition) => ({ ...f.question, id: `${definition.id}:0` }));
+  f.submission.answers = f.assessment.questions.questions.map(() => 'A');
+  f.submission.results = f.assessment.questions.questions.map((question) => ({ ...f.submission.results[0], questionId: question.id }));
+  f.submission.masterySubmissionHash = createHash('sha256').update(JSON.stringify({ id: f.assessment.id, answers: f.submission.answers })).digest('hex');
+  if (stage) seedTenClosedWrittenItems(f, definitions);
+  f.data.completions = [];
+  return f;
+}
+
+test('stage-scoped module and stage submissions reload only their exact CEFR source set', async () => {
+  for (const scope of ['module', 'stage']) {
+    const definitions = (scope === 'module' ? catalogue.modules[0].lessons : catalogue.modules.flatMap((module) => module.lessons))
+      .filter((lesson) => lesson.cefrLevel === 'A1');
+    const targetId = scope === 'module' ? 'A1:basics' : 'A1';
+    const f = aggregateFixture(scope, targetId, definitions, 'A1');
+    const evidence = await loadLanguageLearningCoreEvidence(f.prisma, userId, profileId, context);
+    assert.equal(evidence.length, 1);
+    assert.equal(evidence[0].scope, scope);
+    assert.equal(evidence[0].cefrLevel, 'A1');
+    assert.equal(evidence[0].targetId, targetId);
+    assert.equal(evidence[0].awardedPoints, f.submission.answers.length);
+    const missing = aggregateFixture(scope, targetId, definitions.slice(1), 'A1');
+    assert.deepEqual(await loadLanguageLearningCoreEvidence(missing.prisma, userId, profileId, context), []);
+    const extra = aggregateFixture(scope, targetId, [...definitions, catalogue.modules[0].lessons.find((lesson) => lesson.cefrLevel === 'A2')], 'A1');
+    assert.deepEqual(await loadLanguageLearningCoreEvidence(extra.prisma, userId, profileId, context), []);
+  }
+});
+
+test('new stage-scoped module and stage evidence require at least ten real closed items, never nine', async () => {
+  for (const scope of ['module', 'stage']) {
+    const definitions = (scope === 'module' ? catalogue.modules[0].lessons : catalogue.modules.flatMap((module) => module.lessons))
+      .filter((lesson) => lesson.cefrLevel === 'A1');
+    const targetId = scope === 'module' ? 'A1:basics' : 'A1';
+    const complete = aggregateFixture(scope, targetId, definitions, 'A1');
+    assert.equal(complete.assessment.questions.questions.length, 10);
+    assert.equal(new Set(complete.assessment.questions.questions.map((question) => question.id)).size, 10);
+    assert.equal(new Set(complete.assessment.questions.questions.map((question) => question.prompt)).size, 10);
+    assert.equal((await loadLanguageLearningCoreEvidence(complete.prisma, userId, profileId, context)).length, 1);
+    const short = aggregateFixture(scope, targetId, definitions, 'A1');
+    short.assessment.questions.questions.pop();
+    short.metadata.questionLessonIds.pop();
+    short.submission.answers.pop();
+    short.submission.results.pop();
+    short.submission.masterySubmissionHash = createHash('sha256').update(JSON.stringify({
+      id: short.assessment.id, answers: short.submission.answers,
+    })).digest('hex');
+    assert.equal(short.submission.answers.length, 9);
+    assert.deepEqual(await loadLanguageLearningCoreEvidence(short.prisma, userId, profileId, context), [], scope);
+  }
+});
+
+test('aggregate metadata rejects absent, mismatched, unsupported and out-of-product CEFR stages', async () => {
+  const definitions = catalogue.modules[0].lessons.filter((lesson) => lesson.cefrLevel === 'A1');
+  for (const stage of [undefined, 'A2', 'B1', 'PRE_A1', 'invented']) {
+    const f = aggregateFixture('module', 'A1:basics', definitions, stage);
+    assert.deepEqual(await loadLanguageLearningCoreEvidence(f.prisma, userId, profileId, context), [], String(stage));
+  }
+  for (const [targetId, stage] of [['A1', 'A2'], ['B1', 'B1'], ['unknown', 'A1']]) {
+    const f = aggregateFixture('stage', targetId, definitions, stage);
+    assert.deepEqual(await loadLanguageLearningCoreEvidence(f.prisma, userId, profileId, context), []);
+  }
+});
+
+test('old lesson metadata derives CEFR from its preserved definition and refuses an inconsistent explicit stage', async () => {
+  const f = fixture();
+  const evidence = await loadLanguageLearningCoreEvidence(f.prisma, userId, profileId, context);
+  assert.equal(evidence[0].cefrLevel, target.cefrLevel);
+  f.metadata.cefrLevel = target.cefrLevel === 'A1' ? 'A2' : 'A1';
+  assert.deepEqual(await loadLanguageLearningCoreEvidence(f.prisma, userId, profileId, context), []);
+});
+
+test('legacy module and level evidence retain precisely their frozen English source universe without certifying new stages', async () => {
+  const byId = new Map(catalogue.modules.flatMap((module) => module.lessons).map((lesson) => [lesson.id, lesson]));
+  for (const scope of ['module', 'level']) {
+    const targetId = scope === 'module' ? 'basics' : 'BEGINNER';
+    const ids = shared.getLegacyEnglishBeginnerLessonIds(scope === 'module' ? 'basics' : undefined);
+    const definitions = ids.map((id) => byId.get(id));
+    assert.ok(definitions.every(Boolean));
+    if (scope === 'level') assert.equal(ids.length, 230);
+    const f = aggregateFixture(scope, targetId, definitions);
+    const evidence = await loadLanguageLearningCoreEvidence(f.prisma, userId, profileId, context);
+    assert.equal(evidence.length, 1);
+    assert.equal(evidence[0].cefrLevel, undefined);
+    const projected = shared.projectLanguageLearningCore({ languageCode: 'en', ...context, evidence });
+    assert.ok(projected.stages.every((stage) => stage.status !== 'MASTERED'));
+    const newDefinition = catalogue.modules.flatMap((module) => module.lessons).find((lesson) => !ids.includes(lesson.id));
+    const expanded = aggregateFixture(scope, targetId, [...definitions, newDefinition]);
+    assert.deepEqual(await loadLanguageLearningCoreEvidence(expanded.prisma, userId, profileId, context), []);
+    f.metadata.cefrLevel = 'A1';
+    assert.deepEqual(await loadLanguageLearningCoreEvidence(f.prisma, userId, profileId, context), []);
+  }
+});
+
 test('an explicit language-contract correction is not remediation, while legacy positive variants remain compatible', async () => {
   for (const explicit of [false, undefined]) {
     const f = fixture();
@@ -227,12 +362,14 @@ test('module evidence cannot masquerade a single mastered lesson as complete mod
   assert.deepEqual(await loadLanguageLearningCoreEvidence(f.prisma, userId, profileId, context), []);
   const projected = await loadLanguageLearningCoreProjection(f.prisma, userId, profileId);
   assert.notEqual(projected.modules[0].status, 'MASTERED');
-  assert.equal(projected.modules[1].status, 'LOCKED');
+  assert.equal(projected.modules[1].assessmentAvailable, false);
+  assert.equal(projected.stageAssessmentAvailable, false);
 });
 
 test('the transversal module test accepts all curriculum sources but cannot skip any prerequisite module', async () => {
   const f = fixture();
-  const definitions = catalogue.modules.flatMap((module) => module.lessons);
+  const legacyIds = new Set(shared.getLegacyEnglishBeginnerLessonIds());
+  const definitions = catalogue.modules.flatMap((module) => module.lessons).filter((lesson) => legacyIds.has(lesson.id));
   f.data.sources = definitions.map((definition, index) => ({
     id: `source-${index}`, userId, languageProfileId: profileId, contentVersion: 1,
     masteryRemediationGenerationKey: `language-core:${profileId}:BEGINNER:${definition.id}:0`,
@@ -241,7 +378,7 @@ test('the transversal module test accepts all curriculum sources but cannot skip
   f.metadata.targetId = 'practice-review-assessment';
   f.metadata.sourceLessonIds = f.data.sources.map((source) => source.id);
   f.metadata.sourceContentVersions = f.data.sources.map(() => 1);
-  const selected = catalogue.modules.flatMap((module) => module.lessons.slice(0, 1));
+  const selected = definitions.slice(0, 10);
   f.metadata.questionLessonIds = selected.map((definition) => definition.id);
   f.assessment.lessonId = null;
   f.assessment.contentVersion = null;
@@ -262,7 +399,7 @@ test('the transversal module test accepts all curriculum sources but cannot skip
   assert.equal(evidence[0].scope, 'module');
   assert.equal(evidence[0].targetId, 'practice-review-assessment');
   const projected = await loadLanguageLearningCoreProjection(f.prisma, userId, profileId);
-  assert.equal(projected.modules[10].status, 'LOCKED');
+  assert.equal(projected.modules[10].assessmentAvailable, false);
   assert.equal(projected.levelAssessmentAvailable, false);
   f.metadata.sourceLessonIds.pop();
   f.metadata.sourceContentVersions.pop();
@@ -288,6 +425,19 @@ test('persisted lesson position resumes teaching without granting mastery or ove
   assert.equal(applyLanguageLearningCorePosition(failed, position).nextAction.kind, 'remediate-lesson');
 });
 
+test('persisted CEFR module and stage assessment positions never masquerade as a selected lesson', () => {
+  const core = shared.projectLanguageLearningCore({ languageCode: 'en', ...context, evidence: [] });
+  const module = applyLanguageLearningCorePosition(core, { activeScope: 'module', activeTargetId: 'A1:basics' });
+  assert.equal(module.currentModuleId, 'basics');
+  assert.equal(module.currentLessonId, null);
+  const stage = applyLanguageLearningCorePosition(core, { activeScope: 'stage', activeTargetId: 'A1' });
+  assert.equal(stage.currentModuleId, null);
+  assert.equal(stage.currentLessonId, null);
+  assert.deepEqual(stage.modules, core.modules);
+  assert.equal(stage.levelStatus, core.levelStatus);
+  assert.equal(applyLanguageLearningCorePosition(core, { activeScope: 'module', activeTargetId: 'B2:basics' }), core);
+});
+
 test('read projection is repeatable and never writes state, calls a provider or rewrites the frozen placement', async () => {
   const f = fixture();
   const before = JSON.stringify({ session: f.session, rows: f.data.assessments, sources: f.data.sources });
@@ -300,13 +450,13 @@ test('read projection is repeatable and never writes state, calls a provider or 
   assert.equal('placement' in one, false);
 });
 
-test('canonical written practice opens module 8 in the shared Passport projection while acoustic certification stays unavailable', async () => {
+test('canonical written practice and its removal recalculate the shared Passport without certifying acoustics or blocking unrelated practice', async () => {
   const f = fixture();
   const sources = [];
   const assessments = [];
   const completions = [];
   const sourceByDefinition = new Map();
-  for (const definition of catalogue.modules.slice(0, 7).flatMap(module => module.lessons)) {
+  for (const definition of catalogue.modules.slice(0, 7).flatMap(module => module.lessons).filter((lesson) => lesson.cefrLevel === context.cefrLevel)) {
     const row = fixture();
     const ordinal = sources.length;
     row.lesson.id = `source-written-${ordinal}`;
@@ -334,26 +484,29 @@ test('canonical written practice opens module 8 in the shared Passport projectio
   }
   for (const module of catalogue.modules.slice(0, 6)) {
     const row = fixture();
+    const definitions = module.lessons.filter((lesson) => lesson.cefrLevel === context.cefrLevel);
     row.metadata.scope = 'module';
-    row.metadata.targetId = module.id;
-    row.metadata.sourceLessonIds = module.lessons.map(definition => sourceByDefinition.get(definition.id).id);
-    row.metadata.sourceContentVersions = module.lessons.map(() => 1);
-    row.metadata.questionLessonIds = module.lessons.map(definition => definition.id);
+    row.metadata.cefrLevel = context.cefrLevel;
+    row.metadata.targetId = `${context.cefrLevel}:${module.id}`;
+    row.metadata.sourceLessonIds = definitions.map(definition => sourceByDefinition.get(definition.id).id);
+    row.metadata.sourceContentVersions = definitions.map(() => 1);
+    row.metadata.questionLessonIds = definitions.map(definition => definition.id);
     row.assessment.id = `assessment-module-${module.id}`;
     row.assessment.lessonId = null;
     row.assessment.contentVersion = null;
-    row.assessment.masteryCreationKey = `language-core:${profileId}:BEGINNER:module:${module.id}:0`;
-    row.assessment.questions.questions = module.lessons.map(definition => ({ ...row.question, id: `${definition.id}:0` }));
+    row.assessment.masteryCreationKey = `language-core:${profileId}:BEGINNER:module:${row.metadata.targetId}:0`;
+    row.assessment.questions.questions = definitions.map(definition => ({ ...row.question, id: `${definition.id}:0` }));
     row.submission.id = `submission-module-${module.id}`;
     row.submission.assessmentId = row.assessment.id;
     row.submission.masterySubmissionKey = `language-core:${row.assessment.id}`;
-    row.submission.answers = module.lessons.map(() => 'A');
+    row.submission.answers = definitions.map(() => 'A');
     row.submission.results = row.assessment.questions.questions.map(question => ({
       ...row.submission.results[0], questionId: question.id,
     }));
     row.submission.masterySubmissionHash = createHash('sha256').update(JSON.stringify({
       id: row.assessment.id, answers: row.submission.answers,
     })).digest('hex');
+    seedTenClosedWrittenItems(row, definitions);
     assessments.push(row.assessment);
   }
   f.data.sources = sources;
@@ -367,20 +520,21 @@ test('canonical written practice opens module 8 in the shared Passport projectio
   assert.equal(projected.modules[6].practiceOnlyProgression, true);
   assert.equal(projected.modules[6].score, null);
   assert.equal(projected.modules[6].assessmentAvailable, false);
-  assert.equal(projected.modules[7].status, 'AVAILABLE');
-  assert.equal(projected.currentModuleId, catalogue.modules[7].id);
-  assert.equal(projected.currentLessonId, catalogue.modules[7].lessons[0].id);
+  assert.equal(projected.modules[7].lessons.find((lesson) => lesson.cefrLevel === context.cefrLevel).status, 'AVAILABLE');
   assert.equal(projected.levelAssessmentAvailable, false);
   assert.equal(projected.nextProductLevel, null);
   assert.equal(projected.pronunciationAcoustic, 'BLOCKED_CAPABILITY');
   assert.deepEqual(await loadLanguageLearningCoreProjection(f.prisma, userId, profileId), projected);
   assert.equal(JSON.stringify({ session: f.session, sources, assessments, completions }), before);
-  // Removing one real written completion recalculates the practice gate; a
-  // cached cursor or an unavailable acoustic observation cannot preserve it.
-  const lastPronunciationSource = sourceByDefinition.get(catalogue.modules[6].lessons.at(-1).id).id;
+  // Removing one real written completion recalculates that module's practice
+  // state; interleaved speaking practice remains accessible, not certified.
+  const lastPronunciationSource = sourceByDefinition.get(catalogue.modules[6].lessons.filter((lesson) => lesson.cefrLevel === context.cefrLevel).at(-1).id).id;
   f.data.completions = completions.filter(completion => completion.lessonId !== lastPronunciationSource);
   const recalculated = await loadLanguageLearningCoreProjection(f.prisma, userId, profileId);
   assert.equal(recalculated.modules[6].practiceOnlyProgression, false);
-  assert.equal(recalculated.modules[7].status, 'LOCKED');
+  assert.equal(recalculated.modules[6].masteredLessons, projected.modules[6].masteredLessons - 1);
+  assert.equal(recalculated.modules[6].score, null);
+  assert.equal(recalculated.stageAssessmentAvailable, false);
+  assert.equal(recalculated.nextCefrLevel, null);
   assert.equal(recalculated.levelAssessmentAvailable, false);
 });

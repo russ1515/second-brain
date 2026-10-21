@@ -30,8 +30,26 @@ export function selectLanguageCoreLesson(core: LanguageLearningCoreView, request
   const lesson = module?.lessons.find((entry) => entry.id === lessonId);
   if (!module || !lesson) return { kind: 'invalid', code: 'COURSE_LESSON_NOT_FOUND' };
   if (requestedModuleId && requestedModuleId !== module.id) return { kind: 'invalid', code: 'COURSE_MODULE_LESSON_MISMATCH' };
-  if (module.status === 'LOCKED' || lesson.status === 'LOCKED') return { kind: 'invalid', code: 'COURSE_LESSON_LOCKED' };
+  // A module's status describes the current CEFR stage. A mastered lesson from
+  // an earlier stage remains readable even when this stage's module is locked.
+  if (lesson.status === 'LOCKED') return { kind: 'invalid', code: 'COURSE_LESSON_LOCKED' };
   return { kind: 'selected', module, lesson };
+}
+
+/** Authoring titles/objectives are provider context, not translated UI copy.
+ * Every expanded blueprint uses the same module keys already registered in
+ * all 34 catalogues. Legacy restored definitions retain their existing title. */
+export function languageCoreLessonTitle(
+  lesson: Pick<LanguageLearningLessonView, 'title' | 'order'> & Partial<Pick<LanguageLearningLessonView, 'titleStrategy' | 'cefrLevel'>>,
+  module: Pick<LanguageLearningModuleView, 'order'>,
+  copy: (key: string) => string,
+): string {
+  if (lesson.titleStrategy !== 'localized-module-stage-ordinal') return lesson.title;
+  return `${copy(`learningCore.module.${String(module.order).padStart(2, '0')}`)} · ${lesson.cefrLevel} · ${lesson.order}`;
+}
+
+export function languageCoreModuleAssessmentTarget(core: Pick<LanguageLearningCoreView, 'cefrLevel'>, moduleId: string): string {
+  return `${core.cefrLevel}:${moduleId}`;
 }
 
 export function languageCoreCourseHref(profileId: string, core?: LanguageLearningCoreView | null, lessonId?: string): string {

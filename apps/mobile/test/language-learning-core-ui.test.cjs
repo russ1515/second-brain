@@ -180,7 +180,7 @@ test('module assessment restore remains visible without a lesson query and never
   assert.deepEqual(selected.calls, [['loadLanguageLearningCore', 'p1']]);
 });
 
-test('course loading reads canonical profile first and skips legacy RLLE only for a complete Core catalogue', async () => {
+test('course loading reads canonical profile first and uses every complete language Core catalogue', async () => {
   const calls = [];
   const profile = { id: 'p1', language: 'English', languageCode: 'en', placement: { status: 'complete', productLevel: 'BEGINNER', globalLevel: 'A1' } };
   let current = profile;
@@ -193,8 +193,131 @@ test('course loading reads canonical profile first and skips legacy RLLE only fo
   assert.deepEqual(calls, [['profile', 'p1']]);
   calls.length = 0;
   current = { ...profile, languageCode: 'es', language: 'Spanish' };
-  assert.deepEqual(await opening.loadLanguageCourseOpening('p1', (key) => key), { profile: current, courseLoad: legacy });
-  assert.deepEqual(calls, [['profile', 'p1'], ['legacy', 'p1']]);
+  assert.deepEqual(await opening.loadLanguageCourseOpening('p1', (key) => key), { profile: current, courseLoad: { kind: 'core' } });
+  assert.deepEqual(calls, [['profile', 'p1']]);
+});
+
+test('expanded lesson titles reuse translated module keys in all 34 locales instead of English authoring text', () => {
+  const registered = new Map();
+  load('apps/mobile/lib/locales/language-learning-core-v1.ts', { '../i18n': { extendLocale: (code, entries) => registered.set(code, entries) } });
+  const { languageCoreLessonTitle } = load('apps/mobile/lib/language-learning-core-presentation.ts', {});
+  const lesson = { ...definition(), title: 'Authoring-only complex academic syntax', titleStrategy: 'localized-module-stage-ordinal', titleKey: 'learningCore.module.04', cefrLevel: 'C1', order: 3 };
+  for (const code of SUPPORTED_LANGUAGE_CODES) {
+    const title = languageCoreLessonTitle(lesson, { order: 4 }, (key) => registered.get(code)[key]);
+    assert.equal(title, `${registered.get(code)['learningCore.module.04']} · C1 · 3`);
+    assert.doesNotMatch(title, /Authoring-only|undefined|learningCore\./);
+  }
+});
+
+test('expanded preview and Passport show localized titles, product level and each CEFR stage, never authoring prose', async () => {
+  const lesson = { ...definition(), title: 'Untranslated authoring heading', objective: 'Untranslated authoring objective', titleStrategy: 'localized-module-stage-ordinal', cefrLevel: 'A1' };
+  const data = { ...session(), content: null, assessment: null, activeScope: null, activeTargetId: null,
+    core: { ...session().core, modules: [coreModule([lesson])], stages: [
+      { cefrLevel: 'A1', status: 'IN_PROGRESS', masteredLessons: 1, totalLessons: 4, score: null, weakLessonIds: [] },
+      { cefrLevel: 'A2', status: 'LOCKED', masteredLessons: 0, totalLessons: 4, score: null, weakLessonIds: [] },
+    ] } };
+  const ui = harness('LanguageLearningCore', { profileId: 'p1' }, { loadLanguageLearningCore: async () => data, uiCopy: (key) => `fr:${key}` });
+  await ui.settle();
+  assert.ok(ui.byId('language-core-stage-A1'));
+  assert.ok(ui.byId('language-core-stage-A2'));
+  assert.doesNotMatch(JSON.stringify(ui.nodes().filter((node) => ['Text', 'Badge', 'Button'].includes(node.type)).map((node) => node.props.children ?? node.props.label)), /Untranslated authoring/);
+  const passport = harness('LanguageLearningPassportSummary', { profileId: 'p1' }, { loadLanguageLearningCore: async () => data, uiCopy: (key) => `fr:${key}` });
+  passport.nodes().find((node) => node.type === 'Button').props.onPress();
+  await passport.settle();
+  assert.ok(passport.byId('passport-core-stage-A1'));
+  assert.ok(passport.byId('passport-core-stage-A2'));
+  assert.ok(passport.byId('passport-core-acoustic-unverified'));
+  assert.doesNotMatch(JSON.stringify(passport.nodes().filter((node) => node.type === 'Text').map((node) => node.props.children)), /Untranslated authoring/);
+  assert.deepEqual(ui.calls, [['loadLanguageLearningCore', 'p1']]);
+  assert.deepEqual(passport.calls, [['loadLanguageLearningCore', 'p1']]);
+});
+
+test('module and stage assessment actions send precise CEFR scope only after explicit clicks', async () => {
+  const data = { ...session(), content: null, assessment: null, activeScope: null, activeTargetId: null,
+    core: { ...session().core, cefrLevel: 'A2', stageAssessmentAvailable: true, levelAssessmentAvailable: true,
+      modules: [{ ...coreModule(), assessmentAvailable: true }] } };
+  const ui = harness('LanguageLearningCore', { profileId: 'p1' }, { loadLanguageLearningCore: async () => data, startLanguageLearningAssessment: async () => data });
+  await ui.settle();
+  assert.deepEqual(ui.calls, [['loadLanguageLearningCore', 'p1']]);
+  ui.byId('language-core-module-assessment-basics').props.onPress();
+  await ui.settle();
+  assert.deepEqual(ui.calls[1].slice(0, 4), ['startLanguageLearningAssessment', 'p1', 'module', 'A2:basics']);
+  ui.byId('language-core-stage-assessment').props.onPress();
+  await ui.settle();
+  assert.deepEqual(ui.calls[2].slice(0, 4), ['startLanguageLearningAssessment', 'p1', 'stage', 'A2']);
+  assert.equal(ui.calls.length, 3);
+});
+
+test('stage assessment restores on F5 with saved answers, without selecting or generating a lesson', async () => {
+  const data = { ...session(), activeScope: 'stage', activeTargetId: 'A1', content: null, phase: 'assessment', answers: ['B'] };
+  for (let reload = 0; reload < 2; reload += 1) {
+    const ui = harness('LanguageLearningCore', { profileId: 'p1' }, { loadLanguageLearningCore: async () => data });
+    await ui.settle();
+    const restored = ui.nodes().find((node) => typeof node.type === 'function' && node.type.name === 'LearningLesson');
+    assert.ok(restored);
+    assert.equal(restored.props.session.activeScope, 'stage');
+    assert.deepEqual(restored.props.session.answers, ['B']);
+    assert.equal(ui.byId('language-core-lesson-preview'), undefined);
+    assert.deepEqual(ui.calls, [['loadLanguageLearningCore', 'p1']]);
+  }
+});
+
+test('only the server next-stage action exposes the explicit CEFR advancement command', async () => {
+  const data = { ...session(), core: { ...session().core, nextCefrLevel: 'A2', nextAction: { kind: 'next-stage', moduleId: null, lessonId: null } } };
+  const ui = harness('LanguageLearningCore', { profileId: 'p1' }, { loadLanguageLearningCore: async () => data, startNextLanguageLearningLevel: async () => data });
+  await ui.settle();
+  assert.ok(ui.byId('language-core-next-stage'));
+  assert.deepEqual(ui.calls, [['loadLanguageLearningCore', 'p1']]);
+  ui.byId('language-core-next-stage').props.onPress();
+  await ui.settle();
+  assert.equal(ui.calls.filter((call) => call[0] === 'startNextLanguageLearningLevel').length, 1);
+  assert.ok(ui.navigation.some(([action, href]) => action === 'replace' && href === '/languages/p1/course'));
+  const notPassed = harness('LanguageLearningCore', { profileId: 'p1' }, { loadLanguageLearningCore: async () => ({ ...data, core: { ...data.core, nextAction: { kind: 'capability-blocked', moduleId: null, lessonId: null } } }) });
+  await notPassed.settle();
+  assert.equal(notPassed.byId('language-core-next-stage'), undefined);
+});
+
+test('stage navigation uses only explicit server reachability and does not infer or send mastery', async () => {
+  const data = { ...session(), reachableCefrLevels: ['A1', 'A2'], core: { ...session().core, cefrLevel: 'A2', stages: [
+    { cefrLevel: 'A1', status: 'AVAILABLE', masteredLessons: 0, totalLessons: 4, score: null, weakLessonIds: [] },
+    { cefrLevel: 'A2', status: 'IN_PROGRESS', masteredLessons: 0, totalLessons: 4, score: null, weakLessonIds: [] },
+  ] } };
+  const ui = harness('LanguageLearningCore', { profileId: 'p1' }, { loadLanguageLearningCore: async () => data, startNextLanguageLearningLevel: async () => data });
+  await ui.settle();
+  assert.ok(ui.byId('language-core-open-stage-A1'));
+  assert.equal(ui.byId('language-core-open-stage-A2'), undefined);
+  ui.byId('language-core-open-stage-A1').props.onPress();
+  await ui.settle();
+  assert.deepEqual(ui.calls[1].slice(0, 2), ['startNextLanguageLearningLevel', 'p1']);
+  assert.equal(ui.calls[1][3], 'A1');
+  const inaccessible = harness('LanguageLearningCore', { profileId: 'p1' }, { loadLanguageLearningCore: async () => ({ ...data, reachableCefrLevels: ['A2'] }) });
+  await inaccessible.settle();
+  assert.equal(inaccessible.byId('language-core-open-stage-A1'), undefined);
+  assert.equal(data.core.stages[0].status, 'AVAILABLE');
+});
+
+test('previously mastered stage lessons remain readable when current-stage module status is locked', () => {
+  const { selectLanguageCoreLesson } = load('apps/mobile/lib/language-learning-core-presentation.ts', {});
+  const lesson = { ...definition('preserved-a1', 'MASTERED'), cefrLevel: 'A1' };
+  const core = { ...session().core, cefrLevel: 'A2', modules: [{ ...coreModule([lesson, definition('future-a2', 'LOCKED')]), status: 'LOCKED' }] };
+  assert.equal(selectLanguageCoreLesson(core, 'basics', lesson.id).kind, 'selected');
+  assert.equal(selectLanguageCoreLesson(core, 'basics', 'future-a2').code, 'COURSE_LESSON_LOCKED');
+});
+
+test('stage failure exposes only server-named weak lesson remediation and preserves acquired scores', async () => {
+  const acquired = { ...definition('acquired', 'MASTERED'), score: 0.98, bestScore: 0.98 };
+  const weak = { ...definition('weak', 'MASTERED'), score: 0.93, bestScore: 0.93 };
+  const data = { ...session(), core: { ...session().core, currentLessonId: acquired.id, modules: [coreModule([acquired, weak])], stages: [
+    { cefrLevel: 'A1', status: 'NEEDS_REMEDIATION', masteredLessons: 2, totalLessons: 2, score: 0.899, weakLessonIds: ['weak'] },
+  ] } };
+  const ui = harness('LanguageLearningCore', { profileId: 'p1' }, { loadLanguageLearningCore: async () => data, startLanguageLearningRemediation: async () => data });
+  await ui.settle();
+  assert.equal(ui.byId('language-core-stage-remediation-acquired'), undefined);
+  ui.byId('language-core-stage-remediation-weak').props.onPress();
+  await ui.settle();
+  assert.deepEqual(ui.calls[1].slice(0, 3), ['startLanguageLearningRemediation', 'p1', 'weak']);
+  assert.equal(acquired.score, 0.98);
+  assert.equal(acquired.status, 'MASTERED');
 });
 
 test('opening diagnostics separate HTTP/auth/transport phases and omit secrets, raw messages and identifying URLs', () => {
@@ -529,18 +652,19 @@ test('post-placement branch reuses completed placement and Passport lazily loads
   const source = read('apps/mobile/components/language/learning-core.tsx');
   assert.doesNotMatch(source, /set(?:Score|Mastery)|completeLanguagePlacement|submitLanguagePlacement|localStorage|AsyncStorage/);
   assert.match(source, /module\.weakLessonIds\.includes\(lesson\.id\)/);
-  assert.match(source, /core\.levelStatus === 'MASTERED' && core\.nextProductLevel/);
+  assert.match(source, /core\.nextAction\.kind === 'next-level' && core\.nextProductLevel/);
 });
 
-test('only a complete catalogue replaces the existing course: English Beginner, not ES, JA or higher partial levels', () => {
+test('all 34 expanded catalogues are selectable across product levels without bypassing initial placement', () => {
   const { hasCompleteLanguageCoreCatalogue } = load('apps/mobile/lib/language-learning-core-presentation.ts', {});
   const placed = { status: 'complete', productLevel: 'BEGINNER', globalLevel: 'A1' };
-  assert.equal(hasCompleteLanguageCoreCatalogue({ languageCode: 'en', language: 'English' }, placed), true);
-  assert.equal(hasCompleteLanguageCoreCatalogue({ languageCode: 'es', language: 'Spanish' }, placed), false);
-  assert.equal(hasCompleteLanguageCoreCatalogue({ languageCode: 'ja', language: 'Japanese' }, placed), false);
-  assert.equal(hasCompleteLanguageCoreCatalogue({ languageCode: 'en', language: 'English' }, { ...placed, productLevel: 'INTERMEDIATE', globalLevel: 'B1' }), false);
-  assert.equal(hasCompleteLanguageCoreCatalogue({ languageCode: 'en', language: 'English' }, { ...placed, productLevel: 'ADVANCED', globalLevel: 'C1' }), false);
+  for (const code of SUPPORTED_LANGUAGE_CODES) {
+    for (const [productLevel, globalLevel] of [['BEGINNER', 'A1'], ['BEGINNER', 'A2'], ['INTERMEDIATE', 'B1'], ['INTERMEDIATE', 'B2'], ['ADVANCED', 'C1'], ['ADVANCED', 'C2']]) {
+      assert.equal(hasCompleteLanguageCoreCatalogue({ languageCode: code, language: code }, { ...placed, productLevel, globalLevel }), true, `${code}:${globalLevel}`);
+    }
+  }
   assert.equal(hasCompleteLanguageCoreCatalogue({ languageCode: 'en', language: 'English' }, { ...placed, status: 'required' }), false);
+  assert.equal(hasCompleteLanguageCoreCatalogue({ languageCode: null, language: 'unknown language' }, placed), false);
 });
 
 test('client sends answers and stable operation keys, never client-authored score or mastery', async () => {
@@ -549,9 +673,15 @@ test('client sends answers and stable operation keys, never client-authored scor
   await client.saveLanguageLearningAnswers('p/a', 'lesson/b', ['A'], 'assessment');
   await client.submitLanguageLearningLesson('p/a', 'lesson/b', ['A'], 'stable-key');
   await client.submitLanguageLearningAssessment('p/a', 'basics', ['B'], 'module-key');
+  await client.startLanguageLearningAssessment('p/a', 'stage', 'A2', 'stage-key');
+  await client.submitLanguageLearningAssessment('p/a', 'A2:basics', ['C'], 'stage-module-key');
+  await client.startNextLanguageLearningLevel('p/a', 'navigate-stage-key', 'A1');
   assert.equal(calls[0][0], '/languages/p%2Fa/learning-core/lessons/lesson%2Fb/answers');
   assert.deepEqual(calls[1][1].body, { answers: ['A'], idempotencyKey: 'stable-key' });
   assert.equal(calls[2][0], '/languages/p%2Fa/learning-core/assessments/basics/submit');
   assert.deepEqual(calls[2][1].body, { answers: ['B'], idempotencyKey: 'module-key' });
+  assert.deepEqual(calls[3][1].body, { scope: 'stage', targetId: 'A2', idempotencyKey: 'stage-key' });
+  assert.equal(calls[4][0], '/languages/p%2Fa/learning-core/assessments/A2%3Abasics/submit');
+  assert.deepEqual(calls[5][1].body, { idempotencyKey: 'navigate-stage-key', cefrLevel: 'A1' });
   assert.ok(calls.every(([, request]) => !('score' in request.body) && !('mastered' in request.body)));
 });

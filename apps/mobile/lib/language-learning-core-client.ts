@@ -1,6 +1,7 @@
 import type {
   AssessmentSubmissionView,
   AssessmentView,
+  CefrLevel,
   LanguageLearningCoreView,
   LessonView,
 } from '@second-brain/shared';
@@ -15,7 +16,7 @@ export interface LanguageLearningSessionView {
   assessment: AssessmentView | null;
   answers: string[];
   latestSubmission: AssessmentSubmissionView | null;
-  activeScope: 'lesson' | 'module' | 'level' | null;
+  activeScope: 'lesson' | 'module' | 'stage' | 'level' | null;
   activeTargetId: string | null;
   remediation: boolean;
   phase?: 'teaching' | 'assessment' | 'result';
@@ -23,6 +24,8 @@ export interface LanguageLearningSessionView {
   supportLanguage?: string;
   supportLanguageCode?: string;
   targetLanguage?: string;
+  /** Server navigation grant; never a client-authored mastery decision. */
+  reachableCefrLevels?: CefrLevel[];
 }
 
 const endpoint = (profileId: string, suffix = '') =>
@@ -54,7 +57,7 @@ export function askLanguageLearningHelp(profileId: string, lessonId: string, mes
   return api(lessonEndpoint(profileId, lessonId, 'help'), { method: 'POST', body: { message, idempotencyKey } });
 }
 
-export function startLanguageLearningAssessment(profileId: string, scope: 'module' | 'level', targetId: string, idempotencyKey: string): Promise<LanguageLearningSessionView> {
+export function startLanguageLearningAssessment(profileId: string, scope: 'module' | 'stage' | 'level', targetId: string, idempotencyKey: string): Promise<LanguageLearningSessionView> {
   return api(endpoint(profileId, '/assessments/start'), { method: 'POST', body: { scope, targetId, idempotencyKey } });
 }
 
@@ -66,6 +69,6 @@ export function saveLanguageLearningAssessmentAnswers(profileId: string, targetI
   return api(endpoint(profileId, `/assessments/${encodeURIComponent(targetId)}/answers`), { method: 'POST', body: { answers, phase: 'assessment' } });
 }
 
-export function startNextLanguageLearningLevel(profileId: string, idempotencyKey: string): Promise<LanguageLearningSessionView> {
-  return api(endpoint(profileId, '/levels/next'), { method: 'POST', body: { idempotencyKey } });
+export function startNextLanguageLearningLevel(profileId: string, idempotencyKey: string, cefrLevel?: CefrLevel): Promise<LanguageLearningSessionView> {
+  return api(endpoint(profileId, '/levels/next'), { method: 'POST', body: { idempotencyKey, ...(cefrLevel ? { cefrLevel } : {}) } });
 }

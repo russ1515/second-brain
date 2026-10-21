@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   LANGUAGE_LEARNING_CORE_VERSION,
   buildLanguageLearningCatalogue,
+  getLegacyEnglishBeginnerLessonIds,
   projectLanguageLearningCore,
   toSupportedLanguage,
   type CefrLevel,
@@ -30,8 +31,11 @@ export function applyLanguageLearningCorePosition(
   core: LanguageLearningCoreView,
   position: LanguageLearningCorePosition,
 ): LanguageLearningCoreView {
+  if (position.activeScope === 'stage' && core.cefrLevels.includes(position.activeTargetId as CefrLevel)) {
+    return { ...core, currentModuleId: null, currentLessonId: null };
+  }
   const activeModule = core.modules.find((module) => position.activeScope === 'module'
-    ? module.id === position.activeTargetId
+    ? module.id === position.activeTargetId || `${core.cefrLevel}:${module.id}` === position.activeTargetId
     : position.activeScope === 'lesson' && module.lessons.some((lesson) => lesson.id === position.activeTargetId));
   if (!activeModule) return core;
   const activeLesson = position.activeScope === 'lesson'
@@ -146,7 +150,7 @@ export async function loadLanguageLearningCoreEvidence(
       || metadata.profileId !== profileId || metadata.sessionId !== session.id
       || metadata.productLevel !== context.productLevel
       || (metadata.remediation !== undefined && typeof metadata.remediation !== 'boolean')
-      || !['lesson', 'module', 'level'].includes(String(metadata.scope))
+      || !['lesson', 'module', 'stage', 'level'].includes(String(metadata.scope))
       || typeof metadata.targetId !== 'string' || !Number.isInteger(metadata.variant) || Number(metadata.variant) < 0
       || !strings(metadata.sourceLessonIds) || !strings(metadata.questionLessonIds)
       || !Array.isArray(metadata.sourceContentVersions)
@@ -156,10 +160,22 @@ export async function loadLanguageLearningCoreEvidence(
 
     const scope = metadata.scope as LanguageLearningCoreEvidence['scope'];
     const targetId = metadata.targetId;
-    const module = catalogue.modules.find((item) => item.id === targetId);
+    const definition = definitions.find((item) => item.id === targetId);
+    const scopedModule = /^([ABC][12]):(.+)$/.exec(targetId);
+    const module = catalogue.modules.find((item) => item.id === (scopedModule?.[2] ?? targetId));
+    const aggregateStage = scope === 'stage' ? targetId : scopedModule?.[1];
+    const legacyAggregate = (scope === 'module' || scope === 'level') && metadata.cefrLevel === undefined && !scopedModule;
+    // Old module/level snapshots have no CEFR and retain their exact frozen
+    // 230-source universe. They cannot certify newly added stage toolkits.
+    if (legacyAggregate && (languageCode !== 'en' || context.productLevel !== 'BEGINNER')) continue;
+    if (scope === 'lesson' && metadata.cefrLevel !== undefined && metadata.cefrLevel !== definition?.cefrLevel) continue;
+    if ((scope === 'module' && !legacyAggregate) || scope === 'stage') {
+      if (!cefrLevel(aggregateStage) || !catalogue.cefrLevels.includes(aggregateStage)
+        || metadata.cefrLevel !== aggregateStage) continue;
+    }
     if ((scope === 'lesson' && !definitionIds.has(targetId))
       || (scope === 'module' && (!module || module.acousticAssessmentRequired))
-      || (scope === 'level' && targetId !== context.productLevel)) continue;
+      || (scope === 'level' && (!legacyAggregate || targetId !== context.productLevel))) continue;
     const sourceDefinitionIds: string[] = [];
     let sourceValid = true;
     for (const [index, sourceId] of metadata.sourceLessonIds.entries()) {
@@ -179,14 +195,18 @@ export async function loadLanguageLearningCoreEvidence(
     if (scope === 'lesson' && (metadata.sourceLessonIds.length !== 1
       || sourceDefinitionIds[0] !== targetId || assessment.lessonId !== metadata.sourceLessonIds[0]
       || assessment.contentVersion !== metadata.sourceContentVersions[0])) continue;
-    const requiredModuleSources = module?.kind === 'transversal' ? definitions : module?.lessons;
-    if (scope === 'module' && requiredModuleSources && (sourceDefinitionIds.length !== requiredModuleSources.length
-      || requiredModuleSources.some((lesson) => !sourceDefinitionIds.includes(lesson.id)))) continue;
-    if (scope === 'level' && (sourceDefinitionIds.length !== definitions.length
-      || definitions.some((lesson) => !sourceDefinitionIds.includes(lesson.id)))) continue;
+    const requiredAggregateIds = scope === 'lesson' ? null
+      : legacyAggregate ? getLegacyEnglishBeginnerLessonIds(scope === 'module' && module?.kind !== 'transversal' ? module!.id : undefined)
+        : scope === 'stage' || module?.kind === 'transversal'
+          ? definitions.filter((lesson) => lesson.cefrLevel === aggregateStage).map((lesson) => lesson.id)
+          : module!.lessons.filter((lesson) => lesson.cefrLevel === aggregateStage).map((lesson) => lesson.id);
+    if (requiredAggregateIds && (!requiredAggregateIds.length || sourceDefinitionIds.length !== requiredAggregateIds.length
+      || requiredAggregateIds.some((id) => !sourceDefinitionIds.includes(id)))) continue;
 
     const questions = Array.isArray(payload?.questions) ? payload.questions.map(record) : [];
-    if (!questions.length || questions.length > 100 || questions.some((question) => !question
+    if (!questions.length || questions.length > 100
+      || ((scope === 'stage' || (scope === 'module' && !legacyAggregate)) && questions.length < 10)
+      || questions.some((question) => !question
       || typeof question.id !== 'string' || typeof question.prompt !== 'string'
       || question.format !== 'mcq' || !strings(question.options) || question.options.length < 2
       || new Set(question.options).size !== question.options.length
@@ -238,6 +258,8 @@ export async function loadLanguageLearningCoreEvidence(
         && completion.contentVersion === assessment.contentVersion
         && completion.evidenceRefId === submission.id;
       output.push({ scope, targetId, contentVersion: 1, submissionId: submission.id,
+        ...(scope === 'lesson' ? { cefrLevel: definition!.cefrLevel }
+          : !legacyAggregate && cefrLevel(aggregateStage) ? { cefrLevel: aggregateStage } : {}),
         completionId: completionValid ? completion.id : null,
         state: 'evaluated', awardedPoints, maximumPoints,
         evaluatedAt: submission.createdAt.toISOString(),
