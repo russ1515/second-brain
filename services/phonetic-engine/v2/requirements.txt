@@ -1,0 +1,9 @@
+# Local research only. Install torch==2.8.0 from the official CPU-only index
+# separately first; runtime requires the CPU build, never an implicit GPU stack.
+# No transformers[audio]/[speech]/[all], phonemizer, eSpeak, Azure or LLM SDK.
+transformers==4.57.6
+tokenizers==0.22.1
+safetensors==0.6.2
+huggingface_hub==0.36.0
+numpy==2.2.6
+psutil==7.1.0
