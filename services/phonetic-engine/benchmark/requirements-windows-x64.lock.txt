@@ -1,0 +1,17 @@
+# Isolated CPython 3.12.14, Windows AMD64 only. No model, GPU or FP32 dependency.
+# Install with: python -m pip install --only-binary=:all: --no-deps --no-cache-dir --no-compile --target <isolated-dir> -r <this-file>
+# Exact version lock, NOT an all-wheel hash lock; see environment.lock.json.
+# --no-deps is intentional: the file-only PocketSphinx Decoder does not use its
+# declared sounddevice microphone dependency. All ONNX dependency versions follow.
+onnxruntime==1.23.2
+numpy==2.2.6
+psutil==7.1.0
+coloredlogs==15.0.1
+flatbuffers==25.12.19
+packaging==26.3
+protobuf==7.36.2
+sympy==1.14.0
+humanfriendly==10.0
+pyreadline3==3.5.6
+mpmath==1.3.0
+pocketsphinx==5.0.4

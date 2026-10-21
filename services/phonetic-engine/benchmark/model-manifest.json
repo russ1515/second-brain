@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "sourceExperimentSha": "e5d3277d889d237c2bad0df457f84d699d423a28",
+  "model": {
+    "id": "onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX",
+    "revision": "c69750f5043e5e1f8a71ab95dd3b98338c280c92",
+    "url": "https://huggingface.co/onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX",
+    "cardUrl": "https://huggingface.co/onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX/blob/c69750f5043e5e1f8a71ab95dd3b98338c280c92/README.md",
+    "declaredLicense": "Apache-2.0",
+    "posteriorSource": "ONNX_INT8",
+    "documentaryProvenance": "PASS",
+    "independentlyReproducedConversion": "NOT_VERIFIED",
+    "publisherExporterCommit": null,
+    "publisherSourceCheckpointRevision": null,
+    "provenanceLimit": "Publisher identifies the base model and automatic ONNX conversion, but does not pin the exporter commit or source checkpoint revision. This is not proof of bit-identical conversion or FP32 numerical equivalence."
+  },
+  "sourceModel": {
+    "id": "facebook/wav2vec2-lv-60-espeak-cv-ft",
+    "url": "https://huggingface.co/facebook/wav2vec2-lv-60-espeak-cv-ft",
+    "auditedVocabularyRevision": "ae45363bf3413b374fecd9dc8bc1df0e24c3b7f4",
+    "declaredLicense": "Apache-2.0",
+    "fp32Execution": "NOT_RUN",
+    "int8QualityLossAgainstFp32": "NOT_MEASURED"
+  },
+  "artifacts": [
+    {
+      "path": "config.json",
+      "upstreamPath": "config.json",
+      "bytes": 2382,
+      "sha256": "428b7781d080ad9463dca0e17e5066073cb691bfc14a178a85e76ac79c1f4a0f",
+      "url": "https://huggingface.co/onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX/resolve/c69750f5043e5e1f8a71ab95dd3b98338c280c92/config.json"
+    },
+    {
+      "path": "preprocessor_config.json",
+      "upstreamPath": "preprocessor_config.json",
+      "bytes": 212,
+      "sha256": "a2254a5b58f72cd4de3632f8eee64f3f098b7c1402128d2f419e7d00ae13e335",
+      "url": "https://huggingface.co/onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX/resolve/c69750f5043e5e1f8a71ab95dd3b98338c280c92/preprocessor_config.json"
+    },
+    {
+      "path": "vocab.json",
+      "upstreamPath": "vocab.json",
+      "bytes": 4637,
+      "sha256": "d732ab2456c0c017930001dc9af0b41b3b93d25b2eb9740bf9d925508d7d87d0",
+      "url": "https://huggingface.co/onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX/resolve/c69750f5043e5e1f8a71ab95dd3b98338c280c92/vocab.json"
+    },
+    {
+      "path": "quantize_config.json",
+      "upstreamPath": "quantize_config.json",
+      "bytes": 312,
+      "sha256": "70f61db8708568fa3ee6e66ecbcfdb8a89b9069feadff679dea00b097e521c98",
+      "url": "https://huggingface.co/onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX/resolve/c69750f5043e5e1f8a71ab95dd3b98338c280c92/quantize_config.json"
+    },
+    {
+      "path": "model_int8.onnx",
+      "upstreamPath": "onnx/model_int8.onnx",
+      "bytes": 317712780,
+      "sha256": "74174710e34035bbb7f611601d016c32fc575de7a6f53b1078107dc10a84e7ae",
+      "url": "https://huggingface.co/onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX/resolve/c69750f5043e5e1f8a71ab95dd3b98338c280c92/onnx/model_int8.onnx"
+    }
+  ],
+  "totalArtifactBytes": 317720323,
+  "vocabulary": {
+    "path": "vocab.json",
+    "sha256": "d732ab2456c0c017930001dc9af0b41b3b93d25b2eb9740bf9d925508d7d87d0",
+    "tokenCount": 392,
+    "blankTokenId": 0,
+    "byteIdenticalToAuditedSourceVocabulary": true,
+    "canonicalPhoneInventory": "CMU39_WITH_EXPLICIT_STRESS_MAPPING",
+    "unknownPhoneHandling": "ABSTAIN_DO_NOT_DROP"
+  },
+  "quantization": {
+    "per_channel": false,
+    "reduce_range": false,
+    "is_symmetric": true,
+    "quant_type": 1,
+    "enumMeaning": "NOT_INTERPRETED_WITHOUT_PINNED_EXPORTER_VERSION"
+  },
+  "dictionary": {
+    "path": "data/cmudict-stress.dict",
+    "sourceUrl": "https://github.com/cmusphinx/cmudict",
+    "sourceRevision": "74790861f652b15e4ac49015a90074ad62a27690",
+    "bytes": 3618488,
+    "sha256": "81917843c7f44ce2b094ac63873c2c7a4cf802040792c455ba3ca406891c3d22",
+    "licenseNoticePath": "data/CMUDICT-LICENSE.txt",
+    "license": "CMU_BSD_STYLE_NOTICE"
+  },
+  "frozenComponents": {
+    "services/phonetic-engine/phonetic_engine.py": "fb57fbe3053c3be8da0cb5ff311fb289774759e7cc1c9b50c33d7cb7aebf3579",
+    "services/phonetic-engine/v2/onnx_runtime.py": "83b5c3f2f904b713ecf32b02431b2816a8bab411e67fb4547e63e493ffd6075b",
+    "services/phonetic-engine/v2/mapper.py": "2f1ea9b9843a6e76afd3b31aaeea1611ef1858aac2ab8222bf2a17dcfff87c8e",
+    "services/phonetic-engine/v2/ctc_alignment.py": "c4a576db1884a7ea310f7f9013df0d0ed757dad3918a4011b87e6e28eadbe785",
+    "services/phonetic-engine/v2/scorer.py": "d70935d94e85a48ede096b35f49469b33b5d484c615b1acb07e3bda8e41ab881",
+    "services/phonetic-engine/v2/runtime.py": "4fbf38811c9230960fc15faedd8325daba7cb2ee2ef7a19cc3165ca9066baeaf",
+    "services/phonetic-engine/v2/errors.py": "b1782fea4294783e4e7091f851c1f9beffb9b6f72c035b9c8497e369e3614218",
+    "services/phonetic-engine/v2/onnx_child.py": "cca4bd3e29b897eb51fa959affb7d12b44b12d4a5b8d35b14f7810a3f74bc7ca",
+    "services/phonetic-engine/tests/run_v2_acceptance.py": "5258fe04d9bd089570c987454a27d66dfea36c16181b9cb577d553ad4a9ad7ae",
+    "services/phonetic-engine/tests/run_phase_h_acceptance.py": "d07324cfa422916a2050b7dd34c81f9fb81ec1df19c331eb2f06cda0492f0443"
+  },
+  "policy": {
+    "verifyEveryArtifactBeforeEachBenchmark": true,
+    "allowAlternateRevision": false,
+    "allowRemotePythonCode": false,
+    "allowFp32Download": false,
+    "weightsCommittedToGit": false,
+    "masteryEligible": false,
+    "calibration": "NOT_CALIBRATED"
+  }
+}

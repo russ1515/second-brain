@@ -354,7 +354,7 @@ def validate_prior_gate(prior, phase, identity):
         raise SafetyStop("PRIOR_PHASE_GATE_NOT_VERIFIED")
 
 
-def load_controlled_cases(inventory_path, baseline_path, phase):
+def load_controlled_cases(inventory_path, baseline_path, phase, fixture_root=None):
     if digest(inventory_path) != FROZEN_INVENTORY_SHA:
         raise SafetyStop("CONTROLLED_INVENTORY_HASH_MISMATCH")
     inventory = json.loads(Path(inventory_path).read_text(encoding="utf-8"))
@@ -365,8 +365,19 @@ def load_controlled_cases(inventory_path, baseline_path, phase):
     previous = {row["id"]: row for row in baseline["cases"]}
     # Pure test manifest only. Gold/category/synthetic spoken text never enter
     # the child payload, classifier, posterior source or scorer.
+    resolved = {}
+    root = Path(fixture_root).resolve(strict=True) if fixture_root is not None else None
     for case in inventory["cases"]:
-        if (digest(case["audioPath"]) != case["fixtureSha256"] or
+        # The original inventory and its gold remain byte-identical. Only an
+        # execution path is rebound, never text, gold, identity or observations.
+        name = case["audioPath"].replace("\\", "/").rsplit("/", 1)[-1]
+        path = root / name if root is not None else Path(case["audioPath"])
+        if path.is_symlink() or not path.is_file():
+            raise SafetyStop("CONTROLLED_FIXTURE_PATH_INVALID")
+        if root is not None and path.resolve().parent != root:
+            raise SafetyStop("CONTROLLED_FIXTURE_PATH_INVALID")
+        resolved[case["id"]] = str(path.resolve())
+        if (digest(path) != case["fixtureSha256"] or
                 previous[case["id"]]["fixtureSha256"] != case["fixtureSha256"] or
                 previous[case["id"]]["expectedText"] != case["expectedText"]):
             raise SafetyStop("CONTROLLED_FIXTURE_HASH_MISMATCH")
@@ -376,7 +387,7 @@ def load_controlled_cases(inventory_path, baseline_path, phase):
     payload = []
     for case in selected:
         old = previous[case["id"]].get("result", {})
-        payload.append({"id": case["id"], "audioPath": case["audioPath"],
+        payload.append({"id": case["id"], "audioPath": resolved[case["id"]],
             "fixtureSha256": case["fixtureSha256"], "expectedText": case["expectedText"],
             "baselineCompleteness": old.get("completeness"), "baselineFluency": old.get("fluency")})
     return inventory, baseline, payload
@@ -454,7 +465,8 @@ def supervise(args):
         if args.phase != "load":
             if not args.inventory or not args.baseline:
                 raise SafetyStop("CONTROLLED_FIXTURES_REQUIRED")
-            inventory, baseline, cases = load_controlled_cases(args.inventory, args.baseline, args.phase)
+            inventory, baseline, cases = load_controlled_cases(args.inventory, args.baseline, args.phase,
+                getattr(args, "fixture_root", None))
         api = WindowsAPI()
         monitor = WindowsMemoryMonitor(api)
         baseline_samples = []
@@ -630,6 +642,7 @@ def main():
     parser.add_argument("--prior-gate")
     parser.add_argument("--inventory")
     parser.add_argument("--baseline")
+    parser.add_argument("--fixture-root", help="Rebind execution paths only; frozen inventory remains unchanged")
     parser.add_argument("--baseline-samples", type=int, default=6, choices=range(3, 11))
     parser.add_argument("--timeout-sec", type=int, default=300, choices=range(30, 901), metavar="SECONDS")
     args = parser.parse_args()
